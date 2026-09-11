@@ -24,6 +24,17 @@ final class AppModel {
 
     /// LiDAR lanes + gyro gate (step 2).
     let depth = DepthEngine()
+    /// Taptic Engine renderer (step 3).
+    let haptics = HapticPlayer()
+    /// JSONL trip log for reproducible test walks.
+    let logger = TripLogger()
+
+    /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
+    @ObservationIgnored private let decider = CueDecider()
+    /// Kind currently decided as active (for the UI); `.clear` when nothing is in range.
+    private(set) var activeCue: CueKind = .clear
+    /// Last discrete cue fired and when (debug footer).
+    private(set) var lastCueDescription = "—"
 
     // MARK: Device capabilities (fixed for the life of the process)
 
@@ -57,7 +68,11 @@ final class AppModel {
     }
     /// Master haptic silence (state machine keeps running so speech/watch stay in sync).
     var hapticsSilenced: Bool = Settings.bool("hapticsSilenced", default: false) {
-        didSet { Settings.set(hapticsSilenced, "hapticsSilenced") }
+        didSet { Settings.set(hapticsSilenced, "hapticsSilenced"); haptics.silenced = hapticsSilenced }
+    }
+    /// Write the JSONL trip log.
+    var loggingEnabled: Bool = Settings.bool("loggingEnabled", default: true) {
+        didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
     /// Mirror every obstacle cue to the watch even while the phone engine is healthy.
     var fallbackToWatch: Bool = Settings.bool("fallbackToWatch", default: false) {
@@ -71,6 +86,8 @@ final class AppModel {
 
     init() {
         pushDepthSettings()
+        haptics.silenced = hapticsSilenced
+        logger.enabled = loggingEnabled
     }
 
     /// Called once from the root view's `.task`. Starts the engines that exist at this step.
@@ -78,31 +95,64 @@ final class AppModel {
         guard !started else { return }
         started = true
         observeThermalAndBattery()
+        logger.start()
+        haptics.start()
         depth.onReport = { [weak self] report in
             self?.handle(report)
         }
         depth.start()
+        logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
+                               "haptics": haptics.isHealthy])
     }
 
     /// Foreground/background transitions. ARKit pauses itself in the background; we pause the
-    /// engine explicitly so the gyro stops too, and resume without resetting tracking.
+    /// engine explicitly so the gyro stops too, and resume without resetting tracking. Core
+    /// Haptics stops its engine on suspend, so it is restarted on `.active`.
     func scenePhaseChanged(_ phase: ScenePhase) {
         guard started else { return }
         switch phase {
-        case .active: depth.resume()
-        case .inactive: break
-        case .background: depth.pause()
-        @unknown default: break
+        case .active:
+            haptics.resume()
+            depth.resume()
+        case .inactive:
+            break
+        case .background:
+            depth.pause()
+            haptics.stopAll()
+            decider.reset()
+            activeCue = .clear
+            logger.flush()
+        @unknown default:
+            break
         }
     }
 
-    // MARK: Report routing
+    // MARK: Report routing (the "cue router")
 
-    /// Every depth report lands here (~15 Hz). Step 3 feeds the CueDecider → HapticPlayer,
-    /// step 4 the ObstacleNamer, step 5 the watch mirror.
+    /// Every depth report lands here (~15 Hz): decide → render on the phone (step 3);
+    /// step 4 adds the ObstacleNamer, step 5 the watch mirror.
     private func handle(_ report: LaneReport) {
-        // Step 2: nothing beyond publishing (the UI observes `depth.report`).
+        if let output = decider.update(report, now: report.timestamp) {
+            switch output {
+            case .fire(let cue):
+                activeCue = cue.kind
+                haptics.play(cue)
+                lastCueDescription = "\(cue.kind.rawValue) @ \(String(format: "%.1f", report.timestamp))s"
+                var fields: [String: Any] = ["kind": cue.kind.rawValue, "ar_t": report.timestamp]
+                if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
+                logger.event("cue", fields)
+            case .updateCenter(let d):
+                activeCue = .center
+                haptics.setApproach(distance: d)
+            case .stop:
+                activeCue = .clear
+                haptics.stopAll()
+                logger.event("cue", ["kind": "clear"])
+            }
+        }
+        logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
     }
+
 
     /// Camera Control / volume press reached the app while ARKit owns the camera.
     func cameraControlPressed() {

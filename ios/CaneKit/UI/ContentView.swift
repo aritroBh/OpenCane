@@ -20,6 +20,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: CKSpacing.xl) {
                     statusCard
                     LaneGridView(report: model.depth.report)
+                    HapticsCard()
                     mountSettings($model)
                     capabilityCard
                     DebugFooter()
@@ -60,6 +61,8 @@ struct ContentView: View {
                 .accessibilityHint("Turn off if the phone is clamped sideways")
             Toggle("Mirror left / right", isOn: model.mirrorLeftRight)
                 .accessibilityHint("Turn on if left and right warnings feel swapped")
+            Toggle("Write trip log", isOn: model.loggingEnabled)
+                .accessibilityHint("Saves a JSONL log of lanes, cues and location to the Files app")
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)

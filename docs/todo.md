@@ -34,8 +34,8 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - **test on device:** wall at 1 m ≈ 1.0 in all six tiles; hand at left edge → Left tiles red; raise hand → Head row; swing cane → TRUSTED off; fps ≈ 15; Camera Control press shows "CC event" (or not — record which)
 
 ## Step 3 — Core Haptics
-- [ ] HapticPlayer (CHHapticEngine, pre-built players, Geiger loop, reset/stopped handlers, isHealthy)
-- [ ] CueRouter in AppModel (CueDecider → player, silence toggle)
+- [x] HapticPlayer (CHHapticEngine, pre-built players, Geiger loop, reset/stopped handlers, isHealthy) — compiles, untested on device
+- [x] CueRouter in AppModel (CueDecider → player, silence toggle, trip log) + HapticsCard test buttons
 - [ ] **Milestone: walk at a wall → the cane shakes** (go/no-go for steps 7–9)
 
 ## Step 4 — Speech + obstacle names
@@ -59,6 +59,6 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
-- [ ] TripLogger JSONL + AirDrop
-- [ ] Simulator build (`make sim`) for UI/nav screens
+- [x] TripLogger JSONL (Documents folder; AirDrop from Files)
+- [x] Simulator build + run on iPhone 18 Pro sim (iOS 27) — UI verified by screenshot
 - [ ] Go/no-go checklist rehearsed before any blindfolded walk

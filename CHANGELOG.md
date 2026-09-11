@@ -2,6 +2,17 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 3 — Core Haptics (Fri Sep 11, pre-device)
+- HapticPlayer: haptics-only CHHapticEngine, pre-built left (2 taps) / right (3 taps) / head (2 sharp hits)
+  players, Geiger approach loop (single-transient player on a Task, 2 Hz at 2 m → 8 Hz at 0.5 m, intensity
+  0.6 → 1.0), reset/stopped handlers, `isHealthy` for the watch fallback, silence toggle, test buttons.
+- Cue router in AppModel: CueDecider → HapticPlayer; background stops cues and resets the decider.
+- TripLogger: JSONL in Documents (lanes at 2 Hz, cues, session events; flushed every 2 s and on background).
+- Runs in the iOS 27 simulator (UI verified); haptics + LiDAR need the phone.
+- Test on device: clamp the phone; walk at a wall → taps speed up from 2 m to 0.5 m; hand at torso-left →
+  2 taps, torso-right → 3 taps, head height → sharp double; back away → cue clears only past +0.15 m;
+  "Silence haptics" stops everything; the four test buttons play their patterns; a log file appears in Files.
+
 ## Steps 1–2 — project scaffold + depth engine (Fri Sep 11, pre-device)
 - Xcode 27 RC (27A266a) installed; XcodeGen 2.46.0; `ios/project.yml`, `scripts/gen.sh` (watch-embed patch,
   `WATCH=0` phone-only mode, Secrets copy), `Makefile`, `scripts/test.sh` (works with CLT alone).

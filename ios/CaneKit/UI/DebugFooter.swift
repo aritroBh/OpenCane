@@ -15,7 +15,8 @@ struct DebugFooter: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("fps \(model.depth.fps, specifier: "%.0f") · |ω| \(model.depth.report.rotationRate, specifier: "%.2f") rad/s · frames \(model.depth.framesProcessed)")
             Text("tracking \(model.depth.tracking) · thermal \(model.thermalName) · battery \(model.batteryPercent)% · mesh \(model.depth.meshEnabled ? "on" : "off")")
-            Text("Camera Control: \(model.cameraControlPresses == 0 ? "no events yet" : "\(model.cameraControlPresses) press(es)")")
+            Text("Camera Control: \(model.cameraControlPresses == 0 ? "no events yet" : "\(model.cameraControlPresses) press(es)") · last cue \(model.lastCueDescription)")
+            Text("log \(model.logger.fileName.isEmpty ? "off" : model.logger.fileName) · \(model.logger.linesWritten) lines")
         }
         .font(CKFont.mono)
         .foregroundStyle(CKColor.textSecondary)
