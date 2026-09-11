@@ -314,7 +314,10 @@ final class NavigationEngine {
         guard let raw = bearingError, let fix = lastFix, let tracker,
               fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy,
               fix.speed > 0.5, now - fix.timestamp < 5,
-              !isSettling, !legCurved, !tracker.isNearCurrent(fix) else { return }
+              !isSettling, !legCurved, !tracker.isNearCurrent(fix) else {
+            offCourse.endEpisode()   // a gated-out moment ends the episode: no instant veer after a GPS gap (Muse)
+            return
+        }
         // Walking: judge against the smoothed course (jitter-proof); standing/slow: the heading.
         var err = raw
         if fix.speed > 0.7 {

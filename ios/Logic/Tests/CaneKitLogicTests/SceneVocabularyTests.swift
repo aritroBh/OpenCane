@@ -131,3 +131,24 @@ import Testing
                                         nouns: ["a path", "trees", "grass"]))
     #expect(SceneVocabulary.isFaithful("Trees and grass ahead.", facts: facts, nouns: nouns))
 }
+
+/// Realistic good sentences must still pass the stricter gate (no false rejections of plain wording).
+@Test func plainGoodSentencesStillPass() {
+    let facts = "Camera sees: a crosswalk, the street, cars"
+    let nouns = ["a crosswalk", "the street", "cars"]
+    #expect(SceneVocabulary.isFaithful("A crosswalk crosses the street, with cars passing.", facts: facts, nouns: nouns))
+    #expect(SceneVocabulary.isFaithful("Crosswalk ahead; cars are on the road.", facts: facts, nouns: nouns))
+    let indoor = "Camera sees: tables, chairs, windows"
+    #expect(SceneVocabulary.isFaithful("Tables and chairs ahead, with windows behind them.", facts: indoor,
+                                       nouns: ["tables", "chairs", "windows"]))
+}
+
+/// Words the facts contain are allowed (a sentence about visible sign text is grounded), and the
+/// distance check looks for the LiDAR number, not the substring "meter" (Muse + Antigravity).
+@Test func factWordsAreAllowedAndDistanceIsANumber() {
+    let facts = "Camera sees: the street\nVisible text: \"SIDEWALK CLOSED\""
+    #expect(SceneVocabulary.isFaithful("The street ahead; a sign says sidewalk closed.", facts: facts, nouns: ["the street"]))
+    #expect(!SceneVocabulary.mentionsDistance("Parking meters line the street.", from: "Obstacle ahead at 1.4 meters."))
+    #expect(SceneVocabulary.mentionsDistance("A pole ahead, 1.4 meters away.", from: "Obstacle ahead at 1.4 meters."))
+    #expect(SceneVocabulary.mentionsDistance("A pole two meters ahead.", from: "Obstacle ahead at two meters."))
+}

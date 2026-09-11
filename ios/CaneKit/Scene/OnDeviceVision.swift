@@ -183,7 +183,7 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
             // unless the model already gave its distance (Claude review workflow: the model
             // dropped "Obstacle ahead at 1.4 meters" entirely).
             let lidar = context.get()
-            if !lidar.isEmpty, !sentence.lowercased().contains("meter") { return lidar + " " + sentence }
+            if !lidar.isEmpty, !SceneVocabulary.mentionsDistance(sentence, from: lidar) { return lidar + " " + sentence }
             return sentence
         }
         return Self.template(d, lidar: context.get())

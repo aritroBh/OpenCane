@@ -145,14 +145,24 @@ public enum SceneVocabulary {
         // …and names nothing else from the vocabulary: with an example list in the prompt the
         // model answered "trees, grass" with "a crosswalk, then stairs, then a door, and finally
         // trees" (Claude review workflow). Any object word not detected rejects the sentence.
+        // Anything the facts themselves say is grounded too ("a sign says sidewalk closed" when
+        // the facts carry that visible text; Muse + Antigravity review of f5413b8).
+        var allowed = terms.union(tokens(facts).map(stem))
+        if facts.contains("Visible text") { allowed.insert(stem("sign")) }   // text seen = text on a sign
         let invented = words.contains { w in
             let s = stem(w)
-            return vocabularyStems.contains(s) && !terms.contains(s)
+            return vocabularyStems.contains(s) && !allowed.contains(s)
         }
         guard !invented else { return false }
         // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
         // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
         return numbers(in: sentence).isSubset(of: numbers(in: facts))
+    }
+
+    /// True when `sentence` states a distance that `lidar` (the depth fact) gives — by number, not
+    /// by the substring "meter" ("parking meters" and "kilometers" matched that; review of f5413b8).
+    public static func mentionsDistance(_ sentence: String, from lidar: String) -> Bool {
+        !numbers(in: sentence).isDisjoint(with: numbers(in: lidar))
     }
 
     /// Lower-case word and digit tokens ("1.5" → "1", "5").

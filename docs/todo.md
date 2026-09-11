@@ -81,7 +81,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] CourseSmoother veer (15 m); corner-fence reset; reset after each veer cue
 - [x] Muse full-app review fixes (H1–H3, M1–M8, L2/L5/L6)
 - [x] Round-4 and round-5 adversarial reviews (28 + 22 findings) fixed; nav harness 0 false veers / 72 walks
-- [x] Logic tests (136 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
+- [x] Logic tests (138 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
 - [x] Street View mock of ISR → CIF: FrameReplay, `make uitest-streetview`, `make e2e SCENARIO=streetview`, vision_probe
 - [x] graphify knowledge graph (`graphify-out/`, `graphify query`)
 - [x] docs/stress_test_plan.md, docs/README.md, hardware/mount (phone-to-cane mount for Sagar)

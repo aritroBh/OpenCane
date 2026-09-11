@@ -425,10 +425,10 @@ final class AppModel {
         if ProcessInfo.processInfo.environment["CANEKIT_HAZARD_WATCH"] == "1" { hazards.watchEnabled = true }
         hazards.onHazard = { [weak self] text, source, jpeg in
             // Signs and vision cautions: obstacle priority (below route lines, above scene).
-            // A sign stays relevant while you walk up to it; SignPolicy marks it said at once, so a
-            // line that expired in the queue would be silent for a minute (Claude review workflow).
-            // Vision cautions keep 6 s: their distance goes stale.
-            self?.speech.say(text, .obstacle, ttl: source == .sign ? 20 : 6)
+            // A sign line may wait a little longer than a caution (read from up to ~7 m ahead), but
+            // not so long that it plays after the walker has passed the sign: 8 s ≈ 10 m at walking
+            // pace (Claude workflow wanted longer than 6 s; Muse + Antigravity: 20 s was too long).
+            self?.speech.say(text, .obstacle, ttl: source == .sign ? 8 : 6)
             self?.recordHazard(kind: source.rawValue, text: text, source: source, jpeg: jpeg)
         }
         hazards.start()

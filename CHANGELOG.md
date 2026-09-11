@@ -107,6 +107,14 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   labels (simulator limit)" as a warning; docs: the Team ID instructions (the parentheses in a
   certificate name are not the Team ID), the AirPods check order, Guided Access options, stale
   comments.
+- **Muse + Antigravity on f5413b8:** fixed — the LiDAR distance is prefixed unless the model's sentence
+  states that *number* (`SceneVocabulary.mentionsDistance`; "parking meters" / "kilometers" matched
+  the old substring check); words the facts contain (and "sign" when text is visible) count as
+  grounded, so "a sign says sidewalk closed" is accepted; sign lines keep 8 s in the queue (20 s could
+  play 25 m past the sign); a gated-out veer moment ends the episode (no instant veer after a GPS
+  gap). Tests `plainGoodSentencesStillPass`, `factWordsAreAllowedAndDistanceIsANumber`. Rejected —
+  "the first head cue after unlock replays a stale cue": the decider is reset on background, so any
+  head cue after unlock is a fresh LiDAR detection and should be spoken.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is
