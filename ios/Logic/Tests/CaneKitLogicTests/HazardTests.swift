@@ -357,6 +357,14 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(r == nil)
 }
 
+/// Only close text, or several words, may be mentioned to the walker or the language model.
+@Test func onlyCloseOrMultiWordTextMayBeMentioned() {
+    let p = SignPolicy()
+    #expect(!p.mayMention(SignPolicy.SeenText(text: "EXIT", confidence: 0.9, height: 1.0 / 150)))
+    #expect(p.mayMention(SignPolicy.SeenText(text: "EXIT", confidence: 0.9, height: 1.0 / 40)))
+    #expect(p.mayMention(SignPolicy.SeenText(text: "Sidewalk closed", confidence: 0.9, height: 1.0 / 150)))
+}
+
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.
 @Test func aPartialReadOfTheSameSignIsQuiet() {
     var p = SignPolicy()

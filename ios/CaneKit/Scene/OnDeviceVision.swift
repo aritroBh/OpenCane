@@ -165,7 +165,10 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         if !things.isEmpty { lines.append("Camera sees: " + things.joined(separator: ", ")) }
         // Only text that looks like words: Street View OCR junk ("11", "J.I") became invented
         // distances in the model's sentence.
-        let signs = SceneVocabulary.readableTexts(d.texts.filter { $0.confidence >= 0.5 }.map(\.text)).prefix(3)
+        // …and only text the sign rule would allow: a far lone word stays out of the prompt too.
+        let policy = SignPolicy()
+        let nearby = d.seenTexts.filter { $0.confidence >= 0.5 && policy.mayMention($0) }.map(\.text)
+        let signs = SceneVocabulary.readableTexts(nearby).prefix(3)
         if !signs.isEmpty { lines.append("Visible text: " + signs.map { "\"\($0)\"" }.joined(separator: ", ")) }
         return lines.isEmpty ? "Nothing detected." : lines.joined(separator: "\n")
     }

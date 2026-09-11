@@ -22,7 +22,7 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 130 pass | `make test` |
+| Logic tests (every rule with a number in it) | 131 pass | `make test` |
 | App + watch + widget build, Swift 6 strict | green | `make sim` |
 | UI tests + screenshot tour | 7 pass (one needs the local Street View frames) | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
@@ -52,7 +52,7 @@ The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench test
 ```sh
 git pull
 cd ios
-make test          # 130 logic tests; needs only the Command Line Tools
+make test          # 131 logic tests; needs only the Command Line Tools
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
@@ -144,8 +144,17 @@ capture your own.
 | `make uitest-streetview` | "Where am I" answers with a sentence from a real street frame |
 | `make e2e SCENARIO=streetview` | The clean route walked with the Street View frames as the camera; the report lists every sign / hazard line spoken |
 
-Results and what they changed are in the Street View section of
-[`stress_test_plan.md`](stress_test_plan.md) and in `CHANGELOG.md`.
+What it found and fixed (details in `CHANGELOG.md` Step 12 and
+[`ios/scripts/streetview/README.md`](../ios/scripts/streetview/README.md)): Vision taxonomy words read
+aloud, Apple's on-device model inventing "Distance: zero meters", sign range (now measured: 7.5 cm
+letters ≈ 7 m on a flat frontal sign), STOP signs and far storefront words, and a camera path the
+log could not see.
+
+**Open (being investigated):** in the *simulator* the app's scene classification returns no labels,
+so "Where am I" answers "Nothing recognized ahead." at every corner, while the same frames classify
+fine on the Mac (`vision_probe.swift`) and text recognition works in the simulator. It looks like a
+simulator limitation (Vision classification needs the Neural Engine), not a phone bug, but **check
+"Where am I" on the real phone first thing** (stress plan D17).
 
 ## 9. How to find anything
 

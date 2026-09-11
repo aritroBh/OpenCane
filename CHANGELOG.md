@@ -61,6 +61,9 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   "EX1T" still counts as text; a `SeenText` of unknown size is far by default (the tuple overload is
   for test fixtures only); the Street View e2e needs a clean hazard-watch reply, not just a record.
   Tests `blankWallsTeensAndMisreadsAreHandled`, `unknownTextSizeCountsAsFar`.
+- **Review of 3efc0b1 (Antigravity, on a repo copy):** "Where am I" still showed the language model
+  far lone words; `SignPolicy.mayMention` (close, or several words) now filters the facts too (test
+  `onlyCloseOrMultiWordTextMayBeMentioned`).
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

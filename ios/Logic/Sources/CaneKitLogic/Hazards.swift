@@ -281,6 +281,13 @@ public struct SignPolicy: Sendable, Equatable {
         }
     }
 
+    /// True when a text line may be mentioned at all (to the walker or to the language model): it
+    /// is close (`shortPhraseMinHeight` or taller) or it is several words. A far lone word ("EXIT"
+    /// on a storefront across the street) is never passed on (Antigravity, review of 3efc0b1).
+    public func mayMention(_ s: SeenText) -> Bool {
+        s.height >= shortPhraseMinHeight || Self.normalize(s.text).contains(" ")
+    }
+
     /// Fixtures and tests only: every string is treated as **close** (full height). App code must use
     /// `line(for seen:)` with real heights (`VisionDetections.seenTexts`).
     /// - Parameter texts: recognized strings with confidence (0…1).
