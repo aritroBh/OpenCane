@@ -76,7 +76,8 @@ struct GuideCard: View {
                 CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
                             hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
                 HStack(spacing: CKSpacing.sm) {
-                    CKStatusPill(text: beaconWord, tone: model.beacon.isRunning && model.beaconEnabled ? .trusted : .neutral,
+                    CKStatusPill(text: beaconWord, tone: !model.audioRoute.headphonesConnected ? .warning
+                                 : (model.beacon.isRunning && model.beaconEnabled ? .trusted : .neutral),
                                  systemImage: "dot.radiowaves.left.and.right",
                                  spoken: "Beacon: \(beaconWord)", updatesFrequently: true)
                     CKStatusPill(text: headWord,
