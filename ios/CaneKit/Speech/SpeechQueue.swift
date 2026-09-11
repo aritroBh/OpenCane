@@ -423,7 +423,13 @@ final class SpeechQueue {
     /// start (every waypoint line + intro); `speakNow` for a warning spoken by the system voice.
     func prefetch(_ lines: [String]) {
         guard let naturalVoice, useNaturalVoice else { return }
-        Task.detached(priority: .utility) { await naturalVoice.prefetch(lines) }
+        Task.detached(priority: .utility) { [weak self] in
+            let failure = await naturalVoice.prefetch(lines)
+            // Only report; never let a prefetch failure disable the voice. The live path has its
+            // own circuit breaker, and the cache may already hold the line that matters.
+            guard let failure else { return }
+            await MainActor.run { self?.voiceError = failure }
+        }
     }
 
     /// Drop everything waiting and stop the current line (used when a route ends).

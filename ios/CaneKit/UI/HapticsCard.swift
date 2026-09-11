@@ -65,6 +65,15 @@ struct HapticsCard: View {
                              spoken: model.speech.naturalVoice == nil ? "System voice; add an ElevenLabs key for the natural voice" : "Voice: \(model.speech.backendName)")
                 Spacer(minLength: 0)
             }
+            // The reason the voice pill still says "System" with a key in Secrets.plist — a wrong
+            // key reads "ElevenLabs HTTP 401: …" here. Diagnostic, so it is quiet: no colour, no
+            // speech, and it appears only when something actually failed.
+            if let voiceError = model.speech.voiceError {
+                Text(voiceError)
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Voice problem: \(voiceError)")
+            }
             // Own row: sharing the pill row squeezed "Speaking" to "SPEAKI…" on a 17 Pro Max.
             CKBigButton(title: "Speech test", systemImage: "speaker.wave.3", role: .secondary,
                         hint: "Speaks a scene line, then an obstacle line that interrupts it") { model.speechTest() }

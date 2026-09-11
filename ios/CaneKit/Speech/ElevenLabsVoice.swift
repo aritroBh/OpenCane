@@ -44,6 +44,14 @@ nonisolated struct ElevenLabsVoice: Sendable {
     /// walking pace 2.5 s is ~3.5 m, which is why warnings never wait for it at all.
     var timeout: TimeInterval = 2.5
 
+    /// Timeout for `prefetch` only. Nothing is waiting on a prefetch — it runs on a detached
+    /// utility task minutes before the line is needed — so it gets campus-Wi-Fi headroom instead
+    /// of the walking-pace budget. Sharing the 2.5 s live timeout was silently losing whole route
+    /// prefetches on a slow first connection, which then turned every route line into a live miss
+    /// that *also* had 2.5 s to fail: the natural voice would have been mostly absent on a bad
+    /// network rather than merely late.
+    var prefetchTimeout: TimeInterval = 15
+
     /// nil when no key is configured.
     /// Reads `ELEVENLABS_API_KEY` (required), `ELEVENLABS_VOICE_ID` (default
     /// "21m00Tcm4TlvDq8ikWAM", a premade voice) and `ELEVENLABS_MODEL` (default
@@ -53,6 +61,14 @@ nonisolated struct ElevenLabsVoice: Sendable {
         return ElevenLabsVoice(apiKey: key,
                                voiceID: Secrets.string("ELEVENLABS_VOICE_ID") ?? "21m00Tcm4TlvDq8ikWAM",
                                model: Secrets.string("ELEVENLABS_MODEL") ?? "eleven_flash_v2_5")
+    }
+
+    /// A copy of this voice whose live `timeout` is `seconds`. Used by `prefetch` to give
+    /// background synthesis more headroom than a line someone is waiting to hear.
+    func withTimeout(_ seconds: TimeInterval) -> ElevenLabsVoice {
+        var copy = self
+        copy.timeout = seconds
+        return copy
     }
 
     // MARK: Cache
@@ -98,19 +114,39 @@ nonisolated struct ElevenLabsVoice: Sendable {
     }
 
     /// Pre-synthesize a batch (route lines, common phrases), at most 3 requests in flight so a
-    /// long route never bursts into rate limits. Failures are ignored.
+    /// long route never bursts into rate limits, each with `prefetchTimeout` rather than the
+    /// walking-pace live timeout.
     /// Duplicates and already-cached lines are skipped up front. Returns when every request has
     /// finished or failed. Caller: `SpeechQueue.prefetch`, on a detached `.utility` task.
-    func prefetch(_ lines: [String]) async {
+    ///
+    /// - Returns: the description of the first failure, or nil if every line was fetched (or there
+    ///   was nothing to fetch). A prefetch is the app's *first* call to ElevenLabs, seconds after
+    ///   launch, so this is how a wrong key ("HTTP 401") reaches the Haptics card before anyone
+    ///   has spoken a word — silently swallowing it left the demo looking merely voice-less.
+    func prefetch(_ lines: [String]) async -> String? {
         let missing = Array(Set(lines)).filter { cached($0) == nil }
-        await withTaskGroup(of: Void.self) { group in
+        // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based
+        // isolation a mutable local in this region cannot be sent into a concurrent closure.
+        let slow = withTimeout(prefetchTimeout)
+        return await withTaskGroup(of: String?.self) { group in
             var iterator = missing.makeIterator()
-            for _ in 0..<min(3, missing.count) {
-                if let line = iterator.next() { group.addTask { _ = try? await audio(for: line) } }
+            var firstError: String?
+            func addNext() {
+                guard let line = iterator.next() else { return }
+                group.addTask {
+                    do { _ = try await slow.audio(for: line); return nil }
+                    // Cancellation is the app tearing down, not a voice problem: never report it.
+                    catch is CancellationError { return nil }
+                    catch let error as URLError where error.code == .cancelled { return nil }
+                    catch { return error.localizedDescription }
+                }
             }
-            while await group.next() != nil {
-                if let line = iterator.next() { group.addTask { _ = try? await audio(for: line) } }
+            for _ in 0..<min(3, missing.count) { addNext() }
+            while let result = await group.next() {
+                if firstError == nil, let result { firstError = result }
+                addNext()
             }
+            return firstError
         }
     }
 
