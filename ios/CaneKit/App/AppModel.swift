@@ -28,9 +28,13 @@ final class AppModel {
     let haptics = HapticPlayer()
     /// JSONL trip log for reproducible test walks.
     let logger = TripLogger()
+    /// The app's single voice (step 4).
+    let speech = SpeechQueue()
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     @ObservationIgnored private let decider = CueDecider()
+    /// "door ahead, two meters" from the mesh classification (step 4).
+    @ObservationIgnored private let namer = ObstacleNamer()
     /// Kind currently decided as active (for the UI); `.clear` when nothing is in range.
     private(set) var activeCue: CueKind = .clear
     /// Last discrete cue fired and when (debug footer).
@@ -74,6 +78,10 @@ final class AppModel {
     var loggingEnabled: Bool = Settings.bool("loggingEnabled", default: true) {
         didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
+    /// Speak obstacle names ("door ahead, two meters"). Off = haptics only.
+    var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: true) {
+        didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
+    }
     /// Mirror every obstacle cue to the watch even while the phone engine is healthy.
     var fallbackToWatch: Bool = Settings.bool("fallbackToWatch", default: false) {
         didSet { Settings.set(fallbackToWatch, "fallbackToWatch") }
@@ -96,6 +104,7 @@ final class AppModel {
         started = true
         observeThermalAndBattery()
         logger.start()
+        speech.configureAudioSession()       // before ARKit and before the haptic engine
         haptics.start()
         depth.onReport = { [weak self] report in
             self?.handle(report)
@@ -103,6 +112,7 @@ final class AppModel {
         depth.start()
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy])
+        speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
     }
 
     /// Foreground/background transitions. ARKit pauses itself in the background; we pause the
@@ -120,6 +130,7 @@ final class AppModel {
             depth.pause()
             haptics.stopAll()
             decider.reset()
+            namer.reset()
             activeCue = .clear
             logger.flush()
         @unknown default:
@@ -150,7 +161,17 @@ final class AppModel {
                 logger.event("cue", ["kind": "clear"])
             }
         }
+        if obstacleNamesEnabled, let line = namer.update(report, now: report.timestamp) {
+            speech.say(line, .obstacle, ttl: 4)      // > namer interval + one utterance
+            logger.event("speech", ["text": line, "priority": "obstacle"])
+        }
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
+    }
+
+    /// Debug button: prove the audio route (AirPods) and the queue/interrupt behaviour.
+    func speechTest() {
+        speech.say("Scene test: sidewalk ahead, bike rack at ten o'clock, two meters.", .scene)
+        speech.say("Door ahead, one meter.", .obstacle)
     }
 
 

@@ -36,6 +36,21 @@ struct HapticsCard: View {
                 testButton("Right", "arrow.right", .right)
                 testButton("Head", "arrow.up.to.line", .head)
             }
+            Toggle("Speak obstacle names", isOn: $model.obstacleNamesEnabled)
+                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .accessibilityHint("Says door, wall, seat, window or table when one is straight ahead")
+            HStack(spacing: CKSpacing.sm) {
+                CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
+                             tone: model.speech.isSpeaking ? .warning : .neutral,
+                             systemImage: "speaker.wave.2", updatesFrequently: true)
+                Button("Speech test") { model.speechTest() }
+                    .buttonStyle(CKBigButtonStyle(role: .secondary))
+                    .frame(minHeight: CKMetrics.touchTarget)
+                    .accessibilityHint("Speaks a scene line, then an obstacle line that interrupts it")
+            }
+            if let err = model.speech.audioSessionError {
+                Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+            }
         }
     }
 

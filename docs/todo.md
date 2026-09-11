@@ -39,7 +39,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [ ] **Milestone: walk at a wall → the cane shakes** (go/no-go for steps 7–9)
 
 ## Step 4 — Speech + obstacle names
-- [ ] SpeechQueue (priority, interruptible, one audio session), ObstacleNamer, MeshClassifier (≤ 4 Hz)
+- [x] SpeechQueue (priority, interruptible, one audio session), ObstacleNamer, MeshClassifier (≤ 4 Hz) — compiles, Muse-reviewed, untested on device
 
 ## Step 5 — Watch
 - [ ] PhoneWatchLink (WCSession), WatchModel (haptics map, crown, HKWorkoutSession, buttons), cue mirroring

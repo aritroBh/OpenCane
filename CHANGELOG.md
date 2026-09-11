@@ -2,6 +2,17 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 4 — Speech + obstacle names (Fri Sep 11, pre-device)
+- SpeechQueue: one `.playback` session (`.duckOthers`, no Bluetooth options, interruption re-activation),
+  priorities scene < nav < obstacle, higher priority interrupts at a word boundary, FIFO within priority,
+  TTL drops stale lines, utterance identity guards against the late `didCancel` race, enhanced en-US voice.
+- ObstacleNamer: mesh class at the image centre → "door ahead, two meters" (door/wall/seat/window/table;
+  walls only < 1.5 m), one line per 2.5 s, re-announces only on class change or a full metre of movement.
+- AppModel: "CaneKit ready." on start, obstacle names toggle, speech test button + Speaking pill.
+- Test on device (AirPods in): "CaneKit ready" comes out of the AirPods; walk to a door → "door ahead, two
+  meters" once, closer → "door ahead, one meter"; a chair → "seat ahead…"; Speech test → the obstacle
+  line cuts the scene line at a word boundary; take a phone call → speech resumes afterwards.
+
 ## Step 3 — Core Haptics (Fri Sep 11, pre-device)
 - HapticPlayer: haptics-only CHHapticEngine, pre-built left (2 taps) / right (3 taps) / head (2 sharp hits)
   players, Geiger approach loop (single-transient player on a Task, 2 Hz at 2 m → 8 Hz at 0.5 m, intensity
