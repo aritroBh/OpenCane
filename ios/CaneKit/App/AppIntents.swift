@@ -36,6 +36,19 @@ struct StartDemoRouteIntent: AppIntent {
     }
 }
 
+struct RepeatInstructionIntent: AppIntent {
+    static let title: LocalizedStringResource = "Repeat instruction"
+    static let description = IntentDescription("Says the current route instruction again.")
+    static let supportedModes: IntentModes = .foreground(.immediate)
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let model = try await IntentSupport.model()
+        model.repeatInstruction()
+        return .result()
+    }
+}
+
 enum IntentSupport {
     struct NotReady: Error, CustomLocalizedStringResourceConvertible {
         var localizedStringResource: LocalizedStringResource { "CaneKit is still starting. Try again." }
@@ -64,5 +77,9 @@ struct CaneKitShortcuts: AppShortcutsProvider {
                     phrases: ["Start my route in \(.applicationName)"],
                     shortTitle: "Start route",
                     systemImageName: "figure.walk")
+        AppShortcut(intent: RepeatInstructionIntent(),
+                    phrases: ["Repeat in \(.applicationName)", "\(.applicationName) say that again"],
+                    shortTitle: "Repeat",
+                    systemImageName: "arrow.counterclockwise")
     }
 }

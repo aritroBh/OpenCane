@@ -5,6 +5,8 @@ Native SwiftUI · Swift 6 strict concurrency · Apple frameworks only. Targets: 
 Hardware: iPhone 17 Pro Max (LiDAR, Action button, Camera Control) clamped to a 28.75 mm non-metal pole,
 Apple Watch, AirPods Pro. Nothing else.
 
+Start here: [`docs/CODE_REFERENCE.md`](../docs/CODE_REFERENCE.md) (map of every file, type and function) · [`docs/devices_setup.md`](../docs/devices_setup.md) (AirPods + Apple Watch checklist) · [`AGENTS.md`](../AGENTS.md) (hard rules for editing the repo).
+
 **Status:** built step by step during the hackathon — `CHANGELOG.md` says which steps have landed. Paths marked
 `[step N]` below do not exist until that step; until step 1 lands there is no Xcode project in the repo.
 
@@ -65,7 +67,7 @@ The build Mac had **no Xcode** on Sep 10 (Command Line Tools only). Budget 2–3
 | Spec said | Reality (Apple docs, checked Sep 10) | What CaneKit does |
 |---|---|---|
 | `AVAudioEnvironmentNode.isListenerHeadTrackingEnabled` | Needs the **Head Pose** capability — paid team only | `CMHeadphoneMotionManager` yaw (relative, drifts) drives `listenerAngularOrientation`; **Recenter** on watch / every waypoint / auto when walking straight 3 s |
-| Watch side button = "next" | No API for the side button or a crown *press* | Crown rotation (≥ 3 detents) + big on-screen Next / Describe / Recenter |
+| Watch side button = "next" | No API for the side button or a crown *press* | Crown rotation (≥ 3 detents within 1 s) + big on-screen Repeat / Next / Describe / Recenter |
 | Camera Control press = describe | `AVCaptureEventInteraction` only fires for apps "actively performing capture"; unverified with ARKit owning the camera | Built and spiked in step 2; Action button + watch + on-screen button are the guaranteed paths |
 | Watch haptics on demand | `WKInterfaceDevice.play` no-ops unless the watch app is frontmost; `sendMessage` needs reachability | Watch runs a walking `HKWorkoutSession` (HealthKit on the watch target) so cues play wrist-down; `WKExtendedRuntimeSession` fallback |
 | Haptic rate ∝ 1/distance | `sendParameters` can't retime events | Geiger loop: one pre-built transient player fired on a timer, 2 Hz at 2 m → 8 Hz at 0.5 m |
@@ -93,8 +95,9 @@ The watch app installs through the Watch app on the phone (Automatic App Install
 `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` (git-ignored; `gen.sh` copies it if missing).
 Keys: `VLM_PROVIDER` (`custom` | `anthropic` | `gemini` | `openai`), `CUSTOM_BASE_URL` / `CUSTOM_API_KEY` /
 `CUSTOM_MODEL` (OpenAI-compatible chat endpoint — Muse 1.3), `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`.
-No key → the app speaks "no scene-description key" instead of crashing. Keys ship in plaintext inside the .app;
-fine for a local install, rotate them after the event.
+Voice: `ELEVENLABS_API_KEY`, optional `ELEVENLABS_VOICE_ID` (default: a warm premade voice) and `ELEVENLABS_MODEL`
+(default `eleven_flash_v2_5`). No ElevenLabs key → system voice; no VLM key → the app speaks "no scene-description
+key" instead of crashing. Keys ship in plaintext inside the .app; fine for a local install, rotate them after the event.
 
 Permissions (declared in `project.yml`, prompted on first use): camera + LiDAR (`NSCameraUsageDescription`),
 location when in use, motion (sweep gate, AirPods head tracking, steps), speech recognition + microphone
@@ -104,16 +107,25 @@ location when in use, motion (sweep gate, AirPods head tracking, steps), speech 
 ## 5. Testing
 
 - **Unit (`ios/Logic`, no device):** lane extraction on synthetic depth buffers, hysteresis / rate-limit state
-  machine, geofence + bearing math, MapKit steps → waypoints, watch message codec, VLM response parsing.
-  `cd ios/Logic && swift test`.
+  machine, geofence + bearing math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, watch message
+  codec, VLM response parsing, turn settle, straight-walk, spoken-cue policy, crown gesture. `make test` (79 tests).
+- **Simulator (`make sim`, `make uitest`, `make tour`):** the app builds for the simulator (no LiDAR, no haptics, no
+  watch). The simulator is an **iPhone 17 Pro Max on iOS 27** like the demo phone (`make sim17` creates it once;
+  Xcode 27 only pre-creates iPhone 18s). `CaneKitUITests` drives the real screens (start / Next / Recenter / Stop the
+  demo route, Where am I without a key, haptic test buttons, toggles, VoiceOver labels, empty destination);
+  `make tour` walks every screen state and saves a PNG per state to `ios/build/shots` for visual review.
+- **GPS replay in the simulator:** launch with `SIMCTL_CHILD_CANEKIT_DEMO_ROUTE=1 xcrun simctl launch …` and feed the
+  route with `xcrun simctl location <udid> start --speed=4 --interval=1 <lat,lon> …` (waypoint coordinates from
+  `route_isr_cif.json`); the trip log in the app container's Documents folder shows every waypoint / cue / line.
 - **Device-only (manual, per step's "test on device" line in `CHANGELOG.md`):** LiDAR scale, haptic feel through the
   clamp, beacon left/right + head-tracking sign, wrist-down watch taps, geofence timing, VLM latency, thermal.
 - **Reproducibility:** `TripLogger` writes a JSONL log (lanes, cue, GPS, heading, thermal, battery, speech) to the
   app's Documents folder → Files app / AirDrop. Film every outdoor test with a second phone.
-- **Go / no-go before a blindfolded ISR→CIF walk:** GPS accuracy ≤ 15 m for 30 s at the ISR door · wall at 1 m reads
-  0.8–1.2 m in all six tiles · head cue re-fires with a hand overhead · beacon L/R correct after Recenter · watch tap
-  felt wrist-down · arrival fires at CIF east within 25 m · battery > 40 %, thermal nominal/fair · spotter assigned,
-  kill-word ("stop") rehearsed. Any miss → sighted demo only.
+- **Go / no-go before a blindfolded ISR→CIF walk:** GPS accuracy ≤ 20 m for 30 s at the ISR door (fences and veer
+  cues pause above 20 m and the app says so) · wall at 1 m reads 0.8–1.2 m in all six tiles · head cue re-fires with a
+  hand overhead and "Head height." is spoken · beacon L/R correct after Recenter · watch tap felt wrist-down · "Repeat"
+  on the watch re-speaks the instruction · arrival fires at CIF east within 25 m · battery > 40 %, thermal nominal/fair ·
+  spotter assigned, kill-word ("stop") rehearsed. Any miss → sighted demo only.
 
 ## 6. Gotchas that survive from the first draft
 

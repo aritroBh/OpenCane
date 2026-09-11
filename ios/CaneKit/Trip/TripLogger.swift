@@ -44,7 +44,8 @@ final class TripLogger {
         let url = URL.documentsDirectory.appendingPathComponent(fileName)
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try? FileHandle(forWritingTo: url)
-        event("session", ["file": fileName, "device": ProcessInfo.processInfo.hostName])
+        // (`hostName` does a blocking reverse-DNS lookup on the main thread — never use it here.)
+        event("session", ["file": fileName, "os": ProcessInfo.processInfo.operatingSystemVersionString])
         flushTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))

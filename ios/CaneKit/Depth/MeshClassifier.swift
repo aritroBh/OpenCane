@@ -78,7 +78,12 @@ nonisolated enum MeshClassifier {
                     let vi: Int = idxBytes == 4
                         ? Int(facePtr.load(fromByteOffset: off, as: UInt32.self))
                         : Int(facePtr.load(fromByteOffset: off, as: UInt16.self))
-                    let v = vertPtr.advanced(by: vi * verts.stride).assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                    // Vertices are packed float3 (12-byte stride); SIMD3<Float> is 16 bytes, so
+                    // read the three components individually to avoid a misaligned over-read.
+                    let base = vertPtr.advanced(by: vi * verts.stride)
+                    let v = SIMD3<Float>(base.load(fromByteOffset: 0, as: Float.self),
+                                         base.load(fromByteOffset: 4, as: Float.self),
+                                         base.load(fromByteOffset: 8, as: Float.self))
                     centroid += v
                 }
                 centroid /= 3

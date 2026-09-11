@@ -147,13 +147,32 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
+  # ───────────────────────────── UI tests (simulator) ─────────────────────────────
+  CaneKitUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: CaneKitUITests
+    dependencies:
+      - target: CaneKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.uitests
+        TEST_TARGET_NAME: CaneKit
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+
 schemes:
   CaneKit:
     build:
       targets:
         CaneKit: all
+        CaneKitUITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - CaneKitUITests
     archive:
       config: Release
   CaneKitWatch:

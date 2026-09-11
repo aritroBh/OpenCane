@@ -28,7 +28,7 @@ struct HapticsCard: View {
             }
             Toggle("Silence haptics", isOn: $model.hapticsSilenced)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Cues are still decided and logged, but the phone does not vibrate")
+                .accessibilityHint("The phone stops vibrating; obstacle cues go to the watch and are spoken instead")
             Text("Test patterns").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             HStack(spacing: CKSpacing.sm) {
                 testButton("Left", "arrow.left", .left)
@@ -43,15 +43,16 @@ struct HapticsCard: View {
                 CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
                              tone: model.speech.isSpeaking ? .warning : .neutral,
                              systemImage: "speaker.wave.2", updatesFrequently: true)
-                CKStatusPill(text: model.speech.naturalVoice == nil ? "System voice" : model.speech.backendName,
+                // "System" / "ElevenLabs": one word so the pill row fits a 17 Pro Max with the button.
+                CKStatusPill(text: model.speech.naturalVoice == nil ? "System" : model.speech.backendName,
                              tone: model.speech.naturalVoice == nil ? .neutral : .trusted,
                              systemImage: "waveform.and.mic",
                              spoken: model.speech.naturalVoice == nil ? "System voice; add an ElevenLabs key for the natural voice" : "Voice: \(model.speech.backendName)")
-                Button("Speech test") { model.speechTest() }
-                    .buttonStyle(CKBigButtonStyle(role: .secondary))
-                    .frame(minHeight: CKMetrics.touchTarget)
-                    .accessibilityHint("Speaks a scene line, then an obstacle line that interrupts it")
+                Spacer(minLength: 0)
             }
+            // Own row: sharing the pill row squeezed "Speaking" to "SPEAKI…" on a 17 Pro Max.
+            CKBigButton(title: "Speech test", systemImage: "speaker.wave.3", role: .secondary,
+                        hint: "Speaks a scene line, then an obstacle line that interrupts it") { model.speechTest() }
             if let err = model.speech.audioSessionError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }

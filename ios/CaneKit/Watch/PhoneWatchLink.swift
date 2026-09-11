@@ -147,7 +147,8 @@ nonisolated private final class SessionRelay: NSObject, WCSessionDelegate, @unch
     }
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        if let cmd = WatchEnvelope.decodeWatchToPhone(message) { onCommand?(cmd) }
-        replyHandler(["ok": true])
+        let cmd = WatchEnvelope.decodeWatchToPhone(message)
+        if let cmd { onCommand?(cmd) }
+        replyHandler(["ok": cmd != nil])        // false = watch is newer than this phone build
     }
 }

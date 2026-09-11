@@ -46,8 +46,8 @@ final class WatchModel {
     @ObservationIgnored private var workoutRelay: WorkoutRelay?
     @ObservationIgnored private var runtime: WKExtendedRuntimeSession?
     @ObservationIgnored private var runtimeRelay: RuntimeRelay?
-    @ObservationIgnored private var crownTravel = 0.0
-    @ObservationIgnored private var lastCrownAdvance: TimeInterval = -.infinity
+    /// CaneKitLogic.CrownAccumulator (unit-tested): 3 detents within 1 s of the first, 0.8 s debounce.
+    @ObservationIgnored private var crown = CrownAccumulator()
 
     init() {}
 
@@ -88,7 +88,7 @@ final class WatchModel {
             lastCue = "obstacle \(kind.rawValue)"
         case .status(let text, let d):
             instruction = text
-            distanceM = d
+            distanceM = d >= 0 ? d : nil           // the phone sends -1 for "unknown"
         }
     }
 
@@ -124,26 +124,31 @@ final class WatchModel {
         guard session.activationState == .activated, session.isReachable,
               let dict = try? WatchEnvelope.encode(cmd) else {
             lastError = "Phone not reachable"
-            play(.failure)
+            play(.retry)                    // never .failure: that pattern means "head height"
             return
         }
         lastError = nil
-        session.sendMessage(dict, replyHandler: nil) { [weak self] error in
+        // The phone replies ok=false when it does not know the command (an older phone build than
+        // the watch, e.g. Repeat): say so instead of a reassuring click that did nothing.
+        session.sendMessage(dict, replyHandler: { @Sendable [weak self] reply in
+            let ok = reply["ok"] as? Bool ?? true
+            Task { @MainActor [weak self] in
+                guard !ok, let self else { return }
+                self.lastError = "Update the phone app"
+                self.play(.retry)
+            }
+        }, errorHandler: { @Sendable [weak self] error in
             let text = error.localizedDescription
             Task { @MainActor [weak self] in self?.lastError = text }
-        }
+        })
         play(.click)
     }
 
-    /// Digital Crown: accumulate travel in either direction; three detents = "next waypoint",
-    /// then a 0.8 s debounce.
+    /// Digital Crown: three detents (either direction) within one second of the first = "next
+    /// waypoint", then a 0.8 s debounce. The window is anchored at the first detent, so a cuff
+    /// brushing the crown once per arm swing never adds up to a skip.
     func crownMoved(delta: Double, now: TimeInterval) {
-        crownTravel += abs(delta)
-        guard crownTravel >= 3 else { return }
-        crownTravel = 0
-        guard now - lastCrownAdvance >= 0.8 else { return }
-        lastCrownAdvance = now
-        send(.nextWaypoint)
+        if crown.move(delta: delta, now: now) { send(.nextWaypoint) }
     }
 
     // MARK: Keep-alive

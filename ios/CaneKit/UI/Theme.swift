@@ -235,6 +235,8 @@ struct CKStatusPill: View {
                 .font(CKFont.pill)
                 .kerning(0.9)
                 .monospacedDigit()
+                .lineLimit(1)                       // a pill never hyphenates ("SPEAK-ING")
+                .minimumScaleFactor(0.8)
         }
         .foregroundStyle(tone == .neutral ? CKColor.textPrimary : CKColor.ink)
         .padding(.horizontal, CKSpacing.md)

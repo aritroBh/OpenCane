@@ -18,14 +18,22 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
     public var crossing: Bool
     /// Bearing to walk after this waypoint, degrees true. nil on the last waypoint.
     public var bearingNextDeg: Double?
+    /// The leg *after* this waypoint is not a straight line (e.g. "covered walk south, then the
+    /// path west"): the chord bearing would be wrong, so no veer cues and the beacon stays quiet
+    /// on that leg — the spoken line guides. Optional in JSON (`"curved": true`), default false.
+    public var curved: Bool
+    /// Short spoken name ("Goodwin Avenue") for "Passed …" / "Next, … in N meters". Optional in
+    /// JSON (`"name"`); falls back to the first sentence of `say`.
+    public var name: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, lat, lon, say, crossing
+        case id, lat, lon, say, crossing, curved, name
         case radiusM = "radius_m"
         case bearingNextDeg = "bearing_next_deg"
     }
 
-    public init(id: Int, lat: Double, lon: Double, radiusM: Double, say: String, crossing: Bool, bearingNextDeg: Double?) {
+    public init(id: Int, lat: Double, lon: Double, radiusM: Double, say: String, crossing: Bool,
+                bearingNextDeg: Double?, curved: Bool = false, name: String? = nil) {
         self.id = id
         self.lat = lat
         self.lon = lon
@@ -33,9 +41,31 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
         self.say = say
         self.crossing = crossing
         self.bearingNextDeg = bearingNextDeg
+        self.curved = curved
+        self.name = name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        lat = try c.decode(Double.self, forKey: .lat)
+        lon = try c.decode(Double.self, forKey: .lon)
+        radiusM = try c.decode(Double.self, forKey: .radiusM)
+        say = try c.decode(String.self, forKey: .say)
+        crossing = try c.decode(Bool.self, forKey: .crossing)
+        bearingNextDeg = try c.decodeIfPresent(Double.self, forKey: .bearingNextDeg)
+        curved = try c.decodeIfPresent(Bool.self, forKey: .curved) ?? false
+        name = try c.decodeIfPresent(String.self, forKey: .name)
     }
 
     public var coordinate: Coordinate { Coordinate(latitude: lat, longitude: lon) }
+
+    /// Spoken place name: `name` when set, else the first sentence of the spoken line.
+    public var placeName: String {
+        if let name, !name.isEmpty { return name }
+        let first = say.split(separator: ".", maxSplits: 1).first.map(String.init) ?? say
+        return first.trimmingCharacters(in: .whitespaces)
+    }
 }
 
 public struct Route: Sendable, Equatable, Codable {

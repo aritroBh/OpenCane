@@ -42,8 +42,9 @@ enum WKSpacing {
     static let xs: CGFloat = 4
     static let sm: CGFloat = 8
     static let md: CGFloat = 12
-    /// HIG minimum is 44; we use 48 so three buttons plus a footer fit a 45 mm screen.
-    static let touchTarget: CGFloat = 48
+    /// HIG minimum. Instruction (2 lines) + three 44 pt rows fit a 42 mm screen under the
+    /// inline title; 48 pushed the bottom row off the 46 mm bezel.
+    static let touchTarget: CGFloat = 44
 }
 
 /// Full-width watch button: word + symbol, ≥ 48 pt tall, VoiceOver hint required in production.
@@ -55,16 +56,29 @@ struct WKBigButton: View {
     var role: Role = .primary
     var hint: String? = nil
     var value: String? = nil
+    /// Half-width variant: symbol over a caption, centred — two of these share a row without
+    /// truncating ("De…" / "Rece…" at 46 mm). VoiceOver still reads the full title.
+    var compact: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: WKSpacing.sm) {
-                Image(systemName: systemImage).font(.headline.weight(.bold)).accessibilityHidden(true)
-                Text(title).font(WKFont.button).lineLimit(1).minimumScaleFactor(0.8)
-                Spacer(minLength: 0)
+            Group {
+                if compact {
+                    VStack(spacing: 2) {
+                        Image(systemName: systemImage).font(.headline.weight(.bold)).accessibilityHidden(true)
+                        Text(title).font(.caption2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .padding(.horizontal, WKSpacing.xs)
+                } else {
+                    HStack(spacing: WKSpacing.sm) {
+                        Image(systemName: systemImage).font(.headline.weight(.bold)).accessibilityHidden(true)
+                        Text(title).font(WKFont.button).lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, WKSpacing.md)
+                }
             }
-            .padding(.horizontal, WKSpacing.md)
             .frame(maxWidth: .infinity, minHeight: WKSpacing.touchTarget)
             .foregroundStyle(role == .secondary ? WKColor.text : WKColor.ink)
             .background(fill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

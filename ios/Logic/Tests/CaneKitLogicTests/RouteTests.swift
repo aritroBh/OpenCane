@@ -61,7 +61,30 @@ private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
     #expect(r.waypoints.map(\.id) == Array(1...r.waypoints.count))
     #expect(r.waypoints.last?.bearingNextDeg == nil)
     #expect(r.waypoints.last?.radiusM == 20)
-    #expect(r.waypoints.filter(\.crossing).count >= 4)
+    // Exact pins for the demo route (a hand edit must update these on purpose).
+    #expect(r.waypoints.filter(\.crossing).map(\.id) == [4, 6, 7])
+    #expect(r.waypoints.filter(\.curved).map(\.id) == [1])
+    for wp in r.waypoints where [3, 6, 8].contains(wp.id) {
+        #expect(wp.radiusM == 12, "turn waypoint \(wp.id) should have a 12 m fence")
+    }
+    for wp in r.waypoints.dropLast() {
+        #expect(wp.radiusM >= 10 && wp.radiusM <= 20, "waypoint \(wp.id) fence out of range")
+    }
+    // Text and flag agree both ways.
+    for wp in r.waypoints {
+        if wp.crossing {
+            #expect(wp.say.localizedCaseInsensitiveContains("crossing"), "waypoint \(wp.id) crossing without saying so")
+        } else {
+            let saysCross = wp.say.range(of: "cross", options: .caseInsensitive) != nil
+            #expect(!saysCross || wp.say.localizedCaseInsensitiveContains("no crossing"),
+                    "waypoint \(wp.id) mentions crossing but is not flagged")
+        }
+    }
+    #expect(r.waypoints[2].placeName == "Goodwin Avenue")
+    // Every waypoint has a short spoken name (used in "Passed …" and "Next, … in N meters").
+    for wp in r.waypoints {
+        #expect(wp.name != nil && wp.placeName.count <= 30, "waypoint \(wp.id) needs a short name")
+    }
     #expect(r.bearingInconsistencies(tolerance: 15).isEmpty)
     // Consecutive waypoints are between 20 m and 300 m apart (no duplicates, no teleports).
     for (a, b) in zip(r.waypoints, r.waypoints.dropFirst()) {

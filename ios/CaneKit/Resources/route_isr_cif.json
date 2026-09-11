@@ -5,15 +5,18 @@
   "waypoints": [
     {
       "id": 1,
+      "name": "the Townsend Hall doors",
       "lat": 40.10949,
       "lon": -88.22135,
       "radius_m": 15,
       "say": "Leaving Townsend Hall through the ISR front doors. Follow the covered walk south, then the path west and down to the Illinois Street sidewalk.",
       "crossing": false,
-      "bearing_next_deg": 225.6
+      "bearing_next_deg": 225.6,
+      "curved": true
     },
     {
       "id": 2,
+      "name": "the Illinois Street sidewalk",
       "lat": 40.10913,
       "lon": -88.22183,
       "radius_m": 15,
@@ -23,15 +26,17 @@
     },
     {
       "id": 3,
+      "name": "Goodwin Avenue",
       "lat": 40.10904,
       "lon": -88.2239,
-      "radius_m": 15,
+      "radius_m": 12,
       "say": "Goodwin Avenue. Intersection. Turn right to face north and stay on this side. No crossing needed. Listen for traffic.",
-      "crossing": true,
+      "crossing": false,
       "bearing_next_deg": 358.5
     },
     {
       "id": 4,
+      "name": "Green Street",
       "lat": 40.1105,
       "lon": -88.22395,
       "radius_m": 15,
@@ -41,6 +46,7 @@
     },
     {
       "id": 5,
+      "name": "the middle of Goodwin",
       "lat": 40.11163,
       "lon": -88.22396,
       "radius_m": 15,
@@ -50,15 +56,17 @@
     },
     {
       "id": 6,
+      "name": "Springfield Avenue",
       "lat": 40.11277,
       "lon": -88.22397,
-      "radius_m": 15,
-      "say": "Springfield Avenue. Crossing Goodwin. Signalized, push button. Listen for traffic, cross to the west side, then turn left and walk west.",
+      "radius_m": 12,
+      "say": "Springfield Avenue. Turn left to face west. Crossing Goodwin, signalized, push button. Listen for traffic, then cross and keep walking west.",
       "crossing": true,
       "bearing_next_deg": 270.0
     },
     {
       "id": 7,
+      "name": "Mathews Avenue",
       "lat": 40.11277,
       "lon": -88.22563,
       "radius_m": 15,
@@ -68,15 +76,17 @@
     },
     {
       "id": 8,
+      "name": "the path to CIF",
       "lat": 40.11265,
       "lon": -88.22741,
-      "radius_m": 15,
+      "radius_m": 12,
       "say": "CIF is ahead on your left. Turn left and follow the path south-west to the east entrance.",
       "crossing": false,
       "bearing_next_deg": 237.4
     },
     {
       "id": 9,
+      "name": "the CIF east entrance",
       "lat": 40.11242,
       "lon": -88.22788,
       "radius_m": 20,

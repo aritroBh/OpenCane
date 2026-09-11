@@ -44,6 +44,8 @@ final class AppModel {
     let beacon = BeaconEngine()
     /// AirPods head yaw (step 7).
     let head = HeadPoseTracker()
+    /// Headphones present? (beacon gate, spoken connect/disconnect lines).
+    let audioRoute = AudioRouteMonitor()
     /// "Where am I" (step 8).
     let describer: SceneDescriber
     /// Elapsed / distance / steps for the arrival card (step 9).
@@ -146,7 +148,10 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.beacon.setSpeaking(self.speech.isSpeaking)
-                self.beacon.setHeadYaw(self.head.headYawDeg ?? 0)
+                // After a turn the AirPods yaw (relative to the *old* reference) contains the body
+                // turn that the phone heading already has: adding both double-counts it. Until
+                // the reference is re-zeroed on the new leg, render from the heading alone.
+                self.beacon.setHeadYaw(self.recenterPending ? 0 : (self.head.headYawDeg ?? 0))
                 self.beacon.setTarget(bearing: self.nav.isNavigating ? self.nav.targetBearing : nil)
                 try? await Task.sleep(for: .milliseconds(100))
             }
@@ -165,10 +170,17 @@ final class AppModel {
         observeThermalAndBattery()
         logger.start()
         speech.configureAudioSession()       // before ARKit and before the haptic engine
+        wireAudioRoute()
         haptics.start()
         watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
         watch.activate()
         wireNavigation()
+        // Location prompt at launch (a sighted helper is usually present then); Motion and
+        // HealthKit prompt at route start, so no three-alert pile-up on the first walk.
+        // (Skipped under XCUITest: the three-choice alert races the first tap.)
+        if ProcessInfo.processInfo.environment["CANEKIT_UITEST"] != "1" {
+            location.requestAuthorization()
+        }
         depth.onReport = { [weak self] report in
             self?.handle(report)
         }
@@ -218,10 +230,13 @@ final class AppModel {
             case .fire(let cue):
                 activeCue = cue.kind
                 haptics.play(cue)
-                // Wrist mirror: whenever the phone cannot buzz, or the user asked for both.
-                if !haptics.isHealthy || fallbackToWatch {
+                // Wrist mirror: whenever the phone cannot buzz (engine down *or* silenced), or
+                // the user asked for both.
+                let phoneCannotBuzz = !haptics.isHealthy || haptics.silenced
+                if phoneCannotBuzz || fallbackToWatch {
                     watch.send(obstacle: cue.kind, now: report.timestamp)
                 }
+                speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: report.timestamp)
                 lastCueDescription = "\(cue.kind.rawValue) @ \(String(format: "%.1f", report.timestamp))s"
                 var fields: [String: Any] = ["kind": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
@@ -232,6 +247,7 @@ final class AppModel {
             case .stop:
                 activeCue = .clear
                 haptics.stopAll()
+                cueSpeech.cleared()              // the next head cue is a new episode
                 logger.event("cue", ["kind": "clear"])
             }
         }
@@ -240,6 +256,57 @@ final class AppModel {
             logger.event("speech", ["text": line, "priority": "obstacle"])
         }
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
+    }
+
+    /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
+    @ObservationIgnored private var cueSpeech = CueSpeechPolicy()
+
+    /// Voice channel for obstacle cues. "Head height." is spoken once per obstacle episode (plan:
+    /// "the .head cue must never be suppressed" — an overhanging sign has no mesh class and the
+    /// clamp may damp the tap), never re-spoken every few seconds under the same branch (that
+    /// cut crossing lines to pieces). Left / right / ahead are spoken only when the phone cannot
+    /// buzz; otherwise the Taptic pattern is the channel.
+    private func speakCueIfNeeded(_ cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) {
+        guard let (text, tier) = cueSpeech.line(for: cue, phoneCannotBuzz: phoneCannotBuzz, now: now) else { return }
+        let priority: SpeechPriority = tier == .safety ? .safety : .obstacle
+        // 6 s: long enough to survive queuing behind a crossing line, short enough to stay current.
+        speech.say(text, priority, ttl: 6)
+        logger.event("speech", ["text": text, "priority": "\(priority)"])
+    }
+
+    // MARK: Headphones / watch presence
+
+    /// Beacon only into headphones; say when they come and go so a blind user knows why the
+    /// click vanished (and that speech is now coming out of the cane).
+    private func wireAudioRoute() {
+        audioRoute.onChange = { [weak self] connected, name in
+            guard let self else { return }
+            self.beacon.headphonesConnected = connected
+            self.logger.event("audioroute", ["connected": connected, "name": name])
+            if connected {
+                self.speech.say("\(name) connected.", .nav, ttl: 5)
+                if self.nav.isNavigating { self.head.start(); self.recenterPending = true }
+            } else {
+                self.speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)
+            }
+        }
+        audioRoute.start()
+        beacon.headphonesConnected = audioRoute.headphonesConnected
+    }
+
+    /// Spoken once at route start so the walker knows which channels are live before moving.
+    private func announceChannels() {
+        var lines: [String] = []
+        if !audioRoute.headphonesConnected {
+            lines.append("No headphones. Beacon paused until AirPods connect.")
+        }
+        if watch.isPaired, !watch.isReachable {
+            lines.append("Watch not reachable. Open CaneKit on the watch.")
+        }
+        if !haptics.isHealthy && !watch.isReachable {
+            lines.append("Haptics unavailable. Obstacle cues will be spoken.")
+        }
+        for line in lines { speech.say(line, .nav, ttl: 20) }
     }
 
     // MARK: Navigation (step 6)
@@ -252,6 +319,9 @@ final class AppModel {
             if self.nav.isNavigating {
                 self.liveActivity.update(instruction: self.nav.instruction,
                                          distanceM: self.nav.distanceToNext ?? 0, kind: self.lastNavKind)
+                // The link dedups (same text and < 5 m change), so this is ~1 message / 5 s.
+                self.pushStatusToWatch()
+                self.autoRecenterIfWalkingStraight(fix)
             }
             self.logger.event("gps", ["lat": fix.coordinate.latitude, "lon": fix.coordinate.longitude,
                                       "acc": fix.accuracy, "speed": fix.speed])
@@ -267,6 +337,10 @@ final class AppModel {
             self?.speech.say(text, priority, ttl: 12)
             self?.logger.event("speech", ["text": text, "priority": "nav"])
         }
+        nav.onRepeat = { [weak self] text in
+            self?.speech.sayAgain(text, .nav)
+            self?.logger.event("speech", ["text": text, "priority": "nav", "repeat": true])
+        }
         nav.onNavCue = { [weak self] cue in
             self?.watch.send(nav: cue)
             self?.lastNavKind = cue.rawValue
@@ -276,14 +350,11 @@ final class AppModel {
             guard let self else { return }
             self.logger.event("waypoint", ["index": self.nav.waypointIndex])
             self.pushStatusToWatch()
-            // Auto-recenter once the turn has settled (same window the veer cue waits for):
-            // by then the user faces the new leg, so "head straight" = phone heading.
-            let settle = self.nav.turnSettleSeconds
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(settle))
-                guard let self, self.nav.isNavigating else { return }
-                self.head.recenter()
-            }
+            // The head reference is re-zeroed on the new leg, but only once the user is
+            // demonstrably walking it straight (never on a timer: at a curb they are stopped
+            // with their head turned toward traffic).
+            self.recenterPending = true
+            self.straightWalk.reset()
         }
         nav.onArrived = { [weak self] in
             guard let self else { return }
@@ -300,6 +371,7 @@ final class AppModel {
                 await self.trip.stop()
                 let destination = self.nav.route?.waypoints.last?.say ?? "Arrived"
                 let summary = self.trip.spokenSummary(destination: destination)
+                self.nav.appendToLastSpoken(summary)     // Repeat at the door includes the numbers
                 self.speech.say(summary, .nav, ttl: 30)
                 self.logger.event("speech", ["text": summary, "priority": "nav"])
             }
@@ -312,8 +384,43 @@ final class AppModel {
     /// The user is facing the way to walk: zero the head yaw there.
     func recenter() {
         head.recenter()
+        recenterPending = false
         speech.say("Recentered.", .nav, ttl: 2)
         logger.event("recenter")
+    }
+
+    /// Say the current instruction again (phone button, watch "Repeat", Siri).
+    func repeatInstruction() {
+        nav.repeatInstruction()
+        logger.event("repeat")
+    }
+
+    // MARK: Auto-recenter (README §3: "auto when walking straight for 3 s")
+
+    /// Set at route start and after every waypoint; cleared once a recenter happens. While set,
+    /// the beacon renders from the phone heading alone (see startTicker).
+    @ObservationIgnored private var recenterPending = false
+    /// CaneKitLogic.StraightWalkDetector (unit-tested): 3 fixes > 0.9 m/s, steady course, still head.
+    @ObservationIgnored private var straightWalk = StraightWalkDetector()
+    /// After a crossing the user steps off the curb with the head still turned toward traffic:
+    /// only re-zero once they are this far past the crossing waypoint.
+    private let recenterAfterCrossingM: Double = 15
+
+    /// Walking straight on the new leg with a still head and no turn in progress: the head is
+    /// straight, so this pose becomes the beacon's forward.
+    private func autoRecenterIfWalkingStraight(_ fix: GeoFix) {
+        guard recenterPending, !nav.isSettling, head.isConnected else { straightWalk.reset(); return }
+        if let wp = nav.lastReached, wp.crossing,
+           GeoMath.distanceMeters(fix.coordinate, wp.coordinate) < recenterAfterCrossingM {
+            straightWalk.reset()
+            return
+        }
+        let straight = straightWalk.update(speed: fix.speed, accuracy: fix.accuracy,
+                                           heading: location.heading, headYaw: head.headYawDeg ?? 0)
+        guard straight else { return }
+        head.recenter()
+        recenterPending = false
+        logger.event("recenter", ["auto": true])
     }
 
     /// Start the bundled demo route (ISR Townsend Hall → CIF).
@@ -377,8 +484,9 @@ final class AppModel {
     /// Lines the natural voice should have ready before they are needed.
     static let commonLines = [
         "CaneKit ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
-        "Veer left.", "Veer right.", "GPS weak. Cues may be late.", "GPS back.",
+        "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
+        "Head height.", "Left.", "Right.", "Passed one waypoint.",
     ]
 
     private func beginRoute(_ route: Route) {
@@ -390,12 +498,17 @@ final class AppModel {
         nav.start(route)
         beacon.start()
         head.start()
+        recenterPending = true               // first straight stretch zeroes the head reference
+        straightWalk.reset()
+        cueSpeech = CueSpeechPolicy()
         startTicker()
         trip.start()
         lastNavKind = "straight"
         liveActivity.start(routeName: route.name, instruction: nav.instruction, distanceM: nav.distanceToNext ?? 0)
-        logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count])
+        logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count,
+                               "headphones": audioRoute.outputName, "watch": watch.isReachable])
         pushStatusToWatch()
+        announceChannels()
     }
 
     private func pushStatusToWatch() {
@@ -413,6 +526,7 @@ final class AppModel {
             if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
         case .describe: describeScene()
         case .recenter: recenter()
+        case .repeatLast: repeatInstruction()
         }
     }
 

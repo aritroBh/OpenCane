@@ -2,6 +2,52 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 10 — Two adversarial review rounds, AirPods/Watch presence, XCUITests (Fri Sep 11, pre-device)
+Round 1 (full-app review, 65 agents) and round 2 (review of the round-1 fixes, 5 dimensions, 30+
+findings) and a Muse review of the result are folded in. Verified by 79 logic tests, a green simulator build, 6 XCUITests and the
+screenshot tour on the **iPhone 17 Pro Max / iOS 27** simulator, and a GPS replay with deliberately
+missed fences. Every rule with a number in it moved to `CaneKitLogic` with tests
+(`NavSupport.swift`: TurnSettle, StraightWalkDetector, CueSpeechPolicy, CrownAccumulator).
+
+- **A missed fence never strands the route.** Skip-ahead over the next two waypoints ("Passed one
+  waypoint." + the real line); passed-by detection (2× radius, then receding a radius, 1 m jitter
+  tolerance) says "Passed Goodwin Avenue. Green Street in 150 meters." instead of a stale "turn right";
+  near a waypoint the beacon follows the recorded leg bearing and veer cues are muted, so nothing points
+  back at a missed waypoint. "GPS weak" fires at the same 20 m that pauses the fences.
+- **Arrival is plausible, not lucky.** `distance + accuracy/2 ≤ 20 m` on two consecutive fixes; one 30 m
+  blob 45 m short of CIF can no longer end the route.
+- **No false "Veer" at corners.** The turn settles on distance (6 m, or receding on two good moving
+  fixes), on the body heading matching the new leg, or after 25 s of *moving* time — never on a timer,
+  never on a standing fix. At a crossing the beacon is silent until you reach the curb. WP1's S-shaped
+  path is marked `curved` (no veer, beacon quiet), WP3 is a turn not a crossing, turn fences are 12 m,
+  and WP6 now says "Turn left to face west" before the crossing.
+- **Beacon honesty.** Plays only into headphones; ignores AirPods yaw until re-zeroed after a turn (no
+  double-counted body turn); auto-recenter needs 3 straight fixes and never fires within 15 m of a
+  crossing; restarts after a phone call with retries.
+- **Speech that is never lost or looped.** Priorities scene < obstacle < route < "Head height.";
+  an interrupted line resumes once (then Repeat); "Head height." once per obstacle episode; warnings
+  never wait for ElevenLabs; calls/Siri queue lines and drain afterwards; watchdog for stalled backends.
+  **Repeat** (phone, watch, "Repeat in CaneKit") says the last line actually spoken + where the next
+  waypoint is, even mid-line.
+- **AirPods + Watch presence.** New `AudioRouteMonitor`: "<AirPods name> connected." / "Headphones
+  disconnected. Beacon paused."; at route start the app says which channel is missing (no headphones,
+  watch not reachable, no haptics). Guide card pills show "No AirPods" / "Head tracked" / "Compass only".
+  Watch: distance in the title bar, phone-link glyph, Repeat / Next / Describe / Recenter fit a 42–46 mm
+  screen, crown = 3 detents within 1 s, "Update the phone app" when the phone is older than the watch.
+  Watch gets a status update on every fix (was: only at waypoints). See `docs/devices_setup.md`.
+- Silenced or dead haptics mirror obstacle cues to the watch and speak them.
+- UI: two-per-row guide buttons (no hyphenated "Recen-ter"), single-line pills, fixed "Go" button,
+  full instruction text; Repeat stays after arrival.
+- Infra: `make uitest` / `make tour` / `make sim17` / `make sim-grant`; `.github/workflows/ci.yml`
+  (logic tests on every push); `AGENTS.md`, `CLAUDE.md`, `docs/CODE_REFERENCE.md` for future agents.
+- Test on device: see `docs/devices_setup.md` first (AirPods Spatial Audio off, watch app open). Then:
+  walk past WP2 on the far side of the path → "Passed Illinois Street sidewalk…" and no "Veer"; at
+  Goodwin keep walking to the corner → no "Veer" until you turn, beacon then swings north; at Green St
+  stand at the curb with your head turned → no clicks until you face north; tap Repeat on the watch
+  mid-line → the line again + distance to the next waypoint; pull the AirPods out → "Headphones
+  disconnected. Beacon paused."; toggle Silence haptics and raise a hand overhead → wrist tap +
+  "Head height." once; take a call mid-route → speech and beacon resume.
+
 ## Steps 8–9 — Scene description, arrival card, Live Activity (Fri Sep 11, pre-device)
 - "Where am I": VLMClient protocol with OpenAI-compatible (Muse 1.3 / OpenAI), Anthropic and Gemini
   transports (bodies + parsing unit-tested), SceneDescriber (waits ≤ 3 s for a camera frame, 1024 px JPEG

@@ -21,7 +21,8 @@ public enum PhoneToWatch: Sendable, Codable, Equatable {
 }
 
 public enum WatchToPhone: String, Sendable, Codable, CaseIterable {
-    case nextWaypoint, describe, recenter
+    /// `repeatLast` re-speaks the current instruction (a cut-off crossing line is otherwise lost).
+    case nextWaypoint, describe, recenter, repeatLast
 }
 
 public enum WatchEnvelope {

@@ -4,6 +4,8 @@ Clip a phone onto the white cane you already own. The iPhone (LiDAR + ARKit) is 
 engine; the Apple Watch carries turn cues; AirPods Pro carry the audio beacon and speech. "Phone-only" means
 no ESP32 grip and nothing to buy — the Watch and AirPods Pro the team already owns are part of the demo.
 
+Start here: [`docs/CODE_REFERENCE.md`](docs/CODE_REFERENCE.md) (map of every file, type and function) · [`docs/devices_setup.md`](docs/devices_setup.md) (AirPods + Apple Watch checklist) · [`AGENTS.md`](AGENTS.md) (hard rules for editing the repo).
+
 - `docs/ideas.md` — the plan: verdict, pushbacks, form factor, software architecture, ISR→CIF demo, pitch.
   **§9 is the current decision: phone-only, buy nothing.** §3–4 (ESP32 grip, buy list) are historical.
 - `ios/` — **CaneKit**, native iOS 26 app + watchOS companion (Swift 6, SwiftUI). See `ios/README.md`

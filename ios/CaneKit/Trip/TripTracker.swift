@@ -89,7 +89,9 @@ final class TripTracker {
         let minutes = Int((elapsed / 60).rounded())
         parts.append(minutes == 1 ? "1 minute" : "\(minutes) minutes")
         if let steps { parts.append("\(steps) steps") }
-        return "\(destination). " + parts.joined(separator: ", ") + "."
+        // Waypoint lines already end in a full stop; avoid "entrance.. 1.0 kilometers".
+        let name = destination.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return "\(name). " + parts.joined(separator: ", ") + "."
     }
 
     // MARK: Steps

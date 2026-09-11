@@ -24,7 +24,7 @@ APP     = $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/CaneKit.app
 BUNDLE  = com.aritro.canekit
 XCB     = xcodebuild -project CaneKit.xcodeproj -scheme $(SCHEME) -configuration $(CONFIG) -derivedDataPath $(DERIVED)
 
-.PHONY: gen test build install launch run sim devices clean check-env
+.PHONY: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant
 
 gen:
 	scripts/gen.sh
@@ -51,6 +51,29 @@ run: gen build install launch
 
 sim:
 	$(XCB) -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build
+
+# XCUITest run in the simulator (SIM = a booted or bootable simulator name/UDID).
+# The demo phone is an iPhone 17 Pro Max on iOS 27; Xcode 27 does not create that device by
+# default — `make sim17` creates it once.
+SIM ?= iPhone 17 Pro Max
+# Pre-answer the permission prompts so no system alert races the first tap (fresh simulator / CI).
+sim-grant:
+	-xcrun simctl boot "$(SIM)" 2>/dev/null
+	-xcrun simctl privacy "$(SIM)" grant location $(BUNDLE)
+	-xcrun simctl privacy "$(SIM)" grant motion $(BUNDLE)
+
+uitest: sim-grant
+	$(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO -only-testing:CaneKitUITests test
+
+# Screenshot tour of every screen state (CaneKitVisualTour); PNGs land in SHOTS.
+SHOTS ?= $(DERIVED)/shots
+tour: sim-grant
+	mkdir -p $(SHOTS)
+	$(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO \
+	  -only-testing:CaneKitUITests/CaneKitVisualTour TEST_RUNNER_CANEKIT_SHOTS=$(abspath $(SHOTS)) test
+
+sim17:
+	xcrun simctl create "iPhone 17 Pro Max" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max com.apple.CoreSimulator.SimRuntime.iOS-27-0
 
 devices:
 	xcrun devicectl list devices

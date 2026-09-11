@@ -13,7 +13,24 @@ struct WatchContentView: View {
     @State private var crown = 0.0
 
     var body: some View {
-        // No ScrollView: it would take the crown for scrolling and "Next" would never fire.
+        // NavigationStack reserves the clock strip at the top; we spend that strip on the distance
+        // ("120 m") and the phone-link glyph instead of adding rows, so everything fits a 42–46 mm
+        // screen without a ScrollView (a ScrollView would take the crown and "Next" never fires).
+        NavigationStack {
+            content
+                .navigationTitle(model.distanceM.map { "\($0) m" } ?? "CaneKit")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Image(systemName: model.phoneReachable ? "iphone.radiowaves.left.and.right" : "iphone.slash")
+                            .foregroundStyle(model.phoneReachable ? WKColor.trusted : WKColor.danger)
+                            .accessibilityLabel(model.phoneReachable ? "Phone connected" : "Phone not connected")
+                    }
+                }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: WKSpacing.sm) {
                 Text(model.instruction)
                     .font(WKFont.instruction)
@@ -21,26 +38,17 @@ struct WatchContentView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.7)
                     .accessibilityAddTraits(.isHeader)
-                if let d = model.distanceM {
-                    Text("\(d) m")
-                        .font(WKFont.distance)
-                        .foregroundStyle(WKColor.text)
-                        .accessibilityLabel("\(d) meters to go")
-                }
-                WKBigButton(title: "Next", systemImage: "forward.fill",
+                    .accessibilityValue(model.distanceM.map { "\($0) meters to go" } ?? "")
+                WKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
+                            hint: "Says the current instruction again") { model.send(.repeatLast) }
+                WKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary,
                             hint: "Skips to the next instruction") { model.send(.nextWaypoint) }
-                WKBigButton(title: "Describe", systemImage: "eye", role: .secondary,
-                            hint: "Asks the phone to describe the scene ahead") { model.send(.describe) }
-                WKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
-                            hint: "Sets straight ahead as the beacon's forward direction") { model.send(.recenter) }
                 HStack(spacing: WKSpacing.xs) {
-                    Image(systemName: model.phoneReachable ? "iphone.radiowaves.left.and.right" : "iphone.slash")
-                    Text(model.phoneReachable ? "Phone connected" : "Phone not connected")
-                    Spacer()
-                    Text(model.keepAlive)
+                    WKBigButton(title: "Describe", systemImage: "eye", role: .secondary,
+                                hint: "Asks the phone to describe the scene ahead", compact: true) { model.send(.describe) }
+                    WKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
+                                hint: "Sets straight ahead as the beacon's forward direction", compact: true) { model.send(.recenter) }
                 }
-                .font(WKFont.footnote)
-                .foregroundStyle(WKColor.secondary)
                 if let err = model.lastError {
                     Text(err).font(WKFont.footnote).foregroundStyle(WKColor.danger).lineLimit(1)
                 }

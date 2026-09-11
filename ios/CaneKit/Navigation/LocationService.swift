@@ -51,6 +51,12 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
 
     // MARK: Lifecycle
 
+    /// Show the location prompt now (app launch, while a sighted helper is around) instead of
+    /// stacking it with the Motion and HealthKit prompts at route start.
+    func requestAuthorization() {
+        manager.requestWhenInUseAuthorization()
+    }
+
     /// Requests when-in-use authorization (first call prompts) and starts fixes + heading.
     func start() {
         guard !isRunning else { return }

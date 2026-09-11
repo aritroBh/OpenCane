@@ -20,8 +20,8 @@ struct GuideCard: View {
             Text(model.nav.instruction)
                 .font(CKFont.instruction)
                 .foregroundStyle(CKColor.textPrimary)
-                .lineLimit(3)
-                .minimumScaleFactor(0.8)
+                // Never truncate: the spotter reads this line over the walker's shoulder.
+                .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits([.isHeader, .updatesFrequently])
 
@@ -66,23 +66,32 @@ struct GuideCard: View {
             }
 
             if model.nav.isNavigating {
+                // Two per row: three-up hyphenates "Recenter" on a 17 Pro Max at default type size.
                 HStack(spacing: CKSpacing.lg) {
-                    CKBigButton(title: "Next", systemImage: "forward.fill",
+                    CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
+                                hint: "Says the current instruction again") { model.repeatInstruction() }
+                    CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary,
                                 hint: "Skips to the next instruction") { model.nav.next() }
-                    CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
-                                hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
                 }
+                CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
+                            hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
                 HStack(spacing: CKSpacing.sm) {
                     CKStatusPill(text: beaconWord, tone: model.beacon.isRunning && model.beaconEnabled ? .trusted : .neutral,
                                  systemImage: "dot.radiowaves.left.and.right",
                                  spoken: "Beacon: \(beaconWord)", updatesFrequently: true)
-                    CKStatusPill(text: model.head.isConnected ? "Head tracked" : "Compass only",
-                                 tone: .neutral, systemImage: "airpodspro",
-                                 spoken: model.head.isConnected ? "AirPods head tracking on" : "No AirPods head tracking")
+                    CKStatusPill(text: headWord,
+                                 tone: model.audioRoute.headphonesConnected ? .neutral : .warning,
+                                 systemImage: "airpodspro",
+                                 spoken: headSpoken)
                 }
                 CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive,
                             hint: "Ends guidance") { model.stopRoute() }
             } else {
+                if model.nav.arrived {
+                    // The arrival line + trip summary are the longest of the walk: keep Repeat.
+                    CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
+                                hint: "Says the arrival line again") { model.repeatInstruction() }
+                }
                 CKBigButton(title: "Start demo route", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
                 HStack(spacing: CKSpacing.sm) {
@@ -92,10 +101,19 @@ struct GuideCard: View {
                         .submitLabel(.go)
                         .onSubmit { model.startMapKitRoute() }
                         .accessibilityLabel("Destination")
-                    Button("Go") { model.startMapKitRoute() }
+                    Button {
+                        model.startMapKitRoute()
+                    } label: {
+                        // Explicit padding + fixedSize: the HStack must never squeeze this label.
+                        Text("Go")
+                            .font(CKFont.body.weight(.semibold))
+                            .padding(.horizontal, CKSpacing.lg)
+                            .frame(minWidth: 64, minHeight: CKMetrics.touchTarget)
+                    }
                         .buttonStyle(CKBigButtonStyle(role: .secondary))
-                        .frame(minHeight: CKMetrics.touchTarget)
+                        .fixedSize(horizontal: true, vertical: false)
                         .disabled(model.isBuildingRoute)
+                        .accessibilityLabel("Go")
                         .accessibilityHint("Builds a walking route with Apple Maps")
                 }
             }
@@ -107,8 +125,21 @@ struct GuideCard: View {
 
     private var beaconWord: String {
         guard model.beaconEnabled else { return "Beacon off" }
+        guard model.audioRoute.headphonesConnected else { return "Beacon paused" }
         guard model.beacon.isRunning else { return model.beacon.lastError ?? "Beacon idle" }
         return "Beacon \(Int(model.beacon.renderedVolume * 100))%"
+    }
+
+    /// No headphones → say so; AirPods motion flowing → head tracked; else compass only.
+    private var headWord: String {
+        guard model.audioRoute.headphonesConnected else { return "No AirPods" }
+        return model.head.isConnected ? "Head tracked" : "Compass only"
+    }
+
+    private var headSpoken: String {
+        guard model.audioRoute.headphonesConnected else { return "No headphones connected; beacon paused" }
+        return model.head.isConnected ? "\(model.audioRoute.outputName), head tracking on"
+                                      : "\(model.audioRoute.outputName), no head tracking"
     }
 
     private func bearingWord(_ err: Double) -> String {

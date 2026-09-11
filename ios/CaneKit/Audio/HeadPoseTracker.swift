@@ -27,11 +27,15 @@ final class HeadPoseTracker {
     @ObservationIgnored private let relay = ConnectionRelay()
     @ObservationIgnored private var rawYaw: Double?
     @ObservationIgnored private var referenceYaw: Double?
+    /// Samples already queued on main when `stop()` runs must not re-seed the reference.
+    @ObservationIgnored private var active = false
 
     init() {}
 
     func start() {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
+        active = true
+        referenceYaw = nil
         relay.onConnect = { [weak self] connected in
             Task { @MainActor [weak self] in
                 self?.isConnected = connected
@@ -44,7 +48,7 @@ final class HeadPoseTracker {
             let yaw = motion?.attitude.yaw
             let message = error?.localizedDescription
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, self.active else { return }
                 if let message { self.lastError = message }
                 guard let yaw else { return }
                 self.isConnected = true
@@ -56,6 +60,8 @@ final class HeadPoseTracker {
     }
 
     func stop() {
+        active = false
+        isConnected = false             // the pill must not say "Head tracked" with no data
         manager.stopDeviceMotionUpdates()
         headYawDeg = nil
         rawYaw = nil

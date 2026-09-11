@@ -32,6 +32,11 @@ final class BeaconEngine {
     var enabled = true {
         didSet { if !enabled { silence() } }
     }
+    /// Only render into headphones: a spatial click out of the cane-mounted speaker is noise
+    /// for everyone and carries no direction. Set by the AudioRouteMonitor.
+    var headphonesConnected = false {
+        didSet { render() }
+    }
 
     // MARK: Private
 
@@ -40,6 +45,7 @@ final class BeaconEngine {
     @ObservationIgnored private let environment = AVAudioEnvironmentNode()
     @ObservationIgnored private var clickBuffer: AVAudioPCMBuffer?
     @ObservationIgnored private var configObserver: NSObjectProtocol?
+    @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var targetBearing: Double?
     @ObservationIgnored private var heading: Double?
     @ObservationIgnored private var headYaw: Double = 0
@@ -107,20 +113,44 @@ final class BeaconEngine {
         player.play()
     }
 
-    /// AirPods connect/disconnect re-configures the engine: restart the graph.
+    /// AirPods connect/disconnect re-configures the engine, and a phone call / Siri interrupts
+    /// the audio session (the engine stops silently): restart the graph in both cases.
     private func observeRouteChanges() {
         guard configObserver == nil else { return }
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restartEngine() }
+        }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main
+        ) { [weak self] note in
+            let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
             MainActor.assumeIsolated {
-                guard let self, self.isRunning else { return }
-                do {
-                    try self.engine.start()
-                    self.restartLoop()
-                } catch {
-                    self.lastError = "Beacon restart: \(error.localizedDescription)"
-                }
+                if type == .began { self?.silence() }          // the pill must not claim a live click
+                if type == .ended { self?.restartEngine() }
+            }
+        }
+    }
+
+    /// Bring a stopped engine back with its loop; a no-op when the beacon is not in use.
+    /// Activation can fail right at `.ended` while the call's session winds down, so retry up to
+    /// three times, a second apart — otherwise the click would be gone for the rest of the walk.
+    private func restartEngine(attempt: Int = 0) {
+        guard isRunning else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            if !engine.isRunning { try engine.start() }
+            restartLoop()
+            render()
+            lastError = nil
+        } catch {
+            lastError = "Beacon restart: \(error.localizedDescription)"
+            guard attempt < 3 else { return }
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.restartEngine(attempt: attempt + 1)
             }
         }
     }
@@ -153,7 +183,7 @@ final class BeaconEngine {
     // MARK: Render
 
     private func render() {
-        guard isRunning, enabled, let θ = targetBearing, let h = heading else {
+        guard isRunning, enabled, headphonesConnected, let θ = targetBearing, let h = heading else {
             silence()
             return
         }

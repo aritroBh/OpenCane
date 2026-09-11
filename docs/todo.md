@@ -57,9 +57,27 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 ## Step 9 — Arrival, Live Activity, thermal, battery
 - [x] TripTracker (HealthKit + pedometer), LiveActivityController + widget target, thermal downgrade (in AppModel since step 2), ArrivalCardView — compiles, Muse-reviewed
 
+## Step 10 — Review fixes + UI tests (pre-device)
+- [x] Round-1 full-app adversarial review (65 agents) + fixes
+- [x] Round-2 review of the fixes (5 dimensions, 31 findings) + fixes, incl. unverified ones on inspection
+- [x] TurnSettle / StraightWalkDetector / CueSpeechPolicy / CrownAccumulator extracted to Logic with tests (79 green)
+- [x] Geofence skip-ahead, passed-by wording, leg bearing near waypoints, two-hit plausible arrival
+- [x] Speech: priorities, single replay, Repeat bypasses coalescing, interruption queueing, no network wait for warnings
+- [x] AirPods route monitor (beacon only in headphones, spoken connect/disconnect), channel check at route start
+- [x] Watch: layout fits 42–46 mm, crown window, version-skew reply, status every fix
+- [x] XCUITests (6) + screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator; watch screenshot on a paired watchOS 27 sim
+- [x] AGENTS.md, CLAUDE.md, docs/devices_setup.md, docs/CODE_REFERENCE.md, CI workflow
+- [x] Muse review of the final Step 10 diff folded in (9 of 11 fixed; 2 refuted with evidence)
+- [ ] Commit "Step 10 (pre-device)" + push
+- **test on device:** see CHANGELOG Step 10 and docs/devices_setup.md
+
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
 - [x] TripLogger JSONL (Documents folder; AirDrop from Files)
 - [x] Simulator build + run on iPhone 18 Pro sim (iOS 27) — UI verified by screenshot
 - [ ] Go/no-go checklist rehearsed before any blindfolded walk
+- [ ] Open (not fixed, from the review's unverified list): accidental taps on the clamped screen (Stop / Mirror have no
+      lock), obstacle sensing stopping silently on screen lock (use Guided Access + keep the screen on), compass
+      readings dropped while iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on
+      frequently-updating pills, MapKit route build waits only 15 s for a first fix
