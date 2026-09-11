@@ -21,6 +21,7 @@
 //
 
 import CaneKitLogic
+import CoreML
 import Foundation
 import FoundationModels
 import Synchronization
@@ -54,6 +55,11 @@ nonisolated struct VisionDetections: Sendable, Equatable {
 
 nonisolated enum OnDeviceVision {
 
+    /// Last scene-classification outcome (labels kept, or the error), for the trip log
+    /// (`describe_result` → `labels` / `vision_error`). A silent `try?` hid that classification
+    /// returned nothing in the simulator (Street View e2e).
+    static let lastClassify = Mutex<(labels: [String], error: String?)>(([], nil))
+
     /// Labels below this confidence are noise for our purposes.
     static let labelThreshold: Float = 0.25
     /// Labels too generic to be worth saying.
@@ -71,11 +77,31 @@ nonisolated enum OnDeviceVision {
     static func detect(jpeg: Data, readText: Bool = true, classify: Bool = true,
                        minTextHeight: Float? = nil) async -> VisionDetections {
         var labels: [(String, Float)] = []
-        if classify, let obs = try? await ClassifyImageRequest().perform(on: jpeg) {
-            labels = obs.filter { $0.confidence >= labelThreshold && !boringLabels.contains($0.identifier) }
-                .sorted { $0.confidence > $1.confidence }
-                .prefix(8)
-                .map { ($0.identifier, $0.confidence) }
+        if classify {
+            do {
+                let raw: [(String, Float)]
+                do {
+                    raw = try await ClassifyImageRequest().perform(on: jpeg).map { ($0.identifier, $0.confidence) }
+                } catch {
+                    #if targetEnvironment(simulator)
+                    // The simulator cannot create Vision's neural-network ("espresso") context:
+                    // every Street View e2e corner failed with "Failed to create espresso context".
+                    // Same classifier, forced onto the CPU, so the mock exercises the real path.
+                    raw = try classifyOnCPU(jpeg)
+                    #else
+                    throw error
+                    #endif
+                }
+                labels = raw.filter { $0.1 >= labelThreshold && !boringLabels.contains($0.0) }
+                    .sorted { $0.1 > $1.1 }
+                    .prefix(8)
+                    .map { ($0.0, $0.1) }
+                let kept = labels.map { "\($0.0) \(Int($0.1 * 100))%" }
+                let rawCount = raw.count
+                lastClassify.withLock { $0 = (kept, kept.isEmpty ? "no labels (\(rawCount) raw)" : nil) }
+            } catch {
+                lastClassify.withLock { $0 = ([], String(describing: error)) }
+            }
         }
         var texts: [(String, Float)] = []
         var heights: [Float] = []
@@ -94,6 +120,19 @@ nonisolated enum OnDeviceVision {
         }
         return VisionDetections(labels: labels, texts: texts, textHeights: heights)
     }
+
+    #if targetEnvironment(simulator)
+    /// Simulator only: `VNClassifyImageRequest` pinned to the CPU compute device (the simulator has
+    /// no neural-network context for Vision). Never compiled for the phone.
+    static func classifyOnCPU(_ jpeg: Data) throws -> [(String, Float)] {
+        let request = VNClassifyImageRequest()
+        if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
+            try? request.setComputeDevice(cpu, for: .main)
+        }
+        try VNImageRequestHandler(data: jpeg).perform([request])
+        return (request.results ?? []).map { ($0.identifier, $0.confidence) }
+    }
+    #endif
 }
 
 // MARK: - Path hazards from labels (on-device hazard watch)

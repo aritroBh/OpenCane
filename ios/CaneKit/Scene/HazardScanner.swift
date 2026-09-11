@@ -126,7 +126,12 @@ final class HazardScanner {
 
     private func scanSigns(now: TimeInterval) async {
         let frameName = FrameReplay.shared.currentName ?? ""
-        guard let jpeg = await Self.snapshot(processor, maxDimension: 1280, quality: 0.8) else { return }
+        guard let jpeg = await Self.snapshot(processor, maxDimension: 1280, quality: 0.8) else {
+            // No fresh frame (just unlocked, ARKit stalled): don't spend the 3 s slot on nothing;
+            // retry on the next 500 ms tick (Muse camera review).
+            lastSignScan = -.infinity
+            return
+        }
         // Text only: classification here would be thrown away (review: wasted CPU every scan).
         // Small text (down to 1/128 of the frame, 10 px on the 1280 px scan): measured with
         // scripts/sign_probe.swift on the route frames, 7.5 cm letters on a flat, frontal sign read

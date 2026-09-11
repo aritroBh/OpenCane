@@ -172,4 +172,6 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(MountTilt.status(downDeg: 12).text == "Camera tilt 12° down: tilt the phone up")
     #expect(MountTilt.status(downDeg: -2).text == "Camera tilt 2° up: tilt the phone down")
     #expect(MountTilt.status(downDeg: 0.3).text == "Camera level: tilt the phone down")
+    #expect(MountTilt.status(downDeg: 2.6).ok)          // shows "3°", so it must say good
+    #expect(!MountTilt.status(downDeg: 8.6).ok)         // shows "9°"
 }

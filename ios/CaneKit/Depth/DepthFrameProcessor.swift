@@ -98,6 +98,12 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Most recent camera frame (YCbCr, full video-format resolution) for `jpegSnapshot`.
     /// Exactly one buffer is retained; each frame replaces it.
     private var latestImage: CVPixelBuffer?            // guarded by imageLock
+    /// `ProcessInfo.systemUptime` when `latestImage` arrived (guarded by imageLock). A frame older
+    /// than `maxFrameAge` is treated as absent: after an ARKit stall or interruption the last
+    /// frame shows a corner the walker has left (Muse camera review).
+    private var latestImageAt: TimeInterval = 0
+    /// Seconds after which the retained frame is too old to describe or scan.
+    static let maxFrameAge: TimeInterval = 2
     /// ARKit timestamp (s) of the last published report; drives the `maxRate` cap.
     private var lastPublished: TimeInterval = 0        // queue-only
     /// Published-report counter (wrapping); selects every Nth frame for a mesh lookup.
@@ -169,6 +175,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         // a small pool and stalls if we hoard them.
         imageLock.lock()
         latestImage = frame.capturedImage
+        latestImageAt = ProcessInfo.processInfo.systemUptime
         imageLock.unlock()
 
         let s = settings.withLock { $0 }
@@ -302,7 +309,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         // Simulator e2e: Street View frames stand in for the camera (FrameReplay; inert on device).
         if FrameReplay.shared.isActive { return FrameReplay.shared.jpeg() }
         imageLock.lock()
-        let buffer = latestImage
+        let fresh = ProcessInfo.processInfo.systemUptime - latestImageAt <= Self.maxFrameAge
+        let buffer = fresh ? latestImage : nil
         imageLock.unlock()
         guard let buffer else { return nil }
 
@@ -336,6 +344,6 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     var hasCameraFrame: Bool {
         if FrameReplay.shared.isActive { return true }
         imageLock.lock(); defer { imageLock.unlock() }
-        return latestImage != nil
+        return latestImage != nil && ProcessInfo.processInfo.systemUptime - latestImageAt <= Self.maxFrameAge
     }
 }

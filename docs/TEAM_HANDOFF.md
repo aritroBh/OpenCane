@@ -5,6 +5,18 @@ Aarav. It says what exists, what is proven, what is not, what each of us does ne
 decisions are already made so nobody re-litigates them at 2 a.m. Everything here links to the doc
 that has the detail.
 
+## 0. Start here (5 minutes)
+
+1. `git pull`, then `cd ios && make test` (131 logic tests, needs only the Command Line Tools).
+2. Find your row in §3 and do its first item.
+3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
+   only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
+4. **Aarav:** read §6 (what is on/off) and the D2 / D11 tests in `stress_test_plan.md`; you will feel
+   the haptic patterns and wear the watch.
+5. **Anyone changing code:** read `AGENTS.md` (rules + "How we engineer") and ask the graph where
+   things live: `graphify query "…"` (install once: `uv tool install graphifyy`).
+6. Stuck? The symptom → fix tables are in `docs/devices_setup.md` and the gotchas in `ios/README.md` §6.
+
 ## 1. The one-paragraph version
 
 An iPhone 17 Pro Max (iOS 27) clamped to a 28.75 mm non-metal cane is the only computer. LiDAR
@@ -150,11 +162,12 @@ aloud, Apple's on-device model inventing "Distance: zero meters", sign range (no
 letters ≈ 7 m on a flat frontal sign), STOP signs and far storefront words, and a camera path the
 log could not see.
 
-**Open (being investigated):** in the *simulator* the app's scene classification returns no labels,
-so "Where am I" answers "Nothing recognized ahead." at every corner, while the same frames classify
-fine on the Mac (`vision_probe.swift`) and text recognition works in the simulator. It looks like a
-simulator limitation (Vision classification needs the Neural Engine), not a phone bug, but **check
-"Where am I" on the real phone first thing** (stress plan D17).
+**Diagnosed:** in the *simulator* Vision's scene classification fails with "Failed to create
+espresso context" (the simulator has no neural-network context; the new `vision_error` field in the
+trip log's `describe_result` records it). That is a simulator limit, not a phone bug: the same frames
+classify fine on the Mac (`vision_probe.swift`), and the phone has the Neural Engine. A simulator-only
+CPU fallback now lets the mock exercise the scene words. Still, **check "Where am I" on the real phone
+first thing** (stress plan D17): it should name what is there ("Ahead: a crosswalk, …").
 
 ## 9. How to find anything
 

@@ -64,6 +64,13 @@ the simulator end to end, and the log shows what the camera saw, not only what w
 - **Review of 3efc0b1 (Antigravity, on a repo copy):** "Where am I" still showed the language model
   far lone words; `SignPolicy.mayMention` (close, or several words) now filters the facts too (test
   `onlyCloseOrMultiWordTextMayBeMentioned`).
+- **Muse camera review (after 45230fe):** fixed — the retained camera frame is refused after 2 s
+  (`DepthFrameProcessor.maxFrameAge`: an ARKit stall no longer describes a corner already left); the
+  Mount card judges the tilt it shows (2.6° reads "3°" and is now "good"); a sign scan with no fresh
+  frame no longer spends its 3 s slot. Rejected with reasons — gating *cloud* sentences with
+  on-device labels (the cloud model sees the image; coarse labels would reject good answers), dropping
+  the LiDAR gate on on-device hazard labels (deliberate, AGENTS.md: it stops "fence" chatter along
+  railings). Deferred — clamping cloud hazard-watch distances (the watch ships off by default).
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

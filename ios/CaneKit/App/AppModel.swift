@@ -230,6 +230,8 @@ final class AppModel {
                 "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
                 "provider": self?.describer.providerName ?? "none",
                 "frame": frame,
+                "labels": OnDeviceVision.lastClassify.withLock { $0.labels },
+                "vision_error": OnDeviceVision.lastClassify.withLock { $0.error ?? "" },
             ])
         }
     }

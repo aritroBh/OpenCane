@@ -347,7 +347,8 @@ def main() -> int:
             "navcues": navcues(res["events"]),
             "speech": speech(res["events"]),
             "hazards": [e.get("text", "") for e in res["events"] if e.get("kind") == "hazard"],
-            "describes": [{"frame": e.get("frame"), "text": e.get("text"), "error": e.get("error"), "ms": e.get("ms")}
+            "describes": [{"frame": e.get("frame"), "text": e.get("text"), "error": e.get("error"), "ms": e.get("ms"),
+                           "labels": e.get("labels"), "vision_error": e.get("vision_error")}
                           for e in res["events"] if e.get("kind") == "describe_result"],
             "scan_texts": sorted({t for e in res["events"] if e.get("kind") == "scan" for t in e.get("texts", [])}),
             "hazard_watch": [{"frame": e.get("frame"), "reply": e.get("reply"), "said": e.get("said"),

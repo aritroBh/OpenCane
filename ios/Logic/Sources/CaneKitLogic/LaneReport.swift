@@ -109,10 +109,13 @@ public enum MountTilt {
     /// "Camera tilt 2° up: tilt the phone down", "Camera level: tilt the phone down".
     public static func status(downDeg d: Float) -> (text: String, ok: Bool) {
         let n = Int(abs(d).rounded())
+        // Judge the number that is shown: 2.6° reads "3°" and must be "good", not "tilt down"
+        // (Muse camera review).
+        let shown = Float(d < 0 ? -n : n)
         if n == 0 { return ("Camera level: tilt the phone down", false) }
         let dir = d < 0 ? "up" : "down"
-        if aim.contains(d) { return ("Camera tilt \(n)° \(dir), good", true) }
-        return (d > aim.upperBound ? "Camera tilt \(n)° \(dir): tilt the phone up"
+        if aim.contains(shown) { return ("Camera tilt \(n)° \(dir), good", true) }
+        return (shown > aim.upperBound ? "Camera tilt \(n)° \(dir): tilt the phone up"
                                    : "Camera tilt \(n)° \(dir): tilt the phone down", false)
     }
 }
