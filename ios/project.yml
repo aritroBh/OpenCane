@@ -57,9 +57,12 @@ targets:
       - path: CaneKit/Resources/Secrets.plist
         optional: true
         buildPhase: resources
+      - path: Shared/LiveActivity
     dependencies:
       - package: CaneKitLogic
       - target: CaneKitWatch
+        embed: true
+      - target: CaneKitWidget
         embed: true
     settings:
       base:
@@ -121,6 +124,28 @@ targets:
         NSMotionUsageDescription: "CaneKit counts steps for the arrival summary."
         NSHealthShareUsageDescription: "CaneKit reads your step count for the arrival summary."
         NSHealthUpdateUsageDescription: "CaneKit records the guided walk as a workout so wrist cues keep working."
+
+  # ───────────────────────────── Live Activity widget ─────────────────────────────
+  CaneKitWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CaneKitWidget
+      - path: Shared/LiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.widget
+        PRODUCT_NAME: CaneKitWidget
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: "YES"
+    info:
+      path: CaneKitWidget/Info.plist
+      properties:
+        CFBundleDisplayName: CaneKit
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
 schemes:
   CaneKit:

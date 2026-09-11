@@ -2,6 +2,20 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Steps 8–9 — Scene description, arrival card, Live Activity (Fri Sep 11, pre-device)
+- "Where am I": VLMClient protocol with OpenAI-compatible (Muse 1.3 / OpenAI), Anthropic and Gemini
+  transports (bodies + parsing unit-tested), SceneDescriber (waits ≤ 3 s for a camera frame, 1024 px JPEG
+  off-main, speaks the sentence or a spoken error), triggers: on-screen "Where am I", watch Describe,
+  Camera Control (spike), Action button via the "Where am I" App Shortcut (+ "Start CaneKit route").
+- TripTracker: elapsed, GPS-integrated distance (moving fixes only), steps from HealthKit (watch-merged)
+  with the phone pedometer running alongside; spoken arrival summary after the count refreshes.
+- Live Activity: CaneKitWidget target (Dynamic Island + lock screen glyph/instruction/distance), updates
+  coalesced to waypoint changes or ≥ 10 m, ends 60 s after arrival. ArrivalCardView while walking / on arrival.
+- Automation: `CANEKIT_DEMO_ROUTE=1` env (or `--demo-route`) starts the demo route at launch.
+- Test on device: press "Where am I" → "Describing." then one sentence (needs a key in Secrets.plist; without
+  one it says so); Action button → same from the lock screen; walk the route → Dynamic Island shows the
+  next instruction + distance; arrival → card + "CIF … meters, minutes, steps".
+
 ## Steps 6–7 — Navigation + beacon + natural voice (Fri Sep 11, pre-device)
 - LocationService: `CLLocationUpdate.liveUpdates` + compass; GPS course replaces the compass while walking;
   background activity session so guidance survives a screen lock. NavigationEngine: geofence per waypoint

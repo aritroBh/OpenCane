@@ -21,6 +21,9 @@ import SwiftUI
 @Observable
 final class AppModel {
 
+    /// The live instance, for App Intents (Action button) that run inside the app process.
+    private(set) static weak var shared: AppModel?
+
     // MARK: Engines
 
     /// LiDAR lanes + gyro gate (step 2).
@@ -41,6 +44,12 @@ final class AppModel {
     let beacon = BeaconEngine()
     /// AirPods head yaw (step 7).
     let head = HeadPoseTracker()
+    /// "Where am I" (step 8).
+    let describer: SceneDescriber
+    /// Elapsed / distance / steps for the arrival card (step 9).
+    let trip = TripTracker()
+    /// Dynamic Island / lock screen (step 9).
+    let liveActivity = LiveActivityController()
 
     /// Route picker state.
     var destinationQuery = ""
@@ -115,10 +124,18 @@ final class AppModel {
     @ObservationIgnored private var ticker: Task<Void, Never>?
 
     init() {
+        describer = SceneDescriber(processor: depth.processor, speech: speech)
         pushDepthSettings()
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
         beacon.enabled = beaconEnabled
+        AppModel.shared = self
+    }
+
+    /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
+    func describeScene() {
+        logger.event("describe", ["provider": describer.providerName ?? "none"])
+        describer.describe()
     }
 
     /// 10 Hz sync of the inputs the beacon needs that have no callback of their own
@@ -160,8 +177,10 @@ final class AppModel {
                                "haptics": haptics.isHealthy])
         speech.prefetch(Self.commonLines)
         speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
-        // Automation hook (simulator GPS replay, UI tests): `--demo-route` starts guidance at launch.
-        if CommandLine.arguments.contains("--demo-route") {
+        // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
+        // CANEKIT_DEMO_ROUTE=1 environment variable starts guidance at launch.
+        if CommandLine.arguments.contains("--demo-route")
+            || ProcessInfo.processInfo.environment["CANEKIT_DEMO_ROUTE"] == "1" {
             startDemoRoute()
         }
     }
@@ -229,6 +248,11 @@ final class AppModel {
         location.onFix = { [weak self] fix in
             guard let self else { return }
             self.nav.update(fix: fix)
+            self.trip.ingest(fix)
+            if self.nav.isNavigating {
+                self.liveActivity.update(instruction: self.nav.instruction,
+                                         distanceM: self.nav.distanceToNext ?? 0, kind: self.lastNavKind)
+            }
             self.logger.event("gps", ["lat": fix.coordinate.latitude, "lon": fix.coordinate.longitude,
                                       "acc": fix.accuracy, "speed": fix.speed])
         }
@@ -245,6 +269,7 @@ final class AppModel {
         }
         nav.onNavCue = { [weak self] cue in
             self?.watch.send(nav: cue)
+            self?.lastNavKind = cue.rawValue
             self?.logger.event("navcue", ["cue": cue.rawValue])
         }
         nav.onWaypointAdvanced = { [weak self] in
@@ -267,8 +292,22 @@ final class AppModel {
             self.head.stop()
             self.stopTicker()
             self.pushStatusToWatch()
+            self.liveActivity.end(final: self.nav.instruction)
+            // Arrival card, spoken after the waypoint's own line (same priority → queued),
+            // once the step count has been refreshed.
+            Task { [weak self] in
+                guard let self else { return }
+                await self.trip.stop()
+                let destination = self.nav.route?.waypoints.last?.say ?? "Arrived"
+                let summary = self.trip.spokenSummary(destination: destination)
+                self.speech.say(summary, .nav, ttl: 30)
+                self.logger.event("speech", ["text": summary, "priority": "nav"])
+            }
         }
     }
+
+    /// Last wrist cue kind, for the Live Activity glyph.
+    @ObservationIgnored private var lastNavKind = "straight"
 
     /// The user is facing the way to walk: zero the head yaw there.
     func recenter() {
@@ -327,6 +366,8 @@ final class AppModel {
         beacon.stop()
         head.stop()
         stopTicker()
+        Task { [weak self] in await self?.trip.stop() }
+        liveActivity.end()
         speech.stopAll()                     // queued waypoint lines must not play after Stop
         speech.say("Route stopped.", .nav)
         logger.event("route", ["action": "stop"])
@@ -350,6 +391,9 @@ final class AppModel {
         beacon.start()
         head.start()
         startTicker()
+        trip.start()
+        lastNavKind = "straight"
+        liveActivity.start(routeName: route.name, instruction: nav.instruction, distanceM: nav.distanceToNext ?? 0)
         logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count])
         pushStatusToWatch()
     }
@@ -367,7 +411,7 @@ final class AppModel {
         switch cmd {
         case .nextWaypoint:
             if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
-        case .describe: speech.say("Describe is not ready yet.", .scene, ttl: 2)
+        case .describe: describeScene()
         case .recenter: recenter()
         }
     }
@@ -388,6 +432,7 @@ final class AppModel {
     /// Camera Control / volume press reached the app while ARKit owns the camera.
     func cameraControlPressed() {
         cameraControlPresses += 1
+        describeScene()
     }
 
     // MARK: Private

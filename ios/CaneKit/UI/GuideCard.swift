@@ -50,6 +50,21 @@ struct GuideCard: View {
                 }
             }
 
+            CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
+                        systemImage: "eye", role: .secondary,
+                        hint: "Takes a photo and reads out hazards and landmarks ahead",
+                        value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
+                .disabled(model.describer.isDescribing)
+            if !model.describer.lastDescription.isEmpty {
+                Text(model.describer.lastDescription)
+                    .font(CKFont.body)
+                    .foregroundStyle(CKColor.textPrimary)
+                    .accessibilityLabel("Scene: \(model.describer.lastDescription)")
+            }
+            if let err = model.describer.lastError {
+                Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+            }
+
             if model.nav.isNavigating {
                 HStack(spacing: CKSpacing.lg) {
                     CKBigButton(title: "Next", systemImage: "forward.fill",

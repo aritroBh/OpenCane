@@ -19,6 +19,9 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: CKSpacing.xl) {
                     GuideCard()
+                    if model.nav.isNavigating || model.nav.arrived {
+                        ArrivalCardView()
+                    }
                     statusCard
                     LaneGridView(report: model.depth.report)
                     HapticsCard()

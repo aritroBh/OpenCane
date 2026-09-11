@@ -52,10 +52,10 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] ElevenLabs natural voice with cache + prefetch, AVSpeech fallback (needs key)
 
 ## Step 8 — Scene description
-- [ ] VLM clients (custom/Anthropic/Gemini/OpenAI), Secrets, SceneDescriber, WhereAmI App Shortcut
+- [x] VLM clients (custom/Anthropic/Gemini/OpenAI), Secrets, SceneDescriber, WhereAmI App Shortcut — compiles, Muse-reviewed; needs a key + device
 
 ## Step 9 — Arrival, Live Activity, thermal, battery
-- [ ] TripTracker (HealthKit), LiveActivityController + widget target, ThermalWatchdog, ArrivalCardView
+- [x] TripTracker (HealthKit + pedometer), LiveActivityController + widget target, thermal downgrade (in AppModel since step 2), ArrivalCardView — compiles, Muse-reviewed
 
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
