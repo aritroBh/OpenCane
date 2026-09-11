@@ -18,6 +18,8 @@ import SwiftUI
 
 struct HazardsCard: View {
     @Environment(AppModel.self) private var model
+    /// Backgrounded or locked: ARKit is paused, so the preview must not show a frozen frame.
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var model = model
@@ -72,7 +74,8 @@ struct HazardsCard: View {
     @ViewBuilder private var liveView: some View {
         switch LiveView.state(enabled: model.liveViewEnabled, hot: model.hazards.paused,
                               cameraRunning: model.depth.isRunning,
-                              highFrameRate: model.depth.highFrameRate) {
+                              highFrameRate: model.highFrameRateCamera,
+                              foreground: scenePhase == .active) {
         case .off:
             EmptyView()
         case .hot:
@@ -93,7 +96,7 @@ struct HazardsCard: View {
     private func liveCaption(_ text: String) -> some View {
         Text(text).font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityHidden(true)
+            .accessibilityLabel(text)   // a paused view or a dead camera must be spoken (Muse review)
     }
 
     /// One detection row: a small caption and the spoken line.

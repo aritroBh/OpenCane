@@ -43,8 +43,16 @@ import Testing
     #expect(LiveView.state(enabled: true, hot: false, cameraRunning: false, highFrameRate: false) == .cameraOff)
 }
 
-/// Running and cool: the GPU view, rendered at exactly the camera's frame rate.
-@Test func liveViewRendersAtTheCameraRate() {
+/// Running and cool: the GPU view, capped at 30 fps even when the camera runs at 60 — a helper's
+/// preview must never add the heat that pauses the walker's obstacle warnings (Muse review).
+@Test func liveViewRendersAtMostThirtyFramesPerSecond() {
     #expect(LiveView.state(enabled: true, hot: false, cameraRunning: true, highFrameRate: false) == .live(fps: 30))
-    #expect(LiveView.state(enabled: true, hot: false, cameraRunning: true, highFrameRate: true) == .live(fps: 60))
+    #expect(LiveView.state(enabled: true, hot: false, cameraRunning: true, highFrameRate: true) == .live(fps: 30))
+    #expect(CameraRate.framesPerSecond(highFrameRate: true) == 60)      // the camera still runs at 60
+}
+
+/// Backgrounded or locked: ARKit is paused, so show "Camera off", never a frozen frame.
+@Test func liveViewIsOffInTheBackground() {
+    #expect(LiveView.state(enabled: true, hot: false, cameraRunning: true, highFrameRate: false,
+                           foreground: false) == .cameraOff)
 }

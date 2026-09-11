@@ -28,6 +28,14 @@ public enum CameraRate {
     /// 60 with the Mount card's "60 fps camera (warmer)" switch, else 30.
     /// - Parameter highFrameRate: `DepthEngine.highFrameRate` (mirrors `AppModel.highFrameRateCamera`).
     public static func framesPerSecond(highFrameRate: Bool) -> Int { highFrameRate ? 60 : 30 }
+
+    /// What the *preview* renders at, capped at 30 even when the camera runs at 60: a helper's
+    /// picture must never cost the walker their obstacle warnings, and heat pauses those
+    /// (Muse review of the live-view branch).
+    public static let previewCap = 30
+    public static func previewFramesPerSecond(highFrameRate: Bool) -> Int {
+        min(previewCap, framesPerSecond(highFrameRate: highFrameRate))
+    }
 }
 
 /// What the Hazards card shows under its "Live camera view" switch. Called by `HazardsCard.body`
@@ -49,10 +57,14 @@ public enum LiveView: Equatable, Sendable {
     ///   - hot: `HazardScanner.paused` (set by `AppModel.updateThermal` at `.serious` / `.critical`).
     ///   - cameraRunning: `DepthEngine.isRunning`.
     ///   - highFrameRate: `DepthEngine.highFrameRate`.
-    public static func state(enabled: Bool, hot: Bool, cameraRunning: Bool, highFrameRate: Bool) -> LiveView {
+    /// - Parameter foreground: false while backgrounded or locked; ARKit is paused then and the
+    ///   last frame would be a lie to a sighted helper (Muse review).
+    public static func state(enabled: Bool, hot: Bool, cameraRunning: Bool, highFrameRate: Bool,
+                             foreground: Bool = true) -> LiveView {
+        guard foreground else { return .cameraOff }
         guard enabled else { return .off }
         if hot { return .hot }
         guard cameraRunning else { return .cameraOff }
-        return .live(fps: CameraRate.framesPerSecond(highFrameRate: highFrameRate))
+        return .live(fps: CameraRate.previewFramesPerSecond(highFrameRate: highFrameRate))
     }
 }

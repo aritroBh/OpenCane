@@ -75,6 +75,14 @@ struct LiveCameraView: UIViewRepresentable {
     /// View torn down (switch off, hot, backgrounded): drop the delegate so the render thread
     /// never calls a released coordinator. The session is left exactly as it was (not paused).
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
+        // Stop rendering and let go of the shared session *before* the view dies, so SceneKit's
+        // render thread cannot touch it mid-frame (Muse review: a teardown with live mesh anchers
+        // risked a render-thread crash or an interrupted session, which would silence the lanes).
+        // `isPlaying = false` stops the view's rendering only; the ARSession keeps running for the
+        // depth pipeline. The throwaway session is never run.
+        uiView.isPlaying = false
+        uiView.scene = SCNScene()
+        uiView.session = ARSession()
         uiView.delegate = nil
     }
 
