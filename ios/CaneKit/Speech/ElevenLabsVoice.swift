@@ -26,6 +26,7 @@
 //  stale voice. The cache lives in Caches/, which iOS may purge; a purge only costs latency.
 //
 
+import CaneKitLogic
 import CryptoKit
 import Foundation
 
@@ -113,18 +114,21 @@ nonisolated struct ElevenLabsVoice: Sendable {
         return url
     }
 
-    /// Pre-synthesize a batch (route lines, common phrases), at most 3 requests in flight so a
-    /// long route never bursts into rate limits, each with `prefetchTimeout` rather than the
-    /// walking-pace live timeout.
-    /// Duplicates and already-cached lines are skipped up front. Returns when every request has
-    /// finished or failed. Caller: `SpeechQueue.prefetch`, on a detached `.utility` task.
+    /// Pre-synthesize a batch (route lines, common phrases), at most
+    /// `VoicePrefetch.maxConcurrent` in flight, each with `prefetchTimeout` rather than the
+    /// walking-pace live timeout. What to request and in what order is `VoicePrefetch.queue`
+    /// (CaneKitLogic, pinned by VoicePrefetchTests) — speaking order, no repeats, nothing cached.
+    /// Returns when every request has finished or failed. Caller: `SpeechQueue.prefetch`.
     ///
     /// - Returns: the description of the first failure, or nil if every line was fetched (or there
     ///   was nothing to fetch). A prefetch is the app's *first* call to ElevenLabs, seconds after
     ///   launch, so this is how a wrong key ("HTTP 401") reaches the Haptics card before anyone
     ///   has spoken a word — silently swallowing it left the demo looking merely voice-less.
+    ///   ⚠ With every line already cached nothing is requested, so a key that went bad since the
+    ///   last run stays unreported until the next miss. Prefetch reports failures; it does not
+    ///   validate the key.
     func prefetch(_ lines: [String]) async -> String? {
-        let missing = Array(Set(lines)).filter { cached($0) == nil }
+        let missing = VoicePrefetch.queue(lines) { cached($0) != nil }
         // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based
         // isolation a mutable local in this region cannot be sent into a concurrent closure.
         let slow = withTimeout(prefetchTimeout)
@@ -141,7 +145,7 @@ nonisolated struct ElevenLabsVoice: Sendable {
                     catch { return error.localizedDescription }
                 }
             }
-            for _ in 0..<min(3, missing.count) { addNext() }
+            for _ in 0..<min(VoicePrefetch.maxConcurrent, missing.count) { addNext() }
             while let result = await group.next() {
                 if firstError == nil, let result { firstError = result }
                 addNext()

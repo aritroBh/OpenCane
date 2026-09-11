@@ -58,9 +58,11 @@ struct HapticsCard: View {
                 CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
                              tone: model.speech.isSpeaking ? .warning : .neutral,
                              systemImage: "speaker.wave.2", updatesFrequently: true)
-                // "System" / "ElevenLabs": one word so the pill row fits a 17 Pro Max with the button.
+                // "System" / "ElevenLabs": one word so the pill row fits a 17 Pro Max with the
+                // button. The tone follows what actually spoke, not whether a key exists: a wrong
+                // key would otherwise paint a green pill over lines coming out in Apple's voice.
                 CKStatusPill(text: model.speech.naturalVoice == nil ? "System" : model.speech.backendName,
-                             tone: model.speech.naturalVoice == nil ? .neutral : .trusted,
+                             tone: model.speech.backendName == "ElevenLabs" ? .trusted : .neutral,
                              systemImage: "waveform.and.mic",
                              spoken: model.speech.naturalVoice == nil ? "System voice; add an ElevenLabs key for the natural voice" : "Voice: \(model.speech.backendName)")
                 Spacer(minLength: 0)

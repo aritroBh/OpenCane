@@ -70,6 +70,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 /// Priority of a spoken line. Higher raw value wins: a strictly higher priority interrupts the
 /// line playing; equal or lower queues behind it (FIFO within a band). Order is fixed by
@@ -109,7 +110,9 @@ final class SpeechQueue {
     /// "ElevenLabs" or "System" — what the last line used.
     private(set) var backendName = "System"
     /// Last natural-voice problem (fetch failure, playback failure, watchdog reset). Diagnostic
-    /// only; never cleared automatically, never spoken.
+    /// only, never spoken. Cleared when a new prefetch starts and when the natural voice actually
+    /// plays a line, so the card shows a live complaint rather than a grievance from a dead spot
+    /// the walker left ten minutes ago.
     private(set) var voiceError: String?
     /// Natural voice available (key present). Toggle `useNaturalVoice` to force the system voice.
     /// Built once from `Secrets.plist`; nil without `ELEVENLABS_API_KEY` (hard rule 4: no key,
@@ -179,6 +182,8 @@ final class SpeechQueue {
     @ObservationIgnored private var player: AVAudioPlayer?
     /// Strong reference to `player`'s delegate (AVAudioPlayer holds its delegate weakly).
     @ObservationIgnored private var playerRelay: PlayerRelay?
+    /// The one running batch prefetch, so a new route can cancel the previous route's.
+    @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// In-flight ElevenLabs fetch for a cache miss; cancelled by `stopCurrent`.
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
     /// True from a cache-miss fetch start until the fetch result *or* the 2.5 s deadline claims
@@ -418,17 +423,31 @@ final class SpeechQueue {
     /// Pre-synthesize lines the route will need (no-op without the natural voice).
     /// Fire-and-forget on a detached `.utility` task so the network work never runs on (or
     /// blocks) the main actor; `ElevenLabsVoice` is a Sendable value, so capturing it is safe.
-    /// Failures are silent — a line that is still uncached later simply takes the fetch or
-    /// system-voice path in `speakNow`. Callers: `AppModel.start()` (common lines) and route
-    /// start (every waypoint line + intro); `speakNow` for a warning spoken by the system voice.
+    /// A line that is still uncached later simply takes the fetch or system-voice path in
+    /// `speakNow`. Callers: `AppModel.start()` (common lines) and route start (every waypoint line
+    /// + intro); `speakNow` for a warning spoken by the system voice.
+    ///
+    /// Only one prefetch runs at a time: starting a second route cancels the first. Two overlapping
+    /// batches would put twice `maxConcurrentPrefetches` requests in flight and rate-limit the live
+    /// cue the walker is waiting for, and the older batch is for a route nobody is walking any more.
     func prefetch(_ lines: [String]) {
         guard let naturalVoice, useNaturalVoice else { return }
-        Task.detached(priority: .utility) { [weak self] in
+        prefetchTask?.cancel()
+        // A new attempt: drop the previous complaint so the card cannot keep accusing the voice
+        // after the network came back. A failure below writes a fresh one.
+        voiceError = nil
+        prefetchTask = Task.detached(priority: .utility) { [weak self] in
             let failure = await naturalVoice.prefetch(lines)
             // Only report; never let a prefetch failure disable the voice. The live path has its
             // own circuit breaker, and the cache may already hold the line that matters.
-            guard let failure else { return }
-            await MainActor.run { self?.voiceError = failure }
+            guard let failure, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                // Backgrounding surfaces as a timeout, not a cancellation, and is not a voice
+                // problem: do not accuse the voice for a suspension the user caused.
+                guard UIApplication.shared.applicationState != .background else { return }
+                self.voiceError = failure
+            }
         }
     }
 
@@ -572,6 +591,10 @@ final class SpeechQueue {
     /// generation, so the queue never sticks. Main actor.
     private func playFile(_ url: URL, gen: Int) {
         backendName = "ElevenLabs"
+        // The natural voice just worked, so any earlier complaint is history. Without this a
+        // launch with no signal would leave "timed out" on the card for the rest of the day, even
+        // once every line was coming out in the ElevenLabs voice.
+        voiceError = nil
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             let relay = PlayerRelay { [weak self] in
