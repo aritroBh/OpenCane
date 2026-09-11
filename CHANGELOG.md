@@ -2,6 +2,27 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Steps 6–7 — Navigation + beacon + natural voice (Fri Sep 11, pre-device)
+- LocationService: `CLLocationUpdate.liveUpdates` + compass; GPS course replaces the compass while walking;
+  background activity session so guidance survives a screen lock. NavigationEngine: geofence per waypoint
+  (speak once, wrist cue crossing/turn, advance), live target bearing (recorded bearing when the fix is poor),
+  veer left/right after 3 s off-course with an 8 s settle window after every turn, "GPS weak"/"GPS back".
+  RouteSource: bundled Townsend→CIF file or MapKit walking directions to any typed destination.
+  **Verified in the simulator with a GPS replay: waypoints 1→4 fire in order with the right lines and cues.**
+- BeaconEngine: AVAudioEngine → AVAudioEnvironmentNode (HRTF) soft click at the absolute target bearing,
+  listener yaw = −(heading + head yaw), silent < 10° error, full by 90°, ducks while speaking, survives
+  AirPods route changes, safe across routes. HeadPoseTracker: AirPods yaw via CMHeadphoneMotionManager,
+  Recenter (button / watch / auto 8 s after each turn).
+- Natural voice: ElevenLabs TTS (`eleven_flash_v2_5`, warm premade voice by default) with a disk cache;
+  route lines + common phrases pre-synthesized at route start; AVSpeech fallback offline / without a key.
+  Keys: `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` in Secrets.plist.
+- GuideCard: instruction, hero distance, on-course pill, GPS pill, Next / Recenter / Stop, demo route or
+  typed destination. `--demo-route` launch flag for automation.
+- Test on device (outside, AirPods in): Start demo route at the ISR doors → route intro; walk west → sidewalk
+  line + wrist tap at WP2; at Goodwin → crossing line + wrist notification; turn 45° off for 3 s → "Veer
+  right"; beacon clicks from the walking direction and goes quiet when facing it; turn your head, body still
+  → click moves the other way; Recenter zeroes it; AirPods out → still pans from the compass; Stop → silence.
+
 ## Step 5 — Watch (Fri Sep 11, pre-device)
 - PhoneWatchLink (WCSession): nav cues (turn/crossing/arrived), obstacle mirror throttled 1/s per kind when the
   phone haptic engine is unhealthy or "Mirror obstacle cues" is on, status line via application context +

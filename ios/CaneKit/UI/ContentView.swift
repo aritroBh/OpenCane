@@ -18,6 +18,7 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: CKSpacing.xl) {
+                    GuideCard()
                     statusCard
                     LaneGridView(report: model.depth.report)
                     HapticsCard()
@@ -62,6 +63,8 @@ struct ContentView: View {
                 .accessibilityHint("Turn off if the phone is clamped sideways")
             Toggle("Mirror left / right", isOn: model.mirrorLeftRight)
                 .accessibilityHint("Turn on if left and right warnings feel swapped")
+            Toggle("Audio beacon while navigating", isOn: model.beaconEnabled)
+                .accessibilityHint("A soft click from the direction to walk, through the AirPods")
             Toggle("Write trip log", isOn: model.loggingEnabled)
                 .accessibilityHint("Saves a JSONL log of lanes, cues and location to the Files app")
         }

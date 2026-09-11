@@ -43,6 +43,10 @@ struct HapticsCard: View {
                 CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
                              tone: model.speech.isSpeaking ? .warning : .neutral,
                              systemImage: "speaker.wave.2", updatesFrequently: true)
+                CKStatusPill(text: model.speech.naturalVoice == nil ? "System voice" : model.speech.backendName,
+                             tone: model.speech.naturalVoice == nil ? .neutral : .trusted,
+                             systemImage: "waveform.and.mic",
+                             spoken: model.speech.naturalVoice == nil ? "System voice; add an ElevenLabs key for the natural voice" : "Voice: \(model.speech.backendName)")
                 Button("Speech test") { model.speechTest() }
                     .buttonStyle(CKBigButtonStyle(role: .secondary))
                     .frame(minHeight: CKMetrics.touchTarget)

@@ -13,6 +13,7 @@
 
 import ARKit
 import CaneKitLogic
+import CoreLocation
 import Observation
 import SwiftUI
 
@@ -32,6 +33,19 @@ final class AppModel {
     let speech = SpeechQueue()
     /// WatchConnectivity link (step 5).
     let watch = PhoneWatchLink()
+    /// GPS + compass (step 6).
+    let location = LocationService()
+    /// Waypoint navigation (step 6).
+    let nav = NavigationEngine()
+    /// Spatial-audio beacon (step 7).
+    let beacon = BeaconEngine()
+    /// AirPods head yaw (step 7).
+    let head = HeadPoseTracker()
+
+    /// Route picker state.
+    var destinationQuery = ""
+    private(set) var routeError: String?
+    private(set) var isBuildingRoute = false
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     @ObservationIgnored private let decider = CueDecider()
@@ -84,6 +98,10 @@ final class AppModel {
     var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: true) {
         didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
     }
+    /// Spatial click toward the next waypoint while navigating.
+    var beaconEnabled: Bool = Settings.bool("beaconEnabled", default: true) {
+        didSet { Settings.set(beaconEnabled, "beaconEnabled"); beacon.enabled = beaconEnabled }
+    }
     /// Mirror every obstacle cue to the watch even while the phone engine is healthy.
     var fallbackToWatch: Bool = Settings.bool("fallbackToWatch", default: false) {
         didSet { Settings.set(fallbackToWatch, "fallbackToWatch") }
@@ -94,10 +112,33 @@ final class AppModel {
     @ObservationIgnored private var thermalObserver: NSObjectProtocol?
     @ObservationIgnored private var batteryObserver: NSObjectProtocol?
 
+    @ObservationIgnored private var ticker: Task<Void, Never>?
+
     init() {
         pushDepthSettings()
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
+        beacon.enabled = beaconEnabled
+    }
+
+    /// 10 Hz sync of the inputs the beacon needs that have no callback of their own
+    /// (speech ducking, head yaw). Cheap; runs only while a route is active.
+    private func startTicker() {
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.beacon.setSpeaking(self.speech.isSpeaking)
+                self.beacon.setHeadYaw(self.head.headYawDeg ?? 0)
+                self.beacon.setTarget(bearing: self.nav.isNavigating ? self.nav.targetBearing : nil)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    private func stopTicker() {
+        ticker?.cancel()
+        ticker = nil
     }
 
     /// Called once from the root view's `.task`. Starts the engines that exist at this step.
@@ -110,13 +151,19 @@ final class AppModel {
         haptics.start()
         watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
         watch.activate()
+        wireNavigation()
         depth.onReport = { [weak self] report in
             self?.handle(report)
         }
         depth.start()
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy])
+        speech.prefetch(Self.commonLines)
         speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
+        // Automation hook (simulator GPS replay, UI tests): `--demo-route` starts guidance at launch.
+        if CommandLine.arguments.contains("--demo-route") {
+            startDemoRoute()
+        }
     }
 
     /// Foreground/background transitions. ARKit pauses itself in the background; we pause the
@@ -176,16 +223,152 @@ final class AppModel {
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
     }
 
+    // MARK: Navigation (step 6)
+
+    private func wireNavigation() {
+        location.onFix = { [weak self] fix in
+            guard let self else { return }
+            self.nav.update(fix: fix)
+            self.logger.event("gps", ["lat": fix.coordinate.latitude, "lon": fix.coordinate.longitude,
+                                      "acc": fix.accuracy, "speed": fix.speed])
+        }
+        location.onHeading = { [weak self] h in
+            guard let self else { return }
+            // Gyro gate: a compass reading taken mid-sweep is noise.
+            guard self.depth.report.isTrusted || !self.depth.isRunning else { return }
+            self.nav.update(heading: h, now: Date().timeIntervalSinceReferenceDate)
+            self.beacon.setHeading(h)
+        }
+        nav.onSpeak = { [weak self] text, priority in
+            self?.speech.say(text, priority, ttl: 12)
+            self?.logger.event("speech", ["text": text, "priority": "nav"])
+        }
+        nav.onNavCue = { [weak self] cue in
+            self?.watch.send(nav: cue)
+            self?.logger.event("navcue", ["cue": cue.rawValue])
+        }
+        nav.onWaypointAdvanced = { [weak self] in
+            guard let self else { return }
+            self.logger.event("waypoint", ["index": self.nav.waypointIndex])
+            self.pushStatusToWatch()
+            // Auto-recenter once the turn has settled (same window the veer cue waits for):
+            // by then the user faces the new leg, so "head straight" = phone heading.
+            let settle = self.nav.turnSettleSeconds
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(settle))
+                guard let self, self.nav.isNavigating else { return }
+                self.head.recenter()
+            }
+        }
+        nav.onArrived = { [weak self] in
+            guard let self else { return }
+            self.logger.event("arrived")
+            self.beacon.stop()
+            self.head.stop()
+            self.stopTicker()
+            self.pushStatusToWatch()
+        }
+    }
+
+    /// The user is facing the way to walk: zero the head yaw there.
+    func recenter() {
+        head.recenter()
+        speech.say("Recentered.", .nav, ttl: 2)
+        logger.event("recenter")
+    }
+
+    /// Start the bundled demo route (ISR Townsend Hall → CIF).
+    func startDemoRoute() {
+        do {
+            let route = try RouteSource.bundled()
+            beginRoute(route)
+        } catch {
+            routeError = error.localizedDescription
+            speech.say("Route file missing.", .nav)
+        }
+    }
+
+    /// Build a live MapKit walking route to `destinationQuery` from the current fix.
+    func startMapKitRoute() {
+        let query = destinationQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { routeError = "Type a destination first"; return }
+        location.start()
+        isBuildingRoute = true
+        routeError = nil
+        speech.say("Finding a route to \(query).", .nav)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isBuildingRoute = false }
+            // Wait briefly for a first fix if we have none yet.
+            var tries = 0
+            while self.location.fix == nil, tries < 30 {
+                try? await Task.sleep(for: .milliseconds(500))
+                tries += 1
+            }
+            guard let fix = self.location.fix else {
+                self.routeError = "No GPS fix yet"
+                self.speech.say("No GPS fix yet. Try again outside.", .nav)
+                return
+            }
+            do {
+                let origin = CLLocationCoordinate2D(latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude)
+                let route = try await RouteSource.mapKit(to: query, from: origin)
+                self.beginRoute(route)
+            } catch {
+                self.routeError = error.localizedDescription
+                self.speech.say("Could not build a route. \(error.localizedDescription)", .nav)
+            }
+        }
+    }
+
+    func stopRoute() {
+        nav.stop()
+        location.stop()
+        beacon.stop()
+        head.stop()
+        stopTicker()
+        speech.stopAll()                     // queued waypoint lines must not play after Stop
+        speech.say("Route stopped.", .nav)
+        logger.event("route", ["action": "stop"])
+        pushStatusToWatch()
+    }
+
+    /// Lines the natural voice should have ready before they are needed.
+    static let commonLines = [
+        "CaneKit ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
+        "Veer left.", "Veer right.", "GPS weak. Cues may be late.", "GPS back.",
+        "No route running.", "No GPS fix yet. Try again outside.",
+    ]
+
+    private func beginRoute(_ route: Route) {
+        routeError = nil
+        // Every waypoint line and the route intro, synthesized now so they play instantly.
+        speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
+                        + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
+        location.start()
+        nav.start(route)
+        beacon.start()
+        head.start()
+        startTicker()
+        logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count])
+        pushStatusToWatch()
+    }
+
+    private func pushStatusToWatch() {
+        watch.send(status: nav.instruction, distanceM: nav.distanceToNext ?? -1)
+    }
+
     // MARK: Watch commands
 
-    /// Next / Describe / Recenter from the wrist. Navigation (step 6), the describer (step 8) and
-    /// the beacon (step 7) hook in here; until then the command is acknowledged aloud.
+    /// Next / Describe / Recenter from the wrist. The describer (step 8) and the beacon (step 7)
+    /// hook in here; until then those two are acknowledged aloud.
     private func handleWatchCommand(_ cmd: WatchToPhone) {
         logger.event("watch", ["command": cmd.rawValue])
         switch cmd {
-        case .nextWaypoint: speech.say("Next.", .nav, ttl: 2)
+        case .nextWaypoint:
+            if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
         case .describe: speech.say("Describe is not ready yet.", .scene, ttl: 2)
-        case .recenter: speech.say("Recentered.", .nav, ttl: 2)
+        case .recenter: recenter()
         }
     }
 

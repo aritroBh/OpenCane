@@ -45,10 +45,11 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] PhoneWatchLink (WCSession), WatchModel (haptics map, crown, HKWorkoutSession, buttons), cue mirroring — compiles, Muse-reviewed, untested on device
 
 ## Step 6 — Navigation
-- [ ] LocationService, NavigationEngine (GeofenceTracker + OffCourseDetector), route file, MapKit fallback
+- [x] LocationService, NavigationEngine (GeofenceTracker + OffCourseDetector), route file, MapKit fallback — **verified in the simulator GPS replay**
 
 ## Step 7 — Beacon
-- [ ] BeaconEngine (AVAudioEnvironmentNode, mono click), HeadPoseTracker (CMHeadphoneMotionManager + Recenter)
+- [x] BeaconEngine (AVAudioEnvironmentNode, mono click), HeadPoseTracker (CMHeadphoneMotionManager + Recenter) — compiles, Muse-reviewed, needs AirPods on device
+- [x] ElevenLabs natural voice with cache + prefetch, AVSpeech fallback (needs key)
 
 ## Step 8 — Scene description
 - [ ] VLM clients (custom/Anthropic/Gemini/OpenAI), Secrets, SceneDescriber, WhereAmI App Shortcut
