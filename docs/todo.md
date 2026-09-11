@@ -68,7 +68,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] XCUITests (6) + screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator; watch screenshot on a paired watchOS 27 sim
 - [x] AGENTS.md, CLAUDE.md, docs/devices_setup.md, docs/CODE_REFERENCE.md, CI workflow
 - [x] Muse review of the final Step 10 diff folded in (9 of 11 fixed; 2 refuted with evidence)
-- [ ] Commit "Step 10 (pre-device)" + push
+- [x] Commit "Step 10 (pre-device)" + push (1de6efb)
 - **test on device:** see CHANGELOG Step 10 and docs/devices_setup.md
 
 ## Cross-cutting
