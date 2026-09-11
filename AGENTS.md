@@ -58,9 +58,9 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
    never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start demo route,
-   Stop route, Repeat, Next, Recenter, Where am I, Go, Test left/center/right/head haptic, Silence
-   haptics, Mirror left / right, Write trip log, Head row, Type a destination first) must not change
-   without updating the tests in the same commit.
+   Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
+   left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
+   Type a destination first) must not change without updating the tests in the same commit.
 10. **Every commit**: `cd ios && make test` green (Logic), `make sim` green, and for UI changes
     `make uitest` + `make tour` on the **iPhone 17 Pro Max / iOS 27** simulator (`make sim17` creates
     it once). Run the Muse review (`muse exec`, read-only, from a scratch dir) on the diff. Commit message
@@ -190,6 +190,22 @@ app container's Documents folder.
   across the corner) and is reset after every veer cue (so a corrected walker is not told again).
 - The arrival hint ("You are close to …, press Next to finish") is clock-driven from the 10 Hz
   ticker (`NavigationEngine.tick`), because CoreLocation stops sending fixes while you stand still.
+- "Take me to …" (typed field or Siri) checks the campus gazetteer (`CampusPlaces`: CIF, ISR,
+  Grainger, Illini Union, Siebel, Main Library, ARC) before MapKit, then walks to the *nearest*
+  MKLocalSearch result within 3 km (a name containing every typed word preferred), never MapKit's
+  first answer; "Walking to <place>, N meters." is said before guidance so a wrong pick can be
+  stopped, and Stop also abandons a search still in flight. Siri phrases can only carry the
+  gazetteer places ("Take me to Grainger in CaneKit"; App Shortcut phrases cannot hold a String);
+  any other place goes through "Take me somewhere in CaneKit" and Siri asks where. Gazetteer
+  entrances other than CIF / ISR are OSM entrance nodes, not yet walked.
+- "Navigate to CIF from here" routes with Apple Maps to the route file's last waypoint as a bare
+  coordinate (no search), so it can never pick a different "CIF". Starting the demo route also
+  abandons an in-flight search, so a slow "Take me to …" cannot swap the walker onto another route
+  mid-walk.
+- A trip-log line's `t` and `kind` always belong to the record: a caller's field of the same name is
+  written as `field_t` / `field_kind` (`TripLogRecord`, CaneKitLogic), never dropped and never
+  allowed to win. Cue events therefore name their field `cue` and hazard events `type`; `field_kind`
+  appearing in a log is an app bug and `ios/scripts/e2e.py` fails the run on it.
 - Route cues are felt on the cane as long soft buzzes (turn left 1, right 2, crossing 3, arrived
   long-short-long) — deliberately unlike the crisp obstacle taps.
 

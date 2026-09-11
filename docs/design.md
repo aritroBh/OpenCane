@@ -425,13 +425,34 @@ Rows are one VoiceOver element each on purpose: reading three cells is slower th
 
 ### 6.3 Route choice (inside the Guide card)
 
-The route picker is reduced to two controls in the idle Guide card: **Start demo route** (the bundled
-`route_isr_cif.json`, 9 waypoints, 3 crossings, ≈ 989 m, see `docs/route_isr_cif.md`) and a destination
-`TextField` + **Go** (MapKit: `MKLocalSearch` for the typed text in a 3 km × 3 km region around you, then `MKDirections`
-walking; waypoints at each step end, 15 m fences, 20 m arrival). An empty field shows "Type a destination
-first"; with Location off for CaneKit it is refused at once with "Location is off for CaneKit" and the
-spoken fix (no wait for a fix); with no GPS fix after ~15 s: "No GPS fix yet. Try again outside." The demo route can also be
-started with the "Start my route in CaneKit" App Shortcut.
+The route picker is three controls in the idle Guide card:
+
+- **Start demo route** — the bundled `route_isr_cif.json` (9 waypoints, 3 crossings, ≈ 989 m, see
+  `docs/route_isr_cif.md`). No GPS wait, no network.
+- **Navigate to CIF from here** — the same destination for a walker who is not at ISR: `MKDirections`
+  walking from the live fix to the route file's *last waypoint as a bare coordinate*
+  (40.11242, −88.22788, the CIF east entrance). No search, so MapKit can never pick a different "CIF".
+- A destination `TextField` + **Go** — the campus gazetteer (`CampusPlaces`: CIF, ISR, Grainger, Illini
+  Union, Siebel, Main Library, ARC → entrance coordinates) first; only when nothing matches,
+  `MKLocalSearch` (`regionPriority = .required`, points of interest + addresses) in a ±3 km region around
+  the walker, and the **nearest** result in range wins — names containing every typed word preferred —
+  never MapKit's first answer. Waypoints at each step end, 15 m fences, 20 m arrival.
+
+The last two share `AppModel.buildRoute`. Every MapKit route says **"Walking to \<place>, N meters."**
+(`WalkingIntro`: nearest 10 m, tenths of a kilometre above 1 km) before guidance starts, so a blind walker
+hears what was chosen and can Stop if it is wrong; **Stop route** also abandons a search still in flight.
+An empty field shows "Type a destination first"; with Location off for CaneKit it is refused at once with
+"Location is off for CaneKit" and the spoken fix (no wait for a fix); with no GPS fix after ~15 s: "No GPS
+fix yet. Try again outside."; nothing within 3 km: "Could not find "…" within walking distance".
+
+Every control here is also a Siri phrase, because the walker this card is for cannot see it
+(`AppIntents.swift`): "Start the demo route / Navigate to CIF from here / Take me to Grainger / Take me
+somewhere / Repeat the last instruction / Next waypoint / Stop the route **in CaneKit**", plus "Where am I
+in CaneKit". Seven of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
+obstacle warnings only run with the app frontmost, so guidance must never start in the background.
+App Shortcut phrases can only interpolate an `AppEnum`/`AppEntity`, so the phrase form carries the seven
+gazetteer places (`CampusDestination`); any other place goes through "Take me somewhere in CaneKit" and
+Siri asks "Where do you want to go?" for the free text.
 
 **Not built**: the route cards (Recorded route RECOMMENDED / Any destination), the search sheet, "Use this
 route".

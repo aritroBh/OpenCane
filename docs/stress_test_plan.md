@@ -178,13 +178,15 @@ has `t` (seconds since launch) and `kind`:
   headphones, watch}
 - `gps` {lat, lon, acc, speed} ~1 Hz, only while a route runs · `waypoint` {index = the 1-based
   waypoint reached} · `navcue` {cue} · `arrived`
-- `speech` {text, priority obstacle|safety|nav, repeat?} · `cue` {kind center|left|right|head|clear,
+- `speech` {text, priority obstacle|safety|nav, repeat?} · `cue` {cue center|left|right|head|clear,
   ar_t, distance?}
 - `lanes` at 2 Hz {head[3], torso[3] (−1 = no data or clear), trusted, omega, cue, thermal, battery,
   mesh}
 - `audioroute` {connected, name} · `recenter` {auto?} · `repeat` · `watch` {command | test} ·
-  `describe` {provider}
-- `hazard` {kind, text, source ground|sign|vision}; the same hazard with GPS and photo goes to
+  `describe` {provider} · `destination` {name, meters, waypoints} (a MapKit route was chosen)
+- No field ever replaces a record's own `t` or `kind` (older builds let `cue` / `hazard` fields
+  named `kind` overwrite it; a colliding field is now written as `field_kind`)
+- `hazard` {type, text, source ground|sign|vision}; the same hazard with GPS and photo goes to
   `Documents/hazards/hazards-<session>.geojson`
 
 ```sh
@@ -316,7 +318,7 @@ goes on the bug list with its log file name and video timestamp.
   - Taps in 5 s held at 1.0 m: **20 ± 3**. At 0.5 m: **40 ± 5**.
   - Clears at 2.15 ± 0.2 m going back.
   - Standing at 2.0 m for 10 s: ≤ 1 `cue` fire (no flicker).
-- **Log.** `cue` {kind:"center", distance} at onset, `cue` {kind:"clear"} on the way back, and
+- **Log.** `cue` {cue:"center", distance} at onset, `cue` {cue:"clear"} on the way back, and
   `lanes` torso[1] around both.
 
 ### D4 Sweep gate: bench · Aarav sweeps, Aritro reads
@@ -350,7 +352,7 @@ goes on the bug list with its log file name and video timestamp.
   - Exactly 5 "Head height." lines, ≥ 4 s apart.
   - Silenced: wrist tap and the line, 2/2.
   - Torso control: 0 head cues.
-- **Log.** `cue` kind head; `speech` "Head height." priority `safety`.
+- **Log.** `cue` {cue:"head"}; `speech` "Head height." priority `safety`.
 
 ### D6 Obstacle names indoors: ISR lobby + CIF entrance · Aarav, Aritro
 - **Steps.** Five approaches each from 4 m at walking pace, cane still, to the ISR lobby door, the CIF

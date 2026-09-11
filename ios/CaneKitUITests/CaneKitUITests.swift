@@ -179,6 +179,22 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(app.switches["Write trip log"].exists)
     }
 
+    /// "Navigate to CIF from here" is on the idle guide, enabled, and gives way to the route
+    /// controls while a route runs. Not tapped: it would start GPS and an Apple Maps request.
+    ///
+    /// ⚠ test contract: button "Navigate to CIF from here" (GuideCard; its label is its text),
+    /// "Start demo route", "Stop route".
+    func testNavigateToCIFButtonIsOnTheIdleGuide() {
+        let cif = app.buttons["Navigate to CIF from here"]
+        XCTAssertTrue(cif.waitForExistence(timeout: 10), "CIF-from-here button should be on the idle guide")
+        XCTAssertTrue(cif.isEnabled)
+        app.buttons["Start demo route"].tap()
+        XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 10))
+        XCTAssertFalse(cif.exists, "route controls replace the picker while navigating")
+        app.buttons["Stop route"].tap()
+        XCTAssertTrue(cif.waitForExistence(timeout: 10))
+    }
+
     /// Tapping Go with an empty destination shows the error line instead of building a route.
     ///
     /// ⚠ test contract: button "Go" (GuideCard) and the exact static text

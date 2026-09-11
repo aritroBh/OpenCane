@@ -16,12 +16,14 @@
 //
 //  Key invariants:
 //    · Every line is one JSON object with `t` (seconds since logger creation, wall clock) and
-//      `kind`. `ar_t` fields are the ARKit clock — a different clock; correlate lane/cue records
-//      via `ar_t` and nav records via `t`.
+//      `kind`; no field can replace either (`TripLogRecord`, tested in CaneKitLogic). `ar_t`
+//      fields are the ARKit clock — a different clock; correlate lane/cue records via `ar_t` and
+//      nav records via `t`.
 //    · JSON has no NaN/infinity: numbers go through `num`, and invalid objects are dropped.
 //    · `lanes` records stay throttled (`laneRate`); the depth pipeline reports at ~15 Hz.
-//  ⚠ Do not rename `kind` values or fields without updating any log-analysis tooling; no test
-//  covers the logger — verify by AirDropping a file after a device walk.
+//  ⚠ Do not rename `kind` values or fields without updating any log-analysis tooling
+//  (ios/scripts/e2e.py reads them); only the record assembly is unit-tested — verify the file
+//  itself by AirDropping it after a device walk.
 //
 
 import CaneKitLogic
@@ -113,13 +115,15 @@ final class TripLogger {
     }
 
     /// Any discrete happening: cue fired, waypoint reached, speech line, error…
-    /// Appends `{"t", "kind", …fields}` to the buffer (a field named `t` or `kind` would win);
-    /// flushes early past 16 K characters. Silently drops objects `JSONSerialization` rejects
-    /// (e.g. a NaN passed without `num`). No-op while disabled.
+    /// Appends `{"t", "kind", …fields}` to the buffer. A field can never replace the record's
+    /// `t` or `kind`: `TripLogRecord.make` (CaneKitLogic, `fieldsNeverOverwriteTheRecordTimeOrKind`)
+    /// keeps a colliding field as `field_t` / `field_kind` (the 2026-09-11 phone log had hazard
+    /// records turned into `"kind": "sign"` that way). Flushes early past 16 K characters.
+    /// Silently drops objects `JSONSerialization` rejects (e.g. a NaN passed without `num`).
+    /// No-op while disabled.
     func event(_ kind: String, _ fields: [String: Any] = [:]) {
         guard enabled else { return }
-        var obj: [String: Any] = ["t": Self.num(Date().timeIntervalSince(t0)), "kind": kind]
-        for (k, v) in fields { obj[k] = v }
+        let obj = TripLogRecord.make(t: Self.num(Date().timeIntervalSince(t0)), kind: kind, fields: fields)
         guard JSONSerialization.isValidJSONObject(obj),
               let data = try? JSONSerialization.data(withJSONObject: obj),
               let line = String(data: data, encoding: .utf8) else { return }

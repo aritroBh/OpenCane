@@ -94,7 +94,8 @@ final class AppModel {
     /// Last route-building failure shown under the route picker; nil when there is none.
     /// "Type a destination first" is also an accessibility/test string (AGENTS.md hard rule 9).
     private(set) var routeError: String?
-    /// True while `startMapKitRoute()` waits for a fix and MapKit directions (UI shows progress).
+    /// True while a MapKit build (`buildRoute`: typed field, Siri, "Navigate to CIF from here")
+    /// waits for a fix and MapKit directions (UI shows progress, Go / CIF buttons disabled).
     private(set) var isBuildingRoute = false
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
@@ -377,7 +378,8 @@ final class AppModel {
                     watch.send(obstacle: cue.kind, now: report.timestamp)
                 }
                 speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: report.timestamp)
-                var fields: [String: Any] = ["kind": cue.kind.rawValue, "ar_t": report.timestamp]
+                // Field "cue", not "kind": "kind" is the record type (TripLogRecord reserves it).
+                var fields: [String: Any] = ["cue": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
                 logger.event("cue", fields)
             case .updateCenter(let d):
@@ -388,7 +390,7 @@ final class AppModel {
                 activeCue = .clear
                 haptics.stopAll()
                 cueSpeech.cleared()              // the next head cue is a new episode
-                logger.event("cue", ["kind": "clear"])
+                logger.event("cue", ["cue": "clear"])
             }
         }
         if obstacleNamesEnabled, let line = namer.update(report, now: report.timestamp) {
@@ -481,7 +483,9 @@ final class AppModel {
         let now = Date().timeIntervalSinceReferenceDate
         let fix = [location.fix, nav.lastFix].compactMap { $0 }.first { now - $0.timestamp < 120 }
         hazardLog.record(kind: kind, text: text, fix: fix, jpeg: jpeg)
-        logger.event("hazard", ["kind": kind, "text": text, "source": source.rawValue])
+        // Field "type", not "kind": a "kind" field used to replace the record's own kind
+        // ("hazard" → "sign"), so e2e.py never saw a hazard record (phone trip log, 2026-09-11).
+        logger.event("hazard", ["type": kind, "text": text, "source": source.rawValue])
     }
 
     /// The LiDAR facts the on-device describer may use ("Obstacle ahead at 1.4 meters. Hole
@@ -773,7 +777,11 @@ final class AppModel {
     /// Triggered by the "Start demo route" button, `StartDemoRouteIntent`, and at launch by the
     /// `--demo-route` / `CANEKIT_DEMO_ROUTE=1` automation hook. On failure sets `routeError` and
     /// says "Route file missing."
+    /// ⚠ Abandons an in-flight MapKit build first: a "Take me to …" search that returned *after*
+    /// the demo route started would otherwise call `beginRoute` again and silently swap the walker
+    /// onto the searched route mid-walk.
     func startDemoRoute() {
+        cancelRouteBuild()
         do {
             let route = try RouteSource.bundled()
             beginRoute(route)
@@ -783,27 +791,79 @@ final class AppModel {
         }
     }
 
-    /// Build a live MapKit walking route to `destinationQuery` from the current fix.
-    /// Starts location if needed and waits up to 30 × 500 ms (15 s) for a first fix. Errors are
-    /// both shown (`routeError`) and spoken. `isBuildingRoute` is cleared on every exit path.
+    /// Build a live MapKit walking route to the typed `destinationQuery` ("Go" button / return
+    /// key). Empty text → `routeError = "Type a destination first"` (⚠ UI-test string).
     func startMapKitRoute() {
-        let query = destinationQuery.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { routeError = "Type a destination first"; return }
-        // Location refused: say so now, not after a 15 s wait for a fix that never comes.
+        navigate(to: destinationQuery)
+    }
+
+    /// Walking route from the current fix to a spoken or typed place: the campus gazetteer
+    /// first, then the nearest reasonable MKLocalSearch result (`RouteSource.mapKit(to:from:)`).
+    /// Called by `startMapKitRoute()` and `TakeMeToIntent` (Siri "Take me somewhere in
+    /// CaneKit" → "Where do you want to go?"). Shows the text in the destination field.
+    func navigate(to query: String) {
+        let text = query.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { routeError = "Type a destination first"; return }
+        destinationQuery = text
+        buildRoute(to: .query(text), searchLine: "Finding a route to \(text).")
+    }
+
+    /// Walking route from the current fix to a gazetteer entrance, no search (Siri "Take me to
+    /// Grainger in CaneKit" → `TakeMeToIntent` with a `CampusDestination`).
+    func navigate(to place: CampusPlace) {
+        destinationQuery = place.name
+        buildRoute(to: .place(name: place.name, coordinate: place.coordinate),
+                   searchLine: "Finding a route to \(place.name).")
+    }
+
+    /// "Navigate to CIF from here": Apple Maps walking directions from the live GPS fix to the
+    /// CIF east entrance — the last waypoint of the bundled route file, as a coordinate (no
+    /// search, so MapKit cannot pick a different "CIF"). GuideCard button and
+    /// `NavigateToCIFIntent`. Missing route file → `routeError` + "Route file missing."
+    func navigateToCIFFromHere() {
+        guard let entrance = try? RouteSource.bundled().waypoints.last else {
+            routeError = RouteError.missingBundledRoute.localizedDescription
+            speech.say("Route file missing.", .nav)
+            return
+        }
+        buildRoute(to: .place(name: entrance.placeName, coordinate: entrance.coordinate),
+                   searchLine: "Finding a walking route to CIF from here.")
+    }
+
+    /// The in-flight MapKit build (fix wait + search + directions). Cancelled by `stopRoute()`
+    /// and replaced by a newer request, so a Stop said while "Finding a route…" plays cannot be
+    /// followed by the old route starting anyway.
+    @ObservationIgnored private var routeBuildTask: Task<Void, Never>?
+    /// Bumped by every new build and by `cancelRouteBuild()`; a build whose number is no longer
+    /// current never starts its route or touches `isBuildingRoute`/`routeError`.
+    @ObservationIgnored private var routeBuildGeneration = 0
+
+    /// Shared MapKit path for the typed field, Siri and "Navigate to CIF from here".
+    /// Location refused → spoken now (not after a 15 s wait for a fix that never comes). Else
+    /// starts location, says `searchLine`, waits up to 30 × 500 ms (15 s) for a first fix, asks
+    /// `RouteSource.walking(to:from:)`, then `beginRoute(_:announce:)` with "Walking to <place>,
+    /// N meters." (`WalkingIntro`) so a wrong pick can be stopped. Errors are shown
+    /// (`routeError`) and spoken. `isBuildingRoute` is cleared on every exit of the current build.
+    private func buildRoute(to destination: RouteDestination, searchLine: String) {
         guard !announceLocationDenied() else { return }
+        cancelRouteBuild()
+        let generation = routeBuildGeneration
         location.start()
         isBuildingRoute = true
         routeError = nil
-        speech.say("Finding a route to \(query).", .nav)
-        Task { [weak self] in
+        speech.say(searchLine, .nav)
+        routeBuildTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.isBuildingRoute = false }
-            // Wait briefly for a first fix if we have none yet.
+            let isCurrent = { !Task.isCancelled && self.routeBuildGeneration == generation }
+            defer { if isCurrent() { self.isBuildingRoute = false; self.routeBuildTask = nil } }
+            // Wait briefly for a first fix if we have none yet. (`try?` swallows cancellation, so
+            // the loop checks it: a cancelled sleep returns at once.)
             var tries = 0
-            while self.location.fix == nil, tries < 30 {
+            while self.location.fix == nil, tries < 30, isCurrent() {
                 try? await Task.sleep(for: .milliseconds(500))
                 tries += 1
             }
+            guard isCurrent() else { return }
             guard let fix = self.location.fix else {
                 self.routeError = "No GPS fix yet"
                 self.speech.say("No GPS fix yet. Try again outside.", .nav)
@@ -811,19 +871,41 @@ final class AppModel {
             }
             do {
                 let origin = CLLocationCoordinate2D(latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude)
-                let route = try await RouteSource.mapKit(to: query, from: origin)
-                self.beginRoute(route)
+                let planned = try await RouteSource.walking(to: destination, from: origin)
+                guard isCurrent() else { return }
+                self.logger.event("destination", ["name": planned.placeName, "meters": planned.walkingMeters,
+                                                  "waypoints": planned.route.waypoints.count])
+                self.beginRoute(planned.route,
+                                announce: WalkingIntro.line(place: planned.placeName, meters: planned.walkingMeters))
             } catch {
+                guard isCurrent() else { return }
                 self.routeError = error.localizedDescription
                 self.speech.say("Could not build a route. \(error.localizedDescription)", .nav)
             }
         }
     }
 
-    /// Stop guidance ("Stop route" button). Tears down nav, location, beacon, head tracking, the
-    /// ticker, the trip tracker (fire-and-forget) and the Live Activity, then clears the speech
-    /// queue so queued waypoint lines cannot play after Stop, and says "Route stopped."
+    /// Abandons any in-flight MapKit build (`stopRoute`, or a newer request): cancels the task,
+    /// invalidates its generation and clears `isBuildingRoute`.
+    private func cancelRouteBuild() {
+        routeBuildTask?.cancel()
+        routeBuildTask = nil
+        routeBuildGeneration += 1
+        isBuildingRoute = false
+    }
+
+    /// Skip to the next waypoint (Siri `NextWaypointIntent`, watch Next / crown). Says "No route
+    /// running." when idle, like the watch always did.
+    func nextWaypoint() {
+        if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
+    }
+
+    /// Stop guidance ("Stop route" button, `StopRouteIntent`). Abandons an in-flight MapKit build
+    /// first, then tears down nav, location, beacon, head tracking, the ticker, the trip tracker
+    /// (fire-and-forget) and the Live Activity, clears the speech queue so queued waypoint lines
+    /// cannot play after Stop, and says "Route stopped."
     func stopRoute() {
+        cancelRouteBuild()
         nav.stop()
         location.stop()
         beacon.stop()
@@ -852,12 +934,20 @@ final class AppModel {
     /// `nav.start` (speaks the intro) → beacon/head → recenter pending → fresh cue-speech policy
     /// → ticker → trip tracker (Motion + HealthKit prompts appear here, by design) → Live
     /// Activity → log → watch status → channel announcements (queued after the intro).
-    private func beginRoute(_ route: Route) {
+    /// `announce` (MapKit routes: "Walking to Grainger Engineering Library, 750 meters.") is said
+    /// after a running route is torn down and before the intro, so the walker hears what was
+    /// chosen first and can say Stop if it is wrong.
+    private func beginRoute(_ route: Route, announce: String? = nil) {
         // A second start mid-route (Action button / Siri) restarts cleanly (Muse M5).
         if nav.isNavigating { endRouteQuietly() }
         // Location refused: say so instead of "Route started" followed by silence (Muse H2).
         if announceLocationDenied() { return }
         routeError = nil
+        if let announce {
+            // 20 s: it queues behind "Finding a route…" and must not expire before it plays.
+            speech.say(announce, .nav, ttl: 20)
+            logger.event("speech", ["text": announce, "priority": "nav"])
+        }
         // Camera refused: warn loudly (and keep the error on screen: it is set after the clear
         // above), but still guide. GPS, the beacon and the watch work without the camera, and a
         // blind walker is better off with guidance and no obstacle cues than with nothing.
@@ -910,8 +1000,7 @@ final class AppModel {
     private func handleWatchCommand(_ cmd: WatchToPhone) {
         logger.event("watch", ["command": cmd.rawValue])
         switch cmd {
-        case .nextWaypoint:
-            if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
+        case .nextWaypoint: nextWaypoint()
         case .describe: describeScene()
         case .recenter: recenter()
         case .repeatLast: repeatInstruction()
