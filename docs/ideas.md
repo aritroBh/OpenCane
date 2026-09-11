@@ -265,12 +265,23 @@ Slides: 1 Keep your cane, add the smarts · 2 The $40 cane works, it just can't 
 
 ---
 
-## 7. Open questions
-1. Shaft diameter of the stick we have (calipers, or paper strip circumference ÷ 3.14). Real white cane or pole?
-2. Hackathon rules on pre-built hardware; judging rubric.
-3. Who owns Xcode? Anyone shipped Swift?
-4. AirPods Pro on team? Decides head-tracked beacon (4 h) vs slide.
-5. Budget cap for Thursday order.
-6. Gemini API key or free tier.
-7. Creality models; PETG/TPU on hand or PLA only.
-8. Chest hedge: print it, or 100% phone-on-cane.
+## 7. Answered (Sep 10 night)
+- **Stick shaft = 1.132 in = 28.75 mm.** Not a white cane (12.7 mm). Consequences:
+  - Lamicall bike mount (15–40 mm) fits with no shim. Buy it; it's the guaranteed phone mount.
+  - Printables handlebar mounts fit directly: https://www.printables.com/model/165853-universal-handlebar-phone-mount-v2 (20–32 mm) and https://www.printables.com/model/164840-handlebartube-phone-mount-no-screw (18–100 mm). j-h-a pole grip: `poleDiameter=28.75`.
+  - `cad/grip_module.scad` and `cad/sensor_pod.scad`: set shaft to 28.75, clearance 0.4. Grip module gets roomier; battery + XIAO fit easily.
+  - Still buy one real Ambutech cane (12.7 mm). Pitch is "any cane," so show both: kit on the 28.75 stick for dev, kit on a real cane for the demo, TPU shim between.
+- **AirPods Pro: yes.** Build the head-tracked audio beacon (§5.2 #3). Core, not stretch.
+- **Apple Watch: yes.** New exploits:
+  - Wrist haptics via `WKInterfaceDevice.play(.directionUp/.directionDown/.notification)` over WatchConnectivity. Left/right turn on the wrist, obstacles on the grip. Two channels, no confusion.
+  - **Fallback if the ESP32 grip fails on stage:** watch carries all haptics. Demo survives.
+  - Digital Crown / side button = "next waypoint" / "describe" without touching the phone.
+  - Heart rate + steps for the arrival card via HealthKit.
+  - Watch heading (`CMMotionManager` on watchOS) as a second compass source.
+- **Gemini key: not required.** Only the "what's here?" tap needs a VLM. Options: Gemini free tier ($0), or any Claude/OpenAI key already on hand (swap the URL in `SceneDescriber.swift`). Everything else (LiDAR lanes, mesh classification, OCR, speech, beacon) is on-device with no key.
+- Rules: not a concern.
+
+## 8. Still open
+1. Who owns Xcode?
+2. PETG/TPU on hand or PLA only?
+3. Budget cap for tonight's order.
