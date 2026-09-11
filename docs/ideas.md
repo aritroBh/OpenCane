@@ -285,3 +285,16 @@ Slides: 1 Keep your cane, add the smarts · 2 The $40 cane works, it just can't 
 1. Who owns Xcode?
 2. PETG/TPU on hand or PLA only?
 3. Budget cap for tonight's order.
+
+## 9. Phone-only mode (decision Sep 10 night: phone is king, buy nothing)
+
+Hardware owned: iPhone 17 Pro Max, Apple Watch, AirPods Pro, 28.75 mm stick, 3 printers.
+Only purchase: none required. Phone mount is printed (Printables 165853, fits 20–32 mm). Lamicall $30 is the insurance buy.
+
+Haptic channels, zero new hardware:
+1. Phone Taptic Engine. Phone is clamped to the shaft, so Core Haptics shakes the cane. Obstacle cues live here.
+2. Apple Watch on the cane hand. Turns / crossings on the wrist. Also the stage fallback for channel 1.
+3. AirPods Pro. Head-tracked beacon for bearing. Speech for everything with words.
+ESP32 grip: demoted to stretch. Firmware stays in repo; ignore unless everything else works by H12.
+
+Power: phone battery only. ARKit + LiDAR ≈ 3–4 h. Carry a power bank on the strap for the walk; MagSafe pack on the phone's back if the clamp allows.
