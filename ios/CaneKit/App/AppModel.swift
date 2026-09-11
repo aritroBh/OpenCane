@@ -30,6 +30,8 @@ final class AppModel {
     let logger = TripLogger()
     /// The app's single voice (step 4).
     let speech = SpeechQueue()
+    /// WatchConnectivity link (step 5).
+    let watch = PhoneWatchLink()
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     @ObservationIgnored private let decider = CueDecider()
@@ -106,6 +108,8 @@ final class AppModel {
         logger.start()
         speech.configureAudioSession()       // before ARKit and before the haptic engine
         haptics.start()
+        watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
+        watch.activate()
         depth.onReport = { [weak self] report in
             self?.handle(report)
         }
@@ -148,6 +152,10 @@ final class AppModel {
             case .fire(let cue):
                 activeCue = cue.kind
                 haptics.play(cue)
+                // Wrist mirror: whenever the phone cannot buzz, or the user asked for both.
+                if !haptics.isHealthy || fallbackToWatch {
+                    watch.send(obstacle: cue.kind, now: report.timestamp)
+                }
                 lastCueDescription = "\(cue.kind.rawValue) @ \(String(format: "%.1f", report.timestamp))s"
                 var fields: [String: Any] = ["kind": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
@@ -166,6 +174,25 @@ final class AppModel {
             logger.event("speech", ["text": line, "priority": "obstacle"])
         }
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
+    }
+
+    // MARK: Watch commands
+
+    /// Next / Describe / Recenter from the wrist. Navigation (step 6), the describer (step 8) and
+    /// the beacon (step 7) hook in here; until then the command is acknowledged aloud.
+    private func handleWatchCommand(_ cmd: WatchToPhone) {
+        logger.event("watch", ["command": cmd.rawValue])
+        switch cmd {
+        case .nextWaypoint: speech.say("Next.", .nav, ttl: 2)
+        case .describe: speech.say("Describe is not ready yet.", .scene, ttl: 2)
+        case .recenter: speech.say("Recentered.", .nav, ttl: 2)
+        }
+    }
+
+    /// Debug buttons on the Watch card.
+    func watchTest(_ cue: NavCue) {
+        watch.send(nav: cue)
+        logger.event("watch", ["test": cue.rawValue])
     }
 
     /// Debug button: prove the audio route (AirPods) and the queue/interrupt behaviour.

@@ -21,6 +21,7 @@ struct ContentView: View {
                     statusCard
                     LaneGridView(report: model.depth.report)
                     HapticsCard()
+                    WatchCard()
                     mountSettings($model)
                     capabilityCard
                     DebugFooter()

@@ -42,7 +42,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] SpeechQueue (priority, interruptible, one audio session), ObstacleNamer, MeshClassifier (≤ 4 Hz) — compiles, Muse-reviewed, untested on device
 
 ## Step 5 — Watch
-- [ ] PhoneWatchLink (WCSession), WatchModel (haptics map, crown, HKWorkoutSession, buttons), cue mirroring
+- [x] PhoneWatchLink (WCSession), WatchModel (haptics map, crown, HKWorkoutSession, buttons), cue mirroring — compiles, Muse-reviewed, untested on device
 
 ## Step 6 — Navigation
 - [ ] LocationService, NavigationEngine (GeofenceTracker + OffCourseDetector), route file, MapKit fallback

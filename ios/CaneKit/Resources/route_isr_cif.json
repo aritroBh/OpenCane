@@ -1,14 +1,14 @@
 {
-  "name": "ISR to CIF",
-  "recorded": "2026-09-10",
-  "source": "OpenStreetMap via Nominatim + Overpass API (ODbL), queried 2026-09-10; entrances = OSM entrance nodes, intersections = OSM street-intersection/crossing nodes, WP5 interpolated mid-block; not yet walked/GPS-verified",
+  "name": "ISR Townsend Hall to CIF",
+  "recorded": "2026-09-11",
+  "source": "OpenStreetMap via Nominatim + Overpass API (ODbL), queried 2026-09-10 and 2026-09-11; WP1 = OSM entrance node 5418851678 at the south vestibule of the ISR lounge building, at Townsend Hall's south-west corner (Townsend = east building, OSM way 899305028), confirmed against University Housing ISR site plan + 1st-floor plan (hsgintranet2024.web.illinois.edu, 2025-11); intersections = OSM street-intersection/crossing nodes, WP5 interpolated mid-block; not yet walked/GPS-verified",
   "waypoints": [
     {
       "id": 1,
       "lat": 40.10949,
       "lon": -88.22135,
       "radius_m": 15,
-      "say": "Leaving ISR. Follow the covered walk south, then the path west and down to the Illinois Street sidewalk.",
+      "say": "Leaving Townsend Hall through the ISR front doors. Follow the covered walk south, then the path west and down to the Illinois Street sidewalk.",
       "crossing": false,
       "bearing_next_deg": 225.6
     },

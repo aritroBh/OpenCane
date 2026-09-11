@@ -70,6 +70,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: "NO"
+        CODE_SIGN_ENTITLEMENTS: CaneKit/CaneKit.entitlements
     info:
       path: CaneKit/Info.plist
       properties:
@@ -106,6 +107,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: CaneKitWatch/CaneKitWatch.entitlements
     info:
       path: CaneKitWatch/Info.plist
       properties:
@@ -115,7 +117,7 @@ targets:
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.aritro.canekit
         WKRunsIndependentlyOfCompanionApp: false
-        WKBackgroundModes: [workout-processing]
+        WKBackgroundModes: [workout-processing, mindfulness]   # workout keep-alive + runtime-session fallback
         NSMotionUsageDescription: "CaneKit counts steps for the arrival summary."
         NSHealthShareUsageDescription: "CaneKit reads your step count for the arrival summary."
         NSHealthUpdateUsageDescription: "CaneKit records the guided walk as a workout so wrist cues keep working."

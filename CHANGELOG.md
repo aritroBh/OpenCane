@@ -2,6 +2,22 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 5 — Watch (Fri Sep 11, pre-device)
+- PhoneWatchLink (WCSession): nav cues (turn/crossing/arrived), obstacle mirror throttled 1/s per kind when the
+  phone haptic engine is unhealthy or "Mirror obstacle cues" is on, status line via application context +
+  live message, Next/Describe/Recenter commands in.
+- Watch app: WKHapticType map (turnLeft .directionUp, turnRight .directionDown, crossing .notification,
+  arrived .success, obstacle .failure; mirrored left .start / right .stop / center .click / head .failure),
+  Next/Describe/Recenter buttons, crown = Next after 3 detents (0.8 s debounce), walking HKWorkoutSession
+  keep-alive with delegate + WKExtendedRuntimeSession fallback (mindfulness background mode), initial
+  application-context read, "Phone not reachable" feedback. HealthKit entitlements on both targets.
+- Route: renamed "ISR Townsend Hall to CIF"; Townsend's only Illinois-St door is the ISR front door (WP1
+  unchanged, spoken line updated); docs/route_isr_cif.md documents the evidence.
+- Test on device (watch app open, wrist up): phone Watch card shows "Reachable"; Left/Right/Cross/Arrive
+  buttons → distinct wrist taps; crown three clicks → phone says "Next."; Describe/Recenter buttons → phone
+  acknowledges; toggle "Mirror obstacle cues" → obstacle taps on the wrist ≤ 300 ms after the phone buzz;
+  lower the wrist for 30 s → cues still arrive (workout keep-alive).
+
 ## Step 4 — Speech + obstacle names (Fri Sep 11, pre-device)
 - SpeechQueue: one `.playback` session (`.duckOthers`, no Bluetooth options, interruption re-activation),
   priorities scene < nav < obstacle, higher priority interrupts at a word boundary, FIFO within priority,
