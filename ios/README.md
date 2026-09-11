@@ -20,7 +20,7 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–11 have landed and are verified on the simulator: 128 logic tests, 7
+**Status.** Steps 0–11 have landed and are verified on the simulator: 130 logic tests, 7
 XCUITests (one needs the local Street View frames), the screenshot tour, and `make e2e` (GPS replay
 of the route through the real app, four scenarios, plus an opt-in Street View camera scenario).
 Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
@@ -103,7 +103,7 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 128 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
+| `make test` | `scripts/test.sh`: the 130 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -156,7 +156,7 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 128 Swift Testing tests. They cover lane extraction on
+- **Unit tests (`Logic/`, no device):** 130 Swift Testing tests. They cover lane extraction on
   synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
   math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
   VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy and the crown
@@ -216,6 +216,10 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
   a power bank on the strap, since ARKit + LiDAR run ≈ 3–4 h.
 - **Thermal.** `.serious` or worse turns off mesh classification, and with it the obstacle names.
   Lanes and haptics never stop.
+- **xcodebuild hangs after "Test Suite … passed".** Seen with `make tour` / `make uitest-streetview`
+  when old test-runner processes were left on the simulator (hours old). The tests themselves had
+  passed. Fix: `xcrun simctl shutdown all`, then rerun. `make e2e` relaunches the app itself and is
+  not affected.
 - **Fence radii come from the route file.** Most waypoints use 15 m, turns (WP3, WP6, WP8) use
   12 m and arrival (WP9, CIF) uses 20 m. Before you touch a fence, veer or speech rule, read
   `AGENTS.md` → "Things that look wrong but are deliberate".

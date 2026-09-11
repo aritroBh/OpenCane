@@ -268,22 +268,25 @@ public struct SignPolicy: Sendable, Equatable {
     public init() {}
 
     /// One recognized text line: its string, confidence (0…1) and line-box height as a fraction
-    /// of the image height (1 = unknown / treat as close).
+    /// of the image height. The default height 0 means unknown, treated as **far** (Muse: unknown
+    /// size must never bypass the close-text rule).
     public struct SeenText: Sendable, Equatable {
         public var text: String
         public var confidence: Float
         public var height: Float
-        public init(text: String, confidence: Float, height: Float = 1) {
+        public init(text: String, confidence: Float, height: Float = 0) {
             self.text = text
             self.confidence = confidence
             self.height = height
         }
     }
 
-    /// - Parameter texts: recognized strings with confidence (0…1), size unknown (treated as close).
+    /// Fixtures and tests only: every string is treated as **close** (full height). App code must use
+    /// `line(for seen:)` with real heights (`VisionDetections.seenTexts`).
+    /// - Parameter texts: recognized strings with confidence (0…1).
     /// - Returns: "Sign: sidewalk closed." or nil.
     public mutating func line(for texts: [(text: String, confidence: Float)], now: TimeInterval) -> String? {
-        line(for: texts.map { SeenText(text: $0.text, confidence: $0.confidence) }, now: now)
+        line(for: texts.map { SeenText(text: $0.text, confidence: $0.confidence, height: 1) }, now: now)
     }
 
     /// - Parameter seen: recognized lines with size; see `shortPhraseMinHeight`.

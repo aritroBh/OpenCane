@@ -134,13 +134,14 @@ public enum SceneVocabulary {
     public static func isFaithful(_ sentence: String, facts: String, nouns: [String]) -> Bool {
         let words = tokens(sentence)
         guard !words.isEmpty, words.count <= 30 else { return false }
-        if !nouns.isEmpty {
-            // Accept the noun or any synonym the vocabulary merged into it ("road" for "the street",
-            // "car" for "cars", "crossing" for "a crosswalk"), compared on a simple stem. Exact stem
-            // equality only: prefix matching let "businesses" count as "bus" (Muse, final review).
-            let terms = Set(nouns.flatMap(synonyms(of:)).map(stem))
-            guard words.contains(where: { terms.contains(stem($0)) }) else { return false }
-        }
+        // Nothing nameable was detected: there is nothing the sentence could be faithful to, so the
+        // deterministic template speaks (Muse: "A door ahead." at a blank wall passed the gate).
+        guard !nouns.isEmpty else { return false }
+        // Accept the noun or any synonym the vocabulary merged into it ("road" for "the street",
+        // "car" for "cars", "crossing" for "a crosswalk"), compared on a simple stem. Exact stem
+        // equality only: prefix matching let "businesses" count as "bus" (Muse, final review).
+        let terms = Set(nouns.flatMap(synonyms(of:)).map(stem))
+        guard words.contains(where: { terms.contains(stem($0)) }) else { return false }
         // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
         // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
         return numbers(in: sentence).isSubset(of: numbers(in: facts))
@@ -180,7 +181,9 @@ public enum SceneVocabulary {
     static let numberWords: [String: String] = [
         "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
         "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
-        "fifteen": "15", "twenty": "20", "thirty": "30",
+        "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+        "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30", "forty": "40",
+        "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80", "ninety": "90", "hundred": "100",
     ]
 
     /// The noun's own words (minus articles) plus every Vision identifier merged into it, split on
@@ -208,8 +211,10 @@ public enum SceneVocabulary {
             let chars = t.filter { !$0.isWhitespace }
             guard !chars.isEmpty else { return false }
             let letters = chars.filter(\.isLetter).count
+            // Runs of letters *or digits*: a near "EXIT" misread as "EX1T" is still text
+            // (Muse); the letter-ratio gate still drops "111" and "{4J J".
             var run = 0, best = 0
-            for c in t { run = c.isLetter ? run + 1 : 0; best = max(best, run) }
+            for c in t { run = (c.isLetter || c.isNumber) ? run + 1 : 0; best = max(best, run) }
             return best >= 3 && Double(letters) / Double(chars.count) >= 0.6
         }
     }

@@ -56,6 +56,11 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   am I" template uses sized text too; the camera-denied warning is spoken once, not twice in a row.
   Tests `faithfulnessUnderstandsSynonymsAndSpelledNumbers`, `decimalsInTheFactsStayWhole`,
   `farLinesAreNotJoinedIntoAPhantomSign`.
+- **Review of 3efc0b1 (Muse), all fixed with tests:** with nothing detected the model is never
+  trusted (a blank wall cannot become "A door ahead."); teens and tens count as numbers; a misread
+  "EX1T" still counts as text; a `SeenText` of unknown size is far by default (the tuple overload is
+  for test fixtures only); the Street View e2e needs a clean hazard-watch reply, not just a record.
+  Tests `blankWallsTeensAndMisreadsAreHandled`, `unknownTextSizeCountsAsFar`.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

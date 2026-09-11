@@ -107,3 +107,13 @@ import Testing
     #expect(SceneVocabulary.isFaithful("A door, 1.5 meters ahead.",
                                        facts: "Obstacle ahead at one and a half meters. Camera sees: a door", nouns: ["a door"]))
 }
+
+/// Muse review of 3efc0b1: nothing detected → the model is never trusted; teens are numbers too;
+/// a misread "EX1T" is still text.
+@Test func blankWallsTeensAndMisreadsAreHandled() {
+    #expect(!SceneVocabulary.isFaithful("A door ahead.", facts: "Nothing detected.", nouns: []))
+    #expect(!SceneVocabulary.isFaithful("The street runs thirteen meters ahead.",
+                                        facts: "Obstacle ahead at two meters. Camera sees: the street", nouns: ["the street"]))
+    #expect(SceneVocabulary.readableTexts(["EX1T"]) == ["EX1T"])
+    #expect(SceneVocabulary.readableTexts(["111", "{4J J"]).isEmpty)
+}

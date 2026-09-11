@@ -293,8 +293,10 @@ def check(name: str, events: list[dict]) -> list[str]:
         scan_frames = {e.get("frame") for e in events if e.get("kind") == "scan" and e.get("frame")}
         if len(scan_frames) < 5:
             fails.append(f"sign scans saw only {len(scan_frames)} distinct frames (want ≥ 5): is FrameReplay following the GPS?")
-        if not any(e.get("kind") == "hazard_watch" for e in events):
-            fails.append("no hazard-watch replies logged (CANEKIT_HAZARD_WATCH=1 should turn it on)")
+        clean = [e for e in events if e.get("kind") == "hazard_watch"
+                 and e.get("reply") and not e.get("error") and not e.get("dropped")]
+        if not clean:
+            fails.append("no clean hazard-watch reply (all errored, dropped or missing; CANEKIT_HAZARD_WATCH=1 should turn it on)")
     elif name == "wrong_turn":
         if not any(v == "Veer right." for v in veers):
             fails.append(f"expected 'Veer right.' after overshooting west at Goodwin, got {veers}")

@@ -350,6 +350,13 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(real == "Sign: road closed.")
 }
 
+/// A SeenText with no height is treated as far: a lone word of unknown size is not read.
+@Test func unknownTextSizeCountsAsFar() {
+    var p = SignPolicy()
+    let r = p.line(for: [SignPolicy.SeenText(text: "EXIT", confidence: 0.9)], now: 0)
+    #expect(r == nil)
+}
+
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.
 @Test func aPartialReadOfTheSameSignIsQuiet() {
     var p = SignPolicy()
