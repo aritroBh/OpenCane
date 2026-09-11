@@ -90,6 +90,6 @@ still.
 | Who | Owns |
 |---|---|
 | **Sagar** (hardware) | Calipers, OpenSCAD render and fixes, coupons, all prints, inserts, assembly, setting the hinge angle, T0 fit, T7 shake, T8 drop, reprints |
-| **Aritro** (app) | Phone charged; Guided Access and the Camera Control setting; app-side tests T2–T6, T9, T10; trip logs; `CHANGELOG.md` / `docs/todo.md` entries (AGENTS.md rule 10); any `CaneKitLogic` change the tests call for (e.g. `groundSkipFraction`, `DESIGN.md` §13) |
+| **Aritro** (app) | Phone charged; Guided Access (triple-click the side button in CaneKit → Options: Touch, Side Button, Volume Buttons, Keyboards Off, Motion On → Start; then the watch is the only input, see `docs/devices_setup.md` step 4) and the Camera Control setting; app-side tests T2–T6, T9, T10; trip logs; `CHANGELOG.md` / `docs/todo.md` entries (AGENTS.md rule 10); any `CaneKitLogic` change the tests call for (e.g. `groundSkipFraction`, `DESIGN.md` §13) |
 | **Walker** (blindfolded tester) | Holds the cane in their own natural pose for the angle measurement (T1); identifies haptic patterns (T6); walks |
 | **Spotter** (sighted teammate) | Walks beside the walker on every outdoor test and films it with a second phone (`ios/README.md`) |

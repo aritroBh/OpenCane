@@ -342,8 +342,13 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
 @Test func farLinesAreNotJoinedIntoAPhantomSign() {
     var p = SignPolicy()
     let far: Float = 1.0 / 120
-    let phantom = p.line(for: [SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: far),
-                               SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: far)], now: 0)
+    // A work truck's "ROAD" on the left, a shop's "CLOSED" on the right: not one sign.
+    let phantom = p.line(for: [
+        SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: far,
+                            box: .init(minX: 0.10, maxX: 0.18, minY: 0.50)),
+        SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: far,
+                            box: .init(minX: 0.70, maxX: 0.80, minY: 0.49)),
+    ], now: 0)
     #expect(phantom == nil)
     let real = p.line(for: [SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: 1.0 / 30),
                             SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: 1.0 / 30)], now: 1)
@@ -363,6 +368,32 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(!p.mayMention(SignPolicy.SeenText(text: "EXIT", confidence: 0.9, height: 1.0 / 150)))
     #expect(p.mayMention(SignPolicy.SeenText(text: "EXIT", confidence: 0.9, height: 1.0 / 40)))
     #expect(p.mayMention(SignPolicy.SeenText(text: "Sidewalk closed", confidence: 0.9, height: 1.0 / 150)))
+}
+
+/// A 1 m ledge at 2.0 m: the ground just past the edge is hidden (occlusion shadow), the lower
+/// ground shows again only from ~2.9 m. The warning must give the near edge (≤ 2.1 m), not the far
+/// side of the shadow (Claude review workflow: announced 1+ m too far).
+@Test func aDeepDropIsReportedAtItsNearEdge() {
+    let visible = ground { $0 >= 2.0 ? -1.0 : 0 }.filter { $0.forward < 2.0 || $0.forward >= 2.9 }
+    let h = GroundHazardDetector().classify(visible)
+    #expect(h?.kind == .dropOff)
+    #expect(h.map { $0.distance <= 2.1 } == true)
+}
+
+/// A far two-line sign ("SIDEWALK" stacked over "CLOSED", same width band, one line apart) is read
+/// as one sign; the same words with no geometry are not joined (Claude review workflow).
+@Test func farStackedSignLinesAreJoined() {
+    var p = SignPolicy()
+    let h: Float = 1.0 / 120
+    let stacked = p.line(for: [
+        SignPolicy.SeenText(text: "SIDEWALK", confidence: 0.9, height: h, box: .init(minX: 0.40, maxX: 0.52, minY: 0.5 + h * 1.3)),
+        SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: h, box: .init(minX: 0.42, maxX: 0.50, minY: 0.5)),
+    ], now: 0)
+    #expect(stacked == "Sign: sidewalk closed.")
+    var q = SignPolicy()
+    let noGeometry = q.line(for: [SignPolicy.SeenText(text: "SIDEWALK", confidence: 0.9, height: h),
+                                  SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: h)], now: 0)
+    #expect(noGeometry == nil)
 }
 
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.

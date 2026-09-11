@@ -7,7 +7,7 @@ that has the detail.
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (132 logic tests, needs only the Command Line Tools).
+1. `git pull`, then `cd ios && make test` (136 logic tests, needs only the Command Line Tools).
 2. Find your row in §3 and do its first item.
 3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
    only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
@@ -34,7 +34,7 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 132 pass | `make test` |
+| Logic tests (every rule with a number in it) | 136 pass | `make test` |
 | App + watch + widget build, Swift 6 strict | green | `make sim` |
 | UI tests + screenshot tour | 7 pass (one needs the local Street View frames) | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
@@ -64,7 +64,7 @@ The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench test
 ```sh
 git pull
 cd ios
-make test          # 132 logic tests; needs only the Command Line Tools
+make test          # 136 logic tests; needs only the Command Line Tools
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
@@ -73,10 +73,16 @@ make sim           # simulator build
 To put it on the phone (full list: [`ios/README.md` §1](../ios/README.md#1-day-0-checklist)):
 
 1. Xcode → Settings → Accounts → add your Apple ID (a free Personal Team; installs last 7 days).
+   After `make gen`, open `ios/CaneKit.xcodeproj` once, select the **CaneKit** target →
+   **Signing & Capabilities** and pick the Personal Team. That creates the Apple Development
+   certificate (before it exists, `security find-identity -v -p codesigning` lists nothing).
+   The **Team ID** is shown in Xcode → Settings → Accounts → the team's details, or use the `OU=`
+   value from `security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject`.
+   The 10 characters in parentheses of "Apple Development: Name (…)" are **not** the Team ID.
 2. Settings → Privacy & Security → **Developer Mode** on, on the iPhone **and** the Watch.
 3. Plug the phone in, tap Trust, then `make devices` and create `ios/local.mk`:
    ```make
-   TEAM   = ABCDE12345                # security find-identity -v -p codesigning
+   TEAM   = ABCDE12345                # the OU= value from step 1
    DEVICE = 00008150-…                # from make devices
    ```
 4. Keys (optional) go in `ios/CaneKit/Resources/Secrets.plist` **before** building; it rides inside
@@ -162,12 +168,14 @@ aloud, Apple's on-device model inventing "Distance: zero meters", sign range (no
 letters ≈ 7 m on a flat frontal sign), STOP signs and far storefront words, and a camera path the
 log could not see.
 
-**Diagnosed:** in the *simulator* Vision's scene classification fails with "Failed to create
-espresso context" (the simulator has no neural-network context; the new `vision_error` field in the
-trip log's `describe_result` records it). That is a simulator limit, not a phone bug: the same frames
-classify fine on the Mac (`vision_probe.swift`), and the phone has the Neural Engine. A CPU-only attempt
-was tried and also fails (all 1,303 labels at ~0 confidence), so scene words are tested with
-`vision_probe.swift` on the Mac and on the phone. Still, **check "Where am I" on the real phone
+**Diagnosed:** scene recognition cannot be tested in the *simulator* at all. Vision's scene
+classification fails there with "Failed to create espresso context" (the simulator has no
+neural-network context; the new `vision_error` field in the trip log's `describe_result` records
+it). That is a simulator limit, not a phone bug: the same frames classify fine on the Mac
+(`vision_probe.swift`), and the phone has the Neural Engine. A CPU-only fallback was tried and
+removed again: it returned all 1,303 labels at ~0 confidence, so the Street View mock does not
+exercise the scene words. Scene words are covered by `ios/scripts/vision_probe.swift` on the Mac,
+`SceneVocabularyTests` (logic tests) and the phone. Still, **check "Where am I" on the real phone
 first thing** (stress plan D17): it should name what is there ("Ahead: a crosswalk, …").
 
 ## 9. How to find anything
@@ -198,7 +206,12 @@ after code changes with `graphify update .` (seconds, no API cost).
   until D-tests pass; the lanes, haptics, route and watch are the product.
 - Ramps steeper than ~11 % can read as a drop-off or step (the price of catching curb faces that
   fall mid-bin). ADA ramps (≤ 8.3 %) stay quiet in tests.
-- The screen is exposed on the cane: use Guided Access so a brush cannot hit Stop.
+- The screen is exposed on the cane: use Guided Access so a brush cannot hit Stop. To arm it
+  (Settings → Accessibility → Guided Access on, passcode set), triple-click the side button in
+  CaneKit → Options: **Touch Off, Side Button Off, Volume Buttons Off, Keyboards Off, Motion On** →
+  Start. While armed the watch (Repeat / Next / Describe / Recenter) is the only input. "Where am I"
+  from the Action button may be blocked too (it is a hardware button; stress plan D16 records
+  whether it works), so use the watch's Describe.
 - ARKit stops when the screen locks; the app keeps the screen on while open.
 - Compass readings on the cane are only trusted when the cane is still; while walking > 0.7 m/s the
   veer decision uses the smoothed GPS course.

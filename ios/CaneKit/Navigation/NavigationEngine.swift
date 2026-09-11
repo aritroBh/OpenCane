@@ -322,7 +322,10 @@ final class NavigationEngine {
             // empty inside the corner's fence, so there is no veer judgement until ~15 m past the
             // fence (review: the old leg's course lagged ~16 s after each turn and produced false
             // veers right after WP2/WP3/WP6).
-            guard let course = smoothedCourse, let target = targetBearing else { return }
+            guard let course = smoothedCourse, let target = targetBearing else {
+                offCourse.endEpisode()           // no judgement possible: no episode either
+                return
+            }
             err = GeoMath.bearingError(target: target, heading: course)
         }
         if let turn = offCourse.update(error: err, now: now) {
@@ -332,6 +335,7 @@ final class NavigationEngine {
             // cooldown ends, after the walker has already corrected (nav harness, round 5).
             courseSmoother.reset()
             smoothedCourse = nil
+            offCourse.endEpisode()               // the next veer needs a full 3 s hold again
         }
     }
 

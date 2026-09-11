@@ -72,8 +72,27 @@ func reads(_ jpeg: Data, minFraction: Float?) async -> Bool {
     req.usesLanguageCorrection = true
     if let minFraction { req.minimumTextHeightFraction = minFraction }
     let obs = (try? await req.perform(on: jpeg)) ?? []
-    let lines = obs.compactMap { $0.topCandidates(1).first }.filter { $0.confidence >= 0.5 }.map { normalize($0.string) }
-    let hay = lines.map { " \($0) " } + [" " + lines.joined(separator: " ") + " "]
+    // Same joining rule as SignPolicy: close lines (≥ 1/80 tall) join freely; far lines join only
+    // when stacked on one sign (x overlap, heights within 1.5x, gap under one line height).
+    struct L { let text: String; let r: CGRect }
+    let ls = obs.compactMap { o -> L? in
+        guard let c = o.topCandidates(1).first, c.confidence >= 0.5 else { return nil }
+        return L(text: normalize(c.string), r: o.boundingBox.cgRect)
+    }
+    var hay = ls.map { " \($0.text) " }
+    hay.append(" " + ls.filter { $0.r.height >= 1.0 / 80 }.map(\.text).joined(separator: " ") + " ")
+    let far = ls.filter { $0.r.height < 1.0 / 80 }.sorted { $0.r.minY > $1.r.minY }
+    for (i, a) in far.enumerated() {
+        var chain = [a]
+        for b in far[(i + 1)...] {
+            let u = chain[chain.count - 1].r, v = b.r
+            let overlap = min(u.maxX, v.maxX) - max(u.minX, v.minX)
+            let gap = u.minY - (v.minY + v.height)
+            if overlap > 0, max(u.height, v.height) / min(u.height, v.height) <= 1.5,
+               gap >= -0.5 * v.height, gap < max(u.height, v.height) { chain.append(b) }
+        }
+        if chain.count > 1 { hay.append(" " + chain.map(\.text).joined(separator: " ") + " ") }
+    }
     return hay.contains { $0.contains(" SIDEWALK CLOSED ") }
 }
 

@@ -117,3 +117,17 @@ import Testing
     #expect(SceneVocabulary.readableTexts(["EX1T"]) == ["EX1T"])
     #expect(SceneVocabulary.readableTexts(["111", "{4J J"]).isEmpty)
 }
+
+/// Claude review workflow: with the old prompt Apple's model answered "Camera sees: trees, grass"
+/// with "A crosswalk is ahead, then stairs, then a door, and finally trees." 4 of 4 times. A
+/// sentence naming any vocabulary object that was not detected must be rejected.
+@Test func inventedObjectsAreRejected() {
+    let facts = "Camera sees: trees, grass"
+    let nouns = ["trees", "grass"]
+    #expect(!SceneVocabulary.isFaithful("A crosswalk is ahead, then stairs, then a door, and finally trees.", facts: facts, nouns: nouns))
+    #expect(!SceneVocabulary.isFaithful("Crosswalk, stairs, door, trees, grass.", facts: facts, nouns: nouns))
+    #expect(!SceneVocabulary.isFaithful("A crosswalk, stairs, and a door are ahead; trees are further away.",
+                                        facts: "Depth sensor: Obstacle ahead at 1.4 meters.\nCamera sees: a path, trees, grass",
+                                        nouns: ["a path", "trees", "grass"]))
+    #expect(SceneVocabulary.isFaithful("Trees and grass ahead.", facts: facts, nouns: nouns))
+}

@@ -5,7 +5,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## State of things
 
-- The app is done and tested on the Mac and simulator: 132 logic tests, UI tests, and replays of
+- The app is done and tested on the Mac and simulator: 136 logic tests, UI tests, and replays of
   the ISR → CIF route, including missed turns, noisy GPS and wrong turns.
 - **Nothing has run on the real phone yet.** That is tonight's job;
   [`stress_test_plan.md`](stress_test_plan.md) has the checklist and the schedule.
@@ -39,12 +39,20 @@ The short version for Sagar and Aarav. The full picture is in
 ## Installing on the phone (Aritro)
 
 1. Add your Apple ID in Xcode: Settings → Accounts.
-2. Turn on Developer Mode on the phone and the watch, plug in, and tap Trust.
-3. `cd ios && make devices`, then put `TEAM` and `DEVICE` in `ios/local.mk`.
-4. `make run`.
+2. `cd ios && make gen`, open `ios/CaneKit.xcodeproj` once, select the CaneKit target → Signing &
+   Capabilities and pick the Personal Team (this creates the Apple Development certificate).
+3. Find the Team ID in Xcode → Settings → Accounts → the team's details, or take the `OU=` value
+   from `security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject`. The
+   10 characters in parentheses of "Apple Development: Name (…)" are not the Team ID.
+4. Turn on Developer Mode on the phone and the watch, plug in, and tap Trust.
+5. `make devices`, then put `TEAM` (the Team ID) and `DEVICE` (from `make devices`) in
+   `ios/local.mk`.
+6. `make run`.
 
 ## Known quirks
 
-- Scene recognition doesn't work in the simulator ("Failed to create espresso context", even on the
-  CPU); it is a simulator limit, so check "Where am I" on the phone first.
+- Scene recognition can't be tested in the simulator at all ("Failed to create espresso context";
+  a CPU-only attempt returned all 1,303 labels at ~0 confidence and was removed). Scene words are
+  covered by `ios/scripts/vision_probe.swift` on the Mac, `SceneVocabularyTests` and the phone, so
+  check "Where am I" on the phone first.
 - `make tour` can hang after passing: `xcrun simctl shutdown all` and retry.

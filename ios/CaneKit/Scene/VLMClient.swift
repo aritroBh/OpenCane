@@ -97,7 +97,7 @@ nonisolated enum VLMClientFactory {
     /// `VLM_PROVIDER` (custom / anthropic / gemini / openai) pins one; if that provider lacks a
     /// key, the others are tried in `VLMProvider.allCases` order. Empty or unknown
     /// `VLM_PROVIDER` uses custom → anthropic → gemini → openai. Called once by
-    /// `SceneDescriber.init`.
+    /// `resolved(context:)`.
     static func fromSecrets() -> (any VLMClient)? {
         // Case-insensitive: "Gemini" in Secrets.plist must not silently fall back (Antigravity review).
         let requested = Secrets.string("VLM_PROVIDER").flatMap { VLMProvider(rawValue: $0.lowercased()) }

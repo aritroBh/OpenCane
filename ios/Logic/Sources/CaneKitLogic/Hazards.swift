@@ -35,7 +35,9 @@ public struct GroundSample: Sendable, Equatable {
 }
 
 public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable {
-    /// Ground falls away by more than a step (curb down, stairs down, loading dock, trench).
+    /// Ground falls away by more than a step (curb down, a short step down, a trench). The lower
+    /// surface must be visible within the scan: a long flight of stairs down or a ledge deeper than
+    /// ~0.6 m hides its lower ground (occlusion) and is NOT detected (Claude review workflow).
     case dropOff
     /// A hole whose far side comes back up (pothole, missing paver, open drain).
     case pothole
@@ -151,8 +153,14 @@ public struct GroundHazardDetector: Sendable {
             if delta <= -c.dropThreshold, bin.height - max(p1, p2) <= -c.edgeJump {
                 // Comes back up within the scan → a hole; stays down → a drop-off.
                 let recovers = later.contains { $0 > -c.dropThreshold / 2 }
+                // A deep drop hides the ground just past its edge (occlusion shadow): the first
+                // visible lower bin can be a metre beyond the edge. When bins are missing before
+                // this one, report the end of the last visible ground (Claude review workflow).
+                let lastGroundEnd = i >= 1 ? bins[i - 1].start + c.binSize : c.nearMax
+                let shadow = bin.start > lastGroundEnd + 0.01
                 return GroundHazard(kind: recovers ? .pothole : .dropOff,
-                                    distance: edge(adjacentJump: bin.height - p1), delta: delta)
+                                    distance: shadow ? lastGroundEnd : edge(adjacentJump: bin.height - p1),
+                                    delta: delta)
             }
             // A tall surface filling part of a bin (wall, pole) must not read as a step: the
             // bin's upper returns must also stay under maxRise, not just its median.
@@ -271,14 +279,40 @@ public struct SignPolicy: Sendable, Equatable {
     /// of the image height. The default height 0 means unknown, treated as **far** (Muse: unknown
     /// size must never bypass the close-text rule).
     public struct SeenText: Sendable, Equatable {
+        /// Where the line sits in the image (normalized, Vision's bottom-left origin).
+        public struct Box: Sendable, Equatable {
+            public var minX: Float
+            public var maxX: Float
+            public var minY: Float
+            public init(minX: Float, maxX: Float, minY: Float) {
+                self.minX = minX
+                self.maxX = maxX
+                self.minY = minY
+            }
+        }
         public var text: String
         public var confidence: Float
         public var height: Float
-        public init(text: String, confidence: Float, height: Float = 0) {
+        /// nil = position unknown: such lines are never joined with other far lines.
+        public var box: Box?
+        public init(text: String, confidence: Float, height: Float = 0, box: Box? = nil) {
             self.text = text
             self.confidence = confidence
             self.height = height
+            self.box = box
         }
+    }
+
+    /// True when `upper` sits directly above `lower` on the same sign: their x ranges overlap,
+    /// their heights are within 1.5x of each other, and the gap between them is under one line
+    /// height. A stacked "SIDEWALK" / "CLOSED" qualifies; a distant "ROAD" and a shop's "CLOSED"
+    /// do not.
+    static func stacked(_ upper: SeenText, over lower: SeenText) -> Bool {
+        guard let a = upper.box, let b = lower.box, upper.height > 0, lower.height > 0 else { return false }
+        let overlap = min(a.maxX, b.maxX) - max(a.minX, b.minX)
+        let ratio = max(upper.height, lower.height) / min(upper.height, lower.height)
+        let gap = a.minY - (b.minY + lower.height)
+        return overlap > 0 && ratio <= 1.5 && gap >= -0.5 * lower.height && gap < max(upper.height, lower.height)
     }
 
     /// True when a text line may be mentioned at all (to the walker or to the language model): it
@@ -310,7 +344,18 @@ public struct SignPolicy: Sendable, Equatable {
         }
         let closeLines = lines(minHeight: shortPhraseMinHeight)
         let close = closeLines.map { " \($0) " } + [" " + closeLines.joined(separator: " ") + " "]
-        let anySize = lines(minHeight: 0).map { " \($0) " } + [close.last ?? ""]
+        // Far lines stacked on one sign (geometry says so) are joined top to bottom.
+        let far = usable.filter { $0.height < shortPhraseMinHeight && $0.box != nil }
+            .sorted { ($0.box?.minY ?? 0) > ($1.box?.minY ?? 0) }
+        var stackedJoins: [String] = []
+        for (i, upper) in far.enumerated() {
+            var chain = [upper]
+            for lower in far[(i + 1)...] where Self.stacked(chain[chain.count - 1], over: lower) { chain.append(lower) }
+            if chain.count > 1 {
+                stackedJoins.append(" " + chain.map { Self.normalize($0.text) }.joined(separator: " ") + " ")
+            }
+        }
+        let anySize = lines(minHeight: 0).map { " \($0) " } + [close.last ?? ""] + stackedJoins
         var matched: [String] = []
         for phrase in Self.phrases {
             let haystacks = phrase.contains(" ") ? anySize : close

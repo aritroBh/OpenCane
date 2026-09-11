@@ -37,13 +37,17 @@ nonisolated struct VisionDetections: Sendable, Equatable {
     /// Line-box height of each entry in `texts`, as a fraction of the image height (same order).
     /// Lets `SignPolicy` require one-word phrases to be close (`shortPhraseMinHeight`).
     var textHeights: [Float] = []
+    /// Line-box position of each entry in `texts` (same order), so far lines stacked on one sign
+    /// can be joined ("SIDEWALK" over "CLOSED") while unrelated far words cannot.
+    var textBoxes: [SignPolicy.SeenText.Box?] = []
 
     /// `texts` + `textHeights` in the shape `SignPolicy.line(for:now:)` wants. A missing height
     /// counts as far (0), so it can never bypass the close-text rule (Muse, final review).
     var seenTexts: [SignPolicy.SeenText] {
         texts.enumerated().map { i, t in
             SignPolicy.SeenText(text: t.text, confidence: t.confidence,
-                                height: i < textHeights.count ? textHeights[i] : 0)
+                                height: i < textHeights.count ? textHeights[i] : 0,
+                                box: i < textBoxes.count ? textBoxes[i] : nil)
         }
     }
 
@@ -83,11 +87,14 @@ nonisolated enum OnDeviceVision {
                 // ~0 confidence), so scene words can only be tested on the phone or with
                 // ios/scripts/vision_probe.swift on the Mac. The error lands in `lastClassify`.
                 let raw = try await ClassifyImageRequest().perform(on: jpeg).map { ($0.identifier, $0.confidence) }
+                // No top-N cut here: Vision's hierarchy gives parents and synonyms the same score,
+                // so the first 8 were "conveyance, portal, window, people, adult, path, sidewalk,
+                // road" and the crosswalk (56 %) was cut (Claude review workflow). SceneVocabulary
+                // caps what is said; the log keeps the first 12.
                 labels = raw.filter { $0.1 >= labelThreshold && !boringLabels.contains($0.0) }
                     .sorted { $0.1 > $1.1 }
-                    .prefix(8)
                     .map { ($0.0, $0.1) }
-                let kept = labels.map { "\($0.0) \(Int($0.1 * 100))%" }
+                let kept = labels.prefix(12).map { "\($0.0) \(Int($0.1 * 100))%" }
                 let rawCount = raw.count
                 lastClassify.withLock { $0 = (kept, kept.isEmpty ? "no labels (\(rawCount) raw)" : nil) }
             } catch {
@@ -96,6 +103,7 @@ nonisolated enum OnDeviceVision {
         }
         var texts: [(String, Float)] = []
         var heights: [Float] = []
+        var boxes: [SignPolicy.SeenText.Box?] = []
         if readText {
             var req = RecognizeTextRequest()
             req.recognitionLevel = .fast
@@ -105,11 +113,13 @@ nonisolated enum OnDeviceVision {
                 for o in obs {
                     guard let c = o.topCandidates(1).first else { continue }
                     texts.append((c.string, c.confidence))
-                    heights.append(Float(o.boundingBox.height))
+                    let r = o.boundingBox.cgRect
+                    heights.append(Float(r.height))
+                    boxes.append(.init(minX: Float(r.minX), maxX: Float(r.maxX), minY: Float(r.minY)))
                 }
             }
         }
-        return VisionDetections(labels: labels, texts: texts, textHeights: heights)
+        return VisionDetections(labels: labels, texts: texts, textHeights: heights, textBoxes: boxes)
     }
 
 }
@@ -120,8 +130,9 @@ nonisolated enum OnDeviceHazards {
     /// EXACT Vision classification identifiers that mean "something that can be in the walking
     /// path" → the word to say. Exact, not substring: substring matching turned `license_plate`
     /// into "ice", `scone` into "cones" and `shopping_cart` into "a car" (review, checked against
-    /// `VNClassifyImageRequest.supportedIdentifiers()`; that taxonomy has no cone/barrier labels at
-    /// all — the cloud model covers those). Cars, trucks and water are left out: they are always
+    /// `VNClassifyImageRequest.supportedIdentifiers()`: it has no "cone" or "barrier" id; the closest,
+    /// `road_safety_equipment`, is unmapped until a probe on a real cone photo shows it fires; the
+    /// cloud model covers road-work gear). Cars, trucks and water are left out: they are always
     /// on a street and a whole-frame label says nothing about where.
     static let map: [String: String] = [
         "fence": "a fence", "stairs": "stairs", "staircase": "stairs", "scooter": "a scooter",
@@ -168,6 +179,11 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         // was detected, invents no numbers); otherwise the deterministic template speaks.
         if let sentence = await Self.phrase(facts),
            SceneVocabulary.isFaithful(sentence, facts: facts, nouns: SceneVocabulary.nouns(d.labels, max: 5)) {
+            // The LiDAR fact is the safety-relevant one: say it first, as the template does,
+            // unless the model already gave its distance (Claude review workflow: the model
+            // dropped "Obstacle ahead at 1.4 meters" entirely).
+            let lidar = context.get()
+            if !lidar.isEmpty, !sentence.lowercased().contains("meter") { return lidar + " " + sentence }
             return sentence
         }
         return Self.template(d, lidar: context.get())
@@ -198,10 +214,9 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         // detected. Distance: 0 meters." — so: name what is there, numbers only from the facts.
         let session = LanguageModelSession(instructions: """
             You tell a blind pedestrian what is around them using ONLY the facts given. One \
-            sentence, under 20 words. Name the listed things in plain words, the most useful first \
-            (a crosswalk, stairs or a door before trees). Mention a distance only if the facts give \
-            one, and use exactly that number. Never invent objects or numbers. Never say \
-            "no hazards". No preamble.
+            sentence, under 20 words. Name the listed things in plain words, in the order given. \
+            Mention a distance only if the facts give one, and use exactly that number. Never add \
+            an object or a number that is not in the facts. Never say "no hazards". No preamble.
             """)
         guard let response = try? await session.respond(to: facts,
                                                         options: GenerationOptions(temperature: 0.2)) else { return nil }

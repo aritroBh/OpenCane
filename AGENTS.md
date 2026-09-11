@@ -160,6 +160,9 @@ app container's Documents folder.
   landing mid-bin is missed again (Antigravity round 6 proposed it; rejected with the tests). The ground path has its own looser gyro gate (1.5 rad/s, raw
   depth, ≤ 10 Hz) because a 1 Hz sweep leaves too few 0.6 rad/s frames to warn before the cane tip
   gets there. A rise in the last scan bin is not classified yet (step vs low obstacle is a guess).
+  Drops need their lower ground visible within the 3.5 m scan: a long flight of stairs down or a
+  ledge deeper than ~0.6 m is **not detected** (occlusion); the cane tip and the walker's own
+  caution cover those. A deep drop is reported at the end of the last visible ground.
   Spoken at `.safety` with 4 heavy cane taps; the same hazard (same kind, within 1 m) is repeated
   only when 1 m closer or after 30 s, so standing at a curb does not nag. **Off by default**
   ("Detect drop-offs") until tuned on the real cane. Signs are read on-device every 3 s, text down to

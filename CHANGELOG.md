@@ -92,6 +92,21 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   could never fail was removed (headings arrive current). Rejected — "Repeat dropped during a call"
   (no caller uses a zero TTL; a 12 s Repeat expiring mid-call matches the queue's staleness rule and
   Repeat works again after the call).
+- **Claude review workflow (10 agents, 16 confirmed, 9 rejected), all addressed:** Apple's model
+  invented "a crosswalk, then stairs, then a door" from the prompt's own examples (4/4 on the Mac)
+  → examples removed, `isFaithful` now rejects any vocabulary object that was not detected, and a
+  LiDAR distance is spoken first (test `inventedObjectsAreRejected`); `.prefix(8)` cut the crosswalk
+  behind synonyms → removed; far two-line signs ("SIDEWALK" over "CLOSED") are joined when the line
+  geometry shows one sign (`SeenText.box`, test `farStackedSignLinesAreJoined`; sign_probe
+  re-measured with the same rule: still ≈ 7 m for 7.5 cm letters); a deep drop is reported at the
+  end of the last visible ground, not a metre past its hidden edge (test
+  `aDeepDropIsReportedAtItsNearEdge`), and long stairs down / ledges over ~0.6 m are documented as
+  not detected; a second "Veer" now needs a full 3 s hold after the course reset
+  (`OffCourseDetector.endEpisode`, test `endEpisodeRequiresAFullHoldAgain`); sign lines keep 20 s in
+  the queue; the first head-height cue after unlock is spoken; the Street View e2e reports "no scene
+  labels (simulator limit)" as a warning; docs: the Team ID instructions (the parentheses in a
+  certificate name are not the Team ID), the AirPods check order, Guided Access options, stale
+  comments.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

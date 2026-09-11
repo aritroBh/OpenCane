@@ -261,3 +261,17 @@ private let line = [
     let second = t.update(fix(near2, accuracy: 8))
     #expect(second == .reached(index: 1, waypoint: wps[1], isLast: true))
 }
+
+/// After a cue and `endEpisode()`, a new off-course stretch needs the full 3 s hold again even
+/// once the cooldown has passed.
+@Test func endEpisodeRequiresAFullHoldAgain() {
+    let d = OffCourseDetector()
+    _ = d.update(error: 40, now: 0)
+    let first = d.update(error: 40, now: 3)
+    #expect(first == .right)
+    d.endEpisode()
+    let tooSoon = d.update(error: 40, now: 15)      // cooldown over, but a new episode just began
+    #expect(tooSoon == nil)
+    let held = d.update(error: 40, now: 18)
+    #expect(held == .right)
+}

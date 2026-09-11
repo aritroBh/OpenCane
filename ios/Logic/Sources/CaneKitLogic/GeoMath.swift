@@ -155,6 +155,13 @@ public final class OffCourseDetector {
         lastCue = -.infinity
     }
 
+    /// End the current episode but keep the cooldown: the next off-course stretch needs a full
+    /// `hold` again. Called when the course history is reset after a cue (Claude review workflow:
+    /// otherwise the first smoothed course after the refill could fire at once).
+    public func endEpisode() {
+        offSince = nil
+    }
+
     /// - Parameter error: signed bearing error (target − heading), degrees.
     /// - Parameter now: seconds (the app passes the latest fix's timestamp).
     /// - Returns: the direction to veer, once per episode.

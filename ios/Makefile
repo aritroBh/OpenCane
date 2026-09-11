@@ -12,8 +12,13 @@
 #   make devices             list connected devices (find DEVICE)
 #
 # TEAM and DEVICE come from local.mk (git-ignored):
-#   TEAM   = ABCDE12345                # security find-identity -v -p codesigning
+#   TEAM   = ABCDE12345                # the OU= value of the Apple Development certificate (below)
 #   DEVICE = 00008150-000A1B2C3D4E5F   # make devices
+# TEAM: add the Apple ID in Xcode (Settings > Accounts), `make gen`, open CaneKit.xcodeproj once,
+# CaneKit target > Signing & Capabilities > pick the Personal Team (creates the certificate). Then
+# read the Team ID in Xcode > Settings > Accounts > team details, or run
+#   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+# and take OU=. Not the 10 characters in parentheses of "Apple Development: Name (…)".
 
 -include local.mk
 

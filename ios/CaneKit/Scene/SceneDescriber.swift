@@ -45,17 +45,17 @@ final class SceneDescriber {
     /// Wall-clock milliseconds of the last successful `client.describe` call (request build +
     /// network round trip + parse; excludes the frame wait and JPEG encode).
     private(set) var lastLatencyMs = 0
-    /// Provider name for the UI, or nil when no key is configured.
+    /// Provider name for the UI ("On-device", "Muse + On-device", …); never nil in practice.
     let providerName: String?
 
-    /// Provider chosen once at init by `VLMClientFactory.fromSecrets()`; nil = no key.
+    /// The client, injected by AppModel from `VLMClientFactory.resolved(context:)`; never nil.
     @ObservationIgnored private let client: any VLMClient
     /// Source of camera frames (`hasCameraFrame`, `jpegSnapshot`); shared with `DepthEngine`.
     @ObservationIgnored private let processor: DepthFrameProcessor
     /// Where progress, result and error lines are spoken (all `.scene`).
     @ObservationIgnored private let speech: SpeechQueue
 
-    /// Resolves the provider from Secrets once; changing keys needs an app relaunch.
+    /// Takes the resolved client (cloud with on-device fallback, or on-device only); changing keys needs an app relaunch.
     init(processor: DepthFrameProcessor, speech: SpeechQueue, client: any VLMClient) {
         self.processor = processor
         self.speech = speech

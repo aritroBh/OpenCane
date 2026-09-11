@@ -331,6 +331,7 @@ final class AppModel {
             depth.pause()
             haptics.stopAll()
             decider.reset()
+            cueSpeech.cleared()              // a new foreground is a new episode: speak the first head cue
             namer.reset()
             activeCue = .clear
             logger.flush()
@@ -424,7 +425,10 @@ final class AppModel {
         if ProcessInfo.processInfo.environment["CANEKIT_HAZARD_WATCH"] == "1" { hazards.watchEnabled = true }
         hazards.onHazard = { [weak self] text, source, jpeg in
             // Signs and vision cautions: obstacle priority (below route lines, above scene).
-            self?.speech.say(text, .obstacle, ttl: 6)
+            // A sign stays relevant while you walk up to it; SignPolicy marks it said at once, so a
+            // line that expired in the queue would be silent for a minute (Claude review workflow).
+            // Vision cautions keep 6 s: their distance goes stale.
+            self?.speech.say(text, .obstacle, ttl: source == .sign ? 20 : 6)
             self?.recordHazard(kind: source.rawValue, text: text, source: source, jpeg: jpeg)
         }
         hazards.start()

@@ -20,7 +20,7 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–11 have landed and are verified on the simulator: 132 logic tests, 7
+**Status.** Steps 0–11 have landed and are verified on the simulator: 136 logic tests, 7
 XCUITests (one needs the local Street View frames), the screenshot tour, and `make e2e` (GPS replay
 of the route through the real app, four scenarios, plus an opt-in Street View camera scenario).
 Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
@@ -59,15 +59,23 @@ XcodeGen 2.46.0 are already installed. Apple ID, Developer Mode and `local.mk` a
    ```
 2. Open Xcode once → Settings → Accounts → add your Apple ID. A free **Personal Team** appears. An
    install expires after 7 days, and the team gets 10 App IDs per week. We use 3, so never rename
-   bundle IDs. Your Team ID is the 10 characters in parentheses from
-   `security find-identity -v -p codesigning`.
+   bundle IDs. Then run `cd ios && make gen`, open `ios/CaneKit.xcodeproj` once, select the
+   **CaneKit** target → **Signing & Capabilities** and pick the Personal Team. That creates the
+   Apple Development certificate (until it exists, `security find-identity -v -p codesigning`
+   lists nothing). Your **Team ID** is shown in Xcode → Settings → Accounts → the team's details,
+   or read it from the certificate and use the `OU=` value:
+   ```sh
+   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   ```
+   The 10 characters in parentheses of an "Apple Development: Name (…)" identity are **not** the
+   Team ID.
 3. iPhone **and** Watch: Settings → Privacy & Security → **Developer Mode** → on (this reboots).
 4. Plug the phone in and open Xcode → Window → Devices. The paired watch shows under the phone,
    which registers its UDID. Watch pairing over Wi-Fi is flaky: if the watch isn't paired within
    30 min, the watch app becomes a day-2 item.
 5. Run `cd ios && make devices` and copy the phone's identifier. Then create `ios/local.mk`:
    ```make
-   TEAM   = ABCDE12345                # security find-identity -v -p codesigning
+   TEAM   = ABCDE12345                # the OU= value from step 2
    DEVICE = 00008150-000A1B2C3D4E5F   # make devices
    ```
 6. First install (`make run`), then on the phone: Settings → General → VPN & Device Management →
@@ -103,7 +111,7 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 132 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
+| `make test` | `scripts/test.sh`: the 136 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -129,14 +137,17 @@ The watch app rides inside the phone app and installs through the Watch app on t
 
 | Key | Meaning |
 |---|---|
-| `VLM_PROVIDER` | `custom` \| `anthropic` \| `gemini` \| `openai`. If empty, the first provider with a key is used. |
+| `VLM_PROVIDER` | `custom` \| `anthropic` \| `gemini` \| `openai` \| `ondevice`. If empty, the first provider with a key is used (on-device when there is none). `ondevice` uses the phone only, even with a cloud key set. |
 | `CUSTOM_BASE_URL` / `CUSTOM_API_KEY` / `CUSTOM_MODEL` | Any OpenAI-compatible chat endpoint (Muse 1.3). The base URL goes without `/chat/completions`. |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`, `GEMINI_API_KEY` / `GEMINI_MODEL`, `OPENAI_API_KEY` / `OPENAI_MODEL` | The other "Where am I" providers |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | Natural voice. The defaults are a warm premade voice and `eleven_flash_v2_5`. |
 
-With no ElevenLabs key the app uses the system voice. With no VLM key, "Where am I" says there is
-no key instead of crashing (a UI test checks this). Keys ship in plaintext inside the .app, which is
-fine for a local install; rotate them after the event.
+With no ElevenLabs key the app uses the system voice. With no VLM key (or `VLM_PROVIDER` =
+`ondevice`), "Where am I" answers on the phone: Apple Vision plus Apple's on-device model, or a
+template sentence when Apple Intelligence is off. A cloud key adds the cloud model first, with the
+on-device describer as the fallback. The no-key UI test checks that "Where am I" never hangs or
+crashes. Keys ship in plaintext inside the .app, which is fine for a local install; rotate them
+after the event.
 
 Permissions are declared in `project.yml` and prompted on first use:
 
@@ -156,7 +167,7 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 132 Swift Testing tests. They cover lane extraction on
+- **Unit tests (`Logic/`, no device):** 136 Swift Testing tests. They cover lane extraction on
   synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
   math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
   VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy and the crown
@@ -212,7 +223,8 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
 - **Sweep gate.** Frames with |gyro| ≥ 0.6 rad/s are untrusted. The cue decider freezes and emits
   nothing, and the grid pill reads SWEEPING.
 - **Foreground only.** ARKit stops when the app is backgrounded or the screen locks. The app sets
-  `isIdleTimerDisabled = true`. Use Guided Access (triple-click the side button) for the demo. Keep
+  `isIdleTimerDisabled = true`. Use Guided Access for the demo (how to arm it:
+  `docs/devices_setup.md`, untethered demo step 4). Keep
   a power bank on the strap, since ARKit + LiDAR run ≈ 3–4 h.
 - **Thermal.** `.serious` or worse turns off mesh classification, and with it the obstacle names.
   Lanes and haptics never stop.

@@ -142,6 +142,14 @@ public enum SceneVocabulary {
         // equality only: prefix matching let "businesses" count as "bus" (Muse, final review).
         let terms = Set(nouns.flatMap(synonyms(of:)).map(stem))
         guard words.contains(where: { terms.contains(stem($0)) }) else { return false }
+        // …and names nothing else from the vocabulary: with an example list in the prompt the
+        // model answered "trees, grass" with "a crosswalk, then stairs, then a door, and finally
+        // trees" (Claude review workflow). Any object word not detected rejects the sentence.
+        let invented = words.contains { w in
+            let s = stem(w)
+            return vocabularyStems.contains(s) && !terms.contains(s)
+        }
+        guard !invented else { return false }
         // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
         // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
         return numbers(in: sentence).isSubset(of: numbers(in: facts))
@@ -193,6 +201,10 @@ public enum SceneVocabulary {
         let ids = groups.first { $0.noun == noun }?.ids.flatMap { $0.split(separator: "_").map(String.init) } ?? []
         return own + ids
     }
+
+    /// Every object word the vocabulary knows (noun words minus articles, plus identifier parts),
+    /// stemmed: a sentence may only use the ones that were detected.
+    static let vocabularyStems: Set<String> = Set(groups.flatMap { synonyms(of: $0.noun) }.map(stem))
 
     /// A tiny English stem: "cars" → "car", "bushes" → "bush", "benches" → "bench", "glass" stays.
     static func stem(_ w: String) -> String {

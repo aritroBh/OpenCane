@@ -33,9 +33,14 @@ break the walk. This page is the human checklist plus what CaneKit does on its o
   is still settling, never within 15 m of a crossing, never on a timer.
 - Phone call or Siri mid-route: speech and beacon resume when the interruption ends.
 
-**Sanity check (AirPods in, standing still)**: Start demo route → click should sit to one side; turn
-your body until the click goes silent → you are facing the first leg. Turn your head left with the
-body still → click moves right. Press Recenter → silent again.
+**Sanity check (AirPods in, standing still)**: Start demo route → the click should sit to one side.
+Turn your body until the click goes silent → you are facing the first leg. Press **Recenter** →
+you hear "Recentered.". Now turn your head left with the body still → the click moves to the right.
+Face forward again → silent.
+
+Head yaw is ignored (the click follows the phone's heading alone) until the first Recenter or
+auto-recenter after route start, after each waypoint, and after the AirPods reconnect mid-route. So
+the head-turn step only works after the Recenter.
 
 ## Apple Watch (wrist taps, Repeat / Next / Describe / Recenter)
 
@@ -85,10 +90,14 @@ Nothing in CaneKit talks to the Mac at runtime. The Mac only signs and installs.
    hazard watch, both of which fall back to on-device, see below) and any ElevenLabs line not
    already cached. GPS, LiDAR, haptics, beacon, watch, Live Activity are all on-device.
 4. **Phone settings for the walk:** screen stays on by itself while CaneKit is open (the app disables
-   auto-lock; ARKit stops if the screen locks). Turn on **Guided Access** (Settings → Accessibility →
-   Guided Access; triple-click the side button in CaneKit) so a brush against the clamped screen cannot
-   leave the app or hit Stop. Low Power Mode **off** (it throttles GPS and ARKit). Battery > 40 %, power
-   bank on the strap.
+   auto-lock; ARKit stops if the screen locks). Turn on **Guided Access** so a brush against the
+   clamped screen cannot leave the app or hit Stop. Once: Settings → Accessibility → Guided Access
+   on, set a passcode. To arm it: in CaneKit (route started) triple-click the side button →
+   **Options**: **Touch Off, Side Button Off, Volume Buttons Off, Keyboards Off, Motion On** →
+   **Start**. While armed the watch (Repeat / Next / Describe / Recenter) is the only input.
+   "Where am I" from the Action button may be blocked as well (it is a hardware button; stress plan
+   D16 records whether it works), so ask from the watch's Describe. Exit: triple-click + passcode.
+   Low Power Mode **off** (it throttles GPS and ARKit). Battery > 40 %, power bank on the strap.
 5. **Secrets ride inside the app.** `ios/CaneKit/Resources/Secrets.plist` is copied into the .app at build
    time, so fill in the ElevenLabs / Muse keys *before* `make run`.
 6. **Logs come off the phone without the Mac.** The Files app shows CaneKit's Documents under

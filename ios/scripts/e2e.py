@@ -238,8 +238,11 @@ def navcues(events: list[dict]) -> list[str]:
     return [e.get("cue", "") for e in events if e.get("kind") == "navcue"]
 
 
+warnings: list[str] = []   # non-failing notes for the report (reset per scenario in main)
+
+
 def check(name: str, events: list[dict]) -> list[str]:
-    """Return a list of failures (empty = pass)."""
+    """Return a list of failures (empty = pass). Non-failing notes go to `warnings`."""
     fails: list[str] = []
     said = speech(events)
     cues = navcues(events)
@@ -293,6 +296,12 @@ def check(name: str, events: list[dict]) -> list[str]:
         scan_frames = {e.get("frame") for e in events if e.get("kind") == "scan" and e.get("frame")}
         if len(scan_frames) < 5:
             fails.append(f"sign scans saw only {len(scan_frames)} distinct frames (want ≥ 5): is FrameReplay following the GPS?")
+        # Scene labels cannot come from the simulator ("Failed to create espresso context"): say so
+        # in the report instead of letting "Nothing recognized ahead." look like camera coverage.
+        if described and all(not e.get("labels") for e in described):
+            errs = sorted({(e.get("vision_error") or "")[:60] for e in described})
+            warnings.append("no scene labels in any description (simulator limit?): " + "; ".join(errs)
+                            + " -- scene words are covered by vision_probe.swift on the Mac and the phone")
         clean = [e for e in events if e.get("kind") == "hazard_watch"
                  and e.get("reply") and not e.get("error") and not e.get("dropped")]
         if not clean:
@@ -333,6 +342,7 @@ def main() -> int:
         print(f"▶ {name}: {path_length(paths[name]):.0f} m at {args.speed} m/s …", flush=True)
         try:
             res = run_scenario(udid, name, paths[name], args.speed)
+            warnings.clear()
             fails = check(name, res["events"])
         except Exception as e:                   # one bad launch must not abort the other scenarios
             res = {"events": [], "seconds": 0, "path_m": round(path_length(paths[name]))}
@@ -342,7 +352,8 @@ def main() -> int:
             sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
         ok &= not fails
         report["scenarios"][name] = {
-            "pass": not fails, "failures": fails, "seconds": res["seconds"], "path_m": res["path_m"],
+            "pass": not fails, "failures": fails, "warnings": list(warnings),
+            "seconds": res["seconds"], "path_m": res["path_m"],
             "waypoints": [e.get("index") for e in res["events"] if e.get("kind") == "waypoint"],
             "navcues": navcues(res["events"]),
             "speech": speech(res["events"]),
@@ -359,6 +370,8 @@ def main() -> int:
         print(("  ✔ PASS" if not fails else "  ✘ FAIL") + f"  ({res['seconds']} s)", flush=True)
         for f in fails:
             print(f"    - {f}")
+        for w in warnings:
+            print(f"    ! {w}")
     print(f"report: {report_path}")
     return 0 if ok else 1
 

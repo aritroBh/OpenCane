@@ -75,7 +75,7 @@ day-0 list is in [`ios/README.md` §1](ios/README.md#1-day-0-checklist).
 
 ```sh
 cd ios
-make test      # 132 logic tests; works with the Command Line Tools alone
+make test      # 136 logic tests; works with the Command Line Tools alone
 make gen       # generate CaneKit.xcodeproj; creates the git-ignored Secrets.plist from the template
 make sim17     # once: create the iPhone 17 Pro Max / iOS 27 simulator
 make sim       # simulator build
@@ -85,13 +85,18 @@ make e2e       # GPS replay of the demo route through the real app (~20 min; SCE
 ```
 
 **Phone.** Turn on Developer Mode on the iPhone and the Watch, and add your Apple ID in Xcode
-(personal team). Then:
+(Settings > Accounts; a free Personal Team). After `make gen`, open `ios/CaneKit.xcodeproj` once,
+select the CaneKit target > Signing & Capabilities and pick the Personal Team: that creates the
+Apple Development certificate. The Team ID is shown in Xcode > Settings > Accounts > the team's
+details, or read it from the certificate: the `OU=` value printed by
+`security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject`. (The 10
+characters in parentheses of an "Apple Development: Name (…)" identity are not the Team ID.) Then:
 
 ```sh
 cd ios
 make devices                       # find the phone's identifier
 # create ios/local.mk (git-ignored):
-#   TEAM   = ABCDE12345            # security find-identity -v -p codesigning
+#   TEAM   = ABCDE12345            # the OU= value from the Apple Development certificate
 #   DEVICE = 00008150-…            # from make devices
 make run                           # gen + build + install + launch
 ```
