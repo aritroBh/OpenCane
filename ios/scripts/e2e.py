@@ -238,6 +238,26 @@ def navcues(events: list[dict]) -> list[str]:
     return [e.get("cue", "") for e in events if e.get("kind") == "navcue"]
 
 
+def obstacle_cues(events: list[dict]) -> list[str]:
+    """Obstacle cue records (`kind: cue`); the cue itself is in the `cue` field (it used to be a
+    `kind` field that overwrote the record kind, so these records were invisible)."""
+    return [e.get("cue", "") for e in events if e.get("kind") == "cue"]
+
+
+def hazards(events: list[dict]) -> list[dict]:
+    """Announced hazards (`kind: hazard`): `type` (dropOff / sign / vision …), `text`, `source`.
+    Before the 2026-09-11 fix the app wrote the type as `kind`, replacing "hazard", so this list
+    was always empty."""
+    return [{"type": e.get("type", ""), "text": e.get("text", ""), "source": e.get("source", "")}
+            for e in events if e.get("kind") == "hazard"]
+
+
+def reserved_collisions(events: list[dict]) -> list[dict]:
+    """Records where a caller passed a field named `t` or `kind`: TripLogger keeps the record's
+    own and writes the caller's as `field_t` / `field_kind`. Any hit is an app bug."""
+    return [e for e in events if "field_kind" in e or "field_t" in e]
+
+
 warnings: list[str] = []   # non-failing notes for the report (reset per scenario in main)
 
 
@@ -259,6 +279,9 @@ def check(name: str, events: list[dict]) -> list[str]:
         fails.append(f"waypoints out of order: {wp_idx}")
     if arrived and not any("kilometers" in s or "meters," in s for s in said):
         fails.append("arrival trip summary was not spoken")
+    collisions = reserved_collisions(events)
+    if collisions:
+        fails.append(f"{len(collisions)} log records had a field named 't' or 'kind' (first: {collisions[0]})")
 
     if name in ("clean", "streetview"):
         if wp_idx != list(range(1, 10)):
@@ -357,7 +380,8 @@ def main() -> int:
             "waypoints": [e.get("index") for e in res["events"] if e.get("kind") == "waypoint"],
             "navcues": navcues(res["events"]),
             "speech": speech(res["events"]),
-            "hazards": [e.get("text", "") for e in res["events"] if e.get("kind") == "hazard"],
+            "hazards": hazards(res["events"]),
+            "obstacle_cues": obstacle_cues(res["events"]),
             "describes": [{"frame": e.get("frame"), "text": e.get("text"), "error": e.get("error"), "ms": e.get("ms"),
                            "labels": e.get("labels"), "vision_error": e.get("vision_error")}
                           for e in res["events"] if e.get("kind") == "describe_result"],

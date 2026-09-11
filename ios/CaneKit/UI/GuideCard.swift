@@ -7,13 +7,14 @@
 //  the recorded demo route or a typed MapKit destination.
 //
 //  Implements docs/design.md §6.1 (Guide: instruction, hero distance, bearing word, big
-//  buttons), §6.3 (route picker, reduced to "Start demo route" + a destination field) and the
+//  buttons), §6.3 (route picker, reduced to "Start demo route", "Navigate to CIF from here" and
+//  a destination field) and the
 //  "Off-bearing > 25°" row of §5. Button titles differ from the §6.1 VoiceOver table on purpose
 //  (short words that fit two-up on a 17 Pro Max); the XCUITests pin the shipped words.
 //
 //  Accessibility contract — everything the XCUITests drive lives here (AGENTS.md rule 9):
-//    ⚠ test contract buttons: "Start demo route", "Stop route", "Repeat", "Next", "Recenter",
-//      "Where am I", "Go" (queried as `app.buttons[label]`).
+//    ⚠ test contract buttons: "Start demo route", "Navigate to CIF from here", "Stop route",
+//      "Repeat", "Next", "Recenter", "Where am I", "Go" (queried as `app.buttons[label]`).
 //    ⚠ test contract texts: the instruction `Text` must stay a plain static text whose label is
 //      its content (tests match "Townsend" / "Illinois Street" from route_isr_cif.json); the
 //      error line must stay a plain `Text` (tests match "Type a destination first" exactly and
@@ -99,8 +100,10 @@ struct GuideCard: View {
                 HStack(spacing: CKSpacing.lg) {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
                                 hint: "Says the current instruction again") { model.repeatInstruction() }
+                    // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
+                    // crown and Siri "Next waypoint in CaneKit".
                     CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary,
-                                hint: "Skips to the next instruction") { model.nav.next() }
+                                hint: "Skips to the next instruction") { model.nextWaypoint() }
                 }
                 CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
                             hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
@@ -127,6 +130,13 @@ struct GuideCard: View {
                 // ⚠ test contract: "Start demo route" is the first thing every UI test waits for.
                 CKBigButton(title: "Start demo route", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
+                // Apple Maps walking directions from the live GPS fix to the CIF east entrance,
+                // for when the walker is not at ISR. Label = its text (CKBigButton).
+                CKBigButton(title: "Navigate to CIF from here", systemImage: "location.north.circle",
+                            role: .secondary,
+                            hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
+                            value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
+                    .disabled(model.isBuildingRoute)
                 HStack(spacing: CKSpacing.sm) {
                     TextField("Or type a destination", text: $model.destinationQuery)
                         .textFieldStyle(.roundedBorder)
