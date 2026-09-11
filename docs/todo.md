@@ -87,10 +87,13 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
       2.5 s timeout, circuit breaker, Apple-voice fallback). It is off only because
       `ELEVENLABS_API_KEY` in `ios/CaneKit/Resources/Secrets.plist` is empty. See "ElevenLabs
       setup" below.
-- [ ] Voice control: Siri App Shortcuts for start route, navigate to CIF, where am I, repeat, next, stop
-- [ ] "Navigate to CIF from here" (Apple Maps walking directions from the live GPS fix)
+- [x] Voice control: 7 Siri App Shortcuts (start route, take me to <place>, navigate to CIF, where am I,
+      repeat, next, stop) — on the phone, needs a spoken test
+- [x] "Navigate to CIF from here" (Apple Maps walking directions from the live GPS fix)
+- [x] Destination search: campus gazetteer before MapKit, nearest result, spoken "Walking to X, N meters."
+- [x] Fixed: a slow Siri search could swap the walker onto another route mid-walk
 - [x] Live camera view at the camera's frame rate (GPU view instead of a 3 Hz JPEG), preview capped at 30 fps
-- [ ] Trip-log fix: cue / hazard records keep their record type (field name collision)
+- [x] Trip-log fix: cue / hazard records keep their record type (field name collision)
 - [ ] A/B: Apple's on-device model *with the image* (iOS 27), every object backed by Vision/LiDAR
 - [ ] Experiment branch: Gemma 4 E2B via Cactus, measured on the phone (latency, heat, made-up objects)
 - [ ] Experiments, off by default: front camera head direction; microphone sound alerts (sirens, horns)

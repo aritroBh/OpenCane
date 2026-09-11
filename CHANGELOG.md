@@ -2,6 +2,64 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 13 — Voice control, live camera view, natural voice, nearest-result search (Fri Sep 11, on device)
+
+Everything in this step was driven by the phone itself, not the simulator.
+
+**Voice control (a blind walker cannot use the Guide card).** Seven App Shortcuts — of the ten an app
+may register — in `AppIntents.swift`: Where am I · Take me to *\<place\>* · Navigate to CIF from here ·
+Start the demo route · Repeat the last instruction · Next waypoint · Stop the route. Each forwards to
+one `AppModel` method, so Siri, the Action button, the watch and the on-screen buttons all share one
+code path. All are `.foreground(.immediate)` because ARKit obstacle warnings only run frontmost:
+guidance must never start silently in the background. App Shortcut phrases cannot interpolate a
+`String` (Apple allows only an `AppEnum`/`AppEntity`), so the phrase form carries the seven gazetteer
+places as a `CampusDestination` AppEnum and any other destination goes through "Take me somewhere in
+CaneKit", where Siri asks for the free text. Verified from the built
+`CaneKit.app/Metadata.appintents/extract.actionsdata`: 7 shortcuts, 21 phrase templates.
+
+**"Navigate to CIF from here."** MKDirections walking from the live fix to `route_isr_cif.json`'s last
+waypoint as a bare coordinate — no search, so MapKit cannot pick a different "CIF".
+
+**Destination search was bad.** `CampusPlaces` (CIF, ISR, Grainger, Illini Union, Siebel, Main Library,
+ARC → entrance coordinates) is now consulted *before* MapKit, because MKLocalSearch answered "Grainger"
+with an industrial supply store. On a miss it searches a ±3 km region with `regionPriority = .required`
+and `DestinationPicker` takes the **nearest** sensible result rather than MapKit's first. Every MapKit
+route now speaks "Walking to Grainger Engineering Library, 750 meters." before guidance starts, so a
+wrong pick can be stopped before the walker moves.
+
+**Fixed: route hijack (safety).** A Siri search still in flight when the walker pressed Start demo route
+would return later and call `beginRoute` again, swapping them onto the searched route mid-walk with no
+indication. Start and Stop now abandon an in-flight build.
+
+**Fixed: trip-log field collision.** Cue and hazard events passed a field named `kind` that overwrote
+the record's own, so hazard records came out as `{"kind":"sign"}` and `e2e.py` never saw one. Fields
+renamed (`cue`, `type`), and `TripLogRecord` (CaneKitLogic) now makes it structurally impossible: a
+colliding field is kept as `field_t` / `field_kind` and can never win.
+
+**Live camera view** (`LiveCameraView`, Hazards card, off by default). An `ARSCNView` bound to the app's
+existing `ARSession` — display only, it never runs, pauses or delegates the session — replacing a 3 Hz
+JPEG. Drawn at the camera rate, capped at 30 fps so the preview cannot steal frames from obstacle
+detection, blank in the background and on the lock screen, and torn down safely. For the sighted spotter
+and the demo video; it is off by default because it costs battery and heat and a blind user gains
+nothing from it.
+
+**Natural voice (ElevenLabs) made first-run-proof.** The code has existed since Step 7 but had never run
+against a real key. Two things would have bitten: prefetch shared the 2.5 s live-speech timeout (nobody
+waits on a prefetch — on a slow first connection every one would fail silently, turning each route line
+into a live miss that *also* had 2.5 s to fail), and `voiceError` was recorded but never rendered, so a
+wrong key looked exactly like no key. Prefetch now gets 15 s and reports its first real failure to the
+Haptics card, where a bad key reads "ElevenLabs HTTP 401" seconds after launch. Still blocked on
+`ELEVENLABS_API_KEY` in the git-ignored `Secrets.plist` — see docs/todo.md.
+
+Verified: 164 Logic tests pass, `BUILD SUCCEEDED` with no warnings, installed and launched on the phone.
+
+test on device: say each of the seven phrases with the phone locked and AirPods in (the app must come to
+the foreground and act); "Take me to Grainger in CaneKit" must reach the Springfield Avenue entrance,
+not the supply store; say "Stop the route" while "Finding a route…" still plays and confirm nothing
+starts after; turn on Live camera view on the Hazards card and confirm it is smooth and goes blank when
+the screen locks; AirDrop the trip log and confirm hazard records read `"kind":"hazard"` with a `"type"`
+field and that no line contains `field_kind`.
+
 ## Step 12 — Google Street View mock of ISR → CIF: what failed and the fixes (Fri Sep 11, pre-device)
 The 14 Street View frames of the route (local-only, `ios/scripts/streetview/`) now drive the camera in
 the simulator end to end, and the log shows what the camera saw, not only what was spoken.
