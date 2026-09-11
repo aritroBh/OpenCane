@@ -196,3 +196,12 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     let published60 = (0..<600).filter { h.shouldPublish(at: 1000 + Double($0) / 60) }.count
     #expect(published60 == 150)          // 10 s of 60 Hz input → 15 Hz
 }
+
+/// Ground hazards are judged only when the camera looks 0-15 deg below the horizon: the real
+/// phone's false "Hole ahead" calls came at 10-57 deg with the phone in the hand.
+@Test func groundHazardsNeedAMountLikeTilt() {
+    #expect(MountTilt.groundUsable(downDeg: 5))
+    #expect(MountTilt.groundUsable(downDeg: 14))
+    #expect(!MountTilt.groundUsable(downDeg: 30))
+    #expect(!MountTilt.groundUsable(downDeg: -4))
+}

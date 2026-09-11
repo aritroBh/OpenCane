@@ -169,6 +169,21 @@ final class DepthEngine {
     /// stale `centerHit` is published while the new configuration spins up), and — if running —
     /// re-runs the session with the new configuration (no tracking reset). Caller:
     /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
+    /// Camera at 60 fps (Mount card "60 fps camera (warmer)", off by default). Cues use 30 depth
+    /// reports/s either way; 60 fps doubles the camera's cost and heat for a smoother live view
+    /// and slightly fresher frames. Muse + Antigravity: untested over a 20-minute walk, so it
+    /// ships off until stress-plan D14 passes with it on. Re-runs the session (~1-2 s of depth).
+    private(set) var highFrameRate = false
+
+    func setHighFrameRate(_ on: Bool) {
+        guard on != highFrameRate else { return }
+        highFrameRate = on
+        guard isRunning else { return }
+        let config = makeConfiguration(mesh: meshEnabled)
+        configuration = config
+        session.run(config)
+    }
+
     func setMeshClassification(_ on: Bool) {
         guard on != meshEnabled else { return }
         meshEnabled = on
@@ -194,17 +209,17 @@ final class DepthEngine {
         config.worldAlignment = .gravity
         config.planeDetection = []                       // we never use planes; saves CPU
         config.isAutoFocusEnabled = true
-        // The best the iPhone 17 Pro Max offers *with* LiDAR (measured on the phone, 2026-09-11:
-        // world tracking exposes only the 1x wide camera, up to 60 fps; no ultra-wide, no 120):
-        // the full 4:3 frame (widest view; the sign-range numbers assume it) at 60 fps, the
-        // smallest such format. Fallback: any 60 fps format, then the old ≥ 30 fps choice.
+        // Measured on the iPhone 17 Pro Max (2026-09-11): world tracking with LiDAR exposes only
+        // the 1x wide camera, up to 60 fps (no ultra-wide, no 120). Use the full 4:3 frame (widest
+        // view; the sign-range numbers assume it) at 30 fps by default, 60 when `highFrameRate`.
         let formats = ARWorldTrackingConfiguration.supportedVideoFormats
         let fourThree = { (f: ARConfiguration.VideoFormat) in
             abs(f.imageResolution.width / f.imageResolution.height - 4.0 / 3.0) < 0.01
         }
-        if let best = formats.filter({ $0.framesPerSecond >= 60 && fourThree($0) })
+        let fps = highFrameRate ? 60 : 30
+        if let best = formats.filter({ $0.framesPerSecond == fps && fourThree($0) })
             .min(by: { $0.imageResolution.width < $1.imageResolution.width })
-            ?? formats.first(where: { $0.framesPerSecond >= 60 })
+            ?? formats.first(where: { $0.framesPerSecond >= fps })
             ?? formats.last(where: { $0.framesPerSecond >= 30 }) {
             config.videoFormat = best
         }

@@ -99,6 +99,9 @@ public struct GroundHazardDetector: Sendable {
         public var binSize: Float = 0.3
         public var minSamplesPerBin = 6
         public var minNearSamples = 12
+        /// Where the ground must be relative to the camera for a cane-mounted phone (m). A desk
+        /// 30 cm below a hand-held phone is not the ground (real-phone false "Hole ahead").
+        public var groundHeightRange: ClosedRange<Float> = -1.3 ... -0.5
         /// Drop / hole: bin this far below the ground reference (m).
         public var dropThreshold: Float = 0.12
         /// Step / low obstacle: bin this far above the ground reference (m).
@@ -129,6 +132,7 @@ public struct GroundHazardDetector: Sendable {
         let near = corridor.filter { $0.forward >= c.nearMin && $0.forward <= c.nearMax }.map(\.height)
         guard near.count >= c.minNearSamples else { return nil }
         let ground = Self.median(near)
+        guard c.groundHeightRange.contains(ground) else { return nil }
 
         // Bins beyond the near field.
         var bins: [(start: Float, height: Float)] = []
@@ -153,18 +157,23 @@ public struct GroundHazardDetector: Sendable {
             // Missing bins before this one (shiny patch, puddle, occlusion): a ramp keeps sloping
             // across the gap, so the edge must beat the slope a 10 % ramp covers over it
             // (Antigravity final review: sparse returns made a ramp read as a drop-off).
+            // Slack for the missing span between a reference bin j (-1 = the near field) and this
+            // one, beyond the bins that would normally sit between them.
+            func slack(_ j: Int) -> Float {
+                let refEnd = j >= 0 ? bins[j].start + c.binSize : c.nearMax
+                return 0.10 * max(0, bin.start - refEnd - Float(i - j - 1) * c.binSize)
+            }
+            let s1 = slack(i - 1), s2 = slack(i - 2)
             let prevEnd = i >= 1 ? bins[i - 1].start + c.binSize : c.nearMax
-            let slack = 0.10 * max(0, bin.start - prevEnd)
-            if delta <= -c.dropThreshold, bin.height - max(p1, p2) <= -(c.edgeJump + slack) {
-                // Last bin: nothing beyond it yet, so drop-off vs hole is a guess; a wrong guess
-                // broke the 3-frame confirmation once it turned into a hole (Antigravity).
-                guard !later.isEmpty else { return nil }
+            let dropEdge = bin.height - p1 <= -(c.edgeJump + s1) || bin.height - p2 <= -(c.edgeJump + s2)
+            let riseEdge = bin.height - p1 >= c.edgeJump + s1 || bin.height - p2 >= c.edgeJump + s2
+            if delta <= -c.dropThreshold, dropEdge {
                 // Comes back up within the scan → a hole; stays down → a drop-off.
                 let recovers = later.contains { $0 > -c.dropThreshold / 2 }
                 // A deep drop hides the ground just past its edge (occlusion shadow): the first
                 // visible lower bin can be a metre beyond the edge. When bins are missing before
                 // this one, report the end of the last visible ground (Claude review workflow).
-                let lastGroundEnd = i >= 1 ? bins[i - 1].start + c.binSize : c.nearMax
+                let lastGroundEnd = prevEnd
                 let shadow = bin.start > lastGroundEnd + 0.01
                 return GroundHazard(kind: recovers ? .pothole : .dropOff,
                                     distance: shadow ? lastGroundEnd : edge(adjacentJump: bin.height - p1),
@@ -172,7 +181,7 @@ public struct GroundHazardDetector: Sendable {
             }
             // A tall surface filling part of a bin (wall, pole) must not read as a step: the
             // bin's upper returns must also stay under maxRise, not just its median.
-            if delta >= c.riseThreshold, delta <= c.maxRise, bin.height - min(p1, p2) >= c.edgeJump + slack,
+            if delta >= c.riseThreshold, delta <= c.maxRise, riseEdge,
                Self.upperQuartile(corridor, from: bin.start, to: bin.start + c.binSize) - ground <= c.maxRise {
                 // Last bin: nothing beyond it yet, so step-up vs low obstacle is a guess — wait for
                 // a closer frame instead of saying one kind now and the other next second.
@@ -203,12 +212,24 @@ public struct GroundHazardDetector: Sendable {
         history.removeAll { time - $0.time > config.maxAge }
         if history.count > config.windowFrames { history.removeFirst(history.count - config.windowFrames) }
         guard let latestEntry = history.last, var latest = latestEntry.hazard else { return nil }
+        // Drop-off and hole are one family (a drop first seen at the scan edge becomes a hole once
+        // its far side shows); step up and low obstacle are another. Frames agree within a family,
+        // so a kind change never throws away a confirmation (Muse + Antigravity, 05c8b63).
         let agreeing = history.filter {
-            $0.hazard?.kind == latest.kind && abs($0.at - latestEntry.at) <= config.distanceTolerance
+            guard let k = $0.hazard?.kind else { return false }
+            return Self.family(k) == Self.family(latest.kind) && abs($0.at - latestEntry.at) <= config.distanceTolerance
         }
         guard agreeing.count >= config.confirmFrames else { return nil }
         latest.anchor = latestEntry.at
         return latest
+    }
+
+    /// 0 = the ground falls away (drop-off, hole), 1 = something rises (step up, low obstacle).
+    static func family(_ k: GroundHazardKind) -> Int {
+        switch k {
+        case .dropOff, .pothole: return 0
+        case .stepUp, .lowObstacle: return 1
+        }
     }
 
     /// 75th-percentile height of corridor samples in [from, to).
@@ -422,7 +443,7 @@ public struct HazardWatchPolicy: Sendable, Equatable {
 
     /// Give back the slot `shouldAsk` just took, when no request could be sent (no fresh frame):
     /// the next tick may try again instead of waiting a full interval (Muse final review).
-    public mutating func refund() { lastAsk = -.infinity }
+    public mutating func refund(now: TimeInterval) { lastAsk = now - interval + 2 }   // retry in 2 s, not every tick (Muse)
 
     /// True when a new check should be sent now.
     public mutating func shouldAsk(now: TimeInterval, speed: Double) -> Bool {

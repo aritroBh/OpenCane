@@ -104,6 +104,12 @@ public enum MountTilt {
     /// Degrees below the horizon that work with the current lane grid.
     public static let aim: ClosedRange<Float> = 3...8
 
+    /// Ground hazards (drop-offs, holes, curbs) are judged only when the camera looks 0-15 deg below
+    /// the horizon, i.e. roughly the way the mount holds it. The real phone's false "Hole ahead"
+    /// calls came at 10-57 deg with the phone held in the hand, pointed at desks and the floor.
+    public static let groundAim: ClosedRange<Float> = 0...15
+    public static func groundUsable(downDeg d: Float) -> Bool { groundAim.contains(d) }
+
     /// Camera angle below the horizon (degrees, positive = down) from the Y component of the
     /// camera transform's Z column in ARKit's gravity-aligned world (+Y up). The camera looks
     /// along −Z, so a camera pitched down θ has look.y = −sin θ and column2.y = +sin θ.

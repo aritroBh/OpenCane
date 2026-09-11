@@ -140,6 +140,16 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   waiting for a fresh fix before a typed-destination route (a standing walker's fix is still right
   and iOS may not send a new one). Antigravity again edited and committed in its *copy*; the real
   repo was untouched.
+- **Phone follow-up (hand-held false hazards, heat, spam):** ground hazards are judged only with a
+  mount-like camera tilt (0-15 deg, `MountTilt.groundUsable`) and a plausible ground 0.5-1.3 m below
+  the camera (`groundHeightRange`): every false "Hole ahead" on the phone came at 10-57 deg with the
+  phone in the hand, or with a desk as "ground" (tests `aDeskIsNotTheGround`,
+  `groundHazardsNeedAMountLikeTilt`). Drop-off and hole frames agree as one hazard (no last-bin wait;
+  `dropAndHoleFramesAgreeAsOneHazard`); missing bins get per-reference ramp slack. Camera back to the
+  full 4:3 frame at **30 fps by default** with a "60 fps camera (warmer)" switch (both reviewers:
+  60 fps + 30 Hz untested for heat over a walk). The screen-lock warning is spoken once per route,
+  and the "back" line is gone. Hazard-watch refund retries in 2 s, not every tick. Rejected —
+  "tilt on every frame skews lanes/veer" (the tilt feeds only the Mount card and the log).
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

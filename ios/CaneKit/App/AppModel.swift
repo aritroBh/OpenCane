@@ -203,6 +203,7 @@ final class AppModel {
         hazards.signsEnabled = signsEnabled
         hazards.watchEnabled = hazardWatchEnabled
         pushDepthSettings()
+        depth.setHighFrameRate(highFrameRateCamera)   // before start(): only sets the flag
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
         beacon.enabled = beaconEnabled
@@ -321,7 +322,6 @@ final class AppModel {
         guard started else { return }
         switch phase {
         case .active:
-            if !isForeground, nav.isNavigating { speech.say("Obstacle warnings back.", .nav, ttl: 5) }
             isForeground = true
             haptics.resume()
             depth.resume()
@@ -333,8 +333,11 @@ final class AppModel {
             // Mid-route lock: ARKit pauses, so obstacle warnings stop while GPS guidance and the
             // beacon go on. Say so instead of letting confident guidance hide a dead safety
             // channel (Muse final review).
-            if nav.isNavigating {
-                speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .safety, ttl: 10)
+            // Once per route, and not over the current instruction's priority (Muse + Antigravity:
+            // a pocket check spoke it at .safety every time and replayed the turn line after).
+            if nav.isNavigating, !lockWarningGiven {
+                lockWarningGiven = true
+                speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .nav, ttl: 10)
             }
             isForeground = false
             hazards.stop()                   // no scanning a frozen last frame in the background
@@ -533,6 +536,15 @@ final class AppModel {
             speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)
         }
         return true
+    }
+
+    /// The mid-route screen-lock warning was spoken on this route (at most once per route).
+    @ObservationIgnored private var lockWarningGiven = false
+
+    /// Camera at 60 fps instead of 30 (Mount card, persisted, off by default: heat untested over a
+    /// long walk). See `DepthEngine.setHighFrameRate`.
+    var highFrameRateCamera: Bool = Settings.bool("highFrameRateCamera", default: false) {
+        didSet { Settings.set(highFrameRateCamera, "highFrameRateCamera"); depth.setHighFrameRate(highFrameRateCamera) }
     }
 
     /// When the camera-denied warning was last spoken (`announceCameraDenied`).
@@ -851,6 +863,7 @@ final class AppModel {
         // blind walker is better off with guidance and no obstacle cues than with nothing.
         announceCameraDenied()
         groundPolicy.reset()
+        lockWarningGiven = false
         lastGroundHazard = nil               // a new route must not show the last route's drop-off
         // Every waypoint line and the route intro, synthesized now so they play instantly.
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines

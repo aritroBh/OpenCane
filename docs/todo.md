@@ -71,6 +71,29 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] Commit "Step 10 (pre-device)" + push (1de6efb)
 - **test on device:** see CHANGELOG Step 10 and docs/devices_setup.md
 
+## TONIGHT (live checklist, Fri 2026-09-11 evening; updated with every push)
+
+Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Team, app installed.
+
+- [x] First real-phone desk test: LiDAR, haptics, mesh names, head-height cue, on-device "Where am I" work
+- [x] Depth 10 → 30 reports/s (PublishGate timing bug found on the phone)
+- [x] Camera: measured what ARKit allows with LiDAR (1x wide only, ≤ 60 fps, no 0.5x/120); full 4:3 frame
+- [x] "60 fps camera (warmer)" switch on the Mount card, off by default (heat untested over a long walk)
+- [x] "Where am I" uses one LiDAR snapshot (the phone mixed two moments)
+- [x] False "Hole ahead" indoors: ground hazards judged only with a mount-like tilt (0-15 deg) and a
+      plausible ground height (0.5-1.3 m below the camera); drop-off and hole frames agree as one hazard
+- [x] Screen-lock warning once per route (no spam); Muse + Antigravity final-review fixes
+- [ ] Voice control: Siri App Shortcuts for start route, navigate to CIF, where am I, repeat, next, stop
+- [ ] "Navigate to CIF from here" (Apple Maps walking directions from the live GPS fix)
+- [ ] Live camera view at the camera's frame rate (GPU view instead of a 3 Hz JPEG)
+- [ ] Trip-log fix: cue / hazard records keep their record type (field name collision)
+- [ ] A/B: Apple's on-device model *with the image* (iOS 27), every object backed by Vision/LiDAR
+- [ ] Experiment branch: Gemma 4 E2B via Cactus, measured on the phone (latency, heat, made-up objects)
+- [ ] Experiments, off by default: front camera head direction; microphone sound alerts (sirens, horns)
+- [ ] Muse + Antigravity + Claude workflow review of all of the above; fix or reject with evidence
+- [ ] Install on the phone, verify each item from the trip log, push
+- [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
+
 ## Step 11 — Hazards the maps don't know, on-device vision, stress harness (pre-device)
 - [x] LiDAR ground hazards (GroundSampler + GroundHazardDetector), 4-tap cane haptic, off by default
 - [x] On-device sign reading (Vision text down to 1/128 of the frame, 7.5 cm letters from ≈ 7 m measured, once a minute per phrase)
@@ -81,7 +104,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] CourseSmoother veer (15 m); corner-fence reset; reset after each veer cue
 - [x] Muse full-app review fixes (H1–H3, M1–M8, L2/L5/L6)
 - [x] Round-4 and round-5 adversarial reviews (28 + 22 findings) fixed; nav harness 0 false veers / 72 walks
-- [x] Logic tests (144 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
+- [x] Logic tests (146 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
 - [x] Street View mock of ISR → CIF: FrameReplay, `make uitest-streetview`, `make e2e SCENARIO=streetview`, vision_probe
 - [x] graphify knowledge graph (`graphify-out/`, `graphify query`)
 - [x] docs/stress_test_plan.md, docs/README.md, hardware/mount (phone-to-cane mount for Sagar)

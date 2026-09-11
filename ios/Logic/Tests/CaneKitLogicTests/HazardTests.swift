@@ -433,10 +433,27 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(GroundHazardDetector().classify(ledge)?.kind == .dropOff)
 }
 
-/// A drop in the very last bin waits (drop-off vs hole is a guess there; a wrong guess broke the
-/// 3-frame confirmation when it turned into a hole).
-@Test func aDropInTheLastBinWaitsForACloserLook() {
-    #expect(GroundHazardDetector().classify(ground { $0 >= 3.25 ? -0.2 : 0 }) == nil)
+/// A drop first seen in the last bin is reported (earliest warning); when a closer frame shows its
+/// far side and calls it a hole, the frames still agree: drop-off and hole are one family
+/// (Muse + Antigravity: waiting for a nearer bin cost ~0.3 m of warning).
+@Test func dropAndHoleFramesAgreeAsOneHazard() {
+    #expect(GroundHazardDetector().classify(ground { $0 >= 3.25 ? -0.2 : 0 })?.kind == .dropOff)
+    var d = GroundHazardDetector()
+    let asDrop = ground { $0 >= 2.8 ? -0.2 : 0 }
+    let asHole = ground { ($0 >= 2.8 && $0 < 3.2) ? -0.2 : 0 }
+    _ = d.update(asDrop, trusted: true, time: 0)
+    _ = d.update(asHole, trusted: true, time: 0.1)
+    let third = d.update(asHole, trusted: true, time: 0.2)
+    #expect(third != nil)
+}
+
+/// Real phone, indoors, held in the hand: the "ground" near the camera was a desk 30 cm below it,
+/// so the floor beyond read as "Hole ahead". A cane-mounted phone's ground is 0.5-1.3 m below the
+/// camera; anything else is not ground and gets no verdict.
+@Test func aDeskIsNotTheGround() {
+    let desk = ground { _ in 0 }.map { GroundSample(forward: $0.forward, lateral: $0.lateral,
+                                                    height: $0.forward < 1.8 ? -0.3 : -0.9) }
+    #expect(GroundHazardDetector().classify(desk) == nil)
 }
 
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.

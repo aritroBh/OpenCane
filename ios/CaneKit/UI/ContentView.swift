@@ -95,6 +95,8 @@ struct ContentView: View {
             // ⚠ test contract: switches["Mirror left / right"].
             Toggle("Mirror left / right", isOn: model.mirrorLeftRight)
                 .accessibilityHint("Turn on if left and right warnings feel swapped")
+            Toggle("60 fps camera (warmer)", isOn: model.highFrameRateCamera)
+                .accessibilityHint("Smoother live view; uses more battery and heat. Obstacle cues are the same either way.")
             Toggle("Audio beacon while navigating", isOn: model.beaconEnabled)
                 .accessibilityHint("A soft click from the direction to walk, through the AirPods")
             // ⚠ test contract: switches["Write trip log"].
