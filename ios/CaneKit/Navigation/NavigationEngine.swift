@@ -162,6 +162,10 @@ final class NavigationEngine {
         smoothedCourse = nil
         nearArrivalSince = nil
         arrivalHintGiven = false
+        // A fix kept from an earlier route may be hours old and somewhere else: the new route's
+        // first distance and bearing must not come from it (Antigravity nav review). Keep it only
+        // if it is fresh (< 30 s); otherwise wait for the first live fix.
+        if let f = lastFix, Date().timeIntervalSinceReferenceDate - f.timestamp > 30 { lastFix = nil }
         refreshInstruction()
         let intro = "Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"
         lastSpokenLine = intro

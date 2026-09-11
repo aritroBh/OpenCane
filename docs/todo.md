@@ -100,6 +100,9 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] Engineering bar written into AGENTS.md + CLAUDE.md; hardware/ handed to Sagar
 - [x] Commit b1c35bd pushed (Steps 11–12); follow-up commit with the model-gate fixes
 - [x] docs/TEAM_HANDOFF.md + README / docs index / iOS README refreshed; Muse + Antigravity docs review folded in
+- [ ] Deferred from the Antigravity nav review (verify on device, fix if real): head tracker only with
+      AirPods connected; move `observeThermalAndBattery()` after the audio session is configured;
+      announce skipped waypoints in the passed-by path too
 - **test on device:** see CHANGELOG Step 12
 
 ## Cross-cutting

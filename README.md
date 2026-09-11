@@ -13,7 +13,8 @@ It lives in [`ios/`](ios/).
 Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026. Team: **Aritro** (software),
 **Sagar** (hardware, 3D printing, CAD), **Aarav**.
 
-> **Teammates: after `git pull`, read [`docs/TEAM_HANDOFF.md`](docs/TEAM_HANDOFF.md) first.** It says
+> **Teammates: after `git pull`, read [`docs/TEAM_BRIEF.md`](docs/TEAM_BRIEF.md) (2 minutes), then
+> [`docs/TEAM_HANDOFF.md`](docs/TEAM_HANDOFF.md).** It says
 > what is proven, what is not, who does what next, the mount angle, and which decisions are final.
 
 ## The demo

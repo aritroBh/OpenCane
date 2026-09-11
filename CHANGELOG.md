@@ -71,6 +71,11 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   on-device labels (the cloud model sees the image; coarse labels would reject good answers), dropping
   the LiDAR gate on on-device hazard labels (deliberate, AGENTS.md: it stops "fence" chatter along
   railings). Deferred — clamping cloud hazard-watch distances (the watch ships off by default).
+- **Antigravity nav review:** fixed — a new route no longer starts from a GPS fix older than 30 s.
+  Rejected — stopping the watch keep-alive on "No route" (deliberate: a suspended watch app could not
+  restart it for the next route). Deferred to the device session (logged in docs/todo.md): head
+  tracker started without AirPods (battery), the launch "Phone is hot" line before the audio session
+  is configured, skipped waypoints not announced in the rare passed-by-plus-skip case.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

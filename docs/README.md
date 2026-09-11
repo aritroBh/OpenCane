@@ -33,6 +33,7 @@ screen layout and button labels, where the shipped code (and the tests that pin 
 
 | Doc | Read it when |
 |---|---|
+| [`docs/TEAM_BRIEF.md`](TEAM_BRIEF.md) | **The 2-minute version** for Sagar and Aarav: state, their tasks, the mount's four requirements, install steps, known quirks. |
 | [`docs/TEAM_HANDOFF.md`](TEAM_HANDOFF.md) | **First, after every pull.** What is proven vs not, who does what next, the mount angle, the default settings and why, the decisions that are final, the Street View mock, known risks. |
 | [`docs/CODE_REFERENCE.md`](CODE_REFERENCE.md) | You need to find or change code. It maps every file, type and function by module, with the data-flow diagram and the ⚠ invariants that tests pin. **Update the module's section in the same commit as the code change.** |
 | [`docs/devices_setup.md`](devices_setup.md) | Before touching the AirPods or the Apple Watch, and before the untethered demo: pairing, Spatial Audio off, the watch app, the voice cache, Guided Access and a symptom → fix table. |
