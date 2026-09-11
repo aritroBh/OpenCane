@@ -23,7 +23,8 @@
 //  Invariants: the delegate and consumer are wired exactly once (first `start()`); later starts
 //  go through `resume()` and never reset tracking. Re-running the session (`setMeshClassification`)
 //  costs ~1–2 s of depth, so it happens only on a thermal *change*. No audio: ARKit here never
-//  touches the audio session.
+//  touches the audio session. The session is exposed read-only (`arSession`) so the Hazards card's
+//  `LiveCameraView` can draw it; nothing outside this class runs, pauses or delegates it.
 //
 
 import ARKit
@@ -78,6 +79,14 @@ final class DepthEngine {
 
     /// The single AR session for the app's lifetime (never recreated).
     @ObservationIgnored private let session = ARSession()
+
+    /// Read-only access to the app's one `ARSession`, for display only: `LiveCameraView` (the
+    /// Hazards card's "Live camera view") hands it to an `ARSCNView`, which draws ARKit's own
+    /// camera frames on the GPU at the camera's rate. Callers must never `run`/`pause` it or set
+    /// its `delegate` / `delegateQueue` — this engine owns the lifecycle and `SessionObserver`
+    /// must stay the delegate. Assigning it to `ARSCNView.session` leaves the delegate and queue
+    /// untouched (probed in the iOS 27 simulator, see LiveCameraView.swift).
+    var arSession: ARSession { session }
     /// Off-main frame → `LaneReport` pipeline. Internal (not private) because `SceneDescriber`
     /// needs it for `jpegSnapshot` / `hasCameraFrame`.
     @ObservationIgnored let processor = DepthFrameProcessor()
@@ -216,7 +225,7 @@ final class DepthEngine {
         let fourThree = { (f: ARConfiguration.VideoFormat) in
             abs(f.imageResolution.width / f.imageResolution.height - 4.0 / 3.0) < 0.01
         }
-        let fps = highFrameRate ? 60 : 30
+        let fps = CameraRate.framesPerSecond(highFrameRate: highFrameRate)   // pinned in LiveViewTests
         if let best = formats.filter({ $0.framesPerSecond == fps && fourThree($0) })
             .min(by: { $0.imageResolution.width < $1.imageResolution.width })
             ?? formats.first(where: { $0.framesPerSecond >= fps })
