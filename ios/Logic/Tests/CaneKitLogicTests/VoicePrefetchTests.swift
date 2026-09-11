@@ -30,6 +30,19 @@ import Testing
     #expect(VoicePrefetch.queue([]) { _ in false }.isEmpty)
 }
 
+@Test func aBadKeyStopsThePrefetchInsteadOfRepeatingItselfTwentyTimes() {
+    // Wrong / expired / unscoped key, and an unusable voice or model: every remaining line fails
+    // the same way, so asking again is pure noise.
+    #expect(VoicePrefetch.isFatal(status: 401))
+    #expect(VoicePrefetch.isFatal(status: 403))
+    #expect(VoicePrefetch.isFatal(status: 422))
+    // Bad luck, not a bad key: the next line is still worth trying.
+    #expect(!VoicePrefetch.isFatal(status: 429))
+    #expect(!VoicePrefetch.isFatal(status: 500))
+    #expect(!VoicePrefetch.isFatal(status: 503))
+    #expect(!VoicePrefetch.isFatal(status: 200))
+}
+
 @Test func prefetchConcurrencyLeavesRoomForALiveRequest() {
     // The ElevenLabs free tier allows two concurrent requests. Prefetch must not use them all,
     // or a live cache miss — the line someone is waiting for — comes back 429.

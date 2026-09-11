@@ -23,6 +23,18 @@ public enum VoicePrefetch {
     /// the wrong trade for a blind walker: a warm cache is a convenience, a late turn is a wrong turn.
     public static let maxConcurrent = 2
 
+    /// Whether an HTTP status from the voice service means "stop asking" rather than "try the next
+    /// line".
+    ///
+    /// 401 and 403 are a wrong, expired or unscoped key, and 422 is a voice or model the account
+    /// cannot use: every remaining line would fail identically. Without this, one bad key turns a
+    /// route prefetch into twenty rejected requests — noise in the log, and a way to get an IP
+    /// rate-limited right before a demo. Everything else (429, 5xx, transport errors) is
+    /// per-request bad luck and the next line is still worth trying.
+    public static func isFatal(status: Int) -> Bool {
+        status == 401 || status == 403 || status == 422
+    }
+
     /// The lines actually worth requesting, in the order they should be requested.
     ///
     /// Callers pass lines in the order they will be spoken (route intro, then waypoint 1, 2, 3 …).

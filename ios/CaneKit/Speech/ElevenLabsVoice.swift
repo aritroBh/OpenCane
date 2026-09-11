@@ -74,13 +74,18 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     // MARK: Cache
 
-    /// `Library/Caches/elevenlabs/`, created on demand (every access re-checks; creation errors
-    /// are ignored and surface later as a failed write, i.e. a cache miss).
-    private static var cacheDir: URL {
+    /// `Library/Caches/elevenlabs/`, created once on first use.
+    ///
+    /// A `let`, not a computed `var`: `cached(_:)` is called on the main actor for *every* spoken
+    /// line to choose between instant playback and a fetch, and a computed property would run
+    /// `createDirectory` synchronously on the main thread inside the obstacle- and navigation-cue
+    /// path. Creation errors are ignored here and surface later as a failed write, i.e. a cache
+    /// miss, which the system voice already covers.
+    private static let cacheDir: URL = {
         let dir = URL.cachesDirectory.appendingPathComponent("elevenlabs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
     /// Deterministic file for (voice, model, text): the first 12 bytes of
     /// SHA-256("voiceID|model|text") as 24 hex characters + ".mp3". Text must match exactly
@@ -132,7 +137,7 @@ nonisolated struct ElevenLabsVoice: Sendable {
         // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based
         // isolation a mutable local in this region cannot be sent into a concurrent closure.
         let slow = withTimeout(prefetchTimeout)
-        return await withTaskGroup(of: String?.self) { group in
+        return await withTaskGroup(of: Failure?.self) { group in
             var iterator = missing.makeIterator()
             var firstError: String?
             func addNext() {
@@ -142,16 +147,32 @@ nonisolated struct ElevenLabsVoice: Sendable {
                     // Cancellation is the app tearing down, not a voice problem: never report it.
                     catch is CancellationError { return nil }
                     catch let error as URLError where error.code == .cancelled { return nil }
-                    catch { return error.localizedDescription }
+                    catch let error as VoiceError {
+                        return Failure(message: error.localizedDescription, fatal: error.isFatal)
+                    }
+                    catch { return Failure(message: error.localizedDescription, fatal: false) }
                 }
             }
             for _ in 0..<min(VoicePrefetch.maxConcurrent, missing.count) { addNext() }
             while let result = await group.next() {
-                if firstError == nil, let result { firstError = result }
+                if firstError == nil, let result { firstError = result.message }
+                // A wrong key fails every remaining line identically. Carrying on would turn one
+                // mistake in Secrets.plist into twenty rejected requests, which is how an account
+                // gets rate-limited an hour before a demo.
+                if result?.fatal == true {
+                    group.cancelAll()
+                    break
+                }
                 addNext()
             }
             return firstError
         }
+    }
+
+    /// One failed line: what to show, and whether the rest of the batch is worth attempting.
+    private struct Failure: Sendable {
+        let message: String
+        let fatal: Bool
     }
 
     /// One POST to `/v1/text-to-speech/{voiceID}` requesting 22.05 kHz / 32 kbps mp3 (small
@@ -194,6 +215,12 @@ nonisolated struct ElevenLabsVoice: Sendable {
         case badResponse
         /// Non-2xx: status code and the first ≤ 200 bytes of the response body.
         case http(Int, String)
+        /// True when retrying other lines is pointless — a bad key, or a voice/model this account
+        /// cannot use. Decided by `VoicePrefetch.isFatal` (CaneKitLogic, pinned by its tests).
+        var isFatal: Bool {
+            if case .http(let code, _) = self { return VoicePrefetch.isFatal(status: code) }
+            return false
+        }
         var errorDescription: String? {
             switch self {
             case .badResponse: return "ElevenLabs: empty response"
