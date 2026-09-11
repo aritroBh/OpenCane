@@ -76,6 +76,11 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   restart it for the next route). Deferred to the device session (logged in docs/todo.md): head
   tracker started without AirPods (battery), the launch "Phone is hot" line before the audio session
   is configured, skipped waypoints not announced in the rare passed-by-plus-skip case.
+- **Simulator scene recognition, settled:** Vision classification fails in the simulator ("Failed to
+  create espresso context"); a CPU-pinned `VNClassifyImageRequest` was tried and returns all 1,303
+  labels at ~0 confidence, so it was removed again. Scene words are tested with `vision_probe.swift`
+  on the Mac (real labels) and `SceneVocabularyTests`, and on the phone. The trip log's
+  `describe_result.vision_error` shows this directly.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

@@ -165,8 +165,9 @@ log could not see.
 **Diagnosed:** in the *simulator* Vision's scene classification fails with "Failed to create
 espresso context" (the simulator has no neural-network context; the new `vision_error` field in the
 trip log's `describe_result` records it). That is a simulator limit, not a phone bug: the same frames
-classify fine on the Mac (`vision_probe.swift`), and the phone has the Neural Engine. A simulator-only
-CPU fallback now lets the mock exercise the scene words. Still, **check "Where am I" on the real phone
+classify fine on the Mac (`vision_probe.swift`), and the phone has the Neural Engine. A CPU-only attempt
+was tried and also fails (all 1,303 labels at ~0 confidence), so scene words are tested with
+`vision_probe.swift` on the Mac and on the phone. Still, **check "Where am I" on the real phone
 first thing** (stress plan D17): it should name what is there ("Ahead: a crosswalk, …").
 
 ## 9. How to find anything

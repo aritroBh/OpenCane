@@ -45,6 +45,6 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Known quirks
 
-- Scene recognition doesn't work in the simulator ("Failed to create espresso context"); it is a
-  simulator limit, but check "Where am I" on the phone first.
+- Scene recognition doesn't work in the simulator ("Failed to create espresso context", even on the
+  CPU); it is a simulator limit, so check "Where am I" on the phone first.
 - `make tour` can hang after passing: `xcrun simctl shutdown all` and retry.

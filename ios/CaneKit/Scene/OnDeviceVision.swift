@@ -21,7 +21,6 @@
 //
 
 import CaneKitLogic
-import CoreML
 import Foundation
 import FoundationModels
 import Synchronization
@@ -79,19 +78,11 @@ nonisolated enum OnDeviceVision {
         var labels: [(String, Float)] = []
         if classify {
             do {
-                let raw: [(String, Float)]
-                do {
-                    raw = try await ClassifyImageRequest().perform(on: jpeg).map { ($0.identifier, $0.confidence) }
-                } catch {
-                    #if targetEnvironment(simulator)
-                    // The simulator cannot create Vision's neural-network ("espresso") context:
-                    // every Street View e2e corner failed with "Failed to create espresso context".
-                    // Same classifier, forced onto the CPU, so the mock exercises the real path.
-                    raw = try classifyOnCPU(jpeg)
-                    #else
-                    throw error
-                    #endif
-                }
+                // In the simulator this throws "Failed to create espresso context" (no neural-network
+                // context; even VNClassifyImageRequest pinned to the CPU returns all 1,303 labels at
+                // ~0 confidence), so scene words can only be tested on the phone or with
+                // ios/scripts/vision_probe.swift on the Mac. The error lands in `lastClassify`.
+                let raw = try await ClassifyImageRequest().perform(on: jpeg).map { ($0.identifier, $0.confidence) }
                 labels = raw.filter { $0.1 >= labelThreshold && !boringLabels.contains($0.0) }
                     .sorted { $0.1 > $1.1 }
                     .prefix(8)
@@ -121,18 +112,6 @@ nonisolated enum OnDeviceVision {
         return VisionDetections(labels: labels, texts: texts, textHeights: heights)
     }
 
-    #if targetEnvironment(simulator)
-    /// Simulator only: `VNClassifyImageRequest` pinned to the CPU compute device (the simulator has
-    /// no neural-network context for Vision). Never compiled for the phone.
-    static func classifyOnCPU(_ jpeg: Data) throws -> [(String, Float)] {
-        let request = VNClassifyImageRequest()
-        if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
-            try? request.setComputeDevice(cpu, for: .main)
-        }
-        try VNImageRequestHandler(data: jpeg).perform([request])
-        return (request.results ?? []).map { ($0.identifier, $0.confidence) }
-    }
-    #endif
 }
 
 // MARK: - Path hazards from labels (on-device hazard watch)
