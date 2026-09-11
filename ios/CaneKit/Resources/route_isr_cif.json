@@ -1,0 +1,87 @@
+{
+  "name": "ISR to CIF",
+  "recorded": "2026-09-10",
+  "source": "OpenStreetMap via Nominatim + Overpass API (ODbL), queried 2026-09-10; entrances = OSM entrance nodes, intersections = OSM street-intersection/crossing nodes, WP5 interpolated mid-block; not yet walked/GPS-verified",
+  "waypoints": [
+    {
+      "id": 1,
+      "lat": 40.10949,
+      "lon": -88.22135,
+      "radius_m": 15,
+      "say": "Leaving ISR. Follow the covered walk south, then the path west and down to the Illinois Street sidewalk.",
+      "crossing": false,
+      "bearing_next_deg": 225.6
+    },
+    {
+      "id": 2,
+      "lat": 40.10913,
+      "lon": -88.22183,
+      "radius_m": 15,
+      "say": "Illinois Street sidewalk. Turn right and walk west. Goodwin Avenue is about 175 meters ahead.",
+      "crossing": false,
+      "bearing_next_deg": 266.7
+    },
+    {
+      "id": 3,
+      "lat": 40.10904,
+      "lon": -88.2239,
+      "radius_m": 15,
+      "say": "Goodwin Avenue. Intersection. Turn right to face north and stay on this side. No crossing needed. Listen for traffic.",
+      "crossing": true,
+      "bearing_next_deg": 358.5
+    },
+    {
+      "id": 4,
+      "lat": 40.1105,
+      "lon": -88.22395,
+      "radius_m": 15,
+      "say": "Green Street. Crossing. Signalized, push button. Listen for traffic, then cross and continue north.",
+      "crossing": true,
+      "bearing_next_deg": 359.6
+    },
+    {
+      "id": 5,
+      "lat": 40.11163,
+      "lon": -88.22396,
+      "radius_m": 15,
+      "say": "Halfway up Goodwin. Keep going north. Springfield Avenue is about 125 meters ahead.",
+      "crossing": false,
+      "bearing_next_deg": 359.6
+    },
+    {
+      "id": 6,
+      "lat": 40.11277,
+      "lon": -88.22397,
+      "radius_m": 15,
+      "say": "Springfield Avenue. Crossing Goodwin. Signalized, push button. Listen for traffic, cross to the west side, then turn left and walk west.",
+      "crossing": true,
+      "bearing_next_deg": 270.0
+    },
+    {
+      "id": 7,
+      "lat": 40.11277,
+      "lon": -88.22563,
+      "radius_m": 15,
+      "say": "Mathews Avenue. Crossing. Listen for traffic, then cross and continue west. CIF is about 150 meters ahead.",
+      "crossing": true,
+      "bearing_next_deg": 265.0
+    },
+    {
+      "id": 8,
+      "lat": 40.11265,
+      "lon": -88.22741,
+      "radius_m": 15,
+      "say": "CIF is ahead on your left. Turn left and follow the path south-west to the east entrance.",
+      "crossing": false,
+      "bearing_next_deg": 237.4
+    },
+    {
+      "id": 9,
+      "lat": 40.11242,
+      "lon": -88.22788,
+      "radius_m": 20,
+      "say": "You have arrived at the Campus Instructional Facility, east entrance.",
+      "crossing": false
+    }
+  ]
+}

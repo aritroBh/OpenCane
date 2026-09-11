@@ -22,3 +22,5 @@ ios/CaneKit/Resources/Secrets.plist
 
 # PlatformIO / Arduino (stretch)
 firmware/**/.pio/
+ios/local.mk
+ios/.project.phone-only.yml
