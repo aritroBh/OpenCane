@@ -1,7 +1,16 @@
+//
+//  WatchMessageTests.swift
+//  CaneKitLogicTests
+//
+//  Purpose: pins WatchMessage.swift — the phone ↔ watch wire format under key "m": every
+//  message round-trips, and anything unknown (older / newer app) decodes to nil, never throws.
+//
+
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// Every phone → watch message (nav tap, obstacle mirror, status line) survives WatchConnectivity.
 @Test func phoneToWatchRoundTrips() throws {
     let cases: [PhoneToWatch] = [
         .nav(.turnLeft), .nav(.arrived), .obstacle(.head), .obstacle(.clear),
@@ -14,6 +23,7 @@ import Testing
     }
 }
 
+/// Every watch button command (Next, Describe, Recenter, Repeat) survives WatchConnectivity.
 @Test func watchToPhoneRoundTrips() throws {
     for m in WatchToPhone.allCases {
         let dict = try WatchEnvelope.encode(m)
@@ -21,6 +31,7 @@ import Testing
     }
 }
 
+/// A phone and watch on different app versions ignore unknown messages instead of crashing.
 @Test func unknownPayloadsDecodeToNil() {
     #expect(WatchEnvelope.decodePhoneToWatch([:]) == nil)
     #expect(WatchEnvelope.decodePhoneToWatch(["m": "not data"]) == nil)

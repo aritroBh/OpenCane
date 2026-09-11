@@ -1,14 +1,32 @@
+//
+//  GeoMathTests.swift
+//  CaneKitLogicTests
+//
+//  Purpose: pins GeoMath.swift — haversine distance / bearing, angle wrapping, the veer-cue
+//  `OffCourseDetector`, and every `GeofenceTracker` robustness rule (GPS gating, arrival
+//  plausibility + streak, skip-ahead, look-ahead arrival, passed-by, leg-bearing near a
+//  waypoint). Each case mirrors something that happens on the ISR → CIF walk.
+//
+//  Key invariants / fixtures:
+//    · `isr` / `cif` are the real demo endpoints; `wps` = 2-waypoint ISR → CIF (15 m, 20 m).
+//    · `line` = 4 waypoints ~100 m apart due north (1e-3° lat ≈ 111 m), radii 15/15/15/20 m.
+//    · `fix(_:accuracy:speed:t:)` defaults to a good walking fix: 5 m accuracy, 1.2 m/s.
+//    · Distances metres, speeds m/s, bearings degrees true, times seconds.
+//
+
 import Testing
 @testable import CaneKitLogic
 
 private let isr = Coordinate(latitude: 40.1095, longitude: -88.2214)
 private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
 
+/// Haversine gives the real ISR → CIF crow-flies distance (600–750 m), so metre cues are sane.
 @Test func isrToCifIsAboutSevenHundredMetres() {
     let d = GeoMath.distanceMeters(isr, cif)
     #expect(d > 600 && d < 750)
 }
 
+/// Bearings are clockwise from true north: due N/E/S/W come out 0/90/180/270° (beacon points the right way).
 @Test func cardinalBearings() {
     let o = Coordinate(latitude: 40, longitude: -88)
     #expect(abs(GeoMath.bearingDegrees(from: o, to: Coordinate(latitude: 40.001, longitude: -88)) - 0) < 0.5)
@@ -17,6 +35,7 @@ private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
     #expect(abs(GeoMath.bearingDegrees(from: o, to: Coordinate(latitude: 40, longitude: -88.001)) - 270) < 0.5)
 }
 
+/// Angle wrapping and the error sign across north (350° → 10° is +20°, i.e. veer right).
 @Test func wrapping() {
     #expect(GeoMath.wrap360(-10) == 350)
     #expect(GeoMath.wrap360(370) == 10)
@@ -28,6 +47,7 @@ private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
     #expect(GeoMath.bearingError(target: 350, heading: 10) == -20)
 }
 
+/// A sustained 30° drift says "Veer right" after 3 s, then stays quiet for the 10 s cooldown.
 @Test func offCourseNeedsThreeSecondsThenCoolsDown() {
     let d = OffCourseDetector()
     #expect(d.update(error: 30, now: 0) == nil)
@@ -39,6 +59,7 @@ private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
     #expect(d.update(error: 30, now: 13) == .right)
 }
 
+/// Swinging back on bearing mid-drift restarts the 3 s hold, so a brief wobble never nags.
 @Test func offCourseResetsWhenBackOnBearing() {
     let d = OffCourseDetector()
     #expect(d.update(error: -40, now: 0) == nil)
@@ -57,6 +78,7 @@ private let wps = [
     Waypoint(id: 2, lat: 40.1125, lon: -88.2283, radiusM: 20, say: "CIF east entrance.", crossing: false, bearingNextDeg: nil),
 ]
 
+/// Bad-GPS or standing fixes never fire a turn fence; arrival at the CIF door is speed-exempt but needs two plausible fixes.
 @Test func geofenceGatesOnAccuracyAndSpeedExceptArrival() {
     let t = GeofenceTracker(waypoints: wps)
     let near1 = Coordinate(latitude: 40.10965, longitude: -88.2244)   // ~5 m from wp 1
@@ -76,6 +98,7 @@ private let wps = [
     #expect(t.update(fix(near2)) == nil)
 }
 
+/// A jumpy fix far from the door between two in-fence fixes restarts the arrival count.
 @Test func arrivalStreakResetsOnAMiss() {
     let t = GeofenceTracker(waypoints: wps)
     t.advance()
@@ -86,6 +109,7 @@ private let wps = [
     #expect(t.update(fix(near2, accuracy: 8)) == .reached(index: 1, waypoint: wps[1], isLast: true))
 }
 
+/// CoreLocation's −1 speed / accuracy (standing still, no solution) never fires a turn fence.
 @Test func invalidSpeedOrAccuracyDoesNotPassIntermediateGate() {
     let t = GeofenceTracker(waypoints: wps)
     let near1 = Coordinate(latitude: 40.10965, longitude: -88.2244)
@@ -108,6 +132,7 @@ private let line = [
     Waypoint(id: 4, lat: 40.1127, lon: -88.2240, radiusM: 20, say: "arrived", crossing: false, bearingNextDeg: nil),
 ]
 
+/// Walking past a waypoint under trees with bad GPS: entering the next fence skips the missed one.
 @Test func missedFenceIsSkippedWhenTheNextOneIsEntered() {
     let t = GeofenceTracker(waypoints: line)
     // Walk straight past waypoint 1 under bad GPS (all fixes gated out), then enter fence 2.
@@ -118,6 +143,7 @@ private let line = [
     #expect(t.current == line[2])
 }
 
+/// Standing at the CIF door with the last turn's fence never entered still arrives (look-ahead).
 @Test func lookaheadReachesArrivalWhenThePreviousFenceWasMissed() {
     let t = GeofenceTracker(waypoints: line)
     t.advance(); t.advance()                                            // current = waypoint 3
@@ -129,6 +155,7 @@ private let line = [
     #expect(t.isFinished)
 }
 
+/// One 30 m GPS blob short of the door must not end the route (arrival is irreversible).
 @Test func oneBadFixShortOfTheDoorDoesNotArrive() {
     // Mirrors WP8 → CIF: standing ~45 m short with 30 m fixes that land inside the 20 m fence.
     let t = GeofenceTracker(waypoints: line)
@@ -138,6 +165,7 @@ private let line = [
     #expect(!t.isFinished)
 }
 
+/// GPS wandering while the user waits at a curb never counts as walking past the waypoint.
 @Test func passedByIgnoresStationaryFixesAtACurb() {
     let t = GeofenceTracker(waypoints: line)
     let east = -88.22379                                                        // ≈ 18 m east of the line
@@ -148,6 +176,7 @@ private let line = [
     #expect(t.current == line[0])
 }
 
+/// Walking past the destination at 25 m never ends the route; only entering the arrival fence does.
 @Test func passedByNeverAppliesToArrival() {
     let t = GeofenceTracker(waypoints: line)
     t.advance(); t.advance(); t.advance()                                        // current = arrival
@@ -158,6 +187,7 @@ private let line = [
     #expect(!t.isFinished)
 }
 
+/// After a manual Next, the old waypoint's closest approach cannot trigger a false passed-by.
 @Test func passedByStateResetsAfterAdvance() {
     let t = GeofenceTracker(waypoints: line)
     _ = t.update(fix(Coordinate(latitude: 40.1099, longitude: -88.22376)))       // ~22 m from line[0]
@@ -167,6 +197,7 @@ private let line = [
     #expect(t.current == line[1])
 }
 
+/// 20 m beside a waypoint the beacon keeps the recorded leg bearing instead of swinging sideways.
 @Test func targetBearingUsesTheLegNearTheWaypoint() {
     let t = GeofenceTracker(waypoints: line)
     t.advance()                                                                  // current = line[1], leg = north
@@ -176,6 +207,7 @@ private let line = [
     #expect(t.isNearCurrent(fix(beside)))
 }
 
+/// Passing a corner 22 m off (outside the fence) still advances the route as passed-by.
 @Test func walkingPastAWaypointCountsAsReached() {
     let t = GeofenceTracker(waypoints: line)
     // Pass waypoint 1 at ~22 m to the east (outside its 15 m fence, inside 2× radius), heading north.
@@ -191,6 +223,7 @@ private let line = [
     #expect(t.current == line[1])
 }
 
+/// Walking a parallel path 60 m away never counts as passing the waypoint.
 @Test func passedByNeedsANearApproach() {
     let t = GeofenceTracker(waypoints: line)
     // Walk north 60 m east of the line: never within 2× radius, so waypoint 1 is not "passed".
@@ -200,12 +233,14 @@ private let line = [
     #expect(t.current == line[0])
 }
 
+/// Watch crown / Action button Next skips the current waypoint and returns it.
 @Test func manualAdvanceSkipsWaypoint() {
     let t = GeofenceTracker(waypoints: wps)
     #expect(t.advance() == wps[0])
     #expect(t.current == wps[1])
 }
 
+/// With a 50 m fix the beacon follows the recorded leg bearing, not a live bearing from garbage.
 @Test func targetBearingFallsBackToRecordedWhenFixIsPoor() {
     let t = GeofenceTracker(waypoints: wps)
     t.advance()
@@ -214,6 +249,7 @@ private let line = [
     #expect(t.targetBearing(from: fix(isr, accuracy: 50)) == 0)       // wps[0].bearingNextDeg
 }
 
+/// A 45 m blob between two good fixes at the door is ignored, so arrival still completes.
 @Test func aGatedOutFixDoesNotBreakTheArrivalStreak() {
     let t = GeofenceTracker(waypoints: wps)
     t.advance()

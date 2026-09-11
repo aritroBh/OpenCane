@@ -8,22 +8,37 @@
 //
 //  Step 2 ships the geometry; step 4 wires the result into speech ("door ahead, two meters").
 //
+//  Threading / isolation: a `nonisolated` caseless enum of static, stateless functions. The only
+//  caller is `DepthFrameProcessor.session(_:didUpdate:)` on the depth queue, so the `ARFrame` and
+//  its mesh buffers are read on the thread ARKit delivered them on and never escape. Output is
+//  a Sendable `MeshHit` value.
+//
+//  Invariants: the lookup is bounded (`faceBudget`) so a dense mesh cannot starve the queue;
+//  the reported distance is the *depth* (`centerDepth`), not the face distance — the mesh only
+//  names the thing, LiDAR depth says how far. The world is gravity-aligned (DepthEngine config).
+//
 
 import ARKit
 import CaneKitLogic
 import simd
 
+/// Nearest classified mesh face to the point straight ahead of the camera. Namespace only.
 nonisolated enum MeshClassifier {
 
     /// Max distance (m) from the projected point to a face centroid to count as a hit.
     static let maxFaceDistance: Float = 0.25
     /// Anchors whose origin is farther than this from the point are skipped without scanning faces.
+    /// Metres; the actual test uses `anchorReach + 1.0`, slack for mesh chunks whose faces extend
+    /// well past the anchor's origin.
     static let anchorReach: Float = 2.5
     /// Hard cap on faces visited per lookup so a dense mesh can never stall the depth queue.
+    /// Counts sampled faces (every 3rd), across all anchors.
     static let faceBudget = 30_000
 
     /// `ObstacleClass` mirrors `ARMeshClassification` by raw value (0 none … 7 door). Checked once
     /// at runtime in debug builds so an SDK reorder cannot silently mislabel doors as seats.
+    /// Lazily evaluated on the first `nearestFace` call (`_ = mappingVerified`); `assert` is
+    /// compiled out in release, where the value is computed but unused.
     static let mappingVerified: Bool = {
         let pairs: [(ARMeshClassification, ObstacleClass)] = [
             (.none, .none), (.wall, .wall), (.floor, .floor), (.ceiling, .ceiling),
@@ -34,6 +49,14 @@ nonisolated enum MeshClassifier {
         return ok
     }()
 
+    /// Classify what is straight ahead: project `centerDepth` metres along the camera's forward
+    /// axis into world space and return the class of the nearest sampled face centroid within
+    /// `maxFaceDistance`, with `distance = centerDepth`.
+    ///
+    /// Returns nil when the depth is out of the 0.1–5 m window, no classified mesh anchor is near,
+    /// or no sampled face centroid is within 25 cm. The camera's forward axis is
+    /// used even in portrait (the lens axis does not rotate with the device). Runs on the depth
+    /// queue; called every `meshEveryNthFrame`th published frame.
     /// - Parameters:
     ///   - centerDepth: median depth of the image-centre window (m); `.infinity` → nil.
     ///   - frame: the current ARFrame (anchors + camera).

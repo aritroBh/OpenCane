@@ -1,4 +1,9 @@
-# Cane printable drafts (OpenSCAD)
+# Cane printable drafts (OpenSCAD), legacy ESP32 era
+
+**Legacy, do not print for the demo.** These drafts are from the ESP32 plan (XIAO grip module,
+VL53L1X sensor pod, coin motors), which the phone-only CaneKit app replaced. They also assume a
+12.7 mm aluminum/graphite shaft; the real cane pole is **28.75 mm, non-metal**, so none of the clamps
+below fit it. The current phone-to-cane mount lives in [`hardware/mount/`](../hardware/mount/).
 
 All three files are UNRENDERED drafts written without a running OpenSCAD.
 Open each, press F5, and check pockets against the real parts before exporting STL.
@@ -7,9 +12,9 @@ Open each, press F5, and check pockets against the real parts before exporting S
 - chest_plate.scad — lanyard/chest plate with GoPro-style 3-prong mount. Hedge if phone-on-cane blur is a problem.
 - sensor_pod.scad — hooded tube clamp for VL53L1X, aims 35° down the shaft.
 
-External parts to grab as-is:
+External parts to grab as-is (sized for the old 12.7 mm shaft):
 - Phone clamp (GoPro-compatible): https://www.printables.com/model/145012
-- Pole grip, set poleDiameter=12.7: https://github.com/j-h-a/go-pro-mounts
+- Pole grip, set poleDiameter=12.7 (the real pole needs 28.75): https://github.com/j-h-a/go-pro-mounts
 - Parametric tube clamp: https://www.printables.com/model/1214545-print-in-place-tube-clamp-fully-parametric
 
-Key dimensions used: shaft 12.7 mm (Ambutech aluminum/graphite), VL53L1X breakout 25.5x17.5x4.6, LiPo 36x29x4.75, XIAO ESP32-S3 21x17.5.
+Key dimensions used: shaft 12.7 mm (Ambutech aluminum/graphite; not the demo cane, which is 28.75 mm non-metal), VL53L1X breakout 25.5x17.5x4.6, LiPo 36x29x4.75, XIAO ESP32-S3 21x17.5.

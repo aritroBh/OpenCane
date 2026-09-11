@@ -24,3 +24,16 @@ ios/CaneKit/Resources/Secrets.plist
 firmware/**/.pio/
 ios/local.mk
 ios/.project.phone-only.yml
+
+# Python bytecode (ios/scripts/e2e.py)
+__pycache__/
+*.pyc
+
+# Google Street View captures are Google's imagery: local test input only, never committed
+ios/scripts/streetview/*.jpg
+# graphify: machine-local paths and the extraction cache (graph.json / report / html are committed)
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json
+graphify-out/20*/

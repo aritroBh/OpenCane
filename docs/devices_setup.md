@@ -27,8 +27,10 @@ break the walk. This page is the human checklist plus what CaneKit does on its o
 - The beacon only renders into headphones (a spatial click from a speaker on a stick is noise).
 - Head tracking is relative: the Guide card shows **Head tracked** when AirPods motion data flows,
   **Compass only** otherwise (still works — the click pans with the phone's compass). **Recenter**
-  (phone button, watch button) zeroes "straight ahead"; the app also auto-recenters after 3 s of
-  walking straight following each waypoint.
+  (phone button, watch button) zeroes "straight ahead"; after each waypoint the app also
+  auto-recenters once you walk the new leg straight: 3 GPS fixes in a row (about 3 s) faster than
+  0.6 m/s with a steady course and a still head, with AirPods head tracking live. Never while a turn
+  is still settling, never within 15 m of a crossing, never on a timer.
 - Phone call or Siri mid-route: speech and beacon resume when the interruption ends.
 
 **Sanity check (AirPods in, standing still)**: Start demo route → click should sit to one side; turn
@@ -73,12 +75,14 @@ Nothing in CaneKit talks to the Mac at runtime. The Mac only signs and installs.
    install is valid for **7 days**, so installing Friday covers Saturday. Launch it once while plugged
    in to accept "trust developer" and the permission prompts (Location at launch; Motion and Health at
    the first route start; Health again on the watch).
-2. **Warm the voice cache on Wi-Fi.** Start the demo route once indoors with Wi-Fi: every route line
+2. **Warm the voice cache on Wi-Fi.** With the ElevenLabs key already in `Secrets.plist` before
+   `make run`, start the demo route once indoors with Wi-Fi: every route line
    and common phrase is pre-synthesized with ElevenLabs into the app's Caches folder, so the walk
    plays them instantly even with weak cellular. Warnings ("Head height.") always use the system voice
    the first time rather than wait for the network. No network at all → the system voice for
    everything; guidance still works.
-3. **What needs the network during the walk:** only "Where am I" (VLM) and any ElevenLabs line not
+3. **What needs the network during the walk:** only the cloud vision model ("Where am I" and the
+   hazard watch, both of which fall back to on-device, see below) and any ElevenLabs line not
    already cached. GPS, LiDAR, haptics, beacon, watch, Live Activity are all on-device.
 4. **Phone settings for the walk:** screen stays on by itself while CaneKit is open (the app disables
    auto-lock; ARKit stops if the screen locks). Turn on **Guided Access** (Settings → Accessibility →
@@ -87,6 +91,25 @@ Nothing in CaneKit talks to the Mac at runtime. The Mac only signs and installs.
    bank on the strap.
 5. **Secrets ride inside the app.** `ios/CaneKit/Resources/Secrets.plist` is copied into the .app at build
    time, so fill in the ElevenLabs / Muse keys *before* `make run`.
+6. **Logs come off the phone without the Mac.** The Files app shows CaneKit's Documents under
+   **Files → On My iPhone → CaneKit**: the trip logs (`canekit-*.jsonl`, one per launch, while
+   "Write trip log" is on) and the hazard map (`hazards/hazards-<session>.geojson` plus its photos).
+   AirDrop them after the walk; the Hazards card's **Share hazard map** button shares the current map.
+7. **Set the mount angle by reading the phone.** With CaneKit open and the cane held the way the
+   walker holds it, the Mount card's first line reads "Camera tilt N° down · N fps". Turn the
+   mount's hinge until it says **good** (3–8° below the horizon; hardware/mount/DESIGN.md). Steeper
+   than ~10° and the lanes see bare pavement near 2 m and the cane buzzes on an empty sidewalk;
+   level or up and the drop-off detector loses its ground reference. fps should sit near 15.
+
+## On-device vision (no key, no network)
+
+"Where am I" and the hazard watch answer on the phone itself when there is no cloud key or no
+network: Apple Vision reads the scene and signs, and Apple's on-device language model phrases it.
+For the nicer phrasing turn on **Settings → Apple Intelligence & Siri → Apple Intelligence** and let
+the model finish downloading (Wi-Fi, a few minutes, once). With it off, CaneKit still answers with a
+plain template ("Ahead: a crosswalk, the street and cars. Sign: detour."). Either way the scene words
+are plain pedestrian nouns (`SceneVocabulary`), never Vision's category names. The Hazards card shows which
+backend the hazard watch uses.
 
 ## If something is off
 

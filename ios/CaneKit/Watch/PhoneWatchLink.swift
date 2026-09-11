@@ -10,41 +10,73 @@
 //  workout session. Cues are ephemeral, so an unreachable watch simply drops them; the status
 //  line goes through `updateApplicationContext`, which is delivered when the watch wakes.
 //
+//  Wire format: `WatchEnvelope` (CaneKitLogic, unit-tested) wraps `PhoneToWatch` /
+//  `WatchToPhone` as JSON `Data` under key "m" in the `[String: Any]` dictionary WatchConnectivity
+//  carries; this file is transport only.
+//  Deliberate behaviours (AGENTS.md): silencing phone haptics routes obstacle cues here (and to
+//  speech); a watch command this build cannot decode is answered `["ok": false]` so the watch
+//  can say "phone app too old" with its `.retry` haptic.
+//
+//  Threading / isolation: `PhoneWatchLink` is `@MainActor`; every send and every published
+//  property is main-only. `WCSessionDelegate` callbacks arrive on a WatchConnectivity
+//  background queue, so the delegate is the `nonisolated` `SessionRelay` below: it decodes
+//  into Sendable values (`Bool`s, `String?`, `WatchToPhone`) on that queue and the closures
+//  installed by `activate()` hop with `Task { @MainActor in … }` (AGENTS.md hard rule 1).
+//  `sendMessage`'s error handler also runs off main and hops the same way.
+//
 
 import CaneKitLogic
 import Foundation
 import Observation
 import WatchConnectivity
 
+/// Phone end of the watch link: publishes pairing / reachability, sends nav cues, mirrored
+/// obstacle cues and status, and forwards watch commands to `AppModel`. Owned by `AppModel`.
 @MainActor
 @Observable
 final class PhoneWatchLink {
 
     // MARK: Published
 
+    /// Device supports WatchConnectivity (false on iPad). Evaluated once at init.
     private(set) var isSupported = WCSession.isSupported()
+    /// A watch is paired with this phone (from the last activation / state callback).
     private(set) var isPaired = false
+    /// The CaneKit watch app is installed on the paired watch.
     private(set) var isWatchAppInstalled = false
     /// True while the watch app can receive `sendMessage` right now.
+    /// Mirrors `WCSession.isReachable` as of the last relay callback; AppModel uses it to warn
+    /// "Watch not reachable" at route start and to decide whether haptics can fall back to the wrist.
     private(set) var isReachable = false
+    /// Last activation or send error (debug); cleared by the next send attempt.
     private(set) var lastError: String?
+    /// Count of `sendMessage` calls attempted (debug; counts attempts, not deliveries).
     private(set) var messagesSent = 0
+    /// Most recent decoded command from the watch (debug).
     private(set) var lastReceived: WatchToPhone?
 
     /// Called on the main actor for every command from the watch.
+    /// Set by `AppModel.start()` to `handleWatchCommand` (`repeatLast`, `nextWaypoint`,
+    /// `describe`, `recenter`).
     @ObservationIgnored var onCommand: ((WatchToPhone) -> Void)?
 
     // MARK: Private
 
+    /// The session delegate (WCSession holds it weakly, so it is retained here).
     @ObservationIgnored private let relay = SessionRelay()
+    /// Last status pushed, for de-duplication in `send(status:distanceM:)`.
     @ObservationIgnored private var lastStatus: PhoneToWatch?
     /// Per-kind throttle so a chatty obstacle mirror never floods the Bluetooth link.
+    /// Values are the caller's clock (depth report timestamps, seconds).
     @ObservationIgnored private var lastObstacleSent: [CueKind: TimeInterval] = [:]
 
     init() {}
 
     // MARK: Lifecycle
 
+    /// Install the relay's main-actor hop closures, make it the `WCSession` delegate and
+    /// activate. The closures are set *before* the delegate so no early callback is lost.
+    /// No-op when WatchConnectivity is unsupported. Called once by `AppModel.start()`.
     func activate() {
         guard isSupported else { return }
         relay.onStateChange = { [weak self] paired, installed, reachable, error in
@@ -71,11 +103,14 @@ final class PhoneWatchLink {
     // MARK: Sending
 
     /// Turn / crossing / arrived: sent once, dropped if the watch is unreachable.
+    /// Callers: `NavigationEngine.onNavCue` (wired in AppModel) and the watch test buttons.
     func send(nav cue: NavCue) {
         send(.nav(cue))
     }
 
     /// Mirrored obstacle cue (fallback). Throttled to one per kind per second.
+    /// Caller: `AppModel.handle` when the phone cannot buzz (engine down or silenced) or the
+    /// user enabled "fallback to watch". `now` is the depth report timestamp (s).
     func send(obstacle kind: CueKind, now: TimeInterval) {
         if now - (lastObstacleSent[kind] ?? -.infinity) < 1.0 { return }
         lastObstacleSent[kind] = now
@@ -84,6 +119,12 @@ final class PhoneWatchLink {
 
     /// Current instruction + distance for the watch face. Uses application context so the
     /// latest value survives the watch being asleep; also pushed live when reachable.
+    /// De-duplicated: same instruction and < 5 m distance change is skipped (≈ one message per
+    /// 5 s of walking). `distanceM` is metres, -1 when unknown. Caller:
+    /// `AppModel.pushStatusToWatch()` (GPS fixes while navigating, waypoint advance, route
+    /// start/stop).
+    /// Note: `lastStatus` is updated even if the session is not yet activated, so that value is
+    /// not retried until the instruction or distance changes.
     func send(status instruction: String, distanceM: Int) {
         let msg = PhoneToWatch.status(instruction: instruction, distanceM: distanceM)
         if case .status(let i, let d)? = lastStatus, i == instruction, abs(d - distanceM) < 5 { return }
@@ -95,6 +136,8 @@ final class PhoneWatchLink {
         if session.isReachable { deliver(dict, session: session) }
     }
 
+    /// Ephemeral live message: encode and `sendMessage` only if supported, activated and
+    /// reachable right now; otherwise silently dropped (cues are worthless late).
     private func send(_ msg: PhoneToWatch) {
         let session = WCSession.default
         guard isSupported, session.activationState == .activated, session.isReachable,
@@ -102,6 +145,9 @@ final class PhoneWatchLink {
         deliver(dict, session: session)
     }
 
+    /// `sendMessage` without a reply handler. Optimistically bumps `messagesSent` and clears
+    /// `lastError`; a failure arrives later on a WatchConnectivity queue and hops to main to
+    /// set `lastError` (only the error's text crosses — `Error` is not Sendable).
     private func deliver(_ dict: [String: Any], session: WCSession) {
         session.sendMessage(dict, replyHandler: nil) { [weak self] error in
             let text = error.localizedDescription
@@ -114,19 +160,31 @@ final class PhoneWatchLink {
 
 /// WCSessionDelegate callbacks arrive on a background queue. Decode into Sendable values here,
 /// then hop to the main actor.
+///
+/// Why a separate class: a delegate method on the main-actor `PhoneWatchLink` would be called
+/// off main (a data race Swift 6 rejects). This relay touches no main-actor state; the hop
+/// lives in the closures `PhoneWatchLink.activate()` installs. `@unchecked Sendable` is sound
+/// because both closure properties are written once on main before the relay becomes the
+/// session delegate and only read afterwards.
 nonisolated private final class SessionRelay: NSObject, WCSessionDelegate, @unchecked Sendable {
+    /// Receives (paired, app installed, reachable, error text) on the WC queue; the installed
+    /// closure hops to main and updates the published flags.
     var onStateChange: (@Sendable (_ paired: Bool, _ installed: Bool, _ reachable: Bool, _ error: String?) -> Void)?
+    /// Receives each successfully decoded watch command on the WC queue; hops to main.
     var onCommand: (@Sendable (WatchToPhone) -> Void)?
 
+    /// Snapshot the session's state as Sendable values and forward it.
     private func publish(_ session: WCSession, error: Error? = nil) {
         onStateChange?(session.isPaired, session.isWatchAppInstalled, session.isReachable,
                        error?.localizedDescription)
     }
 
+    /// Activation finished (or failed): publish pairing / install / reachability and any error.
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         publish(session, error: error)
     }
 
+    /// Required on iOS; nothing to do while a watch switch is in progress.
     func sessionDidBecomeInactive(_ session: WCSession) {}
 
     /// The user switched watches: re-activate for the new one.
@@ -134,18 +192,23 @@ nonisolated private final class SessionRelay: NSObject, WCSessionDelegate, @unch
         session.activate()
     }
 
+    /// Watch app came to the foreground / started or ended its workout session.
     func sessionReachabilityDidChange(_ session: WCSession) {
         publish(session)
     }
 
+    /// Pairing or watch-app installation changed.
     func sessionWatchStateDidChange(_ session: WCSession) {
         publish(session)
     }
 
+    /// Fire-and-forget command from the watch; undecodable messages are ignored.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         if let cmd = WatchEnvelope.decodeWatchToPhone(message) { onCommand?(cmd) }
     }
 
+    /// Command that expects a reply: forward it if decodable, then answer `["ok": Bool]` at once
+    /// (on this queue, before the main-actor handler runs) so the watch is never left waiting.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         let cmd = WatchEnvelope.decodeWatchToPhone(message)
         if let cmd { onCommand?(cmd) }

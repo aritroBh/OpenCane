@@ -5,12 +5,34 @@
 //  Great-circle distance / bearing, angle wrapping, off-course detection and waypoint geofences.
 //  Foundation only; the app adapts CLLocation → GeoFix.
 //
+//  Purpose: everything the navigation engine needs to turn a stream of GPS fixes into "you
+//  reached waypoint N", "veer left / right" and "the beacon should point at X°". The app's
+//  `NavigationEngine` owns one `GeofenceTracker` and one `OffCourseDetector` per route and feeds
+//  them from `LocationService`; these types never read a clock or a sensor themselves.
+//
+//  Key invariants:
+//    · Units: distances and accuracies in metres, speeds in m/s, angles in degrees, bearings
+//      clockwise from TRUE north in [0, 360), times in seconds (always caller-supplied).
+//    · Signed bearing error = target − heading wrapped to (−180, 180]; positive = turn right.
+//    · Negative `accuracy` or `speed` on a `GeoFix` means "invalid" (CoreLocation reports −1)
+//      and never satisfies a gate.
+//    · `OffCourseDetector` and `GeofenceTracker` are deliberately NOT Sendable: one actor
+//      (MainActor in the app) owns and drives each instance.
+//    · Arrival is irreversible (it stops the beacon and the Live Activity), so the last
+//      waypoint needs `distance + accuracy/2 ≤ radius` on `arrivalHits` consecutive fixes.
+//  Tests: GeoMathTests.swift (20 tests).
+//
 
 import Foundation
 
+/// A WGS-84 latitude / longitude pair in degrees. The package's CoreLocation-free stand-in for
+/// `CLLocationCoordinate2D`; also the JSON-free coordinate used by `Waypoint.coordinate`.
 public struct Coordinate: Sendable, Equatable, Codable {
+    /// Degrees north (negative = south).
     public var latitude: Double
+    /// Degrees east (negative = west; UIUC is ≈ −88.22).
     public var longitude: Double
+    /// Creates a coordinate from degrees latitude / longitude.
     public init(latitude: Double, longitude: Double) {
         self.latitude = latitude
         self.longitude = longitude
@@ -19,12 +41,20 @@ public struct Coordinate: Sendable, Equatable, Codable {
 
 /// One GPS fix, already stripped of CoreLocation types.
 public struct GeoFix: Sendable, Equatable {
+    /// Where the fix says the user is.
     public var coordinate: Coordinate
     /// Horizontal accuracy in metres (negative = invalid).
     public var accuracy: Double
     /// Ground speed in m/s (negative = invalid).
     public var speed: Double
+    /// Seconds; the app passes `CLLocation.timestamp.timeIntervalSinceReferenceDate`. Drives
+    /// `TurnSettle`'s moving-time cap and the `now` the navigation engine hands the detectors.
     public var timestamp: TimeInterval
+    /// - Parameters:
+    ///   - coordinate: position of the fix.
+    ///   - accuracy: horizontal accuracy, metres; negative = invalid.
+    ///   - speed: ground speed, m/s; negative = invalid (CoreLocation's −1 when standing still).
+    ///   - timestamp: seconds (reference-date clock in the app).
     public init(coordinate: Coordinate, accuracy: Double, speed: Double, timestamp: TimeInterval) {
         self.coordinate = coordinate
         self.accuracy = accuracy
@@ -33,9 +63,19 @@ public struct GeoFix: Sendable, Equatable {
     }
 }
 
+/// Spherical-earth geometry helpers. Accurate to well under a metre at campus scale, which is
+/// far below GPS noise. Pinned by `isrToCifIsAboutSevenHundredMetres`, `cardinalBearings`,
+/// `wrapping`.
 public enum GeoMath {
+    /// Mean earth radius in metres (IUGG), used by the haversine formula.
     static let earthRadius = 6_371_000.0
 
+    /// Great-circle (haversine) distance between two coordinates.
+    /// - Parameters:
+    ///   - a: first point.
+    ///   - b: second point.
+    /// - Returns: distance in metres (≥ 0). `min(1, √h)` guards `asin` against rounding > 1.
+    /// Pinned by `isrToCifIsAboutSevenHundredMetres`.
     public static func distanceMeters(_ a: Coordinate, _ b: Coordinate) -> Double {
         let φ1 = a.latitude * .pi / 180, φ2 = b.latitude * .pi / 180
         let dφ = (b.latitude - a.latitude) * .pi / 180
@@ -45,6 +85,7 @@ public enum GeoMath {
     }
 
     /// Initial bearing from `a` to `b`, degrees clockwise from true north in [0, 360).
+    /// Pinned by `cardinalBearings` (N/E/S/W within 0.5°).
     public static func bearingDegrees(from a: Coordinate, to b: Coordinate) -> Double {
         let φ1 = a.latitude * .pi / 180, φ2 = b.latitude * .pi / 180
         let dλ = (b.longitude - a.longitude) * .pi / 180
@@ -54,6 +95,8 @@ public enum GeoMath {
     }
 
     /// Wrap to [0, 360).
+    /// - Parameter deg: any angle in degrees.
+    /// - Returns: the equivalent angle in [0, 360). Pinned by `wrapping`.
     public static func wrap360(_ deg: Double) -> Double {
         var d = deg.truncatingRemainder(dividingBy: 360)
         if d < 0 { d += 360 }
@@ -61,6 +104,7 @@ public enum GeoMath {
     }
 
     /// Wrap to (-180, 180]. Positive = target is clockwise (to the right) of heading.
+    /// Note `wrap180(180) == 180` and `wrap180(360) == 0`. Pinned by `wrapping`.
     public static func wrap180(_ deg: Double) -> Double {
         var d = wrap360(deg)
         if d > 180 { d -= 360 }
@@ -68,32 +112,51 @@ public enum GeoMath {
     }
 
     /// Signed error from `heading` to `target` in (-180, 180].
+    /// - Parameters:
+    ///   - target: bearing the user should walk, degrees true.
+    ///   - heading: bearing the user is walking (body / course), degrees true.
+    /// - Returns: degrees; positive = the target is to the right (turn / veer right).
+    /// Pinned by `wrapping` (`bearingError(target: 10, heading: 350) == 20`).
     public static func bearingError(target: Double, heading: Double) -> Double {
         wrap180(target - heading)
     }
 }
 
+/// A turn / veer direction. `OffCourseDetector` output; `NavigationEngine` speaks it as
+/// "Veer left." / "Veer right." and taps it on the watch as `.turnLeft` / `.turnRight`.
 public enum Turn: String, Sendable, Codable, Equatable {
     case left, right
 }
 
 /// Off-bearing > `threshold` continuously for `hold` seconds → one veer cue, then `cooldown`.
+///
+/// Not Sendable on purpose: owned and driven by `NavigationEngine` on the main actor. After a
+/// cue fires, `offSince` restarts, so a further full `hold` is needed before the next one.
+/// Pinned by `offCourseNeedsThreeSecondsThenCoolsDown`, `offCourseResetsWhenBackOnBearing`.
 public final class OffCourseDetector {
+    /// Degrees of |bearing error| above which the user counts as off course (default 25°).
     public var threshold: Double = 25
+    /// Seconds the error must stay above `threshold` before a cue (default 3 s).
     public var hold: TimeInterval = 3
+    /// Minimum seconds between two veer cues (default 10 s).
     public var cooldown: TimeInterval = 10
 
+    /// Start of the current off-course episode (seconds), nil while on bearing.
     private var offSince: TimeInterval?
+    /// Time of the last emitted cue (seconds); −∞ so the first cue is never blocked.
     private var lastCue: TimeInterval = -.infinity
 
+    /// Creates a detector with the default 25° / 3 s / 10 s tuning.
     public init() {}
 
+    /// Forget the current episode and the cooldown (route start / stop, turn settled).
     public func reset() {
         offSince = nil
         lastCue = -.infinity
     }
 
     /// - Parameter error: signed bearing error (target − heading), degrees.
+    /// - Parameter now: seconds (the app passes the latest fix's timestamp).
     /// - Returns: the direction to veer, once per episode.
     public func update(error: Double, now: TimeInterval) -> Turn? {
         guard abs(error) > threshold else {
@@ -108,6 +171,8 @@ public final class OffCourseDetector {
     }
 }
 
+/// What `GeofenceTracker.update` reports. Only one event kind today; kept an enum so the
+/// navigation engine's `switch` stays exhaustive if more are added.
 public enum NavEvent: Sendable, Equatable {
     /// The fence of `waypoint` (at `index`) was entered. `skipped` lists any earlier waypoints the
     /// tracker had to jump over to get there (their fences were missed, e.g. under bad GPS).
@@ -128,17 +193,26 @@ public enum NavEvent: Sendable, Equatable {
 ///     must be *plausibly* inside the fence — `distance + accuracy / 2 ≤ radius` — on
 ///     `arrivalHits` consecutive fixes, so one 30 m blob 45 m short of the door cannot end the
 ///     route (arrival stops the beacon and the Live Activity; there is no way back).
+///
+/// Not Sendable on purpose: created per route and driven by `NavigationEngine` on the main actor.
+/// Pinned by the geofence tests in GeoMathTests.swift (gating, arrival streak, skip-ahead,
+/// look-ahead arrival, passed-by, leg-bearing).
 public final class GeofenceTracker {
+    /// The route's waypoints in walking order (fixed for the tracker's lifetime).
     public private(set) var waypoints: [Waypoint]
+    /// Index of the waypoint currently being approached; `waypoints.count` once finished.
     public private(set) var index: Int = 0
     /// Ignore fixes worse than this (metres) for intermediate waypoints.
     public var maxAccuracy: Double = 20
     /// Ignore fixes slower than this (m/s) for intermediate waypoints (standing still near a fence).
+    /// The comparison is strict: `speed > minSpeed` passes (pinned by
+    /// `invalidSpeedOrAccuracyDoesNotPassIntermediateGate`).
     public var minSpeed: Double = 0.5
     /// Arrival needs a valid fix no worse than this (metres); a 50 m blob must not end the route.
     public var maxArrivalAccuracy: Double = 30
     /// Consecutive plausible in-fence fixes needed for arrival.
     public var arrivalHits: Int = 2
+    /// Consecutive plausible in-fence arrival fixes seen so far (reset on a judged miss / advance).
     private var arrivalStreak = 0
     /// How many waypoints beyond the current one a fix may claim.
     public var lookahead: Int = 2
@@ -149,17 +223,24 @@ public final class GeofenceTracker {
 
     /// Closest gated approach to the current waypoint (metres) since it became current.
     private var minDistance: Double = .infinity
+    /// Distance (metres) of the previous gated fix to the current waypoint; nil after an advance.
     private var lastDistance: Double?
+    /// Consecutive gated fixes that did not get closer (1 m jitter tolerance).
     private var recedingFixes = 0
 
+    /// - Parameter waypoints: the route in walking order; the last one is the arrival fence.
     public init(waypoints: [Waypoint]) {
         self.waypoints = waypoints
     }
 
+    /// The waypoint being approached, or nil once the route is finished.
     public var current: Waypoint? { index < waypoints.count ? waypoints[index] : nil }
+    /// True after the arrival waypoint was reached (or everything was skipped manually).
     public var isFinished: Bool { index >= waypoints.count }
 
     /// Manual "next" (watch crown / Action button). Returns the waypoint skipped past.
+    /// Resets passed-by state and the arrival streak. Pinned by `manualAdvanceSkipsWaypoint`,
+    /// `passedByStateResetsAfterAdvance`.
     @discardableResult
     public func advance() -> Waypoint? {
         guard let wp = current else { return nil }
@@ -167,6 +248,7 @@ public final class GeofenceTracker {
         return wp
     }
 
+    /// Make `newIndex` current and clear all per-waypoint state (passed-by and arrival streak).
     private func moveTo(_ newIndex: Int) {
         index = newIndex
         minDistance = .infinity
@@ -175,6 +257,9 @@ public final class GeofenceTracker {
         arrivalStreak = 0
     }
 
+    /// GPS quality gate. Intermediate waypoints: `0 ≤ accuracy ≤ maxAccuracy` m and
+    /// `speed > minSpeed` m/s. The last waypoint: only `0 ≤ accuracy ≤ maxArrivalAccuracy` m.
+    /// - Returns: true when the fix may be used for fences / passed-by at that waypoint.
     private func gatePasses(_ fix: GeoFix, forLast isLast: Bool) -> Bool {
         // Invalid (negative) accuracy or speed never satisfies the gate: CoreLocation reports
         // speed -1 exactly when it cannot compute one, typically while standing still.
@@ -184,6 +269,11 @@ public final class GeofenceTracker {
         return true
     }
 
+    /// Feed one GPS fix.
+    /// - Parameter fix: the latest fix (any quality; gating happens here).
+    /// - Returns: `.reached` when a fence was entered (nearest index wins, earlier missed
+    ///   waypoints in `skipped`) or the current waypoint was passed by; nil otherwise and always
+    ///   nil once finished.
     public func update(_ fix: GeoFix) -> NavEvent? {
         guard current != nil else { return nil }
         let lastIndex = waypoints.count - 1
@@ -238,6 +328,11 @@ public final class GeofenceTracker {
     /// arming zone (`passedByFactor × radius`) the recorded leg bearing wins too: next to a
     /// waypoint the live bearing swings wildly with a few metres of offset, and after a missed
     /// fence it would point *back* at the waypoint behind the user.
+    /// - Parameters:
+    ///   - fix: the latest fix.
+    ///   - maxLiveAccuracy: metres; fixes worse than this fall back to the recorded leg bearing.
+    /// - Returns: degrees true in [0, 360), or nil once finished. Pinned by
+    ///   `targetBearingUsesTheLegNearTheWaypoint`, `targetBearingFallsBackToRecordedWhenFixIsPoor`.
     public func targetBearing(from fix: GeoFix, maxLiveAccuracy: Double = 20) -> Double? {
         guard let wp = current else { return nil }
         let leg = index > 0 ? waypoints[index - 1].bearingNextDeg : nil
@@ -250,6 +345,8 @@ public final class GeofenceTracker {
     }
 
     /// True when the fix is inside the zone where passed-by may fire (veer cues are muted there).
+    /// Always false for the last waypoint and once finished. Pinned by
+    /// `targetBearingUsesTheLegNearTheWaypoint`.
     public func isNearCurrent(_ fix: GeoFix) -> Bool {
         guard let wp = current, index < waypoints.count - 1 else { return false }
         return GeoMath.distanceMeters(fix.coordinate, wp.coordinate) <= wp.radiusM * passedByFactor

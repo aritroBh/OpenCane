@@ -7,13 +7,26 @@
 //  the haptic test buttons, the settings toggles, and VoiceOver labels. LiDAR, haptics and
 //  the watch need a phone; everything else here runs on `make uitest`.
 //
+//  Verifies docs/design.md §6.1 (Guide controls) and the accessibility labels that AGENTS.md
+//  rule 9 freezes. Every string literal passed to `app.buttons[...]`, `app.switches[...]`,
+//  `app.otherElements[...]` or `app.staticTexts[...]` below is a ⚠ test contract: it is the
+//  VoiceOver label in ios/CaneKit/UI (or AppModel / the route file) and must change in the
+//  same commit as the UI string.
+//
+//  Target builds with SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated (XCTest is not
+//  MainActor-friendly); see project.yml.
+//
 
 import XCTest
 
+/// Functional XCUITests for the phone app (iPhone 17 Pro Max / iOS 27 simulator).
 final class CaneKitUITests: XCTestCase {
 
+    /// The app under test, relaunched fresh for every test.
     private var app: XCUIApplication!
 
+    /// Launches the app with `CANEKIT_UITEST=1`, which makes `AppModel.start()` skip the location
+    /// permission prompt so the system alert cannot race the first tap. Stops at the first failure.
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -21,6 +34,13 @@ final class CaneKitUITests: XCTestCase {
         app.launch()
     }
 
+    /// Start → instruction shows waypoint 1 → Next → waypoint 2 → Repeat does not advance →
+    /// Recenter → Stop → idle again with no Repeat.
+    ///
+    /// ⚠ test contract: buttons "Start demo route", "Stop route", "Next", "Repeat", "Recenter"
+    /// (GuideCard); instruction texts containing "Townsend" / "Illinois Street" come from the
+    /// `say` lines of CaneKit/Resources/route_isr_cif.json waypoints 1 and 2. Note waypoint 1's
+    /// line already mentions "Illinois Street", so that wait alone does not prove Next advanced.
     func testGuideStartsAndStopsDemoRoute() {
         let start = app.buttons["Start demo route"]
         XCTAssertTrue(start.waitForExistence(timeout: 10), "Start button should be on the guide card")
@@ -49,15 +69,54 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Repeat"].exists, "No Repeat without a route")
     }
 
+    /// "Where am I" with no VLM key must still answer gracefully: with no key the on-device
+    /// describer is used, and in the simulator (no camera) it reports "camera …" or answers
+    /// "Scene: …"; the button must come back.
+    ///
+    /// ⚠ test contract: button "Where am I" (GuideCard); the describer's no-key error text.
+    /// Rule 4 of AGENTS.md: a missing key must never crash.
     func testWhereAmIWithoutKeyReportsGracefully() {
         let button = app.buttons["Where am I"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        // Without a VLM key the describer must say so (no crash, button re-enabled).
-        let msg = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'key'")).firstMatch
-        XCTAssertTrue(msg.waitForExistence(timeout: 5) || button.isEnabled)
+        // No key is needed any more (cloud → on-device fallback). In the simulator there is no
+        // camera, so the describer must report that gracefully ("No camera frame") or answer, and
+        // the button must come back — never hang, never crash.
+        let msg = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'camera' OR label BEGINSWITH 'Scene:'")).firstMatch
+        XCTAssertTrue(msg.waitForExistence(timeout: 8), "Where am I must answer or explain")
+        XCTAssertTrue(app.buttons["Where am I"].waitForExistence(timeout: 5))
     }
 
+    /// "Where am I" end to end with a real street scene: the app's camera is replaced by a Google
+    /// Street View capture of the route (FrameReplay, simulator only) and the on-device describer
+    /// (Apple Vision + Apple's on-device model or its template) must produce a sentence.
+    /// Run with `make uitest-streetview` (passes TEST_RUNNER_CANEKIT_FRAME_DIR); skipped otherwise.
+    /// The frames are local-only (git-ignored): capture them per ios/scripts/streetview/README.md.
+    func testWhereAmIDescribesAStreetViewFrame() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CANEKIT_FRAME_DIR"], !dir.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_CANEKIT_FRAME_DIR to a folder with frames.json (make uitest-streetview)")
+        }
+        app.terminate()
+        app.launchEnvironment["CANEKIT_FRAME_DIR"] = dir
+        app.launch()
+        let button = app.buttons["Where am I"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        let scene = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Scene:'")).firstMatch
+        XCTAssertTrue(scene.waitForExistence(timeout: 45), "the on-device describer should answer from the Street View frame")
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "where-am-i-streetview: \(scene.label)"
+        shot.lifetime = .keepAlways
+        add(shot)
+        print("WHERE-AM-I: \(scene.label)")
+    }
+
+    /// Taps each haptic pattern test button, then toggles "Silence haptics" on and off.
+    /// No haptic is asserted (the simulator has no Taptic Engine); this proves the controls exist
+    /// and do not crash.
+    ///
+    /// ⚠ test contract: buttons "Test left haptic", "Test center haptic", "Test right haptic",
+    /// "Test head haptic" and switch "Silence haptics" (HapticsCard).
     func testHapticTestButtonsAndSilenceToggle() {
         for name in ["Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic"] {
             let b = app.buttons[name]
@@ -70,6 +129,10 @@ final class CaneKitUITests: XCTestCase {
         silence.tap()
     }
 
+    /// Flipping "Mirror left / right" changes the switch value; flips it back afterwards so the
+    /// persisted setting is left as found.
+    ///
+    /// ⚠ test contract: switch "Mirror left / right" (ContentView Mount card).
     func testMountTogglesPersist() {
         let mirror = app.switches["Mirror left / right"]
         XCTAssertTrue(mirror.waitForExistence(timeout: 10))
@@ -82,6 +145,7 @@ final class CaneKitUITests: XCTestCase {
 
     /// A SwiftUI `Toggle` is exposed as a switch whose centre is the *label*; tapping there does
     /// nothing. Tap the nested switch when there is one, else the knob at the trailing edge.
+    /// Keep identical to `CaneKitVisualTour.flip(_:)`.
     private func flip(_ toggle: XCUIElement) {
         let knob = toggle.switches.firstMatch
         if knob.exists, knob != toggle {
@@ -91,6 +155,8 @@ final class CaneKitUITests: XCTestCase {
         }
     }
 
+    /// Polls `condition` every 0.2 s (spinning the run loop) until it is true or `timeout` passes.
+    /// - Returns: the condition's final value.
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -100,6 +166,10 @@ final class CaneKitUITests: XCTestCase {
         return condition()
     }
 
+    /// Spot-checks the VoiceOver tree on the idle screen.
+    ///
+    /// ⚠ test contract: button "Start demo route", element "Head row" (LaneGridView row label),
+    /// button "Where am I", switch "Write trip log" (ContentView Mount card).
     func testAccessibilityLabelsExist() {
         XCTAssertTrue(app.buttons["Start demo route"].waitForExistence(timeout: 10))
         // Rows expose a combined spoken value ("left clear, center clear, right clear" or "no depth data").
@@ -109,6 +179,10 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(app.switches["Write trip log"].exists)
     }
 
+    /// Tapping Go with an empty destination shows the error line instead of building a route.
+    ///
+    /// ⚠ test contract: button "Go" (GuideCard) and the exact static text
+    /// "Type a destination first" (set by `AppModel.startMapKitRoute()`, shown by GuideCard).
     func testDestinationFieldRejectsEmptyQuery() {
         let go = app.buttons["Go"]
         XCTAssertTrue(go.waitForExistence(timeout: 10))

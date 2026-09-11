@@ -1,3 +1,15 @@
+//
+//  VLMCodecTests.swift
+//  CaneKitLogicTests
+//
+//  Purpose: pins VLMCodec.swift — the JSON request shapes for Gemini, OpenAI-compatible (Muse)
+//  and Anthropic, each provider's response parsing (joining, quote / whitespace cleaning,
+//  refusals, empty and malformed bodies), HTTP error messages, and `SpokenDistance` phrasing.
+//
+//  Key invariants: shapes only — these tests do not prove a provider accepts the body; that
+//  needs one live "Describe" per provider on the phone.
+//
+
 import Foundation
 import Testing
 @testable import CaneKitLogic
@@ -6,6 +18,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
 
 // MARK: Requests
 
+/// Describe via Gemini sends the fixed prompt plus the JPEG, with thinking off for latency.
 @Test func geminiRequestCarriesImageAndPrompt() throws {
     let body = try VLMRequest.gemini(jpegBase64: "AAAA")
     let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
@@ -19,6 +32,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect((gen["thinkingConfig"] as! [String: Any])["thinkingBudget"] as? Int == 0)
 }
 
+/// Describe via Muse / OpenAI sends the JPEG as a data URI in a user message.
 @Test func openAIRequestUsesDataURI() throws {
     let body = try VLMRequest.openAICompatible(model: "muse-1.3", jpegBase64: "BBBB")
     let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
@@ -30,6 +44,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect((content[1]["image_url"] as! [String: Any])["url"] as? String == "data:image/jpeg;base64,BBBB")
 }
 
+/// Describe via Anthropic sends image then prompt with a 1024-token cap so thinking cannot starve the answer.
 @Test func anthropicRequestShape() throws {
     let body = try VLMRequest.anthropic(model: "claude-opus-5", jpegBase64: "CCCC")
     let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
@@ -43,6 +58,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
 
 // MARK: Responses
 
+/// Gemini's split answer is joined and cleaned; a safety block becomes a speakable empty-response error.
 @Test func geminiResponseParses() throws {
     let ok = json(#"{"candidates":[{"content":{"parts":[{"text":" Bike rack at 10 o'clock, "},{"text":"two meters. "}]},"finishReason":"STOP"}]}"#)
     #expect(try VLMResponse.gemini(ok) == "Bike rack at 10 o'clock, two meters.")
@@ -51,6 +67,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect(throws: (any Error).self) { try VLMResponse.gemini(json("nope")) }
 }
 
+/// OpenAI-style answers parse as string or parts; quotes are stripped; refusals and no choices are errors.
 @Test func openAIResponseParsesStringAndPartsAndRefusal() throws {
     let str = json(#"{"choices":[{"message":{"role":"assistant","content":"\"Door ahead, one meter.\""},"finish_reason":"stop"}]}"#)
     #expect(try VLMResponse.openAICompatible(str) == "Door ahead, one meter.")
@@ -62,6 +79,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect(throws: VLMError.emptyResponse("no choices")) { try VLMResponse.openAICompatible(empty) }
 }
 
+/// Anthropic text blocks are spoken; a refusal stop reason becomes `.refused`.
 @Test func anthropicResponseParsesAndDetectsRefusal() throws {
     let ok = json(#"{"content":[{"type":"text","text":"Pole at 1 o'clock, two meters."}],"stop_reason":"end_turn"}"#)
     #expect(try VLMResponse.anthropic(ok) == "Pole at 1 o'clock, two meters.")
@@ -69,6 +87,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect(throws: VLMError.refused) { try VLMResponse.anthropic(refused) }
 }
 
+/// A bad key or server error surfaces the provider's message instead of a generic failure.
 @Test func httpErrorsCarryProviderMessage() {
     let body = json(#"{"error":{"message":"API key not valid","type":"invalid_request_error"}}"#)
     #expect(throws: VLMError.http(400, "API key not valid")) { try VLMResponse.checkStatus(400, data: body) }
@@ -76,6 +95,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect(throws: Never.self) { try VLMResponse.checkStatus(200, data: Data()) }
 }
 
+/// Distances are spoken as natural half-metre phrases ("one and a half meters"), never raw decimals.
 @Test func spokenDistances() {
     #expect(SpokenDistance.phrase(0.2) == "very close")
     #expect(SpokenDistance.phrase(0.6) == "half a meter")

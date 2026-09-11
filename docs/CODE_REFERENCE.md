@@ -28,8 +28,9 @@ wins wherever the two disagree.
 
 `AppModel` (`ios/CaneKit/App/AppModel.swift`) owns every engine and does the wiring shown below. The
 pure decision types (`CueDecider`, `CueSpeechPolicy`, `GeofenceTracker`, `TurnSettle`,
-`OffCourseDetector`, `StraightWalkDetector`) live in `CaneKitLogic`, and the app classes around them
-only own state, timing and effects. The module sections below have the exact callbacks.
+`OffCourseDetector`, `StraightWalkDetector`, `CourseSmoother`, `GroundHazardDetector`,
+`GroundHazardPolicy`, `SignPolicy`, `HazardWatchPolicy`) live in `CaneKitLogic`, and the app classes
+around them only own state, timing and effects. The module sections below have the exact callbacks.
 
 ```mermaid
 flowchart LR
@@ -42,12 +43,24 @@ flowchart LR
     CD --> CSP["CueSpeechPolicy<br/>(+ ObstacleNamer)"]
   end
 
+  subgraph Ground["Ground hazards (LiDAR, gyro < 1.5 rad/s, ≤ 10 Hz)"]
+    GS["GroundSampler<br/>(depth → walker frame)"] --> GHD["GroundHazardDetector<br/>(3 of 5 frames, world-anchored)"]
+    GHD -->|LaneReport.groundHazard| GHF["AppModel.groundHazardFound<br/>(GroundHazardPolicy)"]
+  end
+  DFP --> GS
+
+  subgraph Camera["Camera hazards (HazardScanner, 500 ms tick)"]
+    HS["HazardScanner<br/>(signs every 3 s + hazard watch every 8 s)"]
+    HS --> VLMH["VLMClient<br/>(FallbackVLMClient → OnDeviceVLMClient)"]
+  end
+
   subgraph Nav["Route guidance (per GPS fix)"]
     GPS["GPS fix + heading<br/>(CoreLocation)"] --> LS["LocationService"]
     LS --> NE["NavigationEngine"]
     NE --- GT["GeofenceTracker"]
     NE --- TS["TurnSettle"]
     NE --- OCD["OffCourseDetector"]
+    NE --- CS["CourseSmoother<br/>(veer only)"]
   end
 
   subgraph Audio["AirPods"]
@@ -66,23 +79,32 @@ flowchart LR
   TT["TripTracker"]
   AM["AppModel"]
   TL["TripLogger<br/>(JSONL trip log)"]
+  HL["HazardLog<br/>(Documents/hazards/*.geojson + JPEGs)"]
 
   CSP --> SQ
   NE -->|onSpeak / onRepeat| SQ
   NE -->|targetBearing, 10 Hz ticker| BE
   NE -->|onNavCue / status| PWL
+  NE -->|"onNavCue → playNav (long buzzes)"| HP
   NE -->|instruction + distance| LAC
   LS -->|every fix| TT
-  LS -->|heading, gyro-gated| BE
+  LS -->|"heading (compass gyro-gated, GPS course not)"| BE
   HPT -->|headYaw, 10 Hz ticker| BE
   ARM -->|headphonesConnected| BE
+
+  GHF -->|"playGroundHazard (4 heavy taps)"| HP
+  GHF -->|spokenLine at .safety| SQ
+  GHF -->|record + frame| HL
+  VLMH -->|Caution line at .obstacle| SQ
+  HS -->|Sign line at .obstacle| SQ
+  HS -->|"onHazard → recordHazard"| HL
 
   WB -->|WatchToPhone command| PWL
   PWL -->|onCommand| AM
   AM -->|next / repeat / recenter| NE
 
   WAI["Where am I<br/>(button, watch, Siri, Camera Control)"] --> SD["SceneDescriber"]
-  SD --> VLM["VLMClient"]
+  SD --> VLM["VLMClient<br/>(FallbackVLMClient → OnDeviceVLMClient)"]
   VLM -->|description| SQ
 
   Depth -.-> TL
@@ -91,10 +113,16 @@ flowchart LR
   Watch -.-> TL
   SQ -.-> TL
   SD -.-> TL
+  HL -.-> TL
 ```
 
 The dotted edges mean every subsystem writes events (`gps`, `speech`, `navcue`, `waypoint`, `lanes`,
-`watch`, `describe`, …) to `TripLogger` through `AppModel`.
+`watch`, `describe`, `hazard`, …) to `TripLogger` through `AppModel`. Sign reading needs no network
+(on-device Vision text only); the hazard watch and "Where am I" share one `VLMClient` built by
+`VLMClientFactory.resolved(context:)` — the cloud provider when a key is set, with `OnDeviceVLMClient`
+(Apple Vision + Foundation Models, template fallback) behind it, or on-device alone. `AppModel.handle`
+writes `AppModel.contextLine(report)` into the shared `SceneContext` on every report, which is how the
+on-device client knows what LiDAR sees.
 
 ## How to keep this file true
 
@@ -110,11 +138,11 @@ per-commit checks). If this file and `AGENTS.md` disagree, `AGENTS.md` wins; fix
 
 ## Module: logic — `ios/Logic` (SwiftPM package `CaneKitLogic`)
 
-Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation so `swift test` runs on a Mac with only Command Line Tools. **Isolation:** `Package.swift` sets only `.swiftLanguageMode(.v6)` — there is no `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` here (unlike the app targets), so every type is **nonisolated** by default. All value types are `Sendable`; the three stateful classes (`CueDecider`, `OffCourseDetector`, `GeofenceTracker`) are deliberately **not Sendable** and must be owned and driven by exactly one actor (the app drives them from `@MainActor` `AppModel` / `NavigationEngine`). The four `NavSupport` state machines (`TurnSettle`, `StraightWalkDetector`, `CueSpeechPolicy`, `CrownAccumulator`) are `Sendable` structs with `mutating` updates: the owner keeps them in a `var` and must write a mutated copy back (e.g. `if var s = settle { s.update(fix); settle = s }` in `NavigationEngine`).
+Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation so `swift test` runs on a Mac with only Command Line Tools. **Isolation:** `Package.swift` sets only `.swiftLanguageMode(.v6)` — there is no `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` here (unlike the app targets), so every type is **nonisolated** by default. All value types are `Sendable`; the three stateful classes (`CueDecider`, `OffCourseDetector`, `GeofenceTracker`) are deliberately **not Sendable** and must be owned and driven by exactly one actor (the app drives them from `@MainActor` `AppModel` / `NavigationEngine`). The four `NavSupport` state machines (`TurnSettle`, `StraightWalkDetector`, `CueSpeechPolicy`, `CrownAccumulator`) are `Sendable` structs with `mutating` updates: the owner keeps them in a `var` and must write a mutated copy back (e.g. `if var s = settle { s.update(fix); settle = s }` in `NavigationEngine`). The Step 11 state machines follow the same rule: `CourseSmoother` (owned by `NavigationEngine`), `GroundHazardDetector` (owned by `DepthFrameProcessor`, driven only on its serial `canekit.depth` queue), `GroundHazardPolicy` (`AppModel`), `SignPolicy` and `HazardWatchPolicy` (`HazardScanner`) are `Sendable` structs with `mutating` updates held in a `var` by exactly one owner.
 
 ### `ios/Logic/Package.swift`
 - swift-tools 6.0; platforms iOS 26, watchOS 26, macOS 15; one library product `CaneKitLogic`, one test target `CaneKitLogicTests` (Swift Testing). No dependencies.
-- ⚠ Do not add ARKit/UIKit/MapKit imports to `Sources/` — `ios/scripts/test.sh` and the required CI job rely on the package building with Foundation alone.
+- ⚠ Do not add ARKit/UIKit/MapKit imports to `Sources/` — `ios/scripts/test.sh` and the Linux `logic-tests` CI job rely on the package building with Foundation alone.
 
 ---
 
@@ -136,7 +164,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 
 **`enum LaneMath`**
 - `static func computeLanes(depth: UnsafeRawPointer, depthBytesPerRow: Int, confidence: UnsafeRawPointer?, confidenceBytesPerRow: Int, width: Int, height: Int, config: LaneConfig, scratch: inout [Float]) -> LaneGrid`
-  - Raw entry point used by the app (`DepthFrameProcessor.swift:145`) over CVPixelBuffer memory. Depth is Float32 metres; confidence is UInt8. **Both row strides must be honoured** (CVPixelBuffer rows are padded). `scratch` is a reusable sample buffer (no per-frame allocation); not thread-safe — one caller at a time.
+  - Raw entry point used by the app (`DepthFrameProcessor.computeGrid`) over CVPixelBuffer memory. Depth is Float32 metres; confidence is UInt8. **Both row strides must be honoured** (CVPixelBuffer rows are padded). `scratch` is a reusable sample buffer (no per-frame allocation); not thread-safe — one caller at a time.
   - Geometry: `sceneW = rotate ? bufH : bufW`, `sceneH = rotate ? bufW : bufH`; `usableH = max(2, Int(sceneH × (1 − groundSkipFraction)))`; `bandH = usableH / 2` (band 0 = head/top, band 1 = torso); `laneW = sceneW / 3`.
   - A sample is valid iff confidence ≥ `minConfidence` (when a confidence map is given) **and** depth `isFinite && > 0.05 m`. Zero, NaN, and ≤ 5 cm are invalid.
   - Per cell: sorted samples, value = `scratch[min(count−1, Int(count × percentile))]`, or `.infinity` if `count < minSamplesPerCell`. Consequence: an obstacle must cover **more than ~10 %** of a cell's valid samples to register (pinned by `tenthPercentileNeedsMoreThanTenPercentOfCell`).
@@ -150,7 +178,10 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 ### `LaneReport.swift` — what the depth pipeline publishes (~15 Hz); value type so it can cross actors
 - **`enum ObstacleClass: Int, Sendable, Codable, CaseIterable`** — `none=0, wall, floor, ceiling, table, seat, window, door` — mirrors ARKit mesh classification raw values (order must stay in sync with `ARMeshClassification`). `spokenName: String?` → "wall"/"table"/"seat"/"window"/"door"; `nil` for `none/floor/ceiling` (never announced).
 - **`struct MeshHit: Sendable, Equatable`** — `classification: ObstacleClass`, `distance: Float` (m).
-- **`struct LaneReport: Sendable, Equatable`** — `grid: LaneGrid` (default `.empty`), `isTrusted: Bool` (default `true`; false while cane is sweeping, |ω| ≥ app threshold → cues freeze), `rotationRate: Float` (|rad/s|, debug footer), `timestamp: TimeInterval`, `depthAvailable: Bool` (default `false`; false until first depth frame / non-LiDAR), `centerHit: MeshHit?`. Computed `head`/`torso` forward to `grid`.
+- **`struct LaneReport: Sendable, Equatable`** — `grid: LaneGrid` (default `.empty`), `isTrusted: Bool` (default `true`; false while cane is sweeping, |ω| ≥ app threshold → cues freeze), `rotationRate: Float` (|rad/s|; logged as `omega` in the `lanes` trip-log record, not shown on screen), `timestamp: TimeInterval`, `depthAvailable: Bool` (default `false`; false until first depth frame / non-LiDAR), `centerHit: MeshHit?`, `groundHazard: GroundHazard?` (default `nil`; the latest *confirmed* LiDAR ground hazard from `GroundHazardDetector`, set by `DepthFrameProcessor` and re-attached to every report until the next trusted evaluation replaces it — see `Hazards.swift`). `cameraTiltDownDeg: Float?` (default `nil`; degrees the camera looks below the horizon, positive = down, a ~1 s EMA over trusted frames from `DepthFrameProcessor.trackTilt`; nil before the first trusted frame). `init(grid:isTrusted:rotationRate:timestamp:depthAvailable:centerHit:groundHazard:cameraTiltDownDeg:)`, all defaulted. Computed `head`/`torso` forward to `grid`.
+- **`enum MountTilt`** — the mount's camera aim. The lane grid skips a fixed bottom fraction of the image as ground (`LaneConfig.groundSkipFraction`, no gravity correction), so the phone must look only a little below the horizon: at ~10° down the torso lanes already read bare pavement near 2 m (the centre-approach threshold) and the cane buzzes on an empty sidewalk; at 0° or above the ground detector loses its 0.8–1.5 m reference (`hardware/mount/DESIGN.md` and `pitch_model.py` derive the window).
+  - `static let aim: ClosedRange<Float> = 3...8` (degrees down).
+  - `static func status(downDeg d: Float) -> (text: String, ok: Bool)` — `n = Int(|d|.rounded())`; `n == 0` → ("Camera level: tilt the phone down", false); inside `aim` → ("Camera tilt N° down, good", true); above → "Camera tilt N° down: tilt the phone up"; below (incl. looking up, `d < 0` → "up") → "Camera tilt N° up|down: tilt the phone down", false. Shown by `ContentView`'s Mount card (`mountAimRow`). Pinned by `mountTiltWindow`.
 - **`enum TileLevel: Sendable`** — `clear, far, near, urgent, noData`. `static func level(for distance: Float, hasData: Bool) -> TileLevel`: `!hasData → .noData`; non-finite → `.clear`; `< 0.7 → .urgent`; `< 1.2 → .near`; `< 2.0 → .far`; else `.clear`. Used by `LaneGridView` debug tiles. Pinned by `tileLevels`.
 
 ---
@@ -171,7 +202,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 | `minChangeInterval` | 0.4 s | minimum time between cue *changes* |
 | `repeatInterval` | 1.0 s | minimum time before the same discrete cue (left/right/head) fires again |
 
-- **`enum GeigerRate`** — `static func hertz(distance: Float, thresholds: CueThresholds = .init()) -> Double`: `clamp(4/d, 2, 8)`; non-finite or ≤ 0 → 2. So 2 Hz at 2.0 m, 4 Hz at 1.0 m, 8 Hz at 0.5 m. Called by `HapticPlayer.swift:194`. Pinned by `geigerRateScalesWithInverseDistance`.
+- **`enum GeigerRate`** — `static func hertz(distance: Float, thresholds: CueThresholds = .init()) -> Double`: `clamp(4/d, 2, 8)`; non-finite or ≤ 0 → 2. So 2 Hz at 2.0 m, 4 Hz at 1.0 m, 8 Hz at 0.5 m. Called by `HapticPlayer`'s Geiger loop (`startApproachLoopIfNeeded`). Pinned by `geigerRateScalesWithInverseDistance`.
 - **`final class CueDecider`** — **not Sendable**; owned by `AppModel` (`@ObservationIgnored private let decider`). State: `thresholds` (var), `active: CueKind` (private(set), starts `.clear`), `lastChange: TimeInterval` (starts `-∞`), private `lastFired: [CueKind: TimeInterval]`, private `zoneActive` per kind.
   - `init(thresholds: CueThresholds = .init())`
   - `reset()` — clears all state.
@@ -193,13 +224,13 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - **`enum GeoMath`** — `static let earthRadius = 6_371_000.0` m (internal).
   - `distanceMeters(_ a, _ b) -> Double` — haversine, `asin(min(1, √h))` guards rounding.
   - `bearingDegrees(from:to:) -> Double` — initial great-circle bearing, degrees clockwise from true north in `[0, 360)`.
-  - `wrap360(_:)` → `[0, 360)`; `wrap180(_:)` → `(−180, 180]` (note `wrap180(180) == 180`); `bearingError(target:heading:)` = `wrap180(target − heading)`, **positive = target is to the right**. Used by `NavigationEngine.swift:220`.
+  - `wrap360(_:)` → `[0, 360)`; `wrap180(_:)` → `(−180, 180]` (note `wrap180(180) == 180`); `bearingError(target:heading:)` = `wrap180(target − heading)`, **positive = target is to the right**. Used by `NavigationEngine.recomputeError` and the smoothed-course veer error in `update(heading:now:)`.
 - **`enum Turn: String, Sendable, Codable, Equatable`** — `left, right`.
 - **`final class OffCourseDetector`** — **not Sendable**; owned by `NavigationEngine`. Tunables: `threshold = 25°`, `hold = 3 s`, `cooldown = 10 s`.
   - `reset()`; `update(error: Double, now: TimeInterval) -> Turn?` — |error| ≤ threshold resets the episode (`offSince = nil`). Otherwise starts/continues the episode; fires once when `now − offSince ≥ hold` **and** `now − lastCue ≥ cooldown`, then sets `lastCue = now` and `offSince = now` (a further full hold is required before the next cue). Returns `.right` if error > 0 else `.left`.
   - ⚠ Do not change without re-running `offCourseNeedsThreeSecondsThenCoolsDown` / `offCourseResetsWhenBackOnBearing`.
 - **`enum NavEvent: Sendable, Equatable`** — `reached(index: Int, waypoint: Waypoint, isLast: Bool, skipped: [Waypoint] = [], passedBy: Bool = false)`. `skipped` = earlier waypoints jumped over via look-ahead; `passedBy` = never entered but clearly walked past.
-- **`final class GeofenceTracker`** — **not Sendable**; created per route by `NavigationEngine.swift:85` (which sets `maxAccuracy = veerMaxAccuracy`, 20). Enter-once geofences with GPS gating.
+- **`final class GeofenceTracker`** — **not Sendable**; created per route by `NavigationEngine.start(_:)` (which sets `maxAccuracy = veerMaxAccuracy`, 20). Enter-once geofences with GPS gating.
 
 | Tunable | Default | Meaning |
 |---|---|---|
@@ -215,8 +246,8 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
   - `@discardableResult advance() -> Waypoint?` — manual next (watch crown / Action button); returns the waypoint skipped; resets passed-by state and the arrival streak via private `moveTo`.
   - private `gatePasses(_ fix, forLast:)` — last: `accuracy >= 0 && <= maxArrivalAccuracy`; intermediate: `accuracy` in `[0, maxAccuracy]` **and** `speed >= 0 && speed > minSpeed`.
   - `update(_ fix: GeoFix) -> NavEvent?` — (1) for `i in index...min(last, index+lookahead)` with a passing gate: intermediate waypoint fires when `distance <= radiusM`; the **last** waypoint needs `distance + accuracy/2 <= radiusM` (plausibly inside) and increments a private `arrivalStreak`, firing only once it reaches `arrivalHits`. A fix that was *evaluated* for arrival (passed the arrival accuracy gate) but not plausibly inside resets the streak to 0; a fix too poor to judge (> 30 m) leaves it alone (`aGatedOutFixDoesNotBreakTheArrivalStreak`). On fire: `moveTo(i+1)`, return `.reached(index: i, …, skipped: waypoints[index..<i])` — nearest index wins. (2) Passed-by, intermediate only and only on gated fixes: track `minDistance`; `recedingFixes += 1` when `d > lastDistance − 1 m` (tolerates 1 m jitter), else reset to 0 (first fix after `moveTo` has no `lastDistance` → 0); fire `.reached(…, passedBy: true)` when `minDistance <= radiusM × passedByFactor`, `d >= minDistance + radiusM`, `recedingFixes >= passedByFixes`. Never applied to the last waypoint. Returns `nil` once finished.
-  - `targetBearing(from fix: GeoFix, maxLiveAccuracy: Double = 20) -> Double?` — `leg` = previous waypoint's `bearingNextDeg` (nil at index 0). Inside `radiusM × passedByFactor` of the current waypoint → `leg` if non-nil (live bearing swings next to a waypoint and points back after a missed fence; applies to the last waypoint too). Else live bearing when `0 <= accuracy <= maxLiveAccuracy`; else `leg ?? live`. `nil` when finished. Consumed by `NavigationEngine.effectiveBearing` (`NavigationEngine.swift:162/184/292`).
-  - `isNearCurrent(_ fix: GeoFix) -> Bool` — fix within `radiusM × passedByFactor` of the current waypoint; always `false` for the last waypoint or when finished. `NavigationEngine.swift:191` mutes veer cues inside this zone.
+  - `targetBearing(from fix: GeoFix, maxLiveAccuracy: Double = 20) -> Double?` — `leg` = previous waypoint's `bearingNextDeg` (nil at index 0). Inside `radiusM × passedByFactor` of the current waypoint → `leg` if non-nil (live bearing swings next to a waypoint and points back after a missed fence; applies to the last waypoint too). Else live bearing when `0 <= accuracy <= maxLiveAccuracy`; else `leg ?? live`. `nil` when finished. Consumed by `NavigationEngine.effectiveBearing` (`NavigationEngine.update(fix:)`, `update(heading:now:)`, `refreshInstruction`).
+  - `isNearCurrent(_ fix: GeoFix) -> Bool` — fix within `radiusM × passedByFactor` of the current waypoint; always `false` for the last waypoint or when finished. `NavigationEngine.update(heading:now:)` mutes veer cues inside this zone.
   - ⚠ Do not change the gating, arrival plausibility/streak, look-ahead, passed-by, or leg-bearing rules without re-running `GeoMathTests` (`geofenceGatesOnAccuracyAndSpeedExceptArrival`, `arrivalStreakResetsOnAMiss`, `invalidSpeedOrAccuracyDoesNotPassIntermediateGate`, `missedFenceIsSkippedWhenTheNextOneIsEntered`, `lookaheadReachesArrivalWhenThePreviousFenceWasMissed`, `oneBadFixShortOfTheDoorDoesNotArrive`, `passedByIgnoresStationaryFixesAtACurb`, `passedByNeverAppliesToArrival`, `passedByStateResetsAfterAdvance`, `targetBearingUsesTheLegNearTheWaypoint`, `walkingPastAWaypointCountsAsReached`, `passedByNeedsANearApproach`) and a GPS walk of the ISR→CIF route (arrival ends the beacon and Live Activity with no way back).
 
 ---
@@ -246,26 +277,26 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
   2. Crossing, not yet released: `stoppedHits` counts consecutive *at-the-curb* fixes: `speed < minSpeed` (speed −1 counts as standing), accuracy ≤ `maxAccuracy`, and distance to the anchor ≤ `nearM + curbSlackM` (6 + 4 = 10 m); any other fix resets it; 2 → `releaseAt = now` (no grace). A pause 11 m short of the street does not release (`aPauseShortOfTheCurbDoesNotReleaseACrossing`).
   3. Only good, moving, unreleased fixes continue: `d ≤ nearM` → `releaseAt = now + graceSeconds`; else `minDistance = min(minDistance, d)`, `recedeHits` counts consecutive fixes with `d ≥ minDistance + recedeM` (reset otherwise); 2 → `releaseAt = now + graceSeconds`. Stationary or poor fixes never ratchet `minDistance` and never release by distance. Once set, `releaseAt` never moves.
 - `mutating update(heading: Double, now:)` — unreleased and `nextBearing != nil`: `|wrap180(heading − nextBearing)| < headingMatchDeg` → `releaseAt = now`. Caller must pass the gyro-gated **body** heading (phone on the cane), never head yaw.
-- Owner: `NavigationEngine.settle: TurnSettle?`, created in `reached` (`NavigationEngine.swift:274`): normal fence entry → `heldBearing` = previous leg (`skipped.last?.bearingNextDeg ?? previousBearing`), `nextBearing = wp.bearingNextDeg`, `isCrossing = wp.crossing`, `startDistance` = last fix's distance (∞ if none); manual or passed-by → `heldBearing nil`, `isCrossing false`, `releasedAt = now`. Not created for the last waypoint. When live, the engine sets `settle = nil` and resets `OffCourseDetector`; `isSettling` mutes veer cues and blocks auto-recenter.
+- Owner: `NavigationEngine.settle: TurnSettle?`, created in `reached`: normal fence entry → `heldBearing` = previous leg (`skipped.last?.bearingNextDeg ?? previousBearing`), `nextBearing = wp.bearingNextDeg` only when `NavigationEngine.isTurn(from: prev, to:)` (else nil), `isCrossing = wp.crossing`, `startDistance` = last fix's distance (∞ if none); manual or passed-by → `heldBearing nil`, `isCrossing false`, `releasedAt = now`. Not created for the last waypoint. When live, the engine sets `settle = nil` and resets `OffCourseDetector`; `isSettling` mutes veer cues and blocks auto-recenter.
 - ⚠ Do not change the release rules or defaults without re-running the nine `NavSupportTests` settle tests (`settleHoldsThePreviousLegUntilNearTheCornerPlusGrace`, `settleDoesNotReleaseOnOneJitteryFix`, `settleReleasesAfterTwoConsecutiveRecedingFixes`, `stationaryOrPoorFixesNeverReleaseByDistance`, `settleCapCountsMovingTimeOnly`, `crossingSilencesTheBeaconAndReleasesAtTheCurb`, `turningTheBodyReleasesImmediately`, `manualOrPassedByAdvanceIsLiveAtOnce`, `noHeldBearingFallsBackToLive`) and a walk through the 12 m turn fences (WP3/WP6/WP8) incl. the WP6 crossing.
 
 **`struct StraightWalkDetector: Sendable, Equatable`** — "walking straight" for AirPods auto-recenter.
 - Vars: `minSpeed = 0.6` m/s (cane users walk ~0.6–1.0 m/s), `maxAccuracy = 20` m, `maxCourseDelta = 15°`, `maxYawDelta = 8°`, `requiredFixes = 3`; `private(set) count`; private `lastHeading`, `lastYaw`. `reset()` clears all three.
 - `mutating update(speed: Double, accuracy: Double, heading: Double?, headYaw: Double) -> Bool` — unless `speed > minSpeed`, `0 <= accuracy <= maxAccuracy` and `heading != nil` → `reset()`, `false`. `steady = |wrap180(heading − lastHeading)| < maxCourseDelta`, `still = |headYaw − lastYaw| < maxYawDelta` (plain difference, not wrapped); both `true` on the first fix. `count = steady && still ? count + 1 : 1` (the fix that breaks a run starts the next one). At `requiredFixes` → `reset()` and `true` (the first fix counts).
-- Owner: `AppModel.straightWalk` (`AppModel.swift:402`), fed each fix by `autoRecenterIfWalkingStraight` with `location.heading` and `head.headYawDeg ?? 0`; reset while no recenter is pending, `nav.isSettling`, AirPods not connected, or within `recenterAfterCrossingM` (15 m) of a crossing `nav.lastReached`; reset at route start and on every waypoint advance (which re-arms `recenterPending`). `true` → `head.recenter()`.
+- Owner: `AppModel.straightWalk` (`AppModel.autoRecenterIfWalkingStraight`), fed each fix by `autoRecenterIfWalkingStraight` with `location.heading` and `head.headYawDeg ?? 0`; reset while no recenter is pending, `nav.isSettling`, AirPods not connected, or within `recenterAfterCrossingM` (15 m) of a crossing `nav.lastReached`; reset at route start and on every waypoint advance (which re-arms `recenterPending`). `true` → `head.recenter()`.
 - ⚠ Pinned by `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn`.
 
 **`struct CueSpeechPolicy: Sendable, Equatable`** — which obstacle cues are also spoken.
 - `enum Tier: Sendable, Equatable { safety, obstacle }`. Vars `headInterval = 4 s`, `sideInterval = 4 s`; private `lastSpoken: [CueKind: TimeInterval]`, `episodeKind` (starts `.clear`).
 - `mutating cleared()` — `episodeKind = .clear` (next head cue is a new episode).
 - `mutating line(for cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) -> (text: String, tier: Tier)?` — `newEpisode = episodeKind != cue.kind`; a `.head` cue sets `episodeKind = .head`, and a side cue moves the episode only when it is actually spoken (a buzzed, silent side cue between two head re-fires does not make the second "new" — `aBuzzedSideCueDoesNotSplitAHeadEpisode`). `.head` → `"Head height."` (`.safety`, `headInterval`) only on a new episode, regardless of `phoneCannotBuzz`. `.left` → `"Left."`, `.right` → `"Right."`, `.centerApproach(d)` → `"Ahead, \(SpokenDistance.phrase(d))."` (all `.obstacle`, `sideInterval`) only when `phoneCannotBuzz`. Then a per-kind limiter: `nil` if `now − lastSpoken[kind] < interval`, else record `now` and return. Consequences: a head episode swallowed by the 4 s limiter is not spoken later in that episode; a *spoken* side cue (phone cannot buzz) between two head cues starts a new head episode.
-- Owner: `AppModel.cueSpeech` (`AppModel.swift:262`): `speakCueIfNeeded` on every `CueOutput.fire` with `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; `.safety` → `SpeechPriority.safety`, else `.obstacle`; ttl 6 s (survives queuing behind a crossing line). `cleared()` on `CueOutput.stop`; a fresh instance at route start.
+- Owner: `AppModel.cueSpeech` (`AppModel.speakCueIfNeeded`): `speakCueIfNeeded` on every `CueOutput.fire` with `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; `.safety` → `SpeechPriority.safety`, else `.obstacle`; ttl 6 s (survives queuing behind a crossing line). `cleared()` on `CueOutput.stop`; a fresh instance at route start.
 - ⚠ Pinned by `headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`. The head line must never be suppressed for a new episode (spec: an overhanging sign has no mesh class).
 
 **`struct CrownAccumulator: Sendable, Equatable`** — Digital Crown "next waypoint" gesture.
 - Vars `detents = 3` (Double), `window = 1 s`, `debounce = 0.8 s`; private `windowStart`, `travel`, `lastFire` (`-∞`).
 - `mutating move(delta: Double, now: TimeInterval) -> Bool` — window expires when `now − windowStart > window` (travel reset); a new window is anchored at the first detent; `travel += |delta|` (either direction). At `travel ≥ detents` the window and travel reset, then fire only if `now − lastFire ≥ debounce` (a debounced gesture is consumed, not carried over). A cuff brushing once per arm swing never accumulates.
-- Owner: `WatchModel.crown` (`WatchModel.swift:50`); `crownMoved(delta:now:)` → `send(.nextWaypoint)`.
+- Owner: `WatchModel.crown` (`CrownAccumulator` held by `WatchModel`); `crownMoved(delta:now:)` → `send(.nextWaypoint)`.
 - ⚠ Pinned by `crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve`, `crownDebouncesBackToBackGestures`.
 
 ---
@@ -277,9 +308,9 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
   - `name: String?` — optional JSON `"name"`: the short spoken place name ("Goodwin Avenue", "the path to CIF"). Every waypoint in the shipped route has one (pinned by `shippedRouteFileIsConsistent`, ≤ 30 chars).
   - `placeName: String` — `name` when set, else the first sentence of `say` (split on the first `.`, whitespace-trimmed; MapKit routes use this fallback). Used by `NavigationEngine` for "Passed <place>. <next place> in N meters." and Repeat's "Next, <place>, in N meters." ⚠ Give every hand-written waypoint a `name`; the first-sentence fallback reads badly for sentences like "CIF is ahead on your left".
   - ⚠ `CodingKeys` are the on-disk schema of `ios/CaneKit/Resources/route_isr_cif.json`; changing them breaks `routeFileDecodesSnakeCaseSchema` and `shippedRouteFileIsConsistent`.
-- **`struct Route: Sendable, Equatable, Codable`** — `name`, `waypoints`. `static func load(from data: Data) throws -> Route` (plain `JSONDecoder`; called by `RouteSource.swift:22`). `bearingInconsistencies(tolerance: Double = 15) -> [(id, recorded, geometric)]` — every recorded `bearingNextDeg` must be within `tolerance°` (via `wrap180`) of the geometric bearing to the next waypoint; hand-edit sanity check.
+- **`struct Route: Sendable, Equatable, Codable`** — `name`, `waypoints`. `static func load(from data: Data) throws -> Route` (plain `JSONDecoder`; called by `RouteSource.bundled()`). `bearingInconsistencies(tolerance: Double = 15) -> [(id, recorded, geometric)]` — every recorded `bearingNextDeg` must be within `tolerance°` (via `wrap180`) of the geometric bearing to the next waypoint; hand-edit sanity check.
 - **`struct RouteStepInput: Sendable, Equatable`** — `points: [Coordinate]`, `instructions: String` (one MapKit walking step, reduced).
-- **`enum RouteBuilder`** — `static func waypoints(from steps: [RouteStepInput], destinationName: String = "destination") -> [Waypoint]`: drops steps with empty `points` (MapKit's empty first step); one waypoint at the **end** of each step, `id = i+1`, `say` = the **next** step's trimmed instruction (last: `"Arrived at \(destinationName)."`; empty → `"Continue."`), `crossing` = say contains "cross" (case-insensitive), `radiusM` = 15 (20 for the last), `bearingNextDeg` = bearing from this end point to the next step's last point (nil on last), `curved` always `false`. Called by `RouteSource.swift:46`.
+- **`enum RouteBuilder`** — `static func waypoints(from steps: [RouteStepInput], destinationName: String = "destination") -> [Waypoint]`: drops steps with empty `points` (MapKit's empty first step); one waypoint at the **end** of each step, `id = i+1`, `say` = the **next** step's trimmed instruction (last: `"Arrived at \(destinationName)."`; empty → `"Continue."`), `crossing` = say contains "cross" (case-insensitive), `radiusM` = 15 (20 for the last), `bearingNextDeg` = bearing from this end point to the next step's last point (nil on last), `curved` always `false`. Called by `RouteSource.mapKit(to:from:)`.
 
 ---
 
@@ -288,8 +319,8 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - **`enum PhoneToWatch: Sendable, Codable, Equatable`** — `nav(NavCue)`, `obstacle(CueKind)` (mirrored obstacle cue, fallback when phone haptic engine is unhealthy or silenced), `status(instruction: String, distanceM: Int)` (watch face; `distanceM == -1` = unknown — `AppModel` sends `distanceToNext ?? -1`, `WatchModel` maps negative → `nil`). Uses synthesized `Codable` for enums with associated values.
 - **`enum WatchToPhone: String, Sendable, Codable, CaseIterable`** — `nextWaypoint, describe, recenter, repeatLast` (`repeatLast` → `AppModel.repeatInstruction()` → `NavigationEngine.repeatInstruction()`: the last line actually spoken plus "Next, <place>, in N meters.").
 - **`enum WatchEnvelope`** — `static let key = "m"`; `encode(_ m: PhoneToWatch) throws -> [String: Any]` / `encode(_ m: WatchToPhone) throws -> [String: Any]` (value is `Data` from `JSONEncoder`); `decodePhoneToWatch(_:)` / `decodeWatchToPhone(_:) -> …?` return `nil` when the key is missing, not `Data`, or undecodable (forward compatibility with newer app versions — never throw).
-- Call sites: `CaneKit/Watch/PhoneWatchLink.swift` (encode 91/101, decode 146/150), `CaneKitWatch/WatchModel.swift` (decode 68/245/249, encode 125; also read from `receivedApplicationContext`).
-- Version skew: the watch sends commands with a reply handler; the phone replies `["ok": decodeWatchToPhone(message) != nil]` (`PhoneWatchLink.swift:152`). The watch treats a missing `ok` as success; `ok == false` → "Update the phone app" + `.retry` haptic.
+- Call sites: `CaneKit/Watch/PhoneWatchLink.swift` (encode in `send(status:distanceM:)` and private `send(_:)`, decode in `SessionRelay`'s two `didReceiveMessage` variants), `CaneKitWatch/WatchModel.swift` (decode in `WatchSessionRelay` and in `start()`'s reachability handler, also from `receivedApplicationContext`; encode in `send(_:)`).
+- Version skew: the watch sends commands with a reply handler; the phone replies `["ok": decodeWatchToPhone(message) != nil]` (`SessionRelay`'s reply-handler `didReceiveMessage` in `PhoneWatchLink.swift`). The watch treats a missing `ok` as success; `ok == false` → "Update the phone app" + `.retry` haptic.
 - ⚠ Case names and raw values are the wire format between two separately installed binaries. Adding cases is safe (old side decodes `nil`, and an old phone replies `ok=false`); renaming/removing is not. Re-run `WatchMessageTests` and a paired phone+watch device test.
 
 ---
@@ -303,7 +334,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
   - `openAICompatible(model:jpegBase64:prompt:)` — `chat/completions`: user message with `[{type:"text"}, {type:"image_url", image_url.url:"data:image/jpeg;base64,…"}]`, `max_tokens 120`, `temperature 0.2`.
   - `anthropic(model:jpegBase64:prompt:)` — Messages API: content `[image(base64, image/jpeg), text]`, `max_tokens 1024` (ceiling covering thinking + one sentence — 256 would starve the answer on Opus/Sonnet 5), `output_config{effort:"low"}`. Headers (app side): `x-api-key`, `anthropic-version: 2023-06-01`.
 - **`enum VLMResponse`**
-  - `checkStatus(_ status: Int, data: Data) throws` — non-2xx → `.http(status, msg)` where `msg` = provider `{error:{message}}` or first 200 bytes of body. Called first by `VLMClient.swift:77`.
+  - `checkStatus(_ status: Int, data: Data) throws` — non-2xx → `.http(status, msg)` where `msg` = provider `{error:{message}}` or first 200 bytes of body. Called first by `post(_:headers:body:)` in `VLMClient.swift`.
   - `gemini(_ data) throws -> String` — joins `candidates[0].content.parts[].text`; empty → `.emptyResponse(promptFeedback.blockReason ?? finishReason ?? "no text")`; undecodable → `.malformed("gemini: …")`.
   - `openAICompatible(_ data) throws -> String` — no choices → `.emptyResponse("no choices")`; non-empty `message.refusal` → `.refused`; `content` may be a string **or** `[{type,text}]` (internal `struct ContentValue: Decodable`); empty → `.emptyResponse(finish_reason ?? "no content")`.
   - `anthropic(_ data) throws -> String` — `stop_reason == "refusal"` → `.refused`; joins `content[].text` where `type == "text"`; empty → `.emptyResponse(stop_reason ?? "no text")` ("max_tokens" with no text = thinking ate the budget).
@@ -313,7 +344,109 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 
 ---
 
-### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 79 tests
+### `Hazards.swift` — hazards the maps do not know about: LiDAR ground profile, sign phrases, vision-model hazard replies, GeoJSON hazard map (Step 11)
+
+Pure decisions only; the app feeds samples in (`GroundSampler`, `OnDeviceVision`, `VLMClient`) and turns the outputs into speech, haptics and `HazardLog` entries. All types are nonisolated `Sendable` values; the four stateful structs (`GroundHazardDetector`, `GroundHazardPolicy`, `SignPolicy`, `HazardWatchPolicy`) have `mutating` updates and one owner each.
+
+**`struct GroundSample: Sendable, Equatable`** — one LiDAR return already in the walker's gravity-aligned frame: `forward` (m ahead along the horizontal walking direction), `lateral` (m to the right), `height` (m relative to the camera; negative = below the phone). `init(forward:lateral:height:)`. Produced by `GroundSampler.samples(frame:walkDirection:stride:minConfidence:)` (app).
+
+**`enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable`** — `dropOff` (ground falls away by more than a step and stays down), `pothole` (a hole whose far side comes back up), `stepUp` (rises by a step and stays up), `lowObstacle` (10–50 cm tall, ground comes back down behind). `spoken`: "Drop-off ahead" / "Hole ahead" / "Step up ahead" / "Low obstacle ahead". Raw values are also the `kind` written to `HazardRecord` / the `hazard` trip-log event.
+
+**`struct GroundHazard: Sendable, Equatable`** — `kind`, `distance: Float` (m ahead to the hazard's **nearer edge** — see `classify`), `delta: Float` (m height change vs the ground reference; negative for drops/holes), `anchor: Float` (where the hazard is along the walk = `distance` + metres already walked when it was seen; stays put while the walker approaches, so `GroundHazardPolicy` can tell "the same curb, closer" from "a new curb"). `init(kind:distance:delta:anchor: Float? = nil)` — a nil anchor defaults to `distance` (nobody tracks the walk, e.g. tests); `GroundHazardDetector.update` sets it. `spokenLine` = `"\(kind.spoken), \(SpokenDistance.phrase(distance))."` → "Drop-off ahead, two meters." (pinned by `groundHazardLine`).
+
+**`struct GroundHazardDetector: Sendable`** — per-frame classification plus multi-frame confirmation. Owner: `DepthFrameProcessor.groundDetector` (queue-only).
+
+`struct Config: Sendable, Equatable`
+
+| Field | Default | Meaning |
+|---|---|---|
+| `corridorHalfWidth` | 0.45 m | only samples with `|lateral| ≤` this (and finite height) are used |
+| `nearMin` / `nearMax` | 0.8 / 1.5 m | near field whose **median** height is the ground reference |
+| `minNearSamples` | 12 | fewer near-field samples → no verdict (`nil`) |
+| `scanMax` | 3.5 m | bins run from `nearMax` while `start < scanMax` → bins start at 1.5, 1.8, 2.1, 2.4, 2.7, 3.0, 3.3 m |
+| `binSize` | 0.3 m | bin = `[start, start + binSize)`; bin height = median |
+| `minSamplesPerBin` | 6 | sparser bins are skipped entirely (not used as `previous` either) |
+| `dropThreshold` | 0.12 m | drop / hole: bin this far below ground |
+| `riseThreshold` | 0.10 m | step / low obstacle: bin this far above ground |
+| `maxRise` | 0.5 m | taller is the lane grid's job, not a ground hazard |
+| `edgeJump` | 0.07 m | minimum jump vs the previous **two** bins — a curb face that lands mid-bin splits its jump across two bins, while a ramp ≤ 10 % changes ≤ 6 cm over two bins and never triggers |
+| `windowFrames` | 5 | history length (trusted evaluations) |
+| `confirmFrames` | 3 | agreeing entries needed to confirm |
+| `distanceTolerance` | 0.6 m | agreement window on the world-anchored position |
+| `maxAge` | 2 s | entries older than this (vs the newest `time`) are dropped |
+
+- `init(config: Config = Config())`; private `history: [(hazard: GroundHazard?, at: Float, time: TimeInterval)]`.
+- `classify(_ samples: [GroundSample]) -> GroundHazard?` — no memory. Corridor filter → near-field median `ground` (needs ≥ 12) → bins (median, ≥ 6 samples) → none → `nil`. For each bin `i` in order: `delta = h − ground`; `p1` / `p2` = heights of the previous one / two bins (`ground` where they do not exist); `later` = deltas of the following bins; nested `edge(adjacentJump:)` = `bins[i−1].start` when `i ≥ 1` and `|h − p1| < edgeJump` (the face fell inside the previous bin), else `bin.start` — **the reported distance is always the nearer edge** (review round 5: `bin.start` overstated it by up to ~0.4 m).
+  1. Drop: `delta ≤ −dropThreshold` and `h − max(p1, p2) ≤ −edgeJump` → `.pothole` if any later delta `> −dropThreshold/2` (−0.06 m, recovers), else `.dropOff`; `distance = edge(adjacentJump: h − p1)`.
+  2. Rise: `riseThreshold ≤ delta ≤ maxRise` and `h − min(p1, p2) ≥ edgeJump` **and** the bin's 75th-percentile corridor height (`upperQuartile`) − ground `≤ maxRise` (a wall or pole filling part of a bin must not read as a step; `aPartialWallIsNotAStep`) → **a rise in the last bin returns `nil`** (step up vs low obstacle is a guess with nothing beyond it — wait for a closer frame rather than say one kind now and the other next second); otherwise `.stepUp` if every later delta `≥ riseThreshold/2` (0.05 m), else `.lowObstacle`; `distance = edge(adjacentJump: h − p1)`.
+  The first bin that trips wins.
+- `mutating update(_ samples: [GroundSample], trusted: Bool, travelled: Float = 0, time: TimeInterval = 0) -> GroundHazard?` — **untrusted frames return `nil` without touching history** (sweep frames never use up confirmation slots; the app decides "trusted" with its own ground gate, |ω| < 1.5 rad/s, and always passes `trusted: true`). Otherwise appends `(classify(samples), at: (h?.distance ?? 0) + travelled, time)`, drops entries with `time − entry.time > maxAge`, keeps the last `windowFrames`; returns the newest hazard only when it is non-nil and ≥ `confirmFrames` entries have the **same kind** and `|at − newest.at| ≤ distanceTolerance`, with its `anchor` set to the newest entry's `at`. **World-anchored agreement**: `travelled` is the cumulative metres walked along the walk direction (from `DepthFrameProcessor.trackWalk`), so a curb approached at 1.2 m/s — 0.5 m closer on each evaluation — still agrees with itself (`aCurbYouWalkTowardStillConfirms`); a relative comparison never confirmed under a real sweep. `time` is the ARKit clock in the app; the defaults (0) mean nothing ever expires in the older tests.
+- `static upperQuartile(_ samples:, from:, to:) -> Float` — sorted heights in `[from, to)`, index `min(count − 1, count·3/4)`; empty → `−∞`. (Internal; it is passed the corridor samples.)
+- `mutating reset()` — clears history (the processor calls it while ground hazards are disabled). `static median(_:)` — internal, even count = mean of the two middle values.
+- Known limit (AGENTS.md): with the two-bin comparison, ramps steeper than ~11 % (7 cm over 60 cm) can read as a drop-off or step; ≤ 10 % stays silent (`aTenPercentRampIsNotAHazard`; ADA ramps are ≤ 8.3 %). Do not swap `max`/`min` in the two comparisons — that reverts to adjacent-bin only and a curb face landing mid-bin is missed again (`aMidBinCurbFaceIsStillFound`).
+- ⚠ Do not change `Config` defaults, the two-bin edge-jump rule, the nearer-edge distance, the last-bin rule, the upper-quartile guard, the world-anchored agreement or the untrusted-frame rule without re-running every ground test in `HazardTests` (`flatGroundIsQuiet`, `aSmoothRampIsNotAHazard`, `aTenPercentRampIsNotAHazard`, `aCurbDownIsADropOff`, `aHoleThatComesBackUpIsAPothole`, `aCurbUpIsAStepUp`, `aShortBlockIsALowObstacle`, `aMidBinCurbFaceIsStillFound`, `aRiseInTheLastBinWaitsForACloserLook`, `tallThingsAreLeftToTheLaneGrid`, `hazardsOutsideTheCorridorAreIgnored`, `noNearFieldMeansNoVerdict`, `aHazardNeedsThreeAgreeingFrames`, `sweepFramesDoNotConfirm`, `flickeringNoiseNeverConfirms`, `aCurbYouWalkTowardStillConfirms`, `staleEvaluationsExpire`, `aPartialWallIsNotAStep`) and a device walk with the cane sweeping toward a real curb. The feature ships **off by default** (`AppModel.groundHazardsEnabled`) until that walk passes.
+
+**`struct GroundHazardPolicy: Sendable, Equatable`** — when a confirmed hazard is worth saying. Vars `repeatInterval = 30` s (same hazard, not getting closer — the walker standing at it), `closerBy: Float = 1.0` m, `samePlace: Float = 1.0` m (two sightings of one kind whose anchors are this close are the same hazard); private `last: (kind, distance, anchor, time)?` (the last *announced* hazard). `==` compares only the three tunables.
+- `mutating shouldAnnounce(_ h: GroundHazard, now: TimeInterval) -> Bool` — `false` only when **all** hold: same kind as the last announcement, `|last.anchor − h.anchor| ≤ samePlace`, not at least `closerBy` nearer (`last.distance − h.distance < closerBy`), and `now − last.time < repeatInterval`; otherwise records `h` and returns `true`. So a new kind, the same kind elsewhere along the walk, the same hazard ≥ 1 m closer, or 30 s later are announced; standing at a curb gets one warning, not a `.safety` line and four heavy taps every few seconds (review round 5). `mutating reset()`.
+- Owner: `AppModel.groundPolicy`, fed every report carrying a `groundHazard` with `now = report.timestamp` (AR clock); `reset()` at every `beginRoute`. Pinned by `groundHazardsAreAnnouncedSparingly`, `aSecondCurbOfTheSameKindIsAnnounced`.
+
+**`struct SignPolicy: Sendable, Equatable`** — recognized text → at most one spoken sign line.
+- `static let phrases` (18, sorted longest first so "SIDEWALK CLOSED" beats "CLOSED" and "PUSH BUTTON" beats "PUSH"): SIDEWALK CLOSED, ROAD CLOSED, USE OTHER SIDEWALK, NO PEDESTRIANS, DO NOT ENTER, WET FLOOR, KEEP OUT, WORK ZONE, CONSTRUCTION, DETOUR, DANGER, CAUTION, PUSH BUTTON, CLOSED, EXIT, ENTRANCE, PULL, PUSH. **No "STOP"**: a STOP sign faces drivers and, with 1/128-height text reading, would be read at every stop-controlled corner (pinned by `stopSignsAreForDriversPushButtonIsForWalkers`). ⚠ `ios/scripts/vision_probe.swift` keeps a copy (`signPhrases`) — change both.
+- Vars `repeatInterval = 60` s, `minConfidence: Float = 0.5`; private `lastSaid: [String: TimeInterval]`.
+- `struct SeenText { text, confidence, height }` (`height` = line-box height as a fraction of the image height, 1 = unknown/close) and `var shortPhraseMinHeight: Float = 1/80`: **one-word phrases** (EXIT, PUSH, PULL, CLOSED, DETOUR, …) only match lines at least that tall (close); multi-word safety phrases match any size. `mutating line(for seen: [SeenText], now:) -> String?` is the sized entry point (used by `HazardScanner`); the tuple overload below maps to `SeenText` with height 1. Pinned by `farTextReadsSafetySignsButNotStorefrontWords`.
+- `mutating line(for texts: [(text: String, confidence: Float)], now:) -> String?` — keeps lines with confidence ≥ 0.5, `normalize`s each; haystacks = every line padded with spaces **plus all lines joined in reading order** (Vision returns one observation per printed line and real signs stack "SIDEWALK" over "CLOSED" — `stackedSignLinesAreJoined`). Phrases match as whole words (`" PHRASE "` inside `" LINE "`, so "UNSTOPPABLE" ≠ "STOP"). For each phrase, longest first: skip it if it is a **substring of an already-matched phrase** ("CLOSED" inside a matched "SIDEWALK CLOSED" is the same sign); otherwise mark it matched, and if it was said `< repeatInterval` ago **continue to the next phrase** (a DETOUR next to a recently read ROAD CLOSED still counts — `aSecondSignIsStillRead`); else **stamp `now` on the phrase and on every phrase contained in it as whole words** (so a partial read of the same sign seconds later — "CLOSED" after "SIDEWALK CLOSED" — is not a second announcement; `aPartialReadOfTheSameSignIsQuiet`) and return `"Sign: \(phrase.lowercased())."`. `nil` when nothing new.
+- `static normalize(_:)` — uppercase, non-letters → spaces, single-spaced ("Sidewalk-closed!" → "SIDEWALK CLOSED").
+- Owners: `HazardScanner.signPolicy` (wall clock `now`) and a throwaway instance in `OnDeviceVLMClient.template` (`now: 0`). Pinned by `signsAreReadOnceAndSpecifically`, `irrelevantOrUnsureTextIsIgnored`, `stackedSignLinesAreJoined`, `aSecondSignIsStillRead`, `aPartialReadOfTheSameSignIsQuiet`.
+
+**`enum HazardPrompt`** — `static let text`: the hazard-watch prompt ("You are the eyes of a blind pedestrian walking forward. Look only at the walking path in the next 5 meters… reply with ONE short phrase under 8 words naming it and where (left, ahead, right) and roughly how far in meters. Otherwise reply exactly NONE."). `OnDeviceVLMClient` detects hazard mode by `prompt == HazardPrompt.text` — ⚠ keep it a single constant.
+
+**`struct HazardWatchPolicy: Sendable, Equatable`** — the periodic vision-model check. Vars `interval = 8` s, `minSpeed = 0.5` m/s, `similarity = 0.6` (Jaccard), `repeatWindow = 30` s; private `lastAsk` (−∞), `recent: [(words: Set<String>, time)]`. `==` compares `interval` and `minSpeed` only.
+- `mutating shouldAsk(now:, speed:) -> Bool` — `speed > minSpeed` (strict) **and** `now − lastAsk ≥ interval` → sets `lastAsk = now`, `true`.
+- `mutating line(forReply reply: String, now:) -> String?` — trims whitespace/newlines, then leading/trailing double quotes, apostrophes, asterisks and backticks; empty or an uppercased prefix `NONE` → `nil` (a prefix test, so "None." and "NONE — clear path" are silent too). **Decimal-safe first-sentence cut**: stops at the first `[.!?]` followed by whitespace or end, or a newline (regex `[.!?](\s|$)|\n`), so "2.5 meters" survives (`hazardReplyKeepsDecimals`). First 12 space-separated words; word set lowercased and punctuation-trimmed; recent replies older than `repeatWindow` are purged; a reply with Jaccard ≥ `similarity` to any recent one → `nil`; else remembered and returned as `"Caution: \(text)."`.
+- `public static func withoutDistance(_ reply: String) -> String` — removes a spoken distance from a reply whose frame is too old for the number to still be true (the hazard and its side stay): case-insensitive regex `[,;]?\s*(about|around|roughly|approximately|~)?\s*\d+(\.\d+)?\s*(meters?|metres?|m|feet|foot|ft)\b`, then trims spaces ("Orange cones ahead, 3 meters" → "Orange cones ahead"; "Scooter on the left about 2.5 m." → "Scooter on the left."). Caller: `HazardScanner.runWatch` when the reply is older than `distanceFreshFor`.
+- `static jaccard(_:_:)` — internal; empty union → 0.
+- Owner: `HazardScanner.watchPolicy` (wall clock). Pinned by `hazardWatchAsksOnlyWhileWalkingAndRarely`, `hazardWatchRepliesBecomeShortCautions`, `hazardReplyKeepsDecimals`, `aLateReplyLosesItsDistance`.
+
+**`struct HazardRecord: Sendable, Equatable, Codable`** — `kind` ("dropOff" / "pothole" / "stepUp" / "lowObstacle" / "sign" / "vision"), `text` (what was spoken), `latitude`, `longitude` (degrees), `accuracy` (m; −1 = no fix), `time` (seconds since 1970), `photo: String?` (JPEG file name next to the GeoJSON). `init(kind:text:latitude:longitude:accuracy:time:photo: = nil)`.
+
+**`enum HazardGeoJSON`** — `static func encode(_ records: [HazardRecord]) throws -> Data`: RFC 7946 `FeatureCollection` of `Point`s with **`[longitude, latitude]`** order; a record with **`accuracy < 0` (no fix) gets `"geometry": null`** (valid per RFC 7946 §3.2) instead of a bogus point at 0, 0; properties `kind`, `text`, `accuracy_m`, `time` (ISO 8601 via `ISO8601DateFormatter`), `photo` when set; `JSONSerialization` with `.prettyPrinted, .sortedKeys`. Opens in geojson.io, QGIS, Google My Maps and the Files preview. Pinned by `hazardMapIsValidGeoJSON`, `aHazardWithoutAFixHasNullGeometry`. Caller: `HazardLog.record`.
+
+---
+
+### `CourseSmoother.swift` — direction of travel over ≥ 15 m, for veer decisions only (Step 11)
+
+**`struct CourseSmoother: Sendable, Equatable`** — a per-fix GPS course swings tens of degrees when the position jitters a few metres, and `OffCourseDetector` turned that into false "Veer" cues (e2e `gps_jitter`: 28 false veers). This measures the bearing from where the walker was ≥ `baseline` metres ago to where they are now, averaging fixes at each end.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `baseline` | 15 m | travel between the two ends of the measurement |
+| `endFixes` | 5 | fixes averaged at each end |
+| `maxAge` | 30 s | fixes older than this (vs the newest fix's timestamp) are forgotten |
+| `maxAccuracy` | 20 m | fixes outside `[0, maxAccuracy]` are not used at all |
+
+- `mutating reset()` — clears the trail.
+- `mutating update(_ fix: GeoFix) -> Double?` — a poor fix returns `nil` **and is not stored**. Otherwise append, drop fixes older than `maxAge`, require ≥ `2 × endFixes` (10) fixes. `recent` = mean coordinate of the last 5; walk back from index `count − 6` to the first fix whose (single-fix) distance to `recent` is ≥ `baseline`, average it with up to 4 fixes before it (`old`), return `GeoMath.bearingDegrees(from: old, to: recent)` (degrees true). No such fix (less than 15 m of good track) → `nil`. `static mean(_:)` — internal arithmetic mean of lat/lon.
+- Tuned by simulation (±6 m white jitter, 20 seeds): 15 m / 5 fixes → median error 5.8°, worst 28°, never 3 consecutive fixes over 25°; 12 m / 3 fixes false-veered in half the runs. At walking pace the 15 m baseline lags a real turn by ~12 s, which is why **only veer uses it** — the beacon keeps the raw heading.
+- Owner: `NavigationEngine.courseSmoother` — fed every fix in `update(fix:)`; **reset** at `start`, at every waypoint, on every fix still inside the just-reached corner's fence (so there is no veer judgement until ~15 m past the fence), and after every veer cue (the trail still holds the veer). Its output replaces the heading in the veer error only while `fix.speed > 0.7` m/s.
+- ⚠ Do not change `baseline`, `endFixes` or the accuracy gate without re-running `CourseSmootherTests` (`jitterOnAStraightWalkNeverLooksLikeAVeer`, `aRealTurnShowsUpAfterTheBaseline`, `poorFixesAndShortTracksGiveNothing`) and `make e2e SCENARIO=gps_jitter` (≤ 3 veer cues) plus `SCENARIO=wrong_turn` (still ≥ 1 "Veer right.").
+
+---
+
+### `SceneVocabulary.swift` — Vision scene labels → words a walker can use (Street View fix)
+
+Apple Vision's classifier returns a taxonomy, not speech: on the Street View frames it said "automobile, machine, vehicle" at Green Street and "conveyance, portal, manhole" at Springfield, and "Where am I" read those out verbatim. **`public enum SceneVocabulary`** keeps only nouns that matter on foot, merges synonyms and orders them by usefulness to a cane user.
+- `static let table: [String: (noun: String, rank: Int)]` (internal) — Vision identifier → spoken noun phrase and rank (lower = said first): crossing / wayfinding 0–6 (crosswalk, stairs, escalator, traffic light, stop sign, door / entrance / elevator, ramp, sidewalk / path, street / intersection / parking lot), things that move or block 7–11 (automobile / car / vehicle → "cars", truck, bus, train, bicycles, motorcycle, scooter, dog, fence, pole, street light, barrier, bollard, bench, fire hydrant, trash can, mailbox, bike rack, manhole cover, puddle, snow, ice), indoors 12 (tables, chairs, sofa, desks, counter), surroundings 13–16 (archway, buildings, houses, trees, grass, bushes, windows). **Unlisted identifiers are dropped** — the hypernyms ("conveyance", "portal", "machine", "structure", "material", "furniture") say nothing a walker can act on.
+- `public static func nouns(_ labels: [(name: String, confidence: Float)], max: Int = 3, minConfidence: Float = 0.3) -> [String]` — labels with confidence ≥ `minConfidence` that are in the table (identifier lowercased), sorted by rank then confidence, deduplicated by noun, at most `max`.
+- `public static func list(_ nouns: [String]) -> String` — `""` / the one noun / "a, b and c" (no Oxford comma).
+- `public static func sentence(_ labels:) -> String?` — `"Ahead: \(list(nouns(labels)))."`, or nil when nothing is nameable (the caller then says so plainly).
+- `struct Group { rank, noun, ids }`, `static let groups: [Group]` (the vocabulary, most useful first), `static let table: [String: Group]` (identifier → group, built from `groups`), `public static func nouns(_:max: = 3, minConfidence: = 0.3) -> [String]` (distinct nouns sorted by rank then confidence), `public static func list(_:) -> String` ("a, b and c"), `public static func sentence(_:) -> String?` ("Ahead: … ." or nil).
+- `public static func isFaithful(_ sentence:, facts:, nouns:) -> Bool` — accepts a language-model sentence only if it names at least one of `nouns` (matched on the noun's last word), every number in it also appears in `facts`, and it is ≤ 30 words. Born from the Street View mock, where Apple's model answered "No hazards detected. Distance: 0 meters." Pinned by `modelSentencesMustBeFaithfulToTheFacts`.
+- Groups worth knowing: slip hazards (ice, snow, a puddle) rank 7 with things that move or block; "people" (person / people / adult / child / pedestrian) rank 8; "plant" → "plants" (indoors a houseplant), separate from "bushes". Pinned by `peopleIceAndPlantsAreSaidSensibly`.
+- Used by `OnDeviceVLMClient.facts` (top 5 nouns for Apple's on-device model), `.describe` (the `isFaithful` gate on the model's sentence) and `.template` (the "Ahead: …" sentence). Identifiers not in `groups` are dropped on purpose. ⚠ Pinned by `SceneVocabularyTests` (fixtures are the real Street View labels); add a group rather than letting raw identifiers through.
+
+---
+
+### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 124 tests
 **CueDeciderTests.swift** (14; helper `report(head:torso:trusted:)` builds a trusted, depth-available report)
 - `centerApproachFiresThenUpdatesDistance` — first centre frame → `.fire(.centerApproach)`, next → `.updateCenter`, `active == .center`.
 - `centerDistanceIsClampedToNearFloor` — 0.3 m reports as 0.5 m (`centerNear`).
@@ -330,7 +463,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - `noDepthMeansNothing` — `depthAvailable == false` → nil.
 - `geigerRateScalesWithInverseDistance` — 2.0→2 Hz, 1.0→4, 0.5→8, 0.1→8, 10→2, ∞→2.
 
-**GeoMathTests.swift** (19; fixtures `wps` = 2-waypoint ISR→CIF, `line` = 4 waypoints ~100 m apart due north, radii 15/15/15/20)
+**GeoMathTests.swift** (20; fixtures `wps` = 2-waypoint ISR→CIF, `line` = 4 waypoints ~100 m apart due north, radii 15/15/15/20)
 - `isrToCifIsAboutSevenHundredMetres` — haversine 600–750 m for the demo endpoints.
 - `cardinalBearings` — N/E/S/W within 0.5°.
 - `wrapping` — `wrap360`, `wrap180` (incl. 180 → 180, 360 → 0), `bearingError` sign convention.
@@ -338,6 +471,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - `offCourseResetsWhenBackOnBearing` — an on-bearing sample restarts the hold.
 - `geofenceGatesOnAccuracyAndSpeedExceptArrival` — 30 m accuracy and 0.2 m/s rejected for wp1; arrival (~11 m from CIF, speed 0): 40 m rejected, 30 m not plausibly inside (11 + 15 > 20), 12 m first hit → nil, second 12 m → reached; nil after finish.
 - `arrivalStreakResetsOnAMiss` — plausible, far, plausible → nil; the next plausible fix arrives.
+- `aGatedOutFixDoesNotBreakTheArrivalStreak` — a 45 m blob between two good (8 m) fixes at the door is ignored (too poor to judge), so the second good fix still arrives.
 - `invalidSpeedOrAccuracyDoesNotPassIntermediateGate` — −1 accuracy/speed rejected; speed 0.5 rejected, 0.51 accepted; arrival needs valid accuracy only (speed −1 OK), two fixes.
 - `missedFenceIsSkippedWhenTheNextOneIsEntered` — bad-GPS pass of wp1, entering wp2 yields `skipped: [wp1]`.
 - `lookaheadReachesArrivalWhenThePreviousFenceWasMissed` — standing still in the arrival fence with wp3 unvisited: first fix nil, second → `reached(index: 3, skipped: [wp3])`.
@@ -351,14 +485,15 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - `manualAdvanceSkipsWaypoint` — `advance()` returns the skipped waypoint.
 - `targetBearingFallsBackToRecordedWhenFixIsPoor` — 5 m fix → live WNW (280–320°); 50 m fix → recorded `bearingNextDeg` (0).
 
-**NavSupportTests.swift** (17; corner at 40.11, −88.224, helpers `south(m)`/`north(m)`, `settle(...)` = radius 12, held 270, next 0, start 12 m)
+**NavSupportTests.swift** (19; corner at 40.11, −88.224, helpers `south(m)`/`north(m)`, `settle(...)` = radius 12, held 270, next 0, start 12 m)
 - TurnSettle: `settleHoldsThePreviousLegUntilNearTheCornerPlusGrace` (5 m at t=2 → held until 6, live at 6), `settleDoesNotReleaseOnOneJitteryFix`, `settleReleasesAfterTwoConsecutiveRecedingFixes` (`releaseAt == 15` = 11 + 4), `stationaryOrPoorFixesNeverReleaseByDistance` (speed 0 / −1 / accuracy 40), `settleCapCountsMovingTimeOnly` (60 s at the curb not live; 25 s walking live), `crossingSilencesTheBeaconAndReleasesAtTheCurb` (bearing nil, 2 stationary fixes → `releaseAt == 2`), `turningTheBodyReleasesImmediately` (300° no, 350° yes vs next 0), `manualOrPassedByAdvanceIsLiveAtOnce`, `noHeldBearingFallsBackToLive`.
 - StraightWalkDetector: `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` (40° course jump, 0.3 m/s, 12° yaw, nil heading → `count == 0`, 25 m accuracy).
-- CueSpeechPolicy: `headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes` (cleared, 2 s later → nil), `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` (incl. "Ahead, one meter.", per-kind limiter).
+- CueSpeechPolicy: `headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes` (cleared, 2 s later → nil), `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` (incl. "Ahead, one meter.", per-kind limiter), `aBuzzedSideCueDoesNotSplitAHeadEpisode` (a silent, buzzed side cue between two head re-fires does not re-speak "Head height.").
+- TurnSettle (Step 10 round 3): `aPauseShortOfTheCurbDoesNotReleaseACrossing` (stopping 11 m short of a crossing keeps the beacon silent).
 - CrownAccumulator: `crownFiresOnThreeDetentsWithinASecond` (±1 either direction), `crownIgnoresARhythmicSleeve` (one detent per 0.9 s), `crownDebouncesBackToBackGestures` (0.6 fire, 0.9 no, 1.5 fire).
 
-**LaneMathTests.swift** (11; helper `portraitBuffer(bufW: 256, bufH: 192, f)` builds a landscape buffer from a scene function; scene = 192 wide × 256 tall; lanes 64 px; usable height 192 → bands of 96)
-- `uniformWallReadsSameEverywhere`, `leftWallOnlyHitsLeftLanes`, `mirrorSwapsLeftAndRight`, `headRowIsTopBand`, `groundBandIsSkipped` (bottom 25 % at 0.3 m ignored, centre window too), `lowConfidencePixelsAreIgnored` (confidence 0 → `.infinity`), `tenthPercentileNeedsMoreThanTenPercentOfCell` (20 % coverage → 1 m; 5 % → 4 m), `zeroAndNaNDepthsAreInvalid`, `landscapeModeUsesBufferAsScene` (`rotateForPortrait = false`), `rawEntrypointHonoursPaddedRowStrides` (depth bpr 1088, conf bpr 320, confidence 1 accepted, padding 0xFF/0 never read), `tileLevels`.
+**LaneMathTests.swift** (12; helper `portraitBuffer(bufW: 256, bufH: 192, f)` builds a landscape buffer from a scene function; scene = 192 wide × 256 tall; lanes 64 px; usable height 192 → bands of 96)
+- `uniformWallReadsSameEverywhere`, `leftWallOnlyHitsLeftLanes`, `mirrorSwapsLeftAndRight`, `headRowIsTopBand`, `groundBandIsSkipped` (bottom 25 % at 0.3 m ignored, centre window too), `lowConfidencePixelsAreIgnored` (confidence 0 → `.infinity`), `tenthPercentileNeedsMoreThanTenPercentOfCell` (20 % coverage → 1 m; 5 % → 4 m), `zeroAndNaNDepthsAreInvalid`, `landscapeModeUsesBufferAsScene` (`rotateForPortrait = false`), `rawEntrypointHonoursPaddedRowStrides` (depth bpr 1088, conf bpr 320, confidence 1 accepted, padding 0xFF/0 never read), `tileLevels`, `mountTiltWindow` (5° → ok "Camera tilt 5° down, good"; 12° → "…: tilt the phone up"; −2° → "Camera tilt 2° up: tilt the phone down"; 0.3° → "Camera level: tilt the phone down").
 
 **RouteTests.swift** (4)
 - `mapKitStepsBecomeWaypoints` — empty first step dropped; ids 1…; say = next instruction; crossing detection; radii 15/20; bearing; last `bearingNextDeg == nil`.
@@ -370,29 +505,47 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 
 **WatchMessageTests.swift** (3) — `phoneToWatchRoundTrips` (all three cases, incl. `obstacle(.clear)`), `watchToPhoneRoundTrips` (all `WatchToPhone.allCases`), `unknownPayloadsDecodeToNil` (missing key, non-Data, unknown case → nil, never throws).
 
+**HazardTests.swift** (33; helper `ground(profile)` = samples every 10 cm from 0.8 to 3.5 m ahead, five lateral columns −0.3…0.3 m, phone 0.9 m above flat ground, `profile(forward)` = height change; `denseGround(profile)` = the same every 5 cm so a curb face can land mid-bin) Step 12: `stopSignsAreForDriversPushButtonIsForWalkers` (a lone "STOP" → nil; "PUSH BUTTON" + "FOR WALK SIGNAL" → "Sign: push button.").
+- GroundHazardDetector, single frame: `flatGroundIsQuiet`; `aSmoothRampIsNotAHazard` (6 % downhill from 1.5 m); `aTenPercentRampIsNotAHazard` (±10 % on `denseGround` never jumps over two bins); `aCurbDownIsADropOff` (−15 cm from 2.1 m → `.dropOff`, distance within 0.35 m of 2.1, delta < −0.1); `aHoleThatComesBackUpIsAPothole` (−20 cm from 2.1 to 2.7 m); `aCurbUpIsAStepUp` (+15 cm from 2.4 m); `aShortBlockIsALowObstacle` (+30 cm from 2.1 to 2.4 m); `aMidBinCurbFaceIsStillFound` (+12 cm / −13 cm faces at 1.94 m on `denseGround` → `.stepUp` / `.dropOff` with distance ≤ 1.95 m, the nearer edge); `aRiseInTheLastBinWaitsForACloserLook` (+15 cm from 3.25 m → nil); `tallThingsAreLeftToTheLaneGrid` (+90 cm → nil); `hazardsOutsideTheCorridorAreIgnored` (a drop 1 m to the side); `noNearFieldMeansNoVerdict` (only samples beyond 1.6 m → nil); `aPartialWallIsNotAStep` (1.2 m-tall returns filling half of a bin → neither `.stepUp` nor `.lowObstacle`).
+- GroundHazardDetector, over frames: `aHazardNeedsThreeAgreeingFrames` (nil, nil, `.dropOff`); `sweepFramesDoNotConfirm` (5 untrusted frames → nil); `flickeringNoiseNeverConfirms` (drop, flat, step, flat, drop → nil every time); `aCurbYouWalkTowardStillConfirms` (curb 0.5 m closer each evaluation with `travelled` +0.5 m, 0.4 s apart → `.dropOff` by the third); `staleEvaluationsExpire` (t = 0, 0.2, then 5 s → nil).
+- GroundHazardPolicy: `groundHazardsAreAnnouncedSparingly` (3.0 m yes; 2.6 m at +1 s no; 1.9 m at +2 s yes (≥ 1 m closer); a new kind at once; the same step at 9 s no (standing at it); again at 33 s (30 s fallback)); `aSecondCurbOfTheSameKindIsAnnounced` (same kind, anchors 10 and 16 → both announced); `groundHazardLine` ("Drop-off ahead, two meters.", "Hole ahead, one and a half meters.").
+- SignPolicy: `signsAreReadOnceAndSpecifically` ("Sidewalk-CLOSED ahead!" → "Sign: sidewalk closed.", nil at 30 s, again at 61 s); `irrelevantOrUnsureTextIsIgnored` (storefront text, confidence 0.3, "Unstoppable deals" → nil; "detour" at 0.8 → "Sign: detour."); `stackedSignLinesAreJoined` ("SIDEWALK" + "CLOSED" lines → one sign); `aSecondSignIsStillRead` (ROAD CLOSED recently said, DETOUR in the same view → "Sign: detour."); `aPartialReadOfTheSameSignIsQuiet` ("CLOSED" 3 s after "SIDEWALK CLOSED" → nil).
+- HazardWatchPolicy: `hazardWatchAsksOnlyWhileWalkingAndRarely` (0.2 m/s no; 1.2 m/s yes at 1 s, no at 5 s, yes at 9.5 s); `hazardWatchRepliesBecomeShortCautions` ("NONE" / "  none. " → nil; first sentence kept; reworded repeat dropped; a different hazard spoken; the same one again after 30 s); `hazardReplyKeepsDecimals` ("Scooter ahead, 2.5 meters. Also a tree." → "Caution: Scooter ahead, 2.5 meters."); `aLateReplyLosesItsDistance` (`withoutDistance` strips ", 3 meters" and " about 2.5 m", leaves "Low branch ahead" alone).
+- HazardGeoJSON: `hazardMapIsValidGeoJSON` (FeatureCollection, coordinates `[lon, lat]`, `kind` and `photo` properties); `aHazardWithoutAFixHasNullGeometry` (accuracy −1 → `geometry` is JSON null).
+
+**SceneVocabularyTests.swift** (5; fixtures are the labels Vision returned on the Street View frames, 2026-09-11) — `synonymsCollapseAndHypernymsDrop` (WP4: automobile / vehicle / car → "cars", "machine" dropped → "Ahead: the street and cars."); `taxonomyWordsNeverReachSpeech` (WP6: no "conveyance" / "portal" / "machine" → "Ahead: the street and a manhole cover."); `crossingInformationComesFirst` (WP3: crosswalk before the more confident grass → ["a crosswalk", "a path", "the street"]); `indoorSceneIsPlain` (WP1 → "Ahead: tables, chairs and windows."); `nothingNameableIsNil` (only hypernyms / low confidence → nil; one-noun `list`).
+
+**CourseSmootherTests.swift** (3; helper `at(north:east:)` metres from 40.11, −88.224; deterministic `LCG` jitter so it runs identically on Linux CI)
+- `jitterOnAStraightWalkNeverLooksLikeAVeer` — due north at 1.3 m/s with ±6 m jitter on every fix for 120 s: never three consecutive smoothed errors > 25° (what `OffCourseDetector` needs) after t = 30 s, median error < 10°.
+- `aRealTurnShowsUpAfterTheBaseline` — 20 fixes north (course within 5°), then 25 fixes east: course within 10° of 90°.
+- `poorFixesAndShortTracksGiveNothing` — 40 m accuracy → nil every fix; 2.5 m of travel → nil.
+
 ---
 
 ### `ios/scripts/test.sh` — runs the package tests (`make test`)
 - `cd ios/Logic`; if `xcode-select -p` points at `Xcode.app` → `exec swift test "$@"`.
 - Otherwise (Command Line Tools only) → `swift test` with `-Xswiftc -Fsystem -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks`, `-Xfrontend -disable-cross-import-overlays`, and matching `-Xlinker -F/-rpath`, because SwiftPM cannot find Swift Testing's Foundation cross-import overlay under CLT.
 - Invariant: tests may use only core `Testing` + `Foundation` types (no overlay-dependent APIs). Extra args pass through (e.g. `--filter`).
-- CI: `.github/workflows/ci.yml` job `logic-tests` runs plain `swift test` in `ios/Logic` on `macos-latest` with the newest Xcode — **required**; the `sim-build` job is informational (`continue-on-error`).
+- CI: `.github/workflows/ci.yml` (manual `workflow_dispatch` only for now) job `logic-tests` runs plain `swift test` in `ios/Logic` on Linux (`swift:6.2` container); the `sim-build` job (macOS, newest Xcode) is informational (`continue-on-error`). Tests must therefore also pass on Linux Foundation (e.g. `CourseSmootherTests` uses its own LCG rather than a seeded Foundation RNG).
 
 ### Cross-module contracts (who uses what)
 - `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~15 Hz.
 - `AppModel` (MainActor) owns `CueDecider`; feeds each `LaneReport` with `now`; routes `CueOutput` to `HapticPlayer` (which uses `GeigerRate.hertz`), mirrors `CueKind` to the watch via `PhoneToWatch.obstacle`, and asks `CueSpeechPolicy` which cues to speak (`cleared()` on `.stop`).
 - `AppModel` owns `StraightWalkDetector` (auto-recenter; gated on `nav.isSettling` / `nav.lastReached`) and sends `PhoneToWatch.status` on every fix and waypoint change (`distanceM` −1 = unknown; `PhoneWatchLink` drops a status with the same text and < 5 m change).
-- `NavigationEngine` (MainActor) owns `GeofenceTracker` + `OffCourseDetector` + `TurnSettle?`; adapts `CLLocation → GeoFix`; computes `bearingError` via `GeoMath`; veer muted while settling, on `Waypoint.curved` legs, and when `GeofenceTracker.isNearCurrent`; speaks `Waypoint.placeName` for passed-by and Repeat; publishes `targetBearing`/`bearingError` to `BeaconEngine` and `GuideCard`.
+- `NavigationEngine` (MainActor) owns `GeofenceTracker` + `OffCourseDetector` + `TurnSettle?` + `CourseSmoother`; adapts `CLLocation → GeoFix`; computes `bearingError` via `GeoMath`; veer muted while settling, on `Waypoint.curved` legs, and when `GeofenceTracker.isNearCurrent`; speaks `Waypoint.placeName` for passed-by and Repeat; publishes `targetBearing`/`bearingError` to `BeaconEngine` and `GuideCard`.
 - `RouteSource` → `Route.load` (bundled JSON) or `RouteBuilder.waypoints` (MapKit steps).
 - `PhoneWatchLink` / `WatchModel` → `WatchEnvelope` encode/decode (also for `receivedApplicationContext`); phone replies `ok` to watch commands. `WatchModel` owns `CrownAccumulator`.
-- `VLMClient` → `VLMRequest.*`, `VLMResponse.checkStatus` then `VLMResponse.*`.
-- `CueSpeechPolicy`, `ObstacleNamer`, `LaneGridView` → `SpokenDistance.phrase`; `LaneGridView` → `TileLevel.level`.
+- `VLMClient` → `VLMRequest.*`, `VLMResponse.checkStatus` then `VLMResponse.*`; the hazard watch passes `HazardPrompt.text` as the prompt, "Where am I" `ScenePrompt.text`.
+- `CueSpeechPolicy`, `ObstacleNamer`, `LaneGridView`, `GroundHazard.spokenLine`, `AppModel.contextLine` → `SpokenDistance.phrase`; `LaneGridView` → `TileLevel.level`.
+- `DepthFrameProcessor` (depth queue) owns `GroundHazardDetector`, fed `GroundSampler.samples(frame:walkDirection:)` on frames with |ω| < `groundSweepThreshold` (1.5 rad/s, looser than the lanes' 0.6), ≥ 0.1 s apart, with the walked distance and the AR clock → `LaneReport.groundHazard`. `AppModel` owns `GroundHazardPolicy` (AR clock) and turns an announced hazard into a buzz, a `.safety` line and a `HazardLog` entry.
+- `HazardScanner` owns `SignPolicy` and `HazardWatchPolicy` (wall clock); `OnDeviceVLMClient.template` uses a fresh `SignPolicy`. `HazardLog` → `HazardRecord` + `HazardGeoJSON.encode`.
+- `NavigationEngine` owns `CourseSmoother` (veer only, reset per waypoint).
 
 ---
 
 ## Module `app-core` — `ios/CaneKit/App/`
 
-Three files: the `@main` entry, the `AppModel` that owns every engine and all settings, and the App Intents (Action button / Siri). Everything here is `@MainActor` (app-target default `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`, `project.yml`); off-main engines hand back `Sendable` value types (`LaneReport`, `GeoFix`) via closures that `AppModel` installs. The pure state machines `AppModel` leans on (`CueDecider`, `CueSpeechPolicy`, `StraightWalkDetector`) live in CaneKitLogic and are unit-tested there.
+Three files: the `@main` entry, the `AppModel` that owns every engine and all settings, and the App Intents (Action button / Siri). Everything here is `@MainActor` (app-target default `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`, `project.yml`); off-main engines hand back `Sendable` value types (`LaneReport`, `GeoFix`) via closures that `AppModel` installs. The pure state machines `AppModel` leans on (`CueDecider`, `CueSpeechPolicy`, `StraightWalkDetector`, `GroundHazardPolicy`) live in CaneKitLogic and are unit-tested there.
 
 ---
 
@@ -422,36 +575,40 @@ Three files: the `@main` entry, the `AppModel` that owns every engine and all se
 | `AppModel` | `@MainActor @Observable final class` | Owner of all engines and settings; UI reads its published properties. |
 | `Settings` | `enum` namespace (implicitly `@MainActor` via the target default) | Thin `UserDefaults.standard` wrapper: `bool(_:default:)`, `set(_:_:)`. |
 
-#### Engine wiring (all `let`, created in the property initialisers except `describer`)
+#### Engine wiring (all `let`, created in the property initialisers except `describer`, `sceneContext` and `hazards`, which `init` builds)
 
 | Property | Type | Step | Notes |
 |---|---|---|---|
-| `depth` | `DepthEngine` | 2 | LiDAR lanes + gyro gate. `onReport` → `handle(_:)` (~15 Hz); `report.isTrusted`, `isRunning`, `apply(portrait:mirror:)`, `pause/resume`, `setMeshClassification(_:)`. |
-| `haptics` | `HapticPlayer` | 3 | Taptic renderer. `silenced`, `isHealthy`, `play`, `setApproach(distance:)`, `stopAll`, `start/resume`. |
+| `depth` | `DepthEngine` | 2 | LiDAR lanes + gyro gate + ground hazards. `onReport` → `handle(_:)` (~15 Hz); `report.isTrusted`, `isRunning`, `apply(portrait:mirror:groundHazards:)`, `pause/resume`, `setMeshClassification(_:)`, `processor` (camera frames for the describer, scanner and live view). |
+| `haptics` | `HapticPlayer` | 3 | Taptic renderer. `silenced`, `isHealthy`, `play`, `setApproach(distance:)`, `stopAll`, `start/resume`, `playNav(_:)` (route buzzes on the cane), `playGroundHazard()` (4 heavy taps). |
 | `logger` | `TripLogger` | — | JSONL trip log. `enabled`, `start`, `event`, `lanes`, `flush`. |
 | `speech` | `SpeechQueue` | 4 | Single voice. `say(_:_:ttl:)` (default ttl 8), `sayAgain(_:_:ttl:)` (default ttl 12; bypasses coalescing so a line still playing is re-spoken), `prefetch`, `stopAll`, `isSpeaking`, `configureAudioSession`. |
 | `watch` | `PhoneWatchLink` | 5 | WatchConnectivity. `onCommand`, `activate`, `isPaired`, `isReachable`, `send(obstacle:now:)`, `send(nav:)`, `send(status:distanceM:)` (dedups: same text and < 5 m change is dropped). |
-| `location` | `LocationService` | 6 | GPS + compass. `onFix`, `onHeading`, `fix`, `heading` (GPS course when moving, compass otherwise), `start/stop`, `requestAuthorization`. |
+| `location` | `LocationService` | 6 | GPS + compass. `onFix`, `onHeading: ((Double, Bool) -> Void)?` (degrees true, `fromCourse`), `fix`, `heading` (GPS course when moving, compass otherwise), `authorizationDenied`, `start/stop` (`stop` clears `fix`), `requestAuthorization`. |
 | `nav` | `NavigationEngine` | 6 | Waypoints. `onSpeak`, `onRepeat`, `onNavCue`, `onWaypointAdvanced`, `onArrived`, `start/stop/next/repeatInstruction`, `isNavigating`, `isSettling`, `lastReached`, `instruction`, `distanceToNext`, `targetBearing`, `waypointIndex`, `route`. |
-| `beacon` | `BeaconEngine` | 7 | Spatial click. `enabled`, `headphonesConnected` (renders only into headphones), `start/stop`, `setSpeaking`, `setHeadYaw`, `setTarget(bearing:)`, `setHeading`. |
+| `beacon` | `BeaconEngine` | 7 | Spatial click. `enabled`, `headphonesConnected` (renders only into headphones), `start/stop`, `resumeIfNeeded()` (foreground), `setSpeaking`, `setHeadYaw`, `setTarget(bearing:)`, `setHeading`. |
 | `head` | `HeadPoseTracker` | 7 | AirPods yaw. `start/stop/recenter`, `headYawDeg`, `isConnected`. |
-| `audioRoute` | `AudioRouteMonitor` (`@MainActor @Observable`, `ios/CaneKit/Audio/`) | — | Headphone presence. `onChange: ((Bool, String) -> Void)?` fires only when the headphone state flips (connected, route name); `start()`, `headphonesConnected`, `outputName`. |
-| `describer` | `SceneDescriber` | 8 | Built in `init` as `SceneDescriber(processor: depth.processor, speech: speech)`. `describe()`, `providerName`. |
-| `trip` | `TripTracker` | 9 | `start()`, `async stop()`, `ingest(fix)`, `spokenSummary(destination:)`. |
+| `audioRoute` | `AudioRouteMonitor` (`@MainActor @Observable`, `ios/CaneKit/Audio/`) | — | Headphone presence. `onChange: ((Bool, String) -> Void)?` fires 2 s after a headphone flip that stuck and differs from the last announced state (connected, route name); `onImmediateChange: ((Bool) -> Void)?` on every raw flip, undebounced; `start()`, `headphonesConnected`, `outputName`. |
+| `describer` | `SceneDescriber` | 8 | Built in `init` as `SceneDescriber(processor: depth.processor, speech: speech, client: client)` with the shared `VLMClientFactory.resolved(context:)` client. `describe()`, `providerName`. |
+| `trip` | `TripTracker` | 9 | `start()`, `async stop()`, `cancel()` (synchronous, for a restart), `ingest(fix)`, `spokenSummary(destination:)`. |
 | `liveActivity` | `LiveActivityController` | 9 | `start(routeName:instruction:distanceM:)`, `update(instruction:distanceM:kind:)`, `end(final:)` / `end()`. |
+| `sceneContext` | `SceneContext` (`nonisolated final class: Sendable`, `Scene/OnDeviceVision.swift`) | 11 | Built in `init`; `set(AppModel.contextLine(report))` on every report; read off-main by `OnDeviceVLMClient`. |
+| `hazards` | `HazardScanner` | 11 | Built in `init` as `HazardScanner(processor: depth.processor, watchClient: client)` (same client as the describer). `signsEnabled`, `watchEnabled`, `paused`, `onHazard`, `isNavigating`, `currentSpeed`, `start/stop`, `watchProvider`, `lastSign`, `lastCaution`, `lastError`. |
+| `hazardLog` | `HazardLog` | 11 | `record(kind:text:fix:jpeg:)`, `records`, `fileURL`, `fileWritten`, `lastError`. |
 | `decider` | `CueDecider` (`@ObservationIgnored private let`, CaneKitLogic) | 3 | Pure cue state machine; `update(_:now:) -> CueOutput?`, `reset()`. |
 | `namer` | `ObstacleNamer` (`@ObservationIgnored private let`) | 4 | Mesh-class → "door ahead, two meters"; `update(_:now:) -> String?`, `reset()`. |
 
-Logic state held as `@ObservationIgnored private var` value types (CaneKitLogic `NavSupport.swift`): `cueSpeech: CueSpeechPolicy` (which obstacle cues are spoken; replaced with a fresh value in `beginRoute`) and `straightWalk: StraightWalkDetector` (auto-recenter trigger).
+Logic state held as `@ObservationIgnored private var` value types (CaneKitLogic): `cueSpeech: CueSpeechPolicy` (which obstacle cues are spoken; replaced with a fresh value in `beginRoute`), `straightWalk: StraightWalkDetector` (auto-recenter trigger) and `groundPolicy: GroundHazardPolicy` (when a confirmed ground hazard is spoken again; `reset()` in `beginRoute`). Other private flags: `isForeground` (false while backgrounded; gates `liveFrameJPEG`), `wasHot` (thermal notice on transitions only), `lastNavKind`, `recenterPending`, `ticker`, observer tokens.
 
 `private(set) static weak var shared: AppModel?` — set in `init`; read by `IntentSupport.model()` (App Intents run inside the app process).
 
 #### Published UI state (`private(set)` unless noted)
 
 - `destinationQuery: String` (read/write, route picker text), `routeError: String?`, `isBuildingRoute: Bool`.
-- `activeCue: CueKind` (`.clear` when nothing in range), `lastCueDescription: String` (`"<kind> @ <ar_t>s"`, initial `"—"`).
+- `activeCue: CueKind` (`.clear` when nothing in range).
+- `lastGroundHazard: String?` — the last ground-hazard line spoken ("Drop-off ahead, two meters."), shown as the "LIDAR" row of `HazardsCard`.
 - `lidarSupported = DepthEngine.supportsDepth`, `meshClassificationSupported = DepthEngine.supportsMesh` (fixed per process).
-- `status: String { depth.status }` (computed), `started: Bool`, `thermalName: String` (`nominal|fair|serious|critical|unknown`), `batteryPercent: Int` (0–100, `-1` unknown/simulator), `cameraControlPresses: Int`.
+- `status: String { depth.status }` (computed), `started: Bool`, `thermalName: String` (`nominal|fair|serious|critical|unknown`; written into every `lanes` log line), `batteryPercent: Int` (0–100, `-1` unknown/simulator; also only logged now).
 
 #### Settings — UserDefaults keys
 
@@ -459,15 +616,20 @@ Each is a stored `var` initialised from `Settings.bool(key, default:)`; `didSet`
 
 | Key | Default | Pushed to |
 |---|---|---|
-| `portraitMode` | `true` | `pushDepthSettings()` → `depth.apply(portrait:mirror:)` |
+| `portraitMode` | `true` | `pushDepthSettings()` → `depth.apply(portrait:mirror:groundHazards:)` |
 | `mirrorLeftRight` | `false` | `pushDepthSettings()` |
 | `hapticsSilenced` | `false` | `haptics.silenced` (decider keeps running so speech/watch stay in sync) |
 | `loggingEnabled` | `true` | `logger.enabled` |
 | `obstacleNamesEnabled` | `true` | read in `handle` only |
 | `beaconEnabled` | `true` | `beacon.enabled` |
-| `fallbackToWatch` | `false` | read in `handle` only (mirror every cue to the wrist) |
+| `fallbackToWatch` | `false` | read in `handle` / `groundHazardFound` (mirror every cue to the wrist) |
+| `groundHazardsEnabled` | **`false`** (off until validated on the phone — the review's sweep simulation) | `pushDepthSettings()` → `ProcessorSettings.groundHazardsEnabled`; also gates announcing in `handle`. HazardsCard "Detect drop-offs" |
+| `signsEnabled` | `true` | `hazards.signsEnabled`. HazardsCard "Read signs" |
+| `hazardWatchEnabled` | **`false`** (off until validated on the phone) | `hazards.watchEnabled`. HazardsCard "Hazard watch" |
 
-`init()` re-pushes `portrait/mirror`, `haptics.silenced`, `logger.enabled`, `beacon.enabled` (didSet does not run for initial values), then sets `AppModel.shared = self`.
+`liveViewEnabled: Bool = false` is **not** persisted (off at every launch); HazardsCard "Live camera view".
+
+`init()` builds `SceneContext`, the shared client `VLMClientFactory.resolved(context:)` (cloud with on-device fallback when a key is set, on-device otherwise — never nil, works with no network), `describer` and `hazards` (both get that one client); copies `signsEnabled` / `hazardWatchEnabled` into `hazards`; re-pushes `pushDepthSettings()`, `haptics.silenced`, `logger.enabled`, `beacon.enabled` (didSet does not run for initial values), then sets `AppModel.shared = self`.
 
 #### Constants
 
@@ -477,36 +639,44 @@ Each is a stored `var` initialised from `Settings.bool(key, default:)`; `didSet`
 | `CueSpeechPolicy.sideInterval` | 4 s | Min gap per kind for "Left." / "Right." / "Ahead, …" (AR clock). |
 | ticker period | 100 ms (10 Hz) | `startTicker` beacon sync loop. |
 | namer speech `ttl` | 4 s | `> namer interval (2.5 s) + one utterance`. |
-| cue speech `ttl` | 2 s | `speakCueIfNeeded`. |
+| cue speech `ttl` | 6 s | `speakCueIfNeeded` (survives queuing behind a crossing line). |
 | nav speech `ttl` | 12 s; repeat 12 s (`sayAgain` default); arrival summary 30 s | `nav.onSpeak`, `nav.onRepeat`, `onArrived`. |
 | headphone connect/disconnect `ttl` | 5 s | `wireAudioRoute`. |
 | channel announcement `ttl` | 20 s | `announceChannels`. |
 | `StraightWalkDetector` gates | speed `> 0.6` m/s; `0 ≤ acc ≤ 20` m; course `|wrap180(Δ)| < 15°`; head `|Δyaw| < 8°`; 3 fixes (the first counts) | Auto-recenter (≈ 3 s at 1 Hz GPS). Library defaults, not overridden here. |
 | `recenterAfterCrossingM` | 15 m | No auto-recenter this close to a just-reached crossing waypoint. |
 | MapKit first-fix wait | 30 × 500 ms = 15 s | `startMapKitRoute` |
-| thermal "hot" | `.serious` or `.critical` | disables mesh classification |
+| thermal "hot" | `.serious` or `.critical` | disables mesh classification and pauses `hazards` (signs + hazard watch); spoken once per transition |
 | `commonLines` | 15 strings | pre-synthesised at start and route begin |
+| ground-hazard speech | `.safety`, ttl 3 s | `groundHazardFound` (a drop-off is as urgent as head height) |
+| sign / caution speech | `.obstacle`, ttl 6 s | `wireHazards` → `hazards.onHazard` |
+| `GroundHazardPolicy` | same kind at the same place (anchors ≤ 1 m apart) silent for 30 s unless ≥ 1 m closer | library defaults, AR clock |
+| hazard frame / live-view JPEG | 768 px (hazard map) / 480 px (live view), quality 0.6 | `frame(_:maxDimension:)` |
+| camera / location denied lines | `.nav`, ttl 20 s | `announceCameraDenied`, `beginRoute` |
+| thermal notice | `.nav`, ttl 10 s | `updateThermal` |
 
 #### Lifecycle
 
-- **`init()`** — builds `describer`, pushes settings, registers `shared`.
+- **`init()`** — builds `sceneContext`, the shared VLM client, `describer` and `hazards`, pushes settings, registers `shared` (details above).
 - **`start()`** — once (`guard !started`). Order matters:
-  1. `observeThermalAndBattery()`; 2. `logger.start()`; 3. `speech.configureAudioSession()` **before ARKit and before the haptic engine**; 4. `wireAudioRoute()`; 5. `haptics.start()`; 6. `watch.onCommand = handleWatchCommand`; `watch.activate()`; 7. `wireNavigation()`; 8. `location.requestAuthorization()` **unless env `CANEKIT_UITEST == "1"`** (the three-choice alert races the first XCUITest tap) — Location prompts at launch, Motion/HealthKit at route start to avoid a three-alert pile-up; 9. `depth.onReport = handle`; `depth.start()`; 10. log `start` event (`lidar`, `mesh`, `haptics`); 11. `speech.prefetch(commonLines)`; `speech.say("CaneKit ready." | "CaneKit. This phone has no LiDAR.", .nav)`; 12. if `CommandLine.arguments` contains `--demo-route` **or** env `CANEKIT_DEMO_ROUTE == "1"` → `startDemoRoute()` (simulator GPS replay / UI-test hook).
+  1. `observeThermalAndBattery()`; 2. `logger.start()`; 3. `speech.configureAudioSession()` **before ARKit and before the haptic engine**; 4. `wireAudioRoute()`; 5. `haptics.start()`; 6. `watch.onCommand = handleWatchCommand`; `watch.activate()`; 7. `wireNavigation()`; 8. `location.requestAuthorization()` **unless env `CANEKIT_UITEST == "1"`** (the three-choice alert races the first XCUITest tap) — Location prompts at launch, Motion/HealthKit at route start to avoid a three-alert pile-up; 9. `depth.onReport = handle`; `depth.start()`; 10. `wireHazards()` (after the depth engine: the scanner reads its camera frames; starts the scanner); 11. log `start` event (`lidar`, `mesh`, `haptics`, `vision` = `describer.providerName ?? "none"`); 12. `announceCameraDenied()`; 13. `speech.prefetch(commonLines)`; `speech.say("CaneKit ready." | "CaneKit. This phone has no LiDAR.", .nav)`; 14. if `CommandLine.arguments` contains `--demo-route` **or** env `CANEKIT_DEMO_ROUTE == "1"` → `startDemoRoute()` (simulator GPS replay / UI-test / `e2e.py` hook).
   ⚠ Do not reorder audio-session → haptics → ARKit without a device test (AirPods route + Taptic engine ownership).
 - **`scenePhaseChanged(_ phase: ScenePhase)`** — no-op until `started`.
-  - `.active`: `haptics.resume()`, `depth.resume()` (no tracking reset).
+  - `.active`: `isForeground = true`, `haptics.resume()`, `depth.resume()` (no tracking reset), `beacon.resumeIfNeeded()` (the audio engine can die across a screen lock without an interruption notification), `hazards.start()` (idempotent).
   - `.inactive`: nothing.
-  - `.background`: `depth.pause()` (stops gyro too), `haptics.stopAll()`, `decider.reset()`, `namer.reset()`, `activeCue = .clear`, `logger.flush()`.
-- **`startTicker()` / `stopTicker()`** — private; a `Task` at 10 Hz while a route is active pushing `speech.isSpeaking` → `beacon.setSpeaking`, `recenterPending ? 0 : (head.headYawDeg ?? 0)` → `beacon.setHeadYaw`, and `nav.isNavigating ? nav.targetBearing : nil` → `beacon.setTarget(bearing:)`. Idempotent (`guard ticker == nil`). Head yaw is forced to 0 while a recenter is pending: after a turn the AirPods yaw (relative to the old reference) already contains the body turn the phone heading has, so adding both would double-count it.
+  - `.background`: `isForeground = false`, `hazards.stop()` (no scanning a frozen last frame), **`sceneContext.set("")`** (LiDAR facts are stale once we come back), `depth.pause()` (stops gyro and drops the retained camera frame), `haptics.stopAll()`, `decider.reset()`, `namer.reset()`, `activeCue = .clear`, `logger.flush()`.
+- **`startTicker()` / `stopTicker()`** — private; a `Task` at 10 Hz while a route is active pushing `speech.isSpeaking` → `beacon.setSpeaking`, `recenterPending ? 0 : (head.headYawDeg ?? 0)` → `beacon.setHeadYaw`, `nav.isNavigating ? nav.targetBearing : nil` → `beacon.setTarget(bearing:)`, and **`nav.tick(now: Date().timeIntervalSinceReferenceDate)`** (clock-driven nav checks — the arrival hint while standing still, when no fixes arrive). Idempotent (`guard ticker == nil`). Head yaw is forced to 0 while a recenter is pending: after a turn the AirPods yaw (relative to the old reference) already contains the body turn the phone heading has, so adding both would double-count it.
 
 #### Cue router — `handle(_ report: LaneReport)` (private, ~15 Hz, called from `depth.onReport`)
 
 1. `decider.update(report, now: report.timestamp)` (AR clock, seconds) →
-   - `.fire(cue)`: `activeCue = cue.kind`; `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)`; `speakCueIfNeeded(cue, phoneCannotBuzz:, now:)`; update `lastCueDescription`; log `cue` (`kind`, `ar_t`, plus `distance` for `.centerApproach`).
+   - `.fire(cue)`: `activeCue = cue.kind`; `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)`; `speakCueIfNeeded(cue, phoneCannotBuzz:, now:)`; log `cue` (`kind`, `ar_t`, plus `distance` for `.centerApproach`).
    - `.updateCenter(d)`: `activeCue = .center`; `haptics.setApproach(distance: d)` (no watch/speech — continuous ramp).
    - `.stop`: `activeCue = .clear`; `haptics.stopAll()`; `cueSpeech.cleared()` (the next head cue is a new episode); log `cue: clear`.
 2. If `obstacleNamesEnabled` and `namer.update(report, now:)` returns a line → `speech.say(line, .obstacle, ttl: 4)` + log.
-3. `logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)` every report.
+3. If `groundHazardsEnabled`, `report.groundHazard` is non-nil and `groundPolicy.shouldAnnounce(g, now: report.timestamp)` → `groundHazardFound(g, now:)`. (The processor re-attaches the last confirmed hazard to every report, so the policy is what keeps it from being spoken at 15 Hz.)
+4. `sceneContext.set(Self.contextLine(report))` — every report.
+5. `logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)` every report.
 
 Invariants: `now` is always `report.timestamp` (AR clock), never wall time — the decider's `repeatInterval` (1.0 s), its 400 ms `minChangeInterval` and `CueSpeechPolicy`'s intervals are in that clock. ⚠ Do not change the decider/`now` contract without re-running `CueDeciderTests` (`cueChangeNeeds400ms`, `hysteresisHoldsUntilPlusFifteenCentimetres`, `centerApproachFiresThenUpdatesDistance`).
 
@@ -519,20 +689,31 @@ Policy (`CueSpeechPolicy`, CaneKitLogic):
 - `cueSpeech` is reset to `CueSpeechPolicy()` at every `beginRoute`.
 ⚠ Do not add a further suppression path for `.head` without a device head-height test and re-running `NavSupportTests` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`).
 
+#### Hazards the maps do not know about (Step 11)
+
+- **`wireHazards()`** (private, once from `start()` after `depth.start()`) — `hazards.isNavigating = { nav.isNavigating }`, `hazards.currentSpeed = { location.fix?.speed ?? 0 }`, `hazards.onHazard = { text, source, jpeg in speech.say(text, .obstacle, ttl: 6); recordHazard(kind: source.rawValue, text:, source:, jpeg:) }` (signs and vision cautions: below route lines, above scene), then `hazards.start()`.
+- **`groundHazardFound(_ g: GroundHazard, now: TimeInterval)`** (private) — `lastGroundHazard = g.spokenLine`; `haptics.playGroundHazard()` (4 heavy taps; no-op while silenced / unhealthy); if `!haptics.isHealthy || haptics.silenced || fallbackToWatch` → `watch.send(obstacle: .center, now:)` (the wrist plays `.click`); `speech.say(g.spokenLine, .safety, ttl: 3)`; then a `Task` encodes a 768 px frame off-main (`frame(_:maxDimension:)`) and calls `recordHazard(kind: g.kind.rawValue, text: g.spokenLine, source: .ground, jpeg:)`.
+- **`recordHazard(kind:text:source:jpeg:)`** (private) — `fix` = the first of `[location.fix, nav.lastFix]` whose timestamp is **< 120 s old** (wall clock), else nil; `hazardLog.record(kind:text:fix:jpeg:)` (after arrival location is stopped and `location.fix` is nil, so a sign read at the CIF door still lands at the door, not at 0, 0 — review round 5; a fix older than 2 min is not trusted to geotag anything) and log `hazard {kind, text, source}`. Not logged as `speech`.
+- **`static contextLine(_ r: LaneReport) -> String`** — the LiDAR facts for `OnDeviceVLMClient`; `""` without depth. Parts, in order: `"Obstacle ahead at <phrase>."` when the **centre lane only** — `min(torso[1], head[1])` (the filtered 10th-percentile cells; side lanes and the unfiltered centre window made it true almost always on a sidewalk, leaving the on-device LiDAR gate permanently open — review round 5) — is finite and `< 3` m; `"Something at head height."` when the **centre head lane** `head[1]` is finite and `< 1.5` m; `g.spokenLine` for a ground hazard; `"The obstacle ahead looks like a <name>."` for a named `centerHit`. A **non-empty** context is also the on-device hazard watch's `lidarAhead` gate.
+- **`liveFrameJPEG() async -> Data?`** — `nil` while `!isForeground` **or `hazards.paused`** (thermal: the view is optional, the lanes are not), else a 480 px JPEG via `frame(_:maxDimension:)`. Polled ~3 Hz by `HazardsCard` while "Live camera view" is on.
+- **`@concurrent private static frame(_ p: DepthFrameProcessor, maxDimension:) async -> Data?`** — `p.jpegSnapshot(maxDimension:, quality: 0.6)` on the global executor (never main).
+- **`announceCameraDenied()`** (private; from `start()` and `beginRoute`) — only for `AVCaptureDevice.authorizationStatus(for: .video)` `.denied` / `.restricted` (`.notDetermined` is fine, ARKit prompts): `routeError = "Camera is off for CaneKit"` and `speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)`.
+⚠ `groundHazardsEnabled` and `hazardWatchEnabled` default **off** until validated on the phone (AGENTS.md "Things that look wrong"); do not flip the defaults without that walk and the `HazardTests` pins listed under `Hazards.swift`.
+
 #### Headphones / watch presence
 
-- **`wireAudioRoute()`** (private, called once in `start`) — installs `audioRoute.onChange { connected, name }`: `beacon.headphonesConnected = connected`; log `audioroute` (`connected`, `name`); connected → `speech.say("\(name) connected.", .nav, ttl: 5)` and, if `nav.isNavigating`, `head.start()` + `recenterPending = true`; disconnected → `speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)` (head tracker is not stopped). Then `audioRoute.start()` and seeds `beacon.headphonesConnected = audioRoute.headphonesConnected` (the initial read does not fire `onChange`). The beacon only renders into headphones; a click out of the cane speaker carries no direction.
+- **`wireAudioRoute()`** (private, called once in `start`) — installs `audioRoute.onChange { connected, name }` (debounced 2 s in the monitor): `beacon.headphonesConnected = connected`; log `audioroute` (`connected`, `name`); connected → `speech.say("\(name) connected.", .nav, ttl: 5)` and, if `nav.isNavigating`, `head.start()` + `recenterPending = true`; disconnected → `speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)` and **`head.stop()`** (no AirPods, no motion). Also installs `audioRoute.onImmediateChange { connected in beacon.headphonesConnected = connected }` — undebounced, so the click stops the moment the AirPods drop instead of playing from the cane speaker for 2 s. Then `audioRoute.start()` and seeds `beacon.headphonesConnected = audioRoute.headphonesConnected` (the initial read fires neither callback). The beacon only renders into headphones; a click out of the cane speaker carries no direction.
 - **`announceChannels()`** (private, last step of `beginRoute`) — each applicable line at `.nav`, ttl 20, queued after the route intro: `!audioRoute.headphonesConnected` → `"No headphones. Beacon paused until AirPods connect."`; `watch.isPaired && !watch.isReachable` → `"Watch not reachable. Open CaneKit on the watch."`; `!haptics.isHealthy && !watch.isReachable` → `"Haptics unavailable. Obstacle cues will be spoken."`.
 
 #### Navigation wiring — `wireNavigation()` (private, called once in `start`)
 
-- `location.onFix { fix }`: `nav.update(fix:)`; `trip.ingest(fix)`; if `nav.isNavigating` → `liveActivity.update(instruction:, distanceM: nav.distanceToNext ?? 0, kind: lastNavKind)`, `pushStatusToWatch()` (every fix; the link's dedup makes it ≈ 1 message / 5 s) and `autoRecenterIfWalkingStraight(fix)`; log `gps` (`lat`, `lon`, `acc`, `speed`).
-- `location.onHeading { h }`: **gyro gate** — `guard depth.report.isTrusted || !depth.isRunning` (a compass reading mid-cane-sweep is noise; gate only applies while depth is running); then `nav.update(heading: h, now: Date().timeIntervalSinceReferenceDate)` (wall clock, distinct from the AR clock) and `beacon.setHeading(h)`.
+- `location.onFix { fix }`: `FrameReplay.shared.update(position: fix.coordinate)` (simulator Street View camera only; inert on a device); `nav.update(fix:)`; `trip.ingest(fix)`; if `nav.isNavigating` → `liveActivity.update(instruction:, distanceM: nav.distanceToNext ?? 0, kind: lastNavKind)`, `pushStatusToWatch()` (every fix; the link's dedup makes it ≈ 1 message / 5 s) and `autoRecenterIfWalkingStraight(fix)`; log `gps` (`lat`, `lon`, `acc`, `speed`).
+- `location.onHeading { h, fromCourse }`: **gyro gate on the compass only** — `guard fromCourse || depth.report.isTrusted || !depth.isRunning` (a compass reading mid-cane-sweep is noise, but the GPS course is immune to the sweep; gating it froze the heading while walking with a normal sweep — Muse H1); then `nav.update(heading: h, now: Date().timeIntervalSinceReferenceDate)` (wall clock, distinct from the AR clock) and `beacon.setHeading(h)`.
 - `nav.onSpeak { text, priority }`: `speech.say(text, priority, ttl: 12)` + log.
 - `nav.onRepeat { text }`: `speech.sayAgain(text, .nav)` (ttl 12; must bypass coalescing — the line may still be playing) + log `speech {repeat: true}`.
-- `nav.onNavCue { cue: NavCue }`: `watch.send(nav: cue)`; `lastNavKind = cue.rawValue` (Live Activity glyph); log `navcue`.
+- `nav.onNavCue { cue: NavCue }`: `watch.send(nav: cue)`; `haptics.playNav(cue)` unless `cue == .obstacle` (felt on the cane too — including the `.turnLeft/.turnRight` sent with "Veer left/right."); `lastNavKind = cue.rawValue` (Live Activity glyph); log `navcue`.
 - `nav.onWaypointAdvanced`: log `waypoint` (`index`); `pushStatusToWatch()`; `recenterPending = true`; `straightWalk.reset()` (re-zero head **only once walking straight**, never on a timer — at a curb the head is turned toward traffic).
-- `nav.onArrived`: log `arrived`; `beacon.stop()`; `head.stop()`; `stopTicker()`; `pushStatusToWatch()`; `liveActivity.end(final: nav.instruction)`; then a `Task`: `await trip.stop()`; `destination = nav.route?.waypoints.last?.say ?? "Arrived"`; `nav.appendToLastSpoken(summary)` (so Repeat at the door includes the numbers), then `speech.say(summary, .nav, ttl: 30)` — same `.nav` priority as the waypoint line so it queues after it.
+- `nav.onArrived`: log `arrived`; `beacon.stop()`; `head.stop()`; **`location.stop()`** (GPS off after arrival — Muse M2; this also clears `location.fix`); `stopTicker()`; `pushStatusToWatch()`; `liveActivity.end(final: nav.instruction)`; then a `Task`: `await trip.stop()`; `destination = nav.route?.waypoints.last?.say ?? "Arrived"`; `nav.appendToLastSpoken(summary)` (so Repeat at the door includes the numbers), then `speech.say(summary, .nav, ttl: 30)` — same `.nav` priority as the waypoint line so it queues after it.
 
 Public helpers: `recenter()` (`head.recenter()`, `recenterPending = false`, says `"Recentered."` ttl 2, log), `repeatInstruction()` (`nav.repeatInstruction()`, log `repeat`). `nav.repeatInstruction()` speaks the last waypoint line actually spoken (route intro, waypoint line or "Passed …" line) plus `" Next, <placeName>, in N meters."` while navigating, via `onRepeat`; it also works after arrival (last line only); with no route and not arrived it speaks `"No route running."` via `onSpeak`.
 
@@ -549,9 +730,11 @@ Rules, in order:
 #### Route start / stop sequence
 
 - **`startDemoRoute()`** — `RouteSource.bundled()` → `beginRoute`; on throw: `routeError`, says `"Route file missing."`.
-- **`startMapKitRoute()`** — trims `destinationQuery`; empty → `routeError = "Type a destination first"`. Else `location.start()`, `isBuildingRoute = true`, `routeError = nil`, says `"Finding a route to \(query)."`; `Task`: poll `location.fix` up to 30×500 ms; no fix → `routeError = "No GPS fix yet"` + `"No GPS fix yet. Try again outside."`; else `RouteSource.mapKit(to: query, from: origin)` → `beginRoute`; on error `routeError` + `"Could not build a route. …"`. `defer` clears `isBuildingRoute`.
-- **`beginRoute(_ route: Route)`** (private) — order: `routeError = nil` → `speech.prefetch(waypoint lines + commonLines + "Route started. \(name). First: \(first.say)")` → `location.start()` → `nav.start(route)` (speaks the intro) → `beacon.start()` → `head.start()` → `recenterPending = true; straightWalk.reset()` → `cueSpeech = CueSpeechPolicy()` → `startTicker()` → `trip.start()` (Motion/HealthKit prompts here) → `lastNavKind = "straight"` → `liveActivity.start(routeName:instruction:distanceM: nav.distanceToNext ?? 0)` → log `route {action: start, name, waypoints, headphones: audioRoute.outputName, watch: watch.isReachable}` → `pushStatusToWatch()` → `announceChannels()`.
+- **`startMapKitRoute()`** — trims `destinationQuery`; empty → `routeError = "Type a destination first"`; then `guard !announceLocationDenied()` (say so now, not after a 15 s wait for a fix that never comes). Else `location.start()`, `isBuildingRoute = true`, `routeError = nil`, says `"Finding a route to \(query)."`; `Task`: poll `location.fix` up to 30×500 ms; no fix → `routeError = "No GPS fix yet"` + `"No GPS fix yet. Try again outside."`; else `RouteSource.mapKit(to: query, from: origin)` → `beginRoute`; on error `routeError` + `"Could not build a route. …"`. `defer` clears `isBuildingRoute`.
+- **`beginRoute(_ route: Route)`** (private) — order: if `nav.isNavigating` → `endRouteQuietly()` (a second start mid-route from the Action button / Siri restarts cleanly — Muse M5) → if `announceLocationDenied()` → **return** (no "Route started" followed by silence — Muse H2) → `announceCameraDenied()` → `routeError = nil` → `groundPolicy.reset()` → `speech.prefetch(waypoint lines + commonLines + "Route started. \(name). First: \(first.say)")` → `location.start()` → `nav.start(route)` (speaks the intro) → `beacon.start()` → `head.start()` → `recenterPending = true; straightWalk.reset()` → `cueSpeech = CueSpeechPolicy()` → `startTicker()` → `trip.start()` (Motion/HealthKit prompts here) → `lastNavKind = "straight"` → `liveActivity.start(routeName:instruction:distanceM: nav.distanceToNext ?? 0)` → log `route {action: start, name, waypoints, headphones: audioRoute.outputName, watch: watch.isReachable}` → `pushStatusToWatch()` → `announceChannels()`.
 - **`stopRoute()`** — `nav.stop()` → `location.stop()` → `beacon.stop()` → `head.stop()` → `stopTicker()` → `Task { await trip.stop() }` → `liveActivity.end()` → `speech.stopAll()` (**queued waypoint lines must not play after Stop**) → `speech.say("Route stopped.", .nav)` → log `route {action: stop}` → `pushStatusToWatch()`.
+- **`announceLocationDenied() -> Bool`** (private) — `false` unless `location.authorizationDenied`; then `routeError = "Location is off for CaneKit"`, `speech.say("Location access is off. Turn on Location for CaneKit in Settings to navigate.", .nav, ttl: 20)` and `true` (the caller stops). Shared by `beginRoute` and `startMapKitRoute`.
+- **`endRouteQuietly()`** (private; only from `beginRoute` when a route is already running) — `nav.stop()` → `beacon.stop()` → `head.stop()` → `stopTicker()` → **`trip.cancel()`** (synchronous: an async `stop()` would still be tracking when the new `trip.start()` runs, and that start would be a no-op) → `liveActivity.end()` → `speech.stopAll()` → log `route {action: restart}`. Speaks nothing and leaves location running.
 - **`pushStatusToWatch()`** (private) — `watch.send(status: nav.instruction, distanceM: nav.distanceToNext ?? -1)` (`-1` = no distance; the watch maps it to nil).
 - `static let commonLines: [String]` — `"CaneKit ready."`, `"Route started."`, `"Route stopped."`, `"Next."`, `"Recentered."`, `"Veer left."`, `"Veer right."`, `"GPS weak. Waypoint cues paused until it recovers."`, `"GPS back."`, `"No route running."`, `"No GPS fix yet. Try again outside."`, `"Head height."`, `"Left."`, `"Right."`, `"Passed one waypoint."`. Must stay byte-identical to the strings spoken elsewhere (`NavigationEngine`, `CueSpeechPolicy`, this file) or the prefetch cache misses. (`"Route started."` and `"Next."` are not currently spoken standalone — the intro is `"Route started. <name>. First: …"`, prefetched separately.)
 
@@ -559,14 +742,14 @@ Rules, in order:
 
 Logs `watch {command}` then: `.nextWaypoint` → `nav.next()` if navigating else says `"No route running."` (ttl 2); `.describe` → `describeScene()`; `.recenter` → `recenter()`; `.repeatLast` → `repeatInstruction()`. The `WatchToPhone` enum is in CaneKitLogic (`WatchMessage.swift`) — ⚠ adding a case requires updating this `switch` and re-running `WatchMessageTests.watchToPhoneRoundTrips`.
 
-Other triggers into the same paths: `describeScene()` (logs `describe {provider}` then `describer.describe()`; used by button, watch, intent, Camera Control), `cameraControlPressed()` (`cameraControlPresses += 1` then `describeScene()`), debug `watchTest(_ cue: NavCue)` (`watch.send(nav:)`), `speechTest()` (a `.scene` line then an `.obstacle` line to prove interrupt ordering).
+Other triggers into the same paths: `describeScene()` (logs `describe {provider}` then `describer.describe()`; used by button, watch, intent, Camera Control), `cameraControlPressed()` (logs `describe {source: cameraControl}` — the step-2 spike readout — then `describeScene()`, so a press writes two `describe` lines), debug `watchTest(_ cue: NavCue)` (`watch.send(nav:)`), `speechTest()` (a `.scene` line then an `.obstacle` line to prove interrupt ordering).
 
 #### Thermal / battery observers
 
 - `observeThermalAndBattery()` — `UIDevice.current.isBatteryMonitoringEnabled = true`; initial `updateBattery()` + `updateThermal()`; `NotificationCenter` observers for `ProcessInfo.thermalStateDidChangeNotification` and `UIDevice.batteryLevelDidChangeNotification` on `queue: .main`, bodies wrapped in `MainActor.assumeIsolated` (closures are `@Sendable` but provably on main). Tokens kept in `thermalObserver` / `batteryObserver` (`@ObservationIgnored`).
-- `updateThermal()` — maps state to `thermalName`; `hot = .serious || .critical` → `depth.setMeshClassification(!hot)` (cheapest downgrade: drop mesh classification when hot; obstacle names then go silent).
+- `updateThermal()` — maps state to `thermalName`; `hot = .serious || .critical` → `depth.setMeshClassification(!hot)` (cheapest downgrade: drop mesh classification when hot; obstacle names then go silent) and `hazards.paused = hot` (sign scans and the hazard watch stop; ARKit, lanes and haptics keep running). On a cool→hot transition after `started` it says `"Phone is hot. Door and wall names and sign reading paused."` (`.nav`, ttl 10) once (`wasHot` tracks the last state — Muse L5). Ground hazards are not paused by heat.
 - `updateBattery()` — `batteryLevel < 0` → `-1`, else `Int((level*100).rounded())`.
-- `pushDepthSettings()` — `depth.apply(portrait: portraitMode, mirror: mirrorLeftRight)`.
+- `pushDepthSettings()` — `depth.apply(portrait: portraitMode, mirror: mirrorLeftRight, groundHazards: groundHazardsEnabled)`.
 
 ---
 
@@ -592,7 +775,7 @@ Phrases: `"Where am I in <app>"`, `"<app> describe the scene"` (`eye`); `"Start 
 
 ## Module `depth-haptics` — `ios/CaneKit/Depth/*.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift`
 
-Pipeline: ARKit frame (60 Hz, `canekit.depth` queue) → `DepthFrameProcessor` (rate-capped to 15 Hz, gyro gate, `LaneMath.computeLanes`, throttled `MeshClassifier` lookup) → `AsyncStream<LaneReport>` (newest-only) → `DepthEngine` (main actor, `@Observable`) → `onReport` → `AppModel.handle(_:)` → `CueDecider` → `HapticPlayer.play/setApproach/stopAll` (plus the watch mirror, `CueSpeechPolicy` speech and `ObstacleNamer`, all in `AppModel`). Pure logic (`LaneMath`, `LaneConfig`, `LaneGrid`, `LaneReport`, `MeshHit`, `ObstacleClass`, `HapticCue`, `CueKind`, `GeigerRate`) lives in `CaneKitLogic`; this module only wraps ARKit / CoreMotion / CoreHaptics around it.
+Pipeline: ARKit frame (60 Hz, `canekit.depth` queue) → `DepthFrameProcessor` (rate-capped to 15 Hz, gyro gate, `LaneMath.computeLanes`, throttled `MeshClassifier` lookup, and — when enabled — walk tracking + `GroundSampler` → `GroundHazardDetector` on frames under the ground path's own 1.5 rad/s gyro gate) → `AsyncStream<LaneReport>` (newest-only) → `DepthEngine` (main actor, `@Observable`) → `onReport` → `AppModel.handle(_:)` → `CueDecider` → `HapticPlayer.play/setApproach/stopAll` (plus the watch mirror, `CueSpeechPolicy` speech, `ObstacleNamer` and the ground-hazard path `GroundHazardPolicy` → `groundHazardFound` → `HapticPlayer.playGroundHazard`, all in `AppModel`). Pure logic (`LaneMath`, `LaneConfig`, `LaneGrid`, `LaneReport`, `MeshHit`, `ObstacleClass`, `HapticCue`, `CueKind`, `GeigerRate`, `GroundSample`, `GroundHazardDetector`) lives in `CaneKitLogic`; this module only wraps ARKit / CoreMotion / CoreHaptics around it. `FrameReplay` (simulator only) substitutes Street View JPEGs for the camera image.
 
 ### `ios/CaneKit/Depth/DepthFrameProcessor.swift`
 
@@ -607,6 +790,8 @@ Purpose: the only hot path off the main actor. Converts each `ARFrame` into a Se
 | `maxRate` | `15` | Hz publish cap (ARKit delivers 60) |
 | `meshLookupEnabled` | `true` | run `MeshClassifier` at image centre (~10–15 % CPU) |
 | `meshEveryNthFrame` | `4` | mesh lookup on every 4th *published* frame ≈ 4 Hz |
+| `groundHazardsEnabled` | `true` (struct default) — but `AppModel.pushDepthSettings()` writes `AppModel.groundHazardsEnabled`, which defaults **false**, from `init` | walk tracking + ground-hazard evaluation; false → `lastGroundHazard = nil` and `groundDetector.reset()` every frame |
+| `groundSweepThreshold` | `1.5` | rad/s; the **ground path's own, looser** gyro gate (lanes keep `sweepThreshold` 0.6). `GroundSampler` registers every point through `camera.transform` in the gravity frame, so a moving cane does not corrupt the profile; with the 0.6 gate a 1 Hz sweep left ~2 evaluations/s and a curb confirmed only ~1.2–1.7 m ahead at 1.2 m/s, at ~7/s it confirms at ~2.3–2.6 m (review round 5 ray-cast simulation) |
 
 **`LaneConfig` (CaneKitLogic, consumed here)** — lane geometry:
 
@@ -623,7 +808,7 @@ Purpose: the only hot path off the main actor. Converts each `ARFrame` into a Se
 
 Lane grid: usable height = `sceneH × 0.75`, split into 2 equal bands (band 0 = head, band 1 = torso); width split into 3 lanes of `sceneW/3` (0 = left, 1 = centre, 2 = right). Depth ≤ 0.05 m or non-finite is invalid. Centre window uses the full image centre, independent of the ground skip.
 
-**`nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable`** — thread model: every mutable field is guarded by `settings` (Mutex), `imageLock` (NSLock), or is queue-only (`lastPublished`, `publishedCount`, `scratch`, `lastMeshHit`).
+**`nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable`** — thread model: every mutable field is guarded by `settings` (Mutex), `imageLock` (NSLock), or is queue-only (`lastPublished`, `publishedCount`, `scratch`, `lastMeshHit`, `groundDetector: GroundHazardDetector`, `lastGroundHazard: GroundHazard?` (re-attached to every report between evaluations), `lastGroundEval` (AR clock), `walkDirection: SIMD3<Float>?` (smoothed horizontal walking direction, world frame, unit), `travelled: Float` (metres walked along it since launch), `lastCamPos: SIMD3<Float>?`, `tiltDownDeg: Float?` (EMA of the camera's downward look angle)).
 
 - `let reports: AsyncStream<LaneReport>` — `bufferingNewest(1)`: a slow consumer only ever sees the latest report.
 - `let queue = DispatchQueue(label: "canekit.depth", qos: .userInteractive)` — ARKit's `delegateQueue`; serial.
@@ -633,18 +818,51 @@ Lane grid: usable height = `sceneH × 0.75`, split into 2 equal bands (band 0 = 
 - `session(_:didUpdate:)` (on `queue`):
   1. Retains `frame.capturedImage` in `latestImage` under `imageLock` — **one buffer only**; ARKit's pool stalls if more are held.
   2. Rate gate: returns unless `frame.timestamp - lastPublished ≥ 1/maxRate`; increments `publishedCount`.
-  3. `trusted = rotationRate < sweepThreshold`.
-  4. `computeGrid` nil → yields `LaneReport(grid: .empty, isTrusted:, rotationRate:, timestamp:, depthAvailable: false, centerHit: nil)`.
+  3. `trusted = rotationRate < sweepThreshold`; if trusted → `trackTilt(frame)`.
+  4. `computeGrid` nil → yields `LaneReport(grid: .empty, isTrusted:, rotationRate:, timestamp:, depthAvailable: false, centerHit: nil, cameraTiltDownDeg: tiltDownDeg)`.
   5. Mesh: if `meshLookupEnabled && publishedCount % max(1, meshEveryNthFrame) == 0` → `lastMeshHit = MeshClassifier.nearestFace(to: grid.centerDepth, in: frame)`; if lookup disabled → `lastMeshHit = nil`; otherwise the previous hit is **reused** (stale by up to 3 frames by design).
-  6. Yields `LaneReport(grid:, isTrusted:, rotationRate:, timestamp: frame.timestamp, depthAvailable: true, centerHit: lastMeshHit)`.
+  6. Ground hazards: if `groundHazardsEnabled` → `trackWalk(frame)` on **every published frame**; then, only if `ω < groundSweepThreshold` (1.5 rad/s — not the lanes' 0.6) **and** `now − lastGroundEval ≥ 0.1` s → `lastGroundEval = now`, `lastGroundHazard = groundDetector.update(GroundSampler.samples(frame: frame, walkDirection: walkDirection), trusted: true, travelled: travelled, time: now)` (the fastest part of a sweep never uses up confirmation slots, but turnarounds and slow sweeps all count; ~7 evaluations/s at 15 Hz publishing). Disabled → `lastGroundHazard = nil`, `groundDetector.reset()`.
+  7. Yields `LaneReport(grid:, isTrusted:, rotationRate:, timestamp: frame.timestamp, depthAvailable: true, centerHit: lastMeshHit, groundHazard: lastGroundHazard, cameraTiltDownDeg: tiltDownDeg)`. (The no-depth report in step 4 carries no ground hazard.)
+- `private trackTilt(_ frame: ARFrame)` (queue-only, trusted frames) — `deg = asin(clamp(columns.2.y, −1, 1)) · 180/π` (the camera's look direction is `−columns.2`, so this is degrees below the horizon, positive = down); `tiltDownDeg` = EMA with factor 0.07 per trusted published frame (~1 s), seeded by the first. Carried in **both** report yields (`cameraTiltDownDeg`), including the no-depth one.
+- `private trackWalk(_ frame: ARFrame)` (queue-only) — camera forward `−columns.2` flattened to horizontal; if its length > 0.2 (not pointing at the sky / feet) it is normalised and folded into `walkDirection` with `simd_mix(…, 0.07)` per published frame (≈ 1 s EMA at 15 Hz; first frame seeds it). Horizontal camera position `(x, 0, z)`: `travelled += dot(pos − lastCamPos, walkDirection)` when `|step| < 1` m (relocalisation jumps ignored); `lastCamPos = pos`. The corridor must follow the *walk*, not the cane: trusted frames happen at sweep turnarounds where the camera points ±20° off the path.
 - `session(_:didFailWithError:)` — no-op (errors surface via `SessionObserver`).
 - `private func computeGrid(frame:config:) -> LaneGrid?` — uses `frame.smoothedSceneDepth ?? frame.sceneDepth`; requires `kCVPixelFormatType_DepthFloat32`; locks depth (and confidence) buffers read-only, passes base addresses + `bytesPerRow` to `LaneMath.computeLanes(depth:depthBytesPerRow:confidence:confidenceBytesPerRow:width:height:config:scratch:)` with the reusable `scratch` buffer (capacity 2048).
-- `jpegSnapshot(maxDimension: CGFloat = 1024, quality: CGFloat = 0.7) -> Data?` — safe from any thread; copies `latestImage` under lock, applies `.oriented(.right)` when `lane.rotateForPortrait`, scales long edge to ≤ `maxDimension`, sRGB JPEG via `CIContext` (GPU). ~30–80 ms; caller (`SceneDescriber`) must run it `@concurrent`.
-- `var hasCameraFrame: Bool` — `latestImage != nil` (SceneDescriber's "camera warming up" guard polls this up to 30 × 100 ms).
+- `jpegSnapshot(maxDimension: CGFloat = 1024, quality: CGFloat = 0.7) -> Data?` — safe from any thread. **First**: if `FrameReplay.shared.isActive` (simulator with `CANEKIT_FRAME_DIR`) it returns `FrameReplay.shared.jpeg()` unchanged (no resize, no rotation). Otherwise copies `latestImage` under lock, applies `.oriented(.right)` when `lane.rotateForPortrait`, scales long edge to ≤ `maxDimension`, sRGB JPEG via `CIContext` (GPU). ~30–80 ms; callers run it `@concurrent`: `SceneDescriber.snapshot` (1024 px, q 0.7), `HazardScanner.snapshot` (1280 px q 0.8 signs / 768 px q 0.6 watch), `AppModel.frame` (768 px hazard-map photo / 480 px live view, q 0.6).
+- `dropLatestImage()` — sets `latestImage = nil` under `imageLock`. Called by `DepthEngine.pause()`: after a background / foreground cycle the old frame shows a place the walker has left, so "Where am I" and the sign scan must wait for a fresh frame instead of describing it (review round 5).
+- `var hasCameraFrame: Bool` — `true` when `FrameReplay.shared.isActive`, else `latestImage != nil` — i.e. a frame retained since the session last (re)started; **false again after `dropLatestImage()`** (SceneDescriber's "camera warming up" guard polls this up to 30 × 100 ms).
 
 ⚠ Do not change `rotateForPortrait` mapping, band/lane split, `groundSkipFraction`, `percentile`, `minConfidence`, `minSamplesPerCell` or the 0.05 m validity floor without re-running `LaneMathTests` (`uniformWallReadsSameEverywhere`, `leftWallOnlyHitsLeftLanes`, `mirrorSwapsLeftAndRight`, `headRowIsTopBand`, `groundBandIsSkipped`, `lowConfidencePixelsAreIgnored`, `tenthPercentileNeedsMoreThanTenPercentOfCell`, `zeroAndNaNDepthsAreInvalid`, `landscapeModeUsesBufferAsScene`, `rawEntrypointHonoursPaddedRowStrides`).
 ⚠ Do not change `sweepThreshold` (0.6 rad/s), `maxRate` (15 Hz) or `meshEveryNthFrame` without a device walk test on the cane: `CueDecider` timing constants (`minChangeInterval` 0.4 s, `repeatInterval` 1 s) assume ~15 Hz, and the untrusted-frame freeze (`untrustedFramesFreezeState`) assumes sweeps exceed 0.6 rad/s.
 ⚠ Never retain more than one `CVPixelBuffer` from ARKit, and never let `ARFrame`/`ARMeshAnchor` escape the delegate callback.
+⚠ Do not tie the ground path back to the lanes' 0.6 rad/s gate (or remove its own 1.5 rad/s gate), drop `trackWalk`'s `|step| < 1` guard, or pass the camera forward instead of `walkDirection` without re-running `HazardTests` (`sweepFramesDoNotConfirm`, `aCurbYouWalkTowardStillConfirms`, `staleEvaluationsExpire`) and a sweeping-cane device walk toward a real curb.
+
+### `ios/CaneKit/Depth/GroundSampler.swift` (Step 11)
+
+Purpose: turns one `ARFrame`'s LiDAR depth into `[GroundSample]` in the walker's frame for `GroundHazardDetector`. Independent of the cane's tilt and the mount angle because the world is gravity-aligned (`DepthEngine` runs `worldAlignment = .gravity`).
+
+**`nonisolated enum GroundSampler`** — pure static functions, called only from `DepthFrameProcessor.session(_:didUpdate:)` on the depth queue; the `ARFrame` never escapes.
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `maxDepth` | 4.5 m | farther pixels ignored (LiDAR is weak past ~5 m; the detector scans to 3.5 m) |
+| `minDepth` | 0.3 m | nearer pixels ignored (cane shaft, a hand over the lens) |
+| `stride` (param default) | 4 | every 4th pixel both ways → ≤ 3,072 samples from 256×192, one 4×4 multiply each (< 1 ms) |
+| `minConfidence` (param default) | 1 (medium) | drops grazing-angle returns that make far ground noisy |
+
+- `static func samples(frame: ARFrame, walkDirection: SIMD3<Float>? = nil, stride: Int = 4, minConfidence: UInt8 = 1) -> [GroundSample]` — uses **raw `sceneDepth ?? smoothedSceneDepth`** (the reverse of the lanes: the smoothed map blends several frames, which smears the ground profile while the cane moves, and the ground path accepts faster frames than the lanes; Float32 only, else `[]`); locks depth and confidence buffers read-only and honours both `bytesPerRow`. Intrinsics are scaled from `camera.imageResolution` to the depth-map size (`fx, fy, cx, cy`). Each valid pixel `(u, v, d)` is back-projected to ARKit camera space `(xc = (u − cx)/fx·d, yc = −(v − cy)/fy·d, −d)` (sensor landscape orientation, so correct however the phone is held), transformed to world by `camera.transform`, and taken relative to the camera position. `forward` axis = `walkDirection` (or the camera's `−columns.2` when nil) with `y` zeroed; `guard length > 0.2` (else `[]`: pointing at the sky or the feet); `right = normalize(cross(fwd, up))`. Output `GroundSample(forward: dot(rel, fwd), lateral: dot(rel, right), height: rel.y)`.
+- Invariant: `walkDirection` must be the smoothed *walk* direction (`DepthFrameProcessor.trackWalk`), not the camera's — trusted frames occur at sweep turnarounds ±20° off the path, which put curbs, planters and walls beside the sidewalk inside the 0.45 m corridor (review simulation).
+- ⚠ Do not change the back-projection signs, the intrinsics scaling or `minDepth`/`maxDepth` without a device check on flat pavement (expect `classify` → nil) and at a curb; the unit tests feed synthetic samples and cannot catch a projection error.
+
+### `ios/CaneKit/Depth/FrameReplay.swift` (Step 11, simulator-only)
+
+Purpose: a stand-in camera for simulator tests. When the app is launched with `CANEKIT_FRAME_DIR=<folder>` containing `frames.json` (`[{"file", "lat", "lon", "heading"}]`, e.g. `ios/scripts/streetview/`), every "camera frame" (sign reader, hazard watch, "Where am I", live view) is the JPEG nearest to the current simulated GPS fix.
+
+**`nonisolated final class FrameReplay: Sendable`** — `static let shared`; private `State { frames: [Frame(url, at: Coordinate)], position: Coordinate?, cache: [URL: Data] }` behind a `Mutex`.
+- `let isActive: Bool` — true only under `#if targetEnvironment(simulator)` with the env var set and a decodable, non-empty `frames.json`; **always false on a device** (the real ARKit camera is always used on the phone). The initial position is the first frame's.
+- `update(position: Coordinate)` — no-op unless active; called by `AppModel`'s `location.onFix` on every fix (main actor).
+- `jpeg() -> Data?` — nil unless active; the frame with minimum `GeoMath.distanceMeters` to `position`, read once and cached (the whole lookup runs under the lock). Called from `DepthFrameProcessor.jpegSnapshot` (any thread, via `@concurrent` callers); `hasCameraFrame` returns true while active.
+- `currentName: String?` — file name of the frame nearest to `position` (nil when inactive); written as `frame` into the `scan`, `hazard_watch` and `describe_result` trip-log records so a Street View run shows which corner each result came from.
+- Used by `make uitest-streetview` (`CaneKitUITests.testWhereAmIDescribesAStreetViewFrame`) and the opt-in `make e2e SCENARIO=streetview` (`e2e.py` launches with `SIMCTL_CHILD_CANEKIT_FRAME_DIR`).
 
 ### `ios/CaneKit/Depth/DepthEngine.swift`
 
@@ -652,14 +870,14 @@ Purpose: main-actor owner of the `ARSession`; configures LiDAR depth + mesh clas
 
 **`@MainActor @Observable final class DepthEngine`**
 
-Published (all `private(set)`): `report: LaneReport` (~15 Hz), `status: String` (header text via `AppModel.status`: "Depth idle" / "Waiting for depth…" / "Depth OK" / "Depth paused" / "Depth resuming…" / "AR error: …" / "AR interrupted" / "AR resumed" / "Mesh classification on" / "Mesh classification off (thermal)" / "No LiDAR / sceneDepth on this device"), `fps: Double` (rolling over a 2 s window of report timestamps), `framesProcessed: Int`, `isRunning: Bool`, `meshEnabled: Bool` (default `true`), `tracking: String` ("normal", "limited (motion)", "limited (features)", "initializing", "relocalizing", "not available", "limited", "—"). `DebugFooter` shows `fps`, `report.rotationRate`, `framesProcessed`, `tracking`, `meshEnabled`; `ContentView` feeds `report` to `LaneGridView`.
+Published (all `private(set)`): `report: LaneReport` (~15 Hz), `status: String` (header text via `AppModel.status`: "Depth idle" / "Waiting for depth…" / "Depth OK" / "Depth paused" / "Depth resuming…" / "AR error: …" / "AR interrupted" / "AR resumed" / "Mesh classification on" / "Mesh classification off (thermal)" / "No LiDAR / sceneDepth on this device"), `fps: Double` (rolling over a 2 s window of report timestamps), `framesProcessed: Int`, `isRunning: Bool`, `meshEnabled: Bool` (default `true`), `tracking: String` ("normal", "limited (motion)", "limited (features)", "initializing", "relocalizing", "not available", "limited", "—"). `ContentView` feeds `report` to `LaneGridView` and shows `status`; `fps`, `framesProcessed`, `tracking` and `meshEnabled` currently have no on-screen reader.
 
 - `@ObservationIgnored var onReport: ((LaneReport) -> Void)?` — invoked on the main actor for every report; `AppModel.start()` sets it to `handle(report)` (the cue router).
 - `static let supportsDepth` = `ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)`; `static let supportsMesh` = `supportsSceneReconstruction(.meshWithClassification)`. Read by `AppModel.lidarSupported` / `meshClassificationSupported`.
-- `let processor = DepthFrameProcessor()` (internal, `@ObservationIgnored`; handed to `SceneDescriber(processor:speech:)` for snapshots).
-- `apply(portrait: Bool, mirror: Bool)` — writes `lane.rotateForPortrait` / `lane.mirrorLeftRight` into `processor.settings`. Called from `AppModel.pushDepthSettings()` at init and when the Mount toggles (`portraitMode`, `mirrorLeftRight`) change.
+- `let processor = DepthFrameProcessor()` (internal, `@ObservationIgnored`; handed to `SceneDescriber(processor:speech:client:)` and `HazardScanner(processor:watchClient:)` for snapshots, and used by `AppModel.frame(_:maxDimension:)`).
+- `apply(portrait: Bool, mirror: Bool, groundHazards: Bool = true)` — writes `lane.rotateForPortrait`, `lane.mirrorLeftRight` and `groundHazardsEnabled` into `processor.settings` in one `withLock` (the next frame picks it up). Called from `AppModel.pushDepthSettings()` at init and when the Mount toggles (`portraitMode`, `mirrorLeftRight`) or HazardsCard "Detect drop-offs" (`groundHazardsEnabled`) change. ⚠ The parameter default `true` is not the app default: `AppModel` always passes its setting (default false).
 - `start()` — no-op if running; if a configuration already exists → `resume()`; if `!supportsDepth` → status only. Otherwise builds config, installs `SessionObserver` as `session.delegate` with `delegateQueue = processor.queue`, `processor.startMotion()`, `session.run(config, options: [.resetTracking, .removeExistingAnchors])`, sets `isRunning`, status "Waiting for depth…", starts the consumer task. Invariant: a second `start()` after `pause()` must not re-wire the delegate or add a second consumer.
-- `pause()` — no-op unless running; `session.pause()`, `processor.stopMotion()`, `isRunning = false`, status "Depth paused". Called on `.background`.
+- `pause()` — no-op unless running; `session.pause()`, `processor.stopMotion()`, **`processor.dropLatestImage()`** (a paused frame is a stale frame: never describe it later), `isRunning = false`, status "Depth paused". Called on `.background`.
 - `resume()` — no-op if running; `start()` if no configuration yet; otherwise re-runs the stored configuration **without** reset options (keeps the world map), restarts gyro, status "Depth resuming…". Called on `.active`.
 - `setMeshClassification(_ on: Bool)` — thermal hook; no-op if unchanged. Updates `meshEnabled`, `processor.settings.meshLookupEnabled`, and if running re-runs the session with a new config (no reset options). Re-running costs ~1–2 s of depth; `AppModel.updateThermal()` calls it at launch and on every `thermalStateDidChangeNotification` with `!hot` (`hot` = `.serious`/`.critical`), and the unchanged-guard makes it re-run only when that boundary is crossed.
 - `private func makeConfiguration(mesh:)` — `frameSemantics = [.sceneDepth, .smoothedSceneDepth]`; `sceneReconstruction = .meshWithClassification` iff `mesh && supportsMesh`; `worldAlignment = .gravity`; `planeDetection = []`; `isAutoFocusEnabled = true`; `videoFormat` = last supported format with `framesPerSecond >= 30` (lowest resolution ≥ 30 fps — depth is fixed at 256×192 regardless; colour only feeds `jpegSnapshot`).
@@ -668,7 +886,7 @@ Published (all `private(set)`): `report: LaneReport` (~15 Hz), `status: String` 
 - `fileprivate sessionFailed(code:message:)` — maps `ARError.Code` (`.cameraUnauthorized` → "Camera access denied — enable it in Settings"; `.sensorUnavailable`/`.sensorFailed` → "LiDAR sensor unavailable"; `.unsupportedConfiguration` → "Unsupported AR configuration"; else raw message) into "AR error: …", sets `isRunning = false`.
 - `fileprivate sessionInterrupted(_:)`, `fileprivate trackingChanged(_:)` — status/tracking strings only.
 
-Other consumer: `AppModel.location.onHeading` drops compass readings unless `depth.report.isTrusted || !depth.isRunning` (the gyro gate also protects nav heading and the beacon).
+Other consumer: `AppModel.location.onHeading` drops **compass** readings unless `depth.report.isTrusted || !depth.isRunning` (the gyro gate also protects nav heading and the beacon); GPS-course headings (`fromCourse == true`) pass ungated.
 
 **`nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @unchecked Sendable`** — splits the delegate: `session(_:didUpdate:)` forwards synchronously to `DepthFrameProcessor` on the depth queue; `didFailWithError` (extracts `NSError.code` + `localizedDescription` because `any Error` is not Sendable), `sessionWasInterrupted`, `sessionInterruptionEnded`, `cameraDidChangeTrackingState` hop to the engine via `Task { @MainActor }`. Holds `engine` weakly.
 
@@ -711,23 +929,38 @@ Haptic patterns (`buildPlayers()` / `pattern(taps:gap:intensity:sharpness:)` —
 | `rightPlayer` | `.right` | 3 | 0.10 s | 0.9 | 0.5 |
 | `headPlayer` | `.head` | 2 | 0.08 s | 1.0 | 1.0 |
 | `tapPlayer` | Geiger tick | 1 | 0 | 1.0 (overridden per tick) | 0.6 |
+| `groundPlayer` | ground hazard (`playGroundHazard`) | 4 | 0.07 s | 1.0 | 0.3 |
+
+Route cues felt on the cane (`navPlayers: [NavCue: CHHapticPatternPlayer]`, built by `private static buzzes(_ durations: [TimeInterval])`): **continuous** events (`.hapticContinuous`), intensity 0.75, sharpness 0.15 (soft and dull, deliberately unlike the crisp obstacle taps), 0.18 s between buzzes.
+
+| `NavCue` | Buzz durations (s) | Felt as |
+|---|---|---|
+| `.turnLeft` | `[0.45]` | 1 long |
+| `.turnRight` | `[0.35, 0.35]` | 2 long |
+| `.crossing` | `[0.3, 0.3, 0.3]` | 3 long |
+| `.arrived` | `[0.4, 0.12, 0.4]` | long-short-long |
+| `.obstacle` | — (no player; `AppModel` never passes it) | |
 
 Geiger loop (`startApproachLoopIfNeeded` / `fireTap`): one `Task` on the main actor; each iteration reads `approachDistance` (initial `2`), `hz = GeigerRate.hertz(distance:)` = `clamp(4/d, 2, 8)` → **2 Hz at 2.0 m, 4 Hz at 1.0 m, 8 Hz at ≤ 0.5 m, 2 Hz for non-finite/≤ 0**; tick intensity = `0.6 + 0.4 × clamp((2.0 − d)/1.5, 0, 1)` → 0.6 at 2 m, 1.0 at 0.5 m, sent via `.hapticIntensityControl` dynamic parameter; then sleeps `1/hz` s. Only one loop task exists at a time (`guard approachTask == nil`); distance updates change only the next interval. `stopApproachLoop()` cancels and nils the task.
 
 - `start()` — sets `wantsRunning`; if unsupported → `lastError = "This device has no Taptic Engine"`, `isHealthy = false`. Creates `CHHapticEngine(audioSession: nil)` once (`playsHapticsOnly = true`, `isAutoShutdownEnabled = false` — independent of the app's audio session so speech/beacon route changes never stop the buzz), installs `resetHandler` → `rebuildAfterReset()` and `stoppedHandler` → `engineStopped(reasonCode:)` (both hop to main via `Task { @MainActor }`), then `engine.start()` + `buildPlayers()`, `isHealthy = true`, `lastError = nil`; any throw → `isHealthy = false`, `lastError = "Haptic engine: …"`. Safe to call repeatedly. Called by `AppModel.start()` after `speech.configureAudioSession()` and `wireAudioRoute()`.
-- `resume()` — `start()` only if `wantsRunning && !isHealthy` (foreground hook; Core Haptics stops the engine on suspend). Called on `.active`.
+- `resume()` — `start()` only if `wantsRunning && !isHealthy` (foreground hook; Core Haptics stops the engine on suspend). Called on `.active` and by the player's own interruption observer on `.ended`.
 - `stop()` — clears `wantsRunning`, `stopAll()`, `engine.stop`, `isHealthy = false`. No caller in the app today.
 - `private rebuildAfterReset()` — media-server reset: restart engine and rebuild players if `wantsRunning`; failure → `lastError = "Haptic reset failed: …"`.
-- `private engineStopped(reasonCode:)` — `isHealthy = false`, stops the loop; records `lastError` unless reason is `.applicationSuspended` (raw 2).
+- `init()` — installs an `AVAudioSession.interruptionNotification` observer (object: the shared session, `queue: .main`, entered with `MainActor.assumeIsolated`); on `.ended` → `resume()` (a call / Siri stops the haptic engine too). Token kept in `interruptionObserver`. The class now imports `AVFoundation` for this; it still never touches the session's category/options (hard rule 7).
+- `private engineStopped(reasonCode:)` — `isHealthy = false`, stops the loop. `.applicationSuspended` **and `.audioSessionInterrupt`** → nothing more (recovery is `resume()` on foreground / on the interruption's `.ended`). Any other reason (idle timeout, system error, …) → `lastError = "Haptic engine stopped (<code>)"` and a **bounded retry**: unless one is already running (`retrying` flag — no stacked retry loops), a main-actor `Task` that up to 5 times sleeps 1 s and calls `start()` while `wantsRunning && !isHealthy`, clearing `retrying` when done — so cane haptics do not stay dead in the foreground until the next scene-phase change (review round 5).
 - `play(_ cue: HapticCue)` — sets `rendering = cue.kind` **before** the `silenced/isHealthy` guard (UI shows the decided cue even when silent); `.left/.right/.head` → `fire(player)` once; `.centerApproach(d)` → `approachDistance = d`, start loop.
 - `setApproach(distance:)` — updates `approachDistance`, `rendering = .center`, (re)starts loop if `!silenced && isHealthy`. Called for `CueOutput.updateCenter`.
 - `stopAll()` — `rendering = .clear`, cancels loop. Called for `CueOutput.stop`, on `.background`, and on `silenced = true`.
-- `private fire(_:)` — `player.start(atTime: CHHapticTimeImmediate)`, errors to `lastError`.
-- `test(_ kind: CueKind)` — debug buttons (HapticsCard) bypass the decider; `.center` plays `centerApproach(distance: 1.0)` (4 Hz) and auto-stops after 2 s; `.clear` → `stopAll()`.
+- `private fire(_:)` — `player.start(atTime: CHHapticTimeImmediate)`, errors to `lastError`; a nil player is a no-op.
+- `playNav(_ cue: NavCue)` — the route buzz above; no-op while `silenced`, unhealthy, or for a cue without a player. Caller: `AppModel`'s `nav.onNavCue` for every cue except `.obstacle` — waypoint turn/crossing/arrival cues **and** the `.turnLeft/.turnRight` sent with "Veer left/right." — in addition to the watch tap.
+- `playGroundHazard()` — `groundPlayer` (4 fast heavy taps); no-op while `silenced` or unhealthy (`AppModel.groundHazardFound` then mirrors to the watch). Does not touch `rendering` or the Geiger loop.
+- `buildPlayers()` now builds the four obstacle players plus `groundPlayer` and the four `navPlayers`; a media-server reset rebuilds all of them.
+- `test(_ kind: CueKind)` — debug buttons (HapticsCard) bypass the decider; `.center` plays `centerApproach(distance: 1.0)` (4 Hz) and auto-stops after 2 s; `.clear` → `stopAll()`. (There is no test button for the nav buzzes or the ground pattern.)
 
-Cross-module contract (`AppModel.handle(_:)`, ~15 Hz): `.fire(cue)` → `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)` (the link drops the same kind within 1 s); then `speakCueIfNeeded` → `CueSpeechPolicy.line(for:phoneCannotBuzz:now:)` ("Head height." once per episode at `.safety`, ≥ 4 s between episodes; "Left." / "Right." / "Ahead, <distance>." only when `phoneCannotBuzz`, per kind ≥ 4 s, at `.obstacle`; spoken with ttl 6 s). `.updateCenter(d)` → `setApproach`; `.stop` → `stopAll` + `cueSpeech.cleared()` (next head cue is a new episode). `cueSpeech` is reset at route start. `AppModel.hapticsSilenced` (UserDefaults) mirrors into `haptics.silenced`. `announceChannels()` at route start says "Haptics unavailable. Obstacle cues will be spoken." when `!haptics.isHealthy && !watch.isReachable`.
+Cross-module contract (`AppModel.handle(_:)`, ~15 Hz): `.fire(cue)` → `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)` (the link drops the same kind within 1 s); then `speakCueIfNeeded` → `CueSpeechPolicy.line(for:phoneCannotBuzz:now:)` ("Head height." once per episode at `.safety`, ≥ 4 s between episodes; "Left." / "Right." / "Ahead, <distance>." only when `phoneCannotBuzz`, per kind ≥ 4 s, at `.obstacle`; spoken with ttl 6 s). `.updateCenter(d)` → `setApproach`; `.stop` → `stopAll` + `cueSpeech.cleared()` (next head cue is a new episode). `cueSpeech` is reset at route start. `AppModel.hapticsSilenced` (UserDefaults) mirrors into `haptics.silenced`. `announceChannels()` at route start says "Haptics unavailable. Obstacle cues will be spoken." when `!haptics.isHealthy && !watch.isReachable`. Outside the cue router: `nav.onNavCue` → `playNav(cue)` (every cue but `.obstacle`), and `AppModel.groundHazardFound` → `playGroundHazard()` (with the same `phoneCannotBuzz || fallbackToWatch` wrist mirror, sent as `.obstacle(.center)`).
 
-⚠ Do not change the Geiger rate curve (`GeigerRate.hertz`) without re-running `CueDeciderTests.geigerRateScalesWithInverseDistance`; do not change tap counts/gaps (2×120 ms left, 3×100 ms right, 2×80 ms head) without a device test on the cane and updating docs/design.md §5 — the user distinguishes left/right by tap count, and the watch mirror uses the same `CueKind` vocabulary.
+⚠ Do not change the Geiger rate curve (`GeigerRate.hertz`) without re-running `CueDeciderTests.geigerRateScalesWithInverseDistance`; do not change tap counts/gaps (2×120 ms left, 3×100 ms right, 2×80 ms head, 4×70 ms ground) or the route buzzes (1 / 2 / 3 long, long-short-long, continuous and dull) without a device test on the cane and updating docs/design.md §5 and AGENTS.md ("Route cues are felt on the cane as long soft buzzes") — the user distinguishes left/right by tap count and route from obstacle by texture, and the watch mirror uses the same `CueKind` / `NavCue` vocabulary.
 ⚠ Do not change what counts as `phoneCannotBuzz` (engine down or silenced) without re-running `NavSupportTests` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`) — it decides both the wrist mirror and whether side cues are spoken.
 ⚠ Do not change the `CHHapticEngine(audioSession: nil)` / `playsHapticsOnly` / `isAutoShutdownEnabled = false` setup without a device test that toggles AirPods and backgrounds the app — this is what keeps haptics alive across audio-route changes and media-server resets. `CaneKitUITests.testHapticTestButtonsAndSilenceToggle` covers the test buttons and silence toggle.
 
@@ -735,11 +968,13 @@ Cross-module contract (`AppModel.handle(_:)`, ~15 Hz): `.fire(cue)` → `haptics
 
 ## Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)
 
-Owner of everything the user *hears* that is not a haptic: the single speech queue and its two TTS backends, the headphone-route monitor, the spatial-audio beacon and the AirPods head-yaw it needs, and the "Where am I" camera→VLM→speech path plus the key plumbing behind it. Everything in this module is instantiated once by `AppModel` (`ios/CaneKit/App/AppModel.swift`); nothing here talks to ARKit, haptics or the watch directly. The pure rules that decide *what* reaches this module (`CueSpeechPolicy`, `StraightWalkDetector`, `TurnSettle`) live in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`.
+Owner of everything the user *hears* that is not a haptic: the single speech queue and its two TTS backends, the headphone-route monitor, the spatial-audio beacon and the AirPods head-yaw it needs, the "Where am I" camera→VLM→speech path plus the key plumbing behind it, and (Step 11) the camera hazard scanner and the on-device vision stack that works with no key and no network. Everything in this module is instantiated once by `AppModel` (`ios/CaneKit/App/AppModel.swift`); nothing here talks to ARKit, haptics or the watch directly (the scanner only reads `DepthFrameProcessor.jpegSnapshot`). The pure rules that decide *what* reaches this module (`CueSpeechPolicy`, `StraightWalkDetector`, `TurnSettle`) live in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`; the sign / hazard-reply rules (`SignPolicy`, `HazardWatchPolicy`, `HazardPrompt`) in `Hazards.swift`.
 
 Verification handles used below:
-- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (Swift Testing, 79 tests). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker` or `ObstacleNamer` is unit-tested — they are device-only.
-- **UI tests** (`make uitest` → `sim-grant` first, simulator): `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully`; `testGuideStartsAndStopsDemoRoute` (Repeat exists, does not advance the route, disappears after Stop — the `sayAgain` path, audio not asserted).
+- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (Swift Testing, 124 tests). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`), `HazardTests.swift` (sign phrases, hazard-watch replies) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker`, `ObstacleNamer`, `HazardScanner` or `OnDeviceVision` is unit-tested — they are device-only (or simulator-only via FrameReplay).
+- **UI tests** (`make uitest` → `sim-grant` first, simulator; `CANEKIT_UITEST=1` also mutes speech via `SpeechQueue.muted`): `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (no camera in the simulator → "No camera frame" or a "Scene:" answer, button back); `testWhereAmIDescribesAStreetViewFrame` (`make uitest-streetview`: on-device describer over a Street View frame); `testGuideStartsAndStopsDemoRoute` (Repeat exists, does not advance the route, disappears after Stop — the `sayAgain` path, audio not asserted).
+- **`make e2e`** (`ios/scripts/e2e.py`, launched with `CANEKIT_MUTE=1`) asserts on what `SpeechQueue` was asked to say, via the trip log.
+- **`swift ios/scripts/vision_probe.swift ios/scripts/streetview`** runs the same Vision requests, sign phrases and hazard map as `OnDeviceVision` on the Mac.
 - **Device walk** = the manual checks in `CHANGELOG.md` (Step 4, Steps 6–7, and Step 10 "Test on device") plus the AirPods sanity check in `docs/devices_setup.md`: speech test cut at a word boundary, phone call mid-route resumes speech + beacon, AirPods out → "Headphones disconnected. Beacon paused.", turn head with body still → click moves the other way, Recenter zeroes yaw, Repeat on the watch mid-line. (The Steps 6–7 line "AirPods out → still pans from the compass" is superseded: without headphones the beacon is now silent.)
 
 ---
@@ -767,8 +1002,9 @@ Purpose: the one voice of the app — a priority queue over two TTS backends (El
 - `audioSessionError: String?` (shown in `HapticsCard`), `voiceError: String?`, `backendName: String` (`"System"` | `"ElevenLabs"`; `HapticsCard` voice pill shows `"System"` whenever `naturalVoice == nil`, else `backendName`).
 - `naturalVoice: ElevenLabsVoice?` = `ElevenLabsVoice.fromSecrets()` (nil without a key); `useNaturalVoice = true` (toggle to force system voice).
 - `rate: Float = AVSpeechUtteranceDefaultSpeechRate * 1.05`.
+- `static let muted: Bool` — `true` when launched with env `CANEKIT_MUTE=1` (set by `ios/scripts/e2e.py`) or `CANEKIT_UITEST=1` (XCUITests). Read by `speakNow` and `BeaconEngine.render`. Never true on a normal launch.
 
-Private state beyond the backends: `queue`, `sequence`, `generation`, `currentPriority`, `currentText`, `currentExpires`, `currentReplays`, `interrupted: Bool` (between an interruption's `.began` and resume), `interruptionFallback: Task`.
+Private state beyond the backends: `queue`, `sequence`, `generation`, `currentPriority`, `currentText`, `currentExpires`, `currentReplays`, `interrupted: Bool` (between an interruption's `.began` and resume), `interruptionFallback: Task`, `naturalVoiceFailedAt: TimeInterval` (−∞; the natural-voice **circuit breaker**: time of the last ElevenLabs failure or deadline miss), `voicePending: Bool` (true while a natural-voice fetch is racing its 2.5 s deadline; whichever of the two claims it first clears it, so they are mutually exclusive; `stopCurrent()` clears it).
 
 #### Constants
 
@@ -778,8 +1014,11 @@ Private state beyond the backends: `queue`, `sequence`, `generation`, `currentPr
 | `sayAgain` default `ttl` | 12 s (no never-expire case) | `sayAgain(_:_:ttl:)` |
 | `maxReplays` | 1 (`private let`) — an interrupted line resumes once; cut again, it is dropped | `requeueCurrent` |
 | re-queue validity floor | `expires = max(currentExpires, now + 8)` | `requeueCurrent` |
-| interruption fallback drain | 15 s after `.began` if `.ended` never arrives | `interruption(_:)` |
-| session reactivation | 3 tries (`attempt` 0…2), 1 s apart; after the last failure it drains anyway | `resumeAfterInterruption(attempt:)` |
+| interruption fallback drain | 15 s after `.began` if `.ended` never arrives; re-armed for another 15 s each time the fallback's reactivation fails | `interruption(_:)`, `resumeAfterInterruption(attempt:fromEnded:)` |
+| session reactivation | 3 tries (`attempt` 0…2), 1 s apart; after the last failure it drains anyway **only if the system posted `.ended`** (`fromEnded`), otherwise it keeps waiting | `resumeAfterInterruption(attempt:fromEnded:)` |
+| natural-voice total deadline | 2.5 s from `speakNow` to a started mp3; then system voice | `speakNow` (URLRequest's timeout is an *idle* timeout, so a slow trickle could stall longer) |
+| circuit breaker | system voice (+ background prefetch) for 60 s after a natural-voice failure or deadline miss | `speakNow` |
+| muted line length | `0.4 + text.count / 15` s | `speakNow` when `muted` |
 | watchdog limit | `6.0 + Double(text.count) / 6.0` s (≈25 s for a long crossing line) | `armWatchdog` |
 | `postUtteranceDelay` | 0.05 s (`preUtteranceDelay` 0) | `speakSystem` |
 | stop boundary | `.word` (`stopSpeaking(at: .word)`) | `stopCurrent` |
@@ -795,21 +1034,27 @@ Private state beyond the backends: `queue`, `sequence`, `generation`, `currentPr
   1. Not speaking → `speakNow` immediately.
   2. Speaking and `priority > currentPriority` → `requeueCurrent()` then `stopCurrent()` then `speakNow` (interrupt).
   3. Speaking and `priority <= currentPriority` → **coalesce**: dropped if `line == currentText` or an identical text is already queued; otherwise appended with `sequence += 1` and `sortQueue()`.
-  Callers/priorities in `AppModel`: `.nav` for route lines (`nav.onSpeak`, ttl 12 — `NavigationEngine` only ever passes `.nav`), status lines "Recentered." / watch "No route running." (ttl 2), headphone connect/disconnect lines (ttl 5), `announceChannels()` lines at route start (ttl 20), arrival summary (ttl 30), and default-ttl lines ("CaneKit ready.", "Route stopped.", route-building errors); `.obstacle` for namer lines (ttl 4) and `"Left."` / `"Right."` / `"Ahead, <distance>."` from `CueSpeechPolicy` when the phone cannot buzz (ttl 6); `.safety` for `"Head height."` from `CueSpeechPolicy` (ttl 6; once per obstacle episode, ≥ 4 s apart); `.scene` from `SceneDescriber` and `speechTest()`.
+  Callers/priorities in `AppModel`: `.nav` for route lines (`nav.onSpeak`, ttl 12 — `NavigationEngine` only ever passes `.nav`, including the arrival hint "You are close to …"), status lines "Recentered." / watch "No route running." (ttl 2), headphone connect/disconnect lines (ttl 5), the thermal notice (ttl 10), `announceChannels()` lines at route start and the camera-denied / location-denied lines (ttl 20), arrival summary (ttl 30), and default-ttl lines ("CaneKit ready.", "Route stopped.", route-building errors); `.obstacle` for namer lines (ttl 4), `"Left."` / `"Right."` / `"Ahead, <distance>."` from `CueSpeechPolicy` when the phone cannot buzz (ttl 6), and `HazardScanner` sign / caution lines (`"Sign: detour."`, `"Caution: cones ahead, 3 meters."`, ttl 6); `.safety` for `"Head height."` from `CueSpeechPolicy` (ttl 6; once per obstacle episode, ≥ 4 s apart) and ground-hazard lines (`"Drop-off ahead, two meters."`, ttl 3); `.scene` from `SceneDescriber` and `speechTest()`.
 - `sayAgain(_ text: String, _ priority: SpeechPriority, ttl: TimeInterval = 12)` — "say that again": bypasses coalescing so it speaks even when `text` is the line playing now. Trims; empty → no-op; removes any queued copy of `text`. If `interrupted` or speaking a line with `currentPriority > priority` → enqueued (`sequence += 1`, `sortQueue()`). Otherwise `stopCurrent()` + `speakNow` — it interrupts an equal-or-lower line **without** re-queueing it. Only caller: `nav.onRepeat` → `speech.sayAgain(text, .nav)` (`NavigationEngine.repeatInstruction()`: last line actually spoken + " Next, <place>, in N meters." while navigating).
 - `requeueCurrent()` (private) — **re-queue rule**: requires `currentPriority`, non-empty `currentText`, `currentReplays < maxReplays`, `currentExpires > now`, and the text not already queued. Inserted at the *front of its priority band* with `sequence = (min queued sequence ?? sequence) − 1`, `expires = max(currentExpires, now + 8)`, `replays = currentReplays + 1`. Equal priority ⇒ resumes right after the interrupter; lower priority ⇒ after all higher lines. A line already replayed once, or expired, is silently dropped (Repeat recovers it).
 - `sortQueue()` (private) — sort key `(priority desc, sequence asc)`: highest priority first, FIFO within a band.
 - `prefetch(_ lines: [String])` — no-op unless natural voice active; `Task.detached(priority: .utility)` → `ElevenLabsVoice.prefetch`. Called by `AppModel.start()` (`commonLines`), `beginRoute` (every `waypoint.say` + `commonLines` + intro line), and by `speakNow` for an obstacle/safety cache miss.
 - `stopAll()` — clears the queue, `stopCurrent()`, resets `isSpeaking/currentPriority/currentText`. Called by `AppModel.stopRoute()` *before* `say("Route stopped.", .nav)`.
-- `speakNow(_ text: String, _ priority: SpeechPriority, expires: TimeInterval = .infinity, replays: Int = 0)` (private) — `generation += 1`, records current text/priority/expires/replays, `isSpeaking = true`, `lastSpoken = text`, arms the watchdog, then backend choice: no natural voice / `useNaturalVoice == false` → `speakSystem`; cache hit → `playFile`; **miss at `.obstacle` or `.safety` → `speakSystem` now + `prefetch([text])`** (warnings never wait for the network); other miss → `fetchTask` awaiting `naturalVoice.audio(for:)`, result applied only if `generation == gen` still; failure → `voiceError` + `speakSystem`.
+- `speakNow(_ text: String, _ priority: SpeechPriority, expires: TimeInterval = .infinity, replays: Int = 0)` (private) — `generation += 1`, records current text/priority/expires/replays, `isSpeaking = true`, `lastSpoken = text`, arms the watchdog, then backend choice, in order:
+  0. **`muted`** → no audio at all; a `Task` sleeps `0.4 + text.count/15` s then `lineEnded(gen:)` (queue timing, coalescing and logging behave as on a device).
+  1. no natural voice / `useNaturalVoice == false` → `speakSystem`;
+  2. cache hit → `playFile`;
+  3. **miss at `.obstacle` or `.safety` → `speakSystem` now + `prefetch([text])`** (warnings never wait for the network);
+  4. **circuit breaker**: `now − naturalVoiceFailedAt < 60` s → `speakSystem` + `prefetch([text])` (a weak or captive network must not make every line wait for another failure — Muse M1);
+  5. other miss → `voicePending = true`, then a **2.5 s total-deadline** `Task` racing `fetchTask` (awaiting `naturalVoice.audio(for:)`). Each side acts only if `voicePending` is still set, `generation == gen`, **`isSpeaking`**, and (deadline) neither `player` nor `currentUtterance` exists / (fetch) `currentUtterance == nil`; the winner clears `voicePending`, so the deadline and the fetch completion are **mutually exclusive** (the mp3 can never start on top of the system voice, and nothing starts after `stopAll`). Deadline → cancel `fetchTask`, `naturalVoiceFailedAt = now`, `speakSystem`. Fetch success → `playFile`; failure → `voiceError`, `naturalVoiceFailedAt = now`, `speakSystem`.
 - `speakSystem(_:gen:)` (private) — `backendName = "System"`, builds the `AVSpeechUtterance` (voice, rate, delays), stores `currentUtterance`, `synthesizer.speak`.
 - `playFile(_:gen:)` (private) — `backendName = "ElevenLabs"`, `AVAudioPlayer(contentsOf:)` + `PlayerRelay` → `lineEnded(gen:)`. If `play()` returns false (`voiceError = "Playback did not start"`) or init throws (`"Playback: …"`) → `speakSystem(lastSpoken, gen:)` (otherwise `isSpeaking` would stick forever).
 - `armWatchdog(gen:text:)` (private) — **watchdog formula** `limit = 6.0 + text.count / 6.0` seconds. On expiry, if `generation == gen && isSpeaking`: `voiceError = "Speech watchdog reset"`, `stopCurrent()` (bumps `generation`, so in-flight work stays stale), then `lineEnded(gen: generation)` with the *new* generation so the queue advances. It no longer rolls the generation back.
-- `stopCurrent()` (private) — cancels watchdog and fetch task, `player.stop()` if playing, `player = nil`, `stopSpeaking(at: .word)` if speaking, clears `currentUtterance`, **`generation += 1`** so every in-flight callback becomes stale.
+- `stopCurrent()` (private) — cancels watchdog and fetch task, `voicePending = false`, `player.stop()` if playing, `player = nil`, `stopSpeaking(at: .word)` if speaking, clears `currentUtterance`, **`generation += 1`** so every in-flight callback becomes stale.
 - `utteranceEnded(_ id: ObjectIdentifier)` (private) — ignored unless `id` is the current utterance; then clears it and `lineEnded(gen: generation)`.
 - `lineEnded(gen:)` (private) — guard `gen == generation`; cancel watchdog; `player = nil`; clear `currentPriority`/`currentText`; drop `queue` entries with `expires < now`; if the queue is empty **or `interrupted`** → `isSpeaking = false`; else pop the first and `speakNow` it with its `expires` and `replays`.
-- `interruption(_:)` (private) — `.began`: `requeueCurrent()` if speaking, `stopCurrent()`, `isSpeaking = false`, `currentPriority = nil`, `currentText = ""`, `interrupted = true`, and arms `interruptionFallback` (15 s, then `resumeAfterInterruption(attempt: 0)` if still interrupted — `.ended` is not guaranteed). `.ended`: cancel the fallback, `resumeAfterInterruption(attempt: 0)`.
-- `resumeAfterInterruption(attempt:)` (private) — `setActive(true)`; on failure `audioSessionError = "Audio resume: …"` and, if `attempt < 2`, retry after 1 s and return. Then `interrupted = false` and, if not speaking, `lineEnded(gen: generation)` drains what is still valid in priority order.
+- `interruption(_:)` (private) — `.began`: `requeueCurrent()` if speaking, `stopCurrent()`, `isSpeaking = false`, `currentPriority = nil`, `currentText = ""`, `interrupted = true`, and arms `interruptionFallback` (15 s, then `resumeAfterInterruption(attempt: 0, fromEnded: false)` if still interrupted — `.ended` is not guaranteed). `.ended`: cancel the fallback, `resumeAfterInterruption(attempt: 0, fromEnded: true)`.
+- `resumeAfterInterruption(attempt: Int, fromEnded: Bool)` (private) — `setActive(true)`; on failure `audioSessionError = "Audio resume: …"` and, if `attempt < 2`, retry after 1 s (same `fromEnded`) and return. After the third failure: **without `.ended`** (`fromEnded == false`) the call is probably still on, so it **re-arms the 15 s `interruptionFallback`** and returns without draining (Muse M3 — never talk over a call); with `.ended` it drains anyway. On success, or `fromEnded` after three failures: `interrupted = false` and, if not speaking, `lineEnded(gen: generation)` drains what is still valid in priority order.
 
 Invariants a future editor must keep:
 - **Generation token**: every backend callback (`didFinish`, `didCancel`, `didFinishPlaying`, decode error, fetch completion, watchdog) is accepted only when its `gen == generation`. `stopCurrent()` must keep incrementing `generation`; `speakNow` must keep incrementing it before dispatch.
@@ -817,7 +1062,8 @@ Invariants a future editor must keep:
 - Coalescing is by exact trimmed text. A caller that needs a verbatim repeat must use `sayAgain`, not `say` (which drops a line identical to the one playing or queued).
 - Replay cap: an interrupted line resumes at most `maxReplays` (1) times — a head-height branch every few seconds must not loop the first words of a crossing line.
 - While `interrupted`, nothing may start a backend: `say`/`sayAgain` only queue, `lineEnded` does not pop.
-- ⚠ Do not change priorities, the re-queue/replay rule, the obstacle/safety no-network rule or the watchdog without the CHANGELOG Step 10 device checks ("Speech that is never lost or looped": Repeat on the watch mid-line, "Head height." once with haptics silenced, phone call mid-route) and `docs/design.md` §5 (crossing/arrival/head = P0, obstacle names = P1).
+- No line waits more than 2.5 s for the natural voice, and after a failure none waits at all for 60 s (circuit breaker). `muted` must stay env-only (`CANEKIT_MUTE` / `CANEKIT_UITEST`).
+- ⚠ Do not change priorities, the re-queue/replay rule, the obstacle/safety no-network rule, the 2.5 s deadline / 60 s breaker, the interruption re-arm or the watchdog without the CHANGELOG Step 10 device checks ("Speech that is never lost or looped": Repeat on the watch mid-line, "Head height." once with haptics silenced, phone call mid-route) and `docs/design.md` §5 (crossing/arrival/head = P0, obstacle names = P1).
 
 ---
 
@@ -861,7 +1107,7 @@ Purpose: ElevenLabs TTS with an on-disk mp3 cache so any previously heard line (
 - `cached(_ text:) -> URL?` — file-exists check.
 - `audio(for text:) async throws -> URL` — cache hit or `synthesize` + atomic write. Throws on network/HTTP/timeout so `SpeechQueue` can fall back.
 - `prefetch(_ lines:) async` — dedupes (`Set`), filters cached, runs a `TaskGroup` with a sliding window of 3; failures ignored.
-- `synthesize(_:)` (private) — the request above; `request.timeoutInterval = timeout`; non-`HTTPURLResponse` or empty body → `.badResponse`, non-2xx → `.http`.
+- `synthesize(_:)` (private) — the request above; `voiceID` (from Secrets.plist) is percent-encoded with `.urlPathAllowed` and the URL is built with a `guard` (an unbuildable URL throws `.badResponse` — **no force unwrap**, so a bad voice id can never crash the app); `request.timeoutInterval = timeout` (an *idle* timeout between bytes — `SpeechQueue` adds its own 2.5 s total deadline); non-`HTTPURLResponse` or empty body → `.badResponse`, non-2xx → `.http`.
 - Invariant: changing `voiceID` or `model` changes the cache key (old files are simply orphaned, never reused). ⚠ Do not raise `timeout` above roughly one utterance without a device check — a `.nav`/`.scene` cache miss blocks the queue for that long before the system voice starts (`.obstacle`/`.safety` misses never wait; see `SpeechQueue.speakNow`).
 
 ---
@@ -870,11 +1116,11 @@ Purpose: ElevenLabs TTS with an on-disk mp3 cache so any previously heard line (
 
 Purpose: knows whether the user is wearing headphones, and which. The beacon renders only into headphones (a spatial click from the cane-mounted speaker is noise), and a blind user must be told when the click goes away.
 
-- `AudioRouteMonitor` — `@MainActor @Observable final class`. Published: `headphonesConnected: Bool` (`private(set)`, starts false), `outputName: String` (`private(set)`, starts `"Speaker"`: the headphone port's `portName`, else the first output's `portName`, else `"Speaker"`). Computed `isAirPods` = `outputName` contains "AirPods" (case-insensitive; best effort, currently unread — `HeadPoseTracker.isConnected` is the truth for head tracking). `@ObservationIgnored var onChange: ((Bool, String) -> Void)?`.
-- Headphone ports: `[.bluetoothA2DP, .bluetoothLE, .headphones, .usbAudio]` — the first output whose `portType` is in the set wins. `.bluetoothHFP` is deliberately excluded: a mono call-quality route cannot carry a directional click.
-- `start()` — no-op if already observing; `refresh(notify: false)` to read the launch route, then observes `AVAudioSession.routeChangeNotification` (object: the shared session) on `.main` → `refresh(notify: true)` via `MainActor.assumeIsolated`. Called by `AppModel.wireAudioRoute()` from `AppModel.start()`, right after `speech.configureAudioSession()`.
-- `refresh(notify:)` (private) — re-reads `currentRoute.outputs`; fires `onChange(headphonesConnected, outputName)` only when `notify` and the connected state actually **flipped** (switching between two headphone routes updates `outputName` silently).
-- Wiring in `AppModel.wireAudioRoute()`: after `start()`, `beacon.headphonesConnected = audioRoute.headphonesConnected`. `onChange` → `beacon.headphonesConnected = connected`, log `"audioroute"`; connected → `speech.say("<name> connected.", .nav, ttl: 5)` and, if navigating, `head.start()` + `recenterPending = true`; disconnected → `speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)`. At route start `AppModel.announceChannels()` says "No headphones. Beacon paused until AirPods connect." when not connected (plus the watch / haptics lines), `.nav`, ttl 20. UI: `GuideCard` beacon pill "Beacon paused" and head pill "No AirPods" when not connected.
+- `AudioRouteMonitor` — `@MainActor @Observable final class`. Published: `headphonesConnected: Bool` (`private(set)`, starts false), `outputName: String` (`private(set)`, starts `"Speaker"`: the headphone port's `portName`, else the first output's `portName`, else `"Speaker"`). Computed `isAirPods` = `outputName` contains "AirPods" (case-insensitive; best effort, currently unread — `HeadPoseTracker.isConnected` is the truth for head tracking). `@ObservationIgnored var onChange: ((Bool, String) -> Void)?` (debounced, announced), `@ObservationIgnored var onImmediateChange: ((Bool) -> Void)?` (raw, undebounced). Private debounce state: `pending: Task<Void, Never>?`, `announced: Bool?` (the last state actually announced).
+- Headphone ports: `[.bluetoothA2DP, .bluetoothLE, .headphones, .usbAudio]` — the first output whose `portType` is in the set wins. **No `.bluetoothHFP`**: a mono call-quality route cannot carry a directional (HRTF) click, and the one `.playback` session has no Bluetooth options, so AirPods arrive as A2DP. The monitor is read-only toward the audio session (never sets a category, mode, option or route).
+- `start()` — no-op if already observing; `refresh(notify: false)` to read the launch route, **`announced = headphonesConnected`** (the launch state counts as announced), then observes `AVAudioSession.routeChangeNotification` (object: the shared session) on `.main` → `refresh(notify: true)` via `MainActor.assumeIsolated`. Called by `AppModel.wireAudioRoute()` from `AppModel.start()`, right after `speech.configureAudioSession()`.
+- `refresh(notify:)` (private) — re-reads `currentRoute.outputs`, updates `headphonesConnected` / `outputName`. When `notify` and the connected state **flipped**: (1) `onImmediateChange(headphonesConnected)` at once — the beacon must stop the moment the AirPods drop, not click from the cane speaker for 2 s; (2) cancels any `pending` announcement and starts a new one that sleeps **2 s** and then fires `onChange(state, outputName)` only if the state is unchanged **and** differs from `announced` (then records it). After a phone call the route flaps through the receiver / HFP and back; the debounce keeps that from speaking "disconnected" then "connected" with the AirPods still in (Muse L2). Switching between two headphone routes updates `outputName` silently.
+- Wiring in `AppModel.wireAudioRoute()`: after `start()`, `beacon.headphonesConnected = audioRoute.headphonesConnected`. `onImmediateChange` → `beacon.headphonesConnected = connected`. `onChange` → `beacon.headphonesConnected = connected`, log `"audioroute"`; connected → `speech.say("<name> connected.", .nav, ttl: 5)` and, if navigating, `head.start()` + `recenterPending = true`; disconnected → `speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)` + `head.stop()`. At route start `AppModel.announceChannels()` says "No headphones. Beacon paused until AirPods connect." when not connected (plus the watch / haptics lines), `.nav`, ttl 20. UI: `GuideCard` beacon pill "Beacon paused" and head pill "No AirPods" when not connected.
 
 ---
 
@@ -905,8 +1151,9 @@ Purpose: a soft periodic click rendered with HRTF from the direction to walk. Gr
 - `restartLoop()` (private) — `player.stop()` (drops any scheduled buffer so there is never a second loop), `scheduleBuffer(clickBuffer, at: nil, options: [.loops])`, restore `player.volume = renderedVolume`, `play()`.
 - `observeRouteChanges()` (private, registered once via `configObserver == nil`) — `.AVAudioEngineConfigurationChange` (object: the engine; AirPods connect/disconnect) → `restartEngine()`; `AVAudioSession.interruptionNotification` (call/Siri) → `.began`: `silence()` (the pill must not claim a live click), `.ended`: `restartEngine()`. Both delivered on `.main` and entered with `MainActor.assumeIsolated`.
 - `restartEngine(attempt: Int = 0)` (private) — guard `isRunning`; `setActive(true)`; `engine.start()` if stopped; `restartLoop()`; `render()`; `lastError = nil`. On failure `lastError = "Beacon restart: …"` and, if `attempt < 3`, retry after 1 s — otherwise the click would be gone for the rest of the walk.
-- Inputs (each calls `render()`): `setTarget(bearing: Double?)` (nil → silent), `setHeading(_ h: Double?)` (degrees true, already gyro-gated by `AppModel.location.onHeading`), `setHeadYaw(_ yaw: Double)` (degrees, right-positive), `setSpeaking(_ on: Bool)` (from `SpeechQueue.isSpeaking`).
-- `render()` (private) — if not running / disabled / **no headphones** / no target / no heading → `silence()`; otherwise the formulas above, setting `player.position`, `environment.listenerAngularOrientation`, `player.volume`, `renderedError`, `renderedVolume`.
+- `resumeIfNeeded()` — `guard isRunning, !engine.isRunning` → `restartEngine()`. The audio engine can stop across a screen lock without an interruption notification (Muse M4). Caller: `AppModel.scenePhaseChanged(.active)`.
+- Inputs (each calls `render()`): `setTarget(bearing: Double?)` (nil → silent), `setHeading(_ h: Double?)` (degrees true; compass readings gyro-gated by `AppModel.location.onHeading`, GPS course ungated), `setHeadYaw(_ yaw: Double)` (degrees, right-positive), `setSpeaking(_ on: Bool)` (from `SpeechQueue.isSpeaking`).
+- `render()` (private) — if not running / disabled / **no headphones** / **`SpeechQueue.muted`** (simulator tests stay silent) / no target / no heading → `silence()`; otherwise the formulas above, setting `player.position`, `environment.listenerAngularOrientation`, `player.volume`, `renderedError`, `renderedVolume`.
 - `silence()` (private) — `renderedVolume = 0`, `renderedError = nil`, `player.volume = 0` if running.
 - Cross-module: `AppModel.startTicker()` pushes at **10 Hz** (100 ms) while a route is active: `setSpeaking(speech.isSpeaking)`, `setHeadYaw(recenterPending ? 0 : (head.headYawDeg ?? 0))` — after a turn the AirPods yaw (relative to the old reference) already contains the body turn the phone heading has, so it is ignored until re-zeroed on the new leg — and `setTarget(nav.isNavigating ? nav.targetBearing : nil)`. `nav.targetBearing` is nil (beacon silent) on a `curved` leg and while a crossing settles (`TurnSettle`), holds the previous leg's bearing while a turn settles, and follows the recorded leg bearing inside the passed-by zone of the current waypoint. Heading arrives from `LocationService.onHeading` only when `depth.report.isTrusted || !depth.isRunning`.
 
@@ -920,7 +1167,7 @@ Purpose: head yaw from AirPods Pro via `CMHeadphoneMotionManager` (no Head Pose 
 - `ConnectionRelay` — `nonisolated private final class: NSObject, CMHeadphoneMotionManagerDelegate, @unchecked Sendable`; `didConnect`/`didDisconnect` → `onConnect?(Bool)`.
 
 - `start()` — guard available and not already active (`!manager.isDeviceMotionActive`, so a second call is a no-op); `active = true`, `referenceYaw = nil`; delegate relay hops to main and clears `headYawDeg/rawYaw` on disconnect; `startDeviceMotionUpdates(to: .main)` and inside `MainActor.assumeIsolated`: ignore if `!active` (samples already queued when `stop()` ran must not re-seed), record `lastError`, `isConnected = true`, `rawYaw = yaw`, **first sample seeds `referenceYaw`**, `headYawDeg = wrap180((referenceYaw − yaw) · 180/π)`. Called by `AppModel.beginRoute` and by the `AudioRouteMonitor` connect handler when headphones arrive mid-route.
-- `stop()` — `active = false`, `isConnected = false` (the pill must not say "Head tracked" with no data), stop updates, clear `headYawDeg/rawYaw/referenceYaw` (fresh start re-zeroes on first sample). Called by `stopRoute` / `onArrived`.
+- `stop()` — `active = false`, `isConnected = false` (the pill must not say "Head tracked" with no data), stop updates, clear `headYawDeg/rawYaw/referenceYaw` (fresh start re-zeroes on first sample). Called by `stopRoute`, `endRouteQuietly`, `onArrived`, and the `AudioRouteMonitor` disconnect handler (no AirPods, no motion).
 - `recenter()` — `referenceYaw = rawYaw`; `headYawDeg = 0` (or nil when no data). Callers:
   - `AppModel.recenter()` (`GuideCard` Recenter button, watch `.recenter`) — also clears `recenterPending` and says "Recentered." (`.nav`, ttl 2).
   - `AppModel.autoRecenterIfWalkingStraight(_:)`, run on every fix while navigating. Guarded by `recenterPending` (set at `beginRoute`, on every `nav.onWaypointAdvanced`, and on headphones connecting mid-route), `!nav.isSettling` and `head.isConnected` (else the detector resets); skipped and reset while within `recenterAfterCrossingM` = 15 m of `nav.lastReached` when that waypoint is a `crossing` (the user steps off the curb with the head still turned toward traffic). Fires when `StraightWalkDetector.update(speed:accuracy:heading:headYaw:)` returns true: 3 consecutive fixes (the first counts) with speed > 0.6 m/s, accuracy 0…20 m, course change < 15° (`location.heading`), head-yaw change < 8°. Silent (log event only); never on a timer.
@@ -931,11 +1178,18 @@ Purpose: head yaw from AirPods Pro via `CMHeadphoneMotionManager` (no Head Pose 
 
 ### `ios/CaneKit/Scene/VLMClient.swift`
 
-Purpose: transport + key plumbing for the vision-language providers; request bodies and parsing live in `CaneKitLogic` (`VLMRequest`, `VLMResponse`, `VLMError`, `VLMProvider`, `ScenePrompt`).
+Purpose: transport + key plumbing for the vision-language providers, and the cloud → on-device fallback; request bodies and parsing live in `CaneKitLogic` (`VLMRequest`, `VLMResponse`, `VLMError`, `VLMProvider`, `ScenePrompt`, `HazardPrompt`).
 
-- `VLMClient` — `nonisolated protocol: Sendable` with `name: String` and `describe(jpeg: Data) async throws -> String`.
+- `VLMClient` — `nonisolated protocol: Sendable` with `name: String` ("Muse", "Anthropic", "Gemini", "OpenAI", "On-device", or "<cloud> + On-device") and **`describe(jpeg: Data, prompt: String) async throws -> String`** (`prompt` = `ScenePrompt.text` for "Where am I", `HazardPrompt.text` for the hazard watch; throws `VLMError` or `URLError`).
+- `nonisolated extension VLMClient` — default `describe(jpeg: Data)` = `describe(jpeg:prompt: ScenePrompt.text)`. Caller: `SceneDescriber.describe()`.
+- `FallbackVLMClient` (`nonisolated struct: VLMClient`) — `primary`, `fallback: any VLMClient`, **`hazardDeadline: Duration = .seconds(2.5)`**; `name = "\(primary.name) + \(fallback.name)"`. `describe(jpeg:prompt:)`:
+  - **Hazard watch** (`prompt == HazardPrompt.text`): the cloud gets only `hazardDeadline` via `Self.first(within:_:)` — a reply after the full 8–12 s timeout would be about a place the walker has left (review round 5); on any failure or the deadline, if the task itself was cancelled → `CancellationError`, else `fallback.describe(jpeg:prompt:)` (on-device).
+  - **Everything else** ("Where am I"): tries `primary`; **`CancellationError` is rethrown** (a cancelled request must not trigger the fallback); **any other error** (no network, bad key, quota, 8/12 s timeout, refusal) → `fallback.describe(jpeg:prompt:)` with the same prompt.
+  So "Where am I" and the hazard watch always answer something.
+  - `static func first(within limit: Duration, _ op: @escaping @Sendable () async throws -> String) async throws -> String` — a `withThrowingTaskGroup` race of `op` against `Task.sleep(for: limit)`; the first child to finish wins, the other is cancelled (`defer { group.cancelAll() }`); the sleep winning (nil) throws `URLError(.timedOut)`.
 - `VLMClientFactory` — `nonisolated enum`.
-  - `static fromSecrets() -> (any VLMClient)?` — **provider fallback order**: `VLM_PROVIDER` (raw `custom | anthropic | gemini | openai`) selects one provider; empty/unknown → try `[.custom, .anthropic, .gemini, .openai]` in that order, first with a key wins. If the requested provider has no key, every other provider is tried in `VLMProvider.allCases` order (`custom, anthropic, gemini, openai`) before returning nil.
+  - **`static resolved(context: SceneContext) -> any VLMClient`** — what the app actually uses (`AppModel.init`, once, shared by `SceneDescriber` and `HazardScanner`): `VLM_PROVIDER` lowercased `== "ondevice"` → `OnDeviceVLMClient(context:)` only; else `fromSecrets()` non-nil → `FallbackVLMClient(primary: cloud, fallback: onDevice)`; no key → `OnDeviceVLMClient`. **Never nil, never needs the network.** Keys are read once; changing them needs a relaunch.
+  - `static fromSecrets() -> (any VLMClient)?` — the cloud provider or nil; **provider fallback order**: `VLM_PROVIDER` (raw `custom | anthropic | gemini | openai`) selects one provider; empty/unknown → try `[.custom, .anthropic, .gemini, .openai]` in that order, first with a key wins. If the requested provider has no key, every other provider is tried in `VLMProvider.allCases` order (`custom, anthropic, gemini, openai`) before returning nil.
   - `make(_:)` (private) — per-provider key requirements and defaults:
 
 | Provider | Required keys | Optional model key (default) | Client / `name` |
@@ -945,27 +1199,82 @@ Purpose: transport + key plumbing for the vision-language providers; request bod
 | `.gemini` | `GEMINI_API_KEY` | `GEMINI_MODEL` (`gemini-2.5-flash`) | `GeminiClient`, `"Gemini"` |
 | `.openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` (`gpt-4o-mini`) | `OpenAICompatibleClient` at `https://api.openai.com/v1`, `"OpenAI"` |
 
-- `vlmSession` — `nonisolated private let URLSession`: `waitsForConnectivity = true`, `timeoutIntervalForRequest = 20`, `timeoutIntervalForResource = 20` (whole request capped at 20 s; tolerates a lock-screen cold start on Wi-Fi).
+- `vlmSession` — `nonisolated private let URLSession`: **`waitsForConnectivity = false`**, **`timeoutIntervalForRequest = 8`**, **`timeoutIntervalForResource = 12`** — fail fast on a dead network so the on-device fallback answers instead of 20 s of silence.
 - `post(_ url:headers:body:) async throws -> Data` (nonisolated private) — `POST`, `Content-Type: application/json` + provider headers; no `HTTPURLResponse` → `VLMError.malformed("no HTTP response")`; status checked by `VLMResponse.checkStatus` (throws `VLMError.http(code, provider message or first 200 bytes)`).
-- `OpenAICompatibleClient` (`nonisolated struct: VLMClient`; `name`, `baseURL`, `apiKey`, `model`) — normalises the base URL (trim, strip trailing `/`, append `/chat/completions` unless already present; missing scheme → `.malformed("bad base URL")`), header `Authorization: Bearer <key>`, body `VLMRequest.openAICompatible(model:jpegBase64:)`, parse `VLMResponse.openAICompatible`.
-- `AnthropicClient` — `https://api.anthropic.com/v1/messages`, headers `x-api-key`, `anthropic-version: 2023-06-01`; `VLMRequest.anthropic` / `VLMResponse.anthropic`.
-- `GeminiClient` — `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`, header `x-goog-api-key`; `VLMRequest.gemini` / `VLMResponse.gemini`.
+- `OpenAICompatibleClient` (`nonisolated struct: VLMClient`; `name`, `baseURL`, `apiKey`, `model`) — `describe(jpeg:prompt:)` normalises the base URL (trim, strip trailing `/`, append `/chat/completions` unless already present; missing scheme → `.malformed("bad base URL")`), header `Authorization: Bearer <key>`, body `VLMRequest.openAICompatible(model:jpegBase64:prompt:)`, parse `VLMResponse.openAICompatible`.
+- `AnthropicClient` — `https://api.anthropic.com/v1/messages` (a constant literal, the one remaining `!`), headers `x-api-key`, `anthropic-version: 2023-06-01`; `VLMRequest.anthropic(model:jpegBase64:prompt:)` / `VLMResponse.anthropic`.
+- `GeminiClient` — **safe URL**: the model name from Secrets.plist is percent-encoded (`.urlPathAllowed`) into `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`, and an unbuildable URL throws `VLMError.malformed("bad Gemini model name")` (no force unwrap); header `x-goog-api-key` (never a query parameter); `VLMRequest.gemini(jpegBase64:prompt:)` / `VLMResponse.gemini`.
+- ⚠ Do not let `resolved(context:)` return a cloud client without the on-device fallback, or rethrow non-cancellation errors from `FallbackVLMClient`: "Where am I" must never need a key (AGENTS.md) and `testWhereAmIWithoutKeyReportsGracefully` / `testWhereAmIDescribesAStreetViewFrame` assume it.
 - ⚠ Do not change request/response shapes here — they belong in `ios/Logic/Sources/CaneKitLogic/VLMCodec.swift`; any change there must keep `VLMCodecTests` green (`make test`: `geminiRequestCarriesImageAndPrompt`, `openAIRequestUsesDataURI`, `anthropicRequestShape`, `geminiResponseParses`, `openAIResponseParsesStringAndPartsAndRefusal`, `anthropicResponseParsesAndDetectsRefusal`, `httpErrorsCarryProviderMessage`).
 
 ---
 
 ### `ios/CaneKit/Scene/SceneDescriber.swift`
 
-Purpose: "Where am I" — latest camera frame → 1024 px JPEG → configured VLM → one spoken sentence.
+Purpose: "Where am I" — latest camera frame → 1024 px JPEG → the shared `VLMClient` (cloud with on-device fallback, or on-device) → one spoken sentence.
 
-- `SceneDescriber` — `@MainActor @Observable final class`. Published: `isDescribing`, `lastDescription`, `lastError`, `lastLatencyMs: Int`, `providerName: String?` (nil = no key; logged by `AppModel.describeScene()`). `GuideCard` shows "Describing…" / disables the button while `isDescribing`, and renders `lastDescription` and `lastError`. Private: `client = VLMClientFactory.fromSecrets()`, `processor: DepthFrameProcessor`, `speech: SpeechQueue`.
-- `init(processor:speech:)` — built in `AppModel.init` with `depth.processor` and `speech`.
-- `describe()` — one at a time (`guard !isDescribing`). No client → `speech.say("No scene description key is set.", .scene)`, `lastError = "No VLM key in Secrets.plist"`. Otherwise `isDescribing = true`, `lastError = nil`, `say("Describing.", .scene, ttl: 3)`, then a `Task`:
+- `SceneDescriber` — `@MainActor @Observable final class`. Published: `isDescribing`, `lastDescription`, `lastError`, `lastLatencyMs: Int`, `providerName: String?` (still declared optional but always `client.name` now — e.g. "Muse + On-device" or "On-device"; logged by `AppModel.describeScene()` and the `start` event). `GuideCard` shows "Describing…" / disables the button while `isDescribing`, and renders `lastDescription` (a11y label "Scene: …") and `lastError`. Private: `client: any VLMClient` (**injected, never nil**), `processor: DepthFrameProcessor`, `speech: SpeechQueue`.
+- `init(processor: DepthFrameProcessor, speech: SpeechQueue, client: any VLMClient)` — built in `AppModel.init` with `depth.processor`, `speech` and `VLMClientFactory.resolved(context: sceneContext)`.
+- `describe()` — one at a time (`guard !isDescribing`). There is **no no-key branch any more**. `isDescribing = true`, `lastError = nil`, `say("Describing.", .scene, ttl: 3)`, then a `Task`:
   1. Wait for `processor.hasCameraFrame` up to **30 × 100 ms = 3 s** (Action-button cold launch); a cancelled sleep returns (the `defer` still clears `isDescribing`).
-  2. `snapshot(processor)` — `@concurrent private static`, runs `processor.jpegSnapshot(maxDimension: 1024, quality: 0.7)` off the main actor (~30–80 ms on device). nil → `lastError = "No camera frame"`, `say("Camera warming up. Try again.", .scene)`.
-  3. `client.describe(jpeg:)`; success → `lastLatencyMs`, `lastDescription`, `say(text, .scene, ttl: 20)`; failure → `lastError`, `say("Scene description failed.", .scene)`.
-- Triggers, all via `AppModel.describeScene()`: `GuideCard` "Where am I" button, watch `.describe`, `AppIntents.swift` (Action button App Shortcut), `AppModel.cameraControlPressed()`.
-- All speech is `.scene` (lowest priority) — a description never interrupts a route or safety line and is dropped after its ttl if the voice is busy. ⚠ Do not change the no-key path without re-running `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully`.
+  2. `snapshot(processor)` — `@concurrent private static`, runs `processor.jpegSnapshot(maxDimension: 1024, quality: 0.7)` off the main actor (~30–80 ms on device; a Street View frame under `FrameReplay`). nil → `lastError = "No camera frame"`, `say("Camera warming up. Try again.", .scene)` — what the simulator (no ARKit) hits in `testWhereAmIWithoutKeyReportsGracefully`.
+  3. `client.describe(jpeg:)` (scene prompt; worst case a cloud failure after ≤ 12 s, then the on-device answer); success → `lastLatencyMs`, `lastDescription`, `say(text, .scene, ttl: 20)`; failure (only if the on-device fallback also throws) → `lastError`, `say("Scene description failed.", .scene)`.
+- `onResult: ((String?, String?, Int?) -> Void)?` (`@ObservationIgnored`) — every outcome (sentence, error, ms) on the main actor: no frame, success, failure. `AppModel.wireDescriber` logs it as `describe_result`, so a walk log shows what "Where am I" actually said.
+- Triggers, all via `AppModel.describeScene()`: `GuideCard` "Where am I" button, watch `.describe`, `AppIntents.swift` (Action button App Shortcut), `AppModel.cameraControlPressed()`, and the automation hook `AppModel.describeEveryWaypoint` (`CANEKIT_DESCRIBE_EVERY_WAYPOINT=1`: route start + every waypoint, used by the Street View e2e).
+- All speech is `.scene` (lowest priority) — a description never interrupts a route or safety line and is dropped after its ttl if the voice is busy. ⚠ Do not change the no-frame / failure paths without re-running `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (expects a text containing "camera" or starting "Scene:" within 8 s, and the button back) and `make uitest-streetview`.
+
+---
+
+### `ios/CaneKit/Scene/OnDeviceVision.swift` (Step 11)
+
+Purpose: scene understanding with no network and no API key, Apple frameworks only — Vision `ClassifyImageRequest` (what is in view), Vision `RecognizeTextRequest` (sign text), and Foundation Models (Apple's on-device LLM) to word those detections plus the LiDAR context as one sentence; a deterministic template when Apple Intelligence is off or the model is not downloaded. The iOS 26 Foundation Models API is text-only, so Vision does the seeing and the LLM only the wording — it must never invent objects. Everything here is `nonisolated` and `Sendable`; requests and `LanguageModelSession`s are created per call (no shared state).
+
+**`nonisolated struct VisionDetections: Sendable, Equatable`** — `labels: [(name: String, confidence: Float)]` (most confident first), `texts: [(text: String, confidence: Float)]`, `textHeights: [Float]` (each text's line-box height as a fraction of the image height, same order; filled by `detect`), `seenTexts: [SignPolicy.SeenText]` (texts + heights for `SignPolicy`). `==` compares names and texts only. `boringLabels` no longer drops "people"/"adult" (people are said, via `SceneVocabulary`).
+
+**`nonisolated enum OnDeviceVision`**
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `labelThreshold` | 0.25 | classification labels below this are dropped |
+| `boringLabels` | outdoor, structure, material, blue_sky, sky, daytime, night_sky, land, people, adult | too generic to say |
+| label cap | 8 | `prefix(8)` after sorting |
+| text recognition | `recognitionLevel = .fast`, `usesLanguageCorrection = true`, top candidate per observation; `minimumTextHeightFraction` = the caller's `minTextHeight` when given (Vision's default is 1/32) | |
+
+- `@concurrent static func detect(jpeg: Data, readText: Bool = true, classify: Bool = true, minTextHeight: Float? = nil) async -> VisionDetections` — runs on the global executor, never the caller's actor. `minTextHeight` = smallest text to read as a fraction of the image height (nil = Vision's default 1/32). Each request is `try?`: a Vision failure yields empty arrays, never a throw. Callers: `OnDeviceVLMClient.describe` (classify always; text only outside hazard mode; default text height) and `HazardScanner.scanSigns` (`classify: false` — classification there was wasted CPU every scan — and `minTextHeight: 1/128`, so 7.5 cm sign letters read from ≈ 7 m, not 1.7 m, measured by `ios/scripts/sign_probe.swift`).
+
+**`nonisolated enum OnDeviceHazards`** — the on-device hazard watch.
+- `static let map: [String: String]` — **exact** Vision identifiers → spoken words (14): fence → "a fence", stairs / staircase → "stairs", scooter, bicycle, motorcycle, pole, fire_hydrant / hydrant → "a fire hydrant", bench, trash_can → "a trash can", snow, ice, dog. Exact, not substring: substring matching turned `license_plate` into "ice", `scone` into "cones", `shopping_cart` into "a car". Vision's taxonomy has no cone / barrier labels (the cloud model covers those); cars, trucks and water are left out on purpose (always on a street; a whole-frame label says nothing about where). ⚠ `ios/scripts/vision_probe.swift` keeps a copy (`hazardMap`) — change both.
+- `static func reply(for d: VisionDetections, lidarAhead: Bool) -> String` — **LiDAR gate**: `"NONE"` unless `lidarAhead`; otherwise the first label (in confidence order) with confidence ≥ **0.35** whose lowercased identifier is in `map` → `"<word> ahead"`; else `"NONE"`. The camera only *names* what LiDAR already sees, so a parked bike across the street stays silent and the railings that score "fence" 44–62 % all along the route (streetview README) do not chatter. The reply then goes through `HazardWatchPolicy.line(forReply:now:)` like a cloud reply.
+
+**`nonisolated final class SceneContext: Sendable`** — `Mutex<String>`; `set(_:)` / `get()`. Written by `AppModel.handle` on every depth report with `AppModel.contextLine(report)` (main actor), read off-main by `OnDeviceVLMClient`. Empty string = LiDAR sees nothing noteworthy (no obstacle < 3 m ahead, nothing at head height < 1.5 m, no ground hazard, no named mesh hit).
+
+**`nonisolated struct OnDeviceVLMClient: VLMClient`** — `name = "On-device"`, `context: SceneContext`.
+- `describe(jpeg:prompt:)` — hazard mode iff `prompt == HazardPrompt.text`: `detect(jpeg:, readText: false)` → `OnDeviceHazards.reply(for:, lidarAhead: !context.get().isEmpty)`. Otherwise `detect` with text → `facts` → `phrase` (Foundation Models) → on nil, `template`. Never throws in practice (every step degrades).
+- `static facts(_ d:, lidar:) -> String` — plain-text facts for the LLM (never the image): `"Depth sensor: <lidar>"`, `"Camera sees: a crosswalk, the street, cars"` (`SceneVocabulary.nouns(max: 5)`, no raw identifiers), `"Visible text: \"…\""` (up to 3 texts with confidence ≥ 0.5), newline-joined; `"Nothing detected."` when empty.
+- `static phrase(_ facts:) async -> String?` — `nil` unless `SystemLanguageModel.default.availability` is `.available`; a fresh `LanguageModelSession(instructions:)` ("…using ONLY the facts given. One sentence, under 20 words. Hazards and distances first. Never invent objects… Use meters. No preamble.") → `respond(to: facts, options: GenerationOptions(temperature: 0.2))`; an error or empty text → `nil`.
+- `static template(_ d:, lidar:) -> String` — `lidar` (if any) + `SceneVocabulary.sentence` ("Ahead: a crosswalk, the street and cars.") + a sign line from a fresh `SignPolicy` (`now: 0`), space-joined; `"Nothing recognized ahead."` when all empty.
+- ⚠ Do not let the LLM see anything but `facts`, or widen `OnDeviceHazards.map` to substring matching / street objects, without re-running `swift ios/scripts/vision_probe.swift ios/scripts/streetview` and `make uitest-streetview`; the device check is "Where am I" in airplane mode.
+
+---
+
+### `ios/CaneKit/Scene/HazardScanner.swift` (Step 11)
+
+Purpose: the camera's second job — while the LiDAR lanes watch waist-to-head, read the scene for hazards a map does not know about: **signs** (on-device Vision text, `SignPolicy`) and the **hazard watch** (one frame to the shared `VLMClient` with `HazardPrompt.text` every 8 s while walking a route, `HazardWatchPolicy`). Ground hazards come from LiDAR in `DepthFrameProcessor`, not here. Every spoken hazard goes out through `onHazard` so `AppModel` can speak it and write it to `HazardLog`.
+
+- **`enum HazardSource: String, Sendable`** — `ground, sign, vision` (raw value = the `source` field of the `hazard` log event; for signs and vision also the `HazardRecord.kind`).
+- **`HazardScanner`** — `@MainActor @Observable final class`. Owned by `AppModel.hazards`, built in `AppModel.init` as `HazardScanner(processor: depth.processor, watchClient: client)`.
+  - Published (`private(set)`): `isRunning`, `lastSign: String?`, `lastCaution: String?`, `watchProvider: String` (= `watchClient.name`, shown on `HazardsCard`), `lastWatchMs: Int?` (round trip of the last watch request), `lastError: String?`.
+  - Settable: `signsEnabled = true`, `watchEnabled = true` (AppModel overwrites both from its persisted settings in `init` and their `didSet`s), `signPeriod: TimeInterval = 3` s, `paused = false` (set by `AppModel.updateThermal`: hot → no sign scans, no hazard watch), `distanceFreshFor: TimeInterval = 2` s (older replies keep their hazard but lose any spoken distance).
+  - `static func maxReplyAge(speed: Double) -> TimeInterval` = `min(5, 4 / max(speed, 0.5))` — a reply about a frame older than this is not spoken: ~4 m of walking, capped at 5 s (1.2 m/s → 3.3 s; standing or slow → 5 s).
+  - Inputs/outputs (`@ObservationIgnored`, set by `AppModel.wireHazards`): `onHazard: ((String, HazardSource, Data?) -> Void)?` (line, source, the JPEG it came from), `isNavigating: () -> Bool`, `currentSpeed: () -> Double` (m/s of the last fix; 0 without one), `onDiagnostic: ((String, [String: Any]) -> Void)?` (→ `logger.event`: a `scan` record per sign scan and a `hazard_watch` record per reply, including `dropped: "stale"` and errors — what the camera saw, not only what was spoken). `AppModel.wireHazards` also turns the watch on without persisting it when launched with `CANEKIT_HAZARD_WATCH=1` (Street View e2e).
+  - Private: `processor`, `watchClient`, `loop: Task?`, `signPolicy = SignPolicy()`, `watchPolicy = HazardWatchPolicy()`, `watchInFlight`, `lastSignScan` (−∞).
+- `init(processor: DepthFrameProcessor, watchClient: any VLMClient)`.
+- `start()` — idempotent (`guard loop == nil`); `isRunning = true`; a main-actor `Task` that sleeps **500 ms** then `await tick()` until cancelled. Callers: `AppModel.wireHazards` (launch) and `scenePhaseChanged(.active)`. `stop()` — cancels the loop, `isRunning = false` (on `.background`).
+- `private tick() async` — `now` = wall clock; returns while `paused`. **Hazard watch**: `watchEnabled && isNavigating() && !watchInFlight && watchPolicy.shouldAsk(now:, speed: currentSpeed())` (speed > 0.5 m/s, ≥ 8 s since the last ask) → `watchInFlight = true` and an **unawaited** `Task { runWatch() }` (at most one request in flight; the loop keeps ticking). **Signs**: `signsEnabled && now − lastSignScan ≥ signPeriod` → `lastSignScan = now`, `await scanSigns(now:)` — signs are read whether or not a route is running.
+- `private scanSigns(now:) async` — 1280 px snapshot at **quality 0.8** (small sign letters survive compression) → `OnDeviceVision.detect(jpeg:, readText: true, classify: false, minTextHeight: 1.0 / 128)` → `signPolicy.line(for: d.texts, now:)` → `lastSign`, `onHazard(line, .sign, jpeg)`.
+- `private runWatch() async` — `defer { watchInFlight = false }`; 768 px snapshot (quality 0.6); `maxAge = Self.maxReplyAge(speed: currentSpeed())` fixed at request time → `watchClient.describe(jpeg:, prompt: HazardPrompt.text)` (for `FallbackVLMClient` the cloud gets 2.5 s, then on-device) → `lastWatchMs`, `lastError = nil`; a reply older than `maxAge` is **dropped** (it describes where the walker *was*); older than `distanceFreshFor` (2 s) → `HazardWatchPolicy.withoutDistance(reply)` (the hazard and side stay, the now-wrong metres go); then `watchPolicy.line(forReply:, now:)` → `lastCaution`, `onHazard(line, .vision, jpeg)`. Throw → `lastError = "Hazard watch: …"`.
+- `@concurrent private static snapshot(_ p: DepthFrameProcessor, maxDimension: CGFloat, quality: CGFloat = 0.6) async -> Data?` — `p.jpegSnapshot(maxDimension:, quality:)` off the main actor.
+- ⚠ Do not run the hazard watch while standing (a curb needs listening, not talking), raise its rate, lengthen `maxReplyAge` / `distanceFreshFor` / `FallbackVLMClient.hazardDeadline`, or speak stale replies without re-running `HazardTests` (`hazardWatchAsksOnlyWhileWalkingAndRarely`, `hazardWatchRepliesBecomeShortCautions`, `hazardReplyKeepsDecimals`, `aLateReplyLosesItsDistance`) and a device walk with the watch on; it ships **off by default** (`AppModel.hazardWatchEnabled`).
 
 ---
 
@@ -974,7 +1283,7 @@ Purpose: "Where am I" — latest camera frame → 1024 px JPEG → configured VL
 Purpose: reads `CaneKit/Resources/Secrets.plist` (git-ignored; `ios/scripts/gen.sh` copies `ios/Secrets.example.plist` in when missing). Empty strings count as missing so the example file builds with every feature degraded gracefully.
 
 - `Secrets` — `nonisolated enum`. `table: [String: String]` (private static, loaded once from `Bundle.main`; only `String` values kept so it is Sendable). `string(_ key:) -> String?` trims whitespace/newlines and returns nil for empty. `hasElevenLabs: Bool` (static computed; currently unread outside the file).
-- **Secrets.plist keys** (all strings): `VLM_PROVIDER`, `CUSTOM_BASE_URL`, `CUSTOM_API_KEY`, `CUSTOM_MODEL`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. The example ships `VLM_PROVIDER = custom`, the ElevenLabs voice/model and the Anthropic/Gemini/OpenAI model defaults filled in, `CUSTOM_MODEL` empty (code default `muse-1.3`), all keys and `CUSTOM_BASE_URL` empty.
+- **Secrets.plist keys** (all strings): `VLM_PROVIDER` (`custom | anthropic | gemini | openai | ondevice`; `ondevice` is handled only by `VLMClientFactory.resolved`), `CUSTOM_BASE_URL`, `CUSTOM_API_KEY`, `CUSTOM_MODEL`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. The example ships `VLM_PROVIDER = custom`, the ElevenLabs voice/model and the Anthropic/Gemini/OpenAI model defaults filled in, `CUSTOM_MODEL` empty (code default `muse-1.3`), all keys and `CUSTOM_BASE_URL` empty.
 
 ---
 
@@ -984,31 +1293,34 @@ Purpose: spike — Camera Control button (iPhone 16+) and volume buttons via `AV
 
 - `CameraControlInteraction` — `struct: UIViewRepresentable`; `onPress: () -> Void` (called on the main actor on `.began`; `.ended`/`.cancelled` ignored). `makeUIView` creates a non-interactive `UIView`, attaches an enabled `AVCaptureEventInteraction`, and stores it on the coordinator; `updateUIView` refreshes `coordinator.onPress`.
 - `Coordinator` — `@MainActor final class` holding `onPress` and the `interaction`.
-- Attached once in `ContentView`: `.background(CameraControlInteraction { model.cameraControlPressed() })`; `AppModel.cameraControlPressed()` increments `cameraControlPresses` (debug counter shown in `DebugFooter`) and calls `describeScene()`.
+- Attached once in `ContentView`: `.background(CameraControlInteraction { model.cameraControlPressed() })`; `AppModel.cameraControlPressed()` logs `describe {source: cameraControl}` (whether presses reach the app under ARKit is read from the trip log) and calls `describeScene()`.
 
 ---
 
 ## Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity
 
-Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests}.swift` (79 logic tests in total; `make test` / `ios/scripts/test.sh`; required `logic-tests` job in `.github/workflows/ci.yml`). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
+Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController,HazardLog}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`, `CourseSmoother`, `HazardRecord`/`HazardGeoJSON`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport,CourseSmoother,Hazards}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests,CourseSmootherTests,HazardTests}.swift` (124 logic tests in total; `make test` / `ios/scripts/test.sh`; `logic-tests` job in `.github/workflows/ci.yml`, manual for now). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
 
 ### Data flow (who calls whom)
 
 ```
-CoreLocation ──► LocationService ──onFix(GeoFix)──────► AppModel ──► NavigationEngine.update(fix:)
-                                 ──onHeading(deg true)─►          ──► TripTracker.ingest(fix)
+CoreLocation ──► LocationService ──onFix(GeoFix)──────► AppModel ──► FrameReplay.update(position:)  (simulator only)
+                                                                   ──► NavigationEngine.update(fix:)  (CourseSmoother, arrival hint)
+                                 ──onHeading(deg true, fromCourse)─►  ──► TripTracker.ingest(fix)
                                                                    ──► if nav.isNavigating:
                                                                          LiveActivityController.update(...)
                                                                          pushStatusToWatch()          (every fix; PhoneWatchLink drops same text & < 5 m)
                                                                          autoRecenterIfWalkingStraight(fix)
                                                                    ──► TripLogger.event("gps", …)
-AppModel gyro-gates onHeading (depth.report.isTrusted || !depth.isRunning) ──► NavigationEngine.update(heading:now:) + BeaconEngine.setHeading
+AppModel gyro-gates compass headings only (fromCourse || depth.report.isTrusted || !depth.isRunning)
+                 ──► NavigationEngine.update(heading:now:) + BeaconEngine.setHeading
 NavigationEngine ──onSpeak(text, .nav)──► SpeechQueue.say(ttl 12) + log "speech"
                  ──onRepeat(text)──────► SpeechQueue.sayAgain(text, .nav) (bypasses coalescing, default ttl 12) + log "speech" repeat:true
-                 ──onNavCue(NavCue)────► PhoneWatchLink.send(nav:) + AppModel.lastNavKind + log "navcue"
+                 ──onNavCue(NavCue)────► PhoneWatchLink.send(nav:) + HapticPlayer.playNav (cane buzz) + AppModel.lastNavKind + log "navcue"
                  ──onWaypointAdvanced──► log "waypoint", pushStatusToWatch, recenterPending = true, straightWalk.reset()
-                 ──onArrived──────────► log "arrived", beacon/head stop, ticker stop, pushStatusToWatch, LiveActivity.end(final:),
-                                         await TripTracker.stop(), spoken summary (ttl 30)
+                 ──onArrived──────────► log "arrived", beacon/head stop, LocationService.stop, ticker stop, pushStatusToWatch,
+                                         LiveActivity.end(final:), await TripTracker.stop(), spoken summary (ttl 30)
+AppModel ──hazard found (ground / sign / vision)──► HazardLog.record(kind:text:fix: location.fix, jpeg:) + log "hazard"
 AppModel 10 Hz ticker: beacon.setTarget(bearing: nav.isNavigating ? nav.targetBearing : nil)  (nil = silent)
                        beacon.setHeadYaw(recenterPending ? 0 : head.headYawDeg ?? 0)
 autoRecenterIfWalkingStraight reads nav.isSettling / nav.lastReached; GuideCard reads nav.instruction/distanceToNext/bearingError/gpsWeak/
@@ -1024,8 +1336,9 @@ Purpose: reduces CoreLocation to `GeoFix` + a heading in degrees true; owns the 
 
 **`final class LocationService: NSObject, @MainActor CLLocationManagerDelegate`** — `@MainActor @Observable`. Position comes from `CLLocationUpdate.liveUpdates(.otherNavigation)` (async sequence, no delegate); heading from a `CLLocationManager` created on the main actor, so its delegate callbacks are main-actor.
 
-Published (`private(set)`): `fix: GeoFix?`, `compassHeading: Double?` (degrees true, nil until first reading), `heading: Double?` (best estimate: GPS course when moving, compass otherwise), `authorized: Bool`, `denied: Bool`, `lastError: String?`, `isRunning: Bool`.
-Callbacks (`@ObservationIgnored`, invoked on main actor): `onFix: ((GeoFix) -> Void)?`, `onHeading: ((Double) -> Void)?`.
+Published (`private(set)`): `fix: GeoFix?` (**cleared by `stop()`**), `compassHeading: Double?` (degrees true, nil until first reading), `heading: Double?` (best estimate: GPS course when moving, compass otherwise), `authorized: Bool`, `denied: Bool` (set only by a live update, which never comes while denied), `lastError: String?`, `isRunning: Bool`.
+Computed: `authorizationDenied: Bool` — `manager.authorizationStatus == .denied || .restricted`, read straight from CoreLocation so it is right on the very first route (`AppModel.beginRoute` refuses to start and says so).
+Callbacks (`@ObservationIgnored`, invoked on main actor): `onFix: ((GeoFix) -> Void)?`, **`onHeading: ((Double, Bool) -> Void)?`** — degrees true plus `fromCourse`: `true` for the GPS course (immune to cane sweep and tilt, so the caller must **not** gyro-gate it), `false` for the compass (gate it).
 
 | Constant | Value | Where |
 |---|---|---|
@@ -1037,16 +1350,16 @@ Callbacks (`@ObservationIgnored`, invoked on main actor): `onFix: ((GeoFix) -> V
 - `init()` — sets delegate, filter, orientation.
 - `requestAuthorization()` — `requestWhenInUseAuthorization()` only. Called by `AppModel.start()` at launch so the prompt does not stack with Motion/HealthKit prompts at route start; **skipped when `CANEKIT_UITEST=1`** (the three-choice alert races the first XCUITest tap).
 - `start()` — idempotent (`guard !isRunning`). Requests when-in-use, `startUpdatingHeading()` if `CLLocationManager.headingAvailable()`, creates a `CLBackgroundActivitySession` (keeps location alive on screen lock; requires `UIBackgroundModes: [audio, location]` in `project.yml`), spawns `updatesTask` iterating `liveUpdates`. Sets `denied`/`authorized` from the update flags; skips updates with `authorizationRequestInProgress`; calls `ingest` for each `update.location`. Errors → `lastError`. Called by `beginRoute()` and `startMapKitRoute()`.
-- `stop()` — cancels task, stops heading, invalidates background session, `isRunning = false`. Called by `AppModel.stopRoute()`.
-- `private ingest(_ loc: CLLocation)` — builds `GeoFix(coordinate, accuracy: horizontalAccuracy, speed: loc.speed, timestamp: loc.timestamp.timeIntervalSinceReferenceDate)`, sets `fix`, calls `onFix`. **Heading rule:** if `speed > 0.7 && course >= 0`, `heading = loc.course` and `onHeading(course)` fires (course-over-ground is immune to cane tilt and the pole).
-- `locationManager(_:didUpdateHeading:)` — ignores `headingAccuracy < 0` (invalid / needs calibration). Uses `trueHeading` if ≥ 0 else `magneticHeading`. Always updates `compassHeading`; only publishes `heading`/`onHeading` when there is no fix or the last fix's `speed <= 0.7` (standing still → compass is all we have).
+- `stop()` — cancels task, stops heading, invalidates background session, `isRunning = false`, **`fix = nil`** (a stale fix must not seed the next MapKit route's origin). Called by `AppModel.stopRoute()` and `nav.onArrived` (GPS off after arrival).
+- `private ingest(_ loc: CLLocation)` — builds `GeoFix(coordinate, accuracy: horizontalAccuracy, speed: loc.speed, timestamp: loc.timestamp.timeIntervalSinceReferenceDate)`, sets `fix`, calls `onFix`. **Heading rule:** if `speed > 0.7 && course >= 0`, `heading = loc.course` and `onHeading(course, true)` fires (course-over-ground is immune to cane tilt and the pole).
+- `locationManager(_:didUpdateHeading:)` — ignores `headingAccuracy < 0` (invalid / needs calibration). Uses `trueHeading` if ≥ 0 else `magneticHeading`. Always updates `compassHeading`; only publishes `heading`/`onHeading(h, false)` when there is no fix or the last fix's `speed <= 0.7` (standing still → compass is all we have).
 - `locationManagerShouldDisplayHeadingCalibration` → `false` (never show the figure-8 sheet over the guide screen).
 - `locationManager(_:didFailWithError:)` → `lastError`.
 
 Invariants:
 - GeoFix timestamps are `timeIntervalSinceReferenceDate` wall clock; `NavigationEngine.update(heading:now:)` (and `TurnSettle.update(heading:now:)` through it) compares them against `Date().timeIntervalSinceReferenceDate` — keep both on the same clock.
 - The 0.7 m/s threshold is shared between `ingest` and the compass path; changing one without the other creates a band where no heading is published. Known open item (`docs/todo.md`): heading is nil while iOS wants compass calibration until the user walks > 0.7 m/s.
-- `onHeading` is *not* gyro-gated here; `AppModel` does that. Do not add gating in this class.
+- `onHeading` is *not* gyro-gated here; `AppModel` does that, and only for `fromCourse == false`. Do not add gating in this class, and keep the `fromCourse` flag truthful (gating the course froze the heading while walking with a normal sweep — Muse H1).
 - `heading` is also read directly by `AppModel.autoRecenterIfWalkingStraight` (course steadiness for `StraightWalkDetector`).
 
 ⚠ Do not change the 0.7 m/s course rule, `.otherNavigation`, or the background session without a device walk (CHANGELOG step 10 "Test on device" list, after `docs/devices_setup.md`) — no unit test covers CoreLocation.
@@ -1069,7 +1382,11 @@ Tunables (vars) and literals:
 | `veerMaxAccuracy` | 20 m | Veer cues need a fix at least this good; **copied into `GeofenceTracker.maxAccuracy` in `start()`** so "GPS weak" fires exactly when fences pause. Not copied into `TurnSettle.Config.maxAccuracy` (also 20) |
 | `gpsWeakAfter` | 10 s | continuous bad accuracy before "GPS weak…" is spoken |
 | Turn-cue delta | ±30° | in `reached`: `wrap180(next − prev) > 30` → `.turnRight`, `< −30` → `.turnLeft` |
-| Veer fix gate | `speed > 0.5` m/s, `accuracy ∈ [0, veerMaxAccuracy]`, `now − fix.timestamp < 5` s | in `update(heading:now:)` |
+| Veer fix gate | `speed > 0.5` m/s, `accuracy ∈ [0, veerMaxAccuracy]`, `now − fix.timestamp < 5` s, `now − headingTime < 3` s | in `update(heading:now:)`. Note `headingTime` is set to `now` at the top of that same call, so the 3 s check can never fail there; it only documents intent (a heading < 3 s old) |
+| Veer course source | `fix.speed > 0.7` m/s → error = `bearingError(target: targetBearing, heading: smoothedCourse)`, and **no veer at all while `smoothedCourse` is nil** (inside the just-reached corner's fence and the first ~15 m after it, after a poor fix, and right after a veer cue); `0.5 < speed ≤ 0.7` → the raw `bearingError` (heading vs target) | `update(heading:now:)` |
+| `CourseSmoother()` | 15 m baseline, 5 fixes per end, 30 s, 20 m (library defaults) | reset in `start`, at every waypoint, on every fix still inside `lastReached`'s fence (`distance < radiusM`), and after every veer cue |
+| Arrival hint | last waypoint current; fix within `zone = min(2 × radiusM, radiusM + max(0, accuracy)/2)`; *standing* = `fix.speed < 0.5` (−1 counts) **or** the fix is > 5 s old (no new fixes = not moving); for ≥ 20 s by the caller's clock; once per route | `checkArrivalHint(_:now:)`, from `update(fix:)` and `tick(now:)` |
+| Heading release | only when `isTurn(from: prev, to: wp.bearingNextDeg)` (> 30°, or no previous bearing) | `reached` → `TurnSettle(nextBearing:)` |
 | Settle constants | `TurnSettle.Config()` defaults | 6 m near, recede `max(6, radius/2)`, 4 s grace, 30° heading, 25 s moving cap — see `NavSupport.swift` below |
 
 Inherited from `CaneKitLogic.GeofenceTracker` (`GeoMath.swift`; not owned here, but load-bearing):
@@ -1084,41 +1401,47 @@ Inherited from `CaneKitLogic.GeofenceTracker` (`GeoMath.swift`; not owned here, 
 | `isNearCurrent(_ fix:)` | true when the fix is within `passedByFactor × radius` of the current waypoint; always false on the last waypoint. Veer cues are muted there |
 | `OffCourseDetector` | `threshold = 25°`, `hold = 3 s`, `cooldown = 10 s`; after a cue a new full hold is required |
 
-Private state (`@ObservationIgnored`): `tracker: GeofenceTracker?`, `offCourse = OffCourseDetector()`, `lastFix: GeoFix?`, `heading: Double?`, `weakSince: TimeInterval?`, `previousBearing: Double?` (the `bearing_next_deg` of the last reached waypoint), `settle: TurnSettle?`, `lastSpokenLine: String` (what Repeat says), `legCurved: Bool` (the leg now being walked is `curved`).
+`lastFix: GeoFix?` is `@ObservationIgnored private(set)` — most recent fix, kept across `stop()`/`start()`; read by `AppModel.recordHazard` (when < 120 s old) to geotag hazards after arrival stopped location.
+
+Private state (`@ObservationIgnored`): `tracker: GeofenceTracker?`, `offCourse = OffCourseDetector()`, `heading: Double?`, `headingTime: TimeInterval` (−∞; wall clock of the last heading), `courseSmoother = CourseSmoother()`, `smoothedCourse: Double?` (its latest output; nil until 15 m of good track on the current leg), `nearArrivalSince: TimeInterval?`, `arrivalHintGiven: Bool`, `weakSince: TimeInterval?`, `previousBearing: Double?` (the `bearing_next_deg` of the last reached waypoint), `settle: TurnSettle?`, `lastSpokenLine: String` (what Repeat says), `legCurved: Bool` (the leg now being walked is `curved`).
 
 Functions:
-- `start(_ route: Route)` — new `GeofenceTracker(waypoints:)` with `maxAccuracy = veerMaxAccuracy`; resets `offCourse`, all flags, `waypointIndex = 0`, `startedAt = Date()`, `previousBearing`/`settle`/`legCurved`/`lastReached`; `refreshInstruction()`; speaks `"Route started. \(route.name). First: \(first.say)"` and stores it as `lastSpokenLine`. Does not clear `lastFix`.
+- `start(_ route: Route)` — new `GeofenceTracker(waypoints:)` with `maxAccuracy = veerMaxAccuracy`; resets `offCourse`, `courseSmoother`, `smoothedCourse`, `nearArrivalSince`, `arrivalHintGiven`, all flags, `waypointIndex = 0`, `startedAt = Date()`, `previousBearing`/`settle`/`legCurved`/`lastReached`; `refreshInstruction()`; speaks `"Route started. \(route.name). First: \(first.say)"` and stores it as `lastSpokenLine`. Does not clear `lastFix`.
 - `stop()` — `isNavigating = false`, drops tracker/settle, `isSettling = false`, `instruction = "No route"`, clears distance/bearing/error. Does **not** clear `route`/`arrived`/`lastSpokenLine`/`lastReached`.
 - `next()` — manual advance (watch Next / crown, GuideCard Next): guard navigating; `tracker.advance()` then `reached(wp, index: waypointIndex, isLast: tracker.isFinished, skipped: [], manual: true)`. Speaks the skipped waypoint's line and its wrist cue; the new leg is live at once.
 - `appendToLastSpoken(_ text: String)` — appends a line spoken outside the engine (the arrival trip summary from `AppModel.onArrived`) to `lastSpokenLine`, so Repeat includes it.
 - `repeatInstruction()` — if neither navigating nor arrived: `onSpeak("No route running.", .nav)`. Else text = `lastSpokenLine` (or `instruction` if empty), plus `" Next, \(tracker.current.placeName), in \(distanceToNext) meters."` while navigating with a known distance; delivered through **`onRepeat`**, not `onSpeak`. After arrival it repeats the arrival waypoint's line.
 - `update(fix: GeoFix)` — guard navigating and tracker. Order matters:
-  1. `lastFix = fix`; `now = fix.timestamp`.
+  1. `lastFix = fix`; `now = fix.timestamp`; `smoothedCourse = courseSmoother.update(fix)` (nil for a poor fix or < 15 m of track); then, if the fix is still **inside the fence of `lastReached`** (`distance < radiusM`), `courseSmoother.reset()` and `smoothedCourse = nil` — the trail would hold the end of the old leg, whose first "course" is a diagonal across the corner 35–45° off the new leg (review round 5 harness: false "Veer right." after WP2/WP3/WP6 on every clean walk).
   2. **GPS-weak:** if `accuracy < 0 || accuracy > veerMaxAccuracy`: start `weakSince`; after `gpsWeakAfter` s set `gpsWeak = true` and speak `"GPS weak. Waypoint cues paused until it recovers."` (once). Else clear `weakSince`; if it was weak speak `"GPS back."` (once).
   3. `settle?.update(fix)` (copy, mutate, write back), then `refreshSettling(now:)`.
   4. If a current waypoint exists: `distanceToNext`, `targetBearing = effectiveBearing(live: tracker.targetBearing(from: fix), now:)`, `recomputeError()`.
   5. `tracker.update(fix)` → on `.reached(index, wp, isLast, skipped, passedBy)` call `reached(..., manual: false, passedBy:)`. (So the fix that reaches a waypoint is never fed to the new settle; it only sets its start distance.)
-- `update(heading h: Double, now: TimeInterval)` — guard navigating; stores heading. If settling: `settle.update(heading:now:)`, `refreshSettling`, and `targetBearing` recomputed from `lastFix` (a heading release swings the beacon immediately). Then `recomputeError()`. Veer cue only when `bearingError`, `lastFix` and tracker exist, fix accuracy in `[0, veerMaxAccuracy]`, `fix.speed > 0.5`, `now − fix.timestamp < 5 s`, `!isSettling`, `!legCurved`, and `!tracker.isNearCurrent(fix)`; then `offCourse.update(error:now:)` → speak `"Veer left."`/`"Veer right."` and `onNavCue(.turnLeft/.turnRight)`. Caller must gyro-gate (AppModel does) — this also gates the settle heading release.
+  6. `checkArrivalHint(fix, now: fix.timestamp)`.
+- `tick(now: TimeInterval)` — clock-driven checks that must not wait for a GPS fix: guard navigating and a `lastFix`, then `checkArrivalHint(lastFix, now:)`. Called at **10 Hz** by `AppModel.startTicker()` with wall-clock `now` (the same clock as `GeoFix.timestamp`) — CoreLocation stops delivering fixes when the walker stands still, which is exactly when the hint is needed (review round 5).
+- `private checkArrivalHint(_ fix: GeoFix, now: TimeInterval)` — only while navigating with the **last** waypoint current (else `nearArrivalSince = nil`). Standing near the door — `distance ≤ zone` with `zone = min(2 × radiusM, radiusM + max(0, fix.accuracy)/2)` (the fence plus half the fix's uncertainty, not a flat 2× radius that covered almost the whole final leg) **and** standing (`fix.speed < 0.5` or `now − fix.timestamp > 5` s) — starts / continues `nearArrivalSince` (at `now`); anything else resets it (a normal walking approach must not hear the hint). After ≥ 20 s, once per route (`arrivalHintGiven`): `onSpeak("You are close to \(wp.placeName). Keep going toward it, or press Next to finish.", .nav)` — for GPS too poor under the entrance overhang to give the two plausible arrival fixes. It does not change `lastSpokenLine`.
+- `update(heading h: Double, now: TimeInterval)` — guard navigating; stores `heading` and `headingTime = now`. If settling: `settle.update(heading:now:)`, `refreshSettling`, and `targetBearing` recomputed from `lastFix` (a heading release swings the beacon immediately). Then `recomputeError()`. Veer cue only when `bearingError`, `lastFix` and tracker exist, fix accuracy in `[0, veerMaxAccuracy]`, `fix.speed > 0.5`, `now − fix.timestamp < 5 s`, `now − headingTime < 3 s` (always true here, see table), `!isSettling`, `!legCurved`, and `!tracker.isNearCurrent(fix)`. The error judged is the raw `bearingError` at `0.5 < speed ≤ 0.7`; **while walking (`speed > 0.7`) it is `GeoMath.bearingError(target: targetBearing, heading: smoothedCourse)`, and with no `smoothedCourse` (or no `targetBearing`) there is no veer judgement at all**. Then `offCourse.update(error:now:)` → speak `"Veer left."`/`"Veer right."` and `onNavCue(.turnLeft/.turnRight)` (which AppModel also buzzes on the cane), then **`courseSmoother.reset()`, `smoothedCourse = nil`** — the 15 m trail still holds the veer, and without a reset it re-fires once the 10 s cooldown ends, after the walker has already corrected (nav harness, round 5). Caller must gyro-gate compass headings (AppModel does) — this also gates the settle heading release.
 - `private refreshSettling(now:)` — no `settle` → `isSettling = false`. If `settle.isLive(at: now)`: clear settle, `isSettling = false`, `offCourse.reset()` (hold timer restarts on the new leg); else `isSettling = true`.
 - `private effectiveBearing(live:now:)` — `nil` if `legCurved`; else `settle.bearing(live:at:)` while a settle exists (held bearing, or nil at a crossing); else `live`.
 - `private recomputeError()` — `bearingError = GeoMath.bearingError(target:heading:)` or nil.
 - `private reached(_ wp, index, isLast, skipped, manual, passedBy = false)`:
   - `waypointIndex = index + 1`, `lastReached = wp`; `nextWp = route.waypoints[safe: index + 1]` (nil when last); `prev = skipped.last?.bearingNextDeg ?? previousBearing`.
-  - **Passed-by:** speaks `"Passed \(wp.placeName)."` + `" \(nextWp.placeName) in N meters."` (distance from `lastFix`, when both exist); stored as `lastSpokenLine`. **No wrist cue** and not the waypoint's own `say` (its "turn right…" would be stale). On a normal (non-passed-by) fire, if any **skipped** waypoint was a crossing and the entered one is not, the wrist still gets `.crossing` (the user just walked across that street).
+  - **Passed-by:** speaks `"Passed \(wp.placeName)."` + `" \(nextWp.placeName.sentenceCased) in N meters."` (distance from `lastFix`, when both exist; `String.sentenceCased` is a file-private extension that upper-cases the first character, so "the path to CIF" starts the sentence as "The path to CIF"); stored as `lastSpokenLine`. **No wrist cue** and not the waypoint's own `say` (its "turn right…" would be stale). On a normal (non-passed-by) fire, if any **skipped** waypoint was a crossing and the entered one is not, the wrist still gets `.crossing` (the user just walked across that street).
   - **Otherwise:** if `skipped` non-empty speak `"Passed one waypoint."` / `"Passed N waypoints."` first, then `wp.say` (= `lastSpokenLine`). Wrist cue precedence: `isLast` → `.arrived`; else `wp.crossing` → `.crossing`; else turn from `delta = wrap180(wp.bearingNextDeg − prev)` (±30°).
-  - `previousBearing = wp.bearingNextDeg`; `legCurved = wp.curved`; `offCourse.reset()`.
+  - `previousBearing = wp.bearingNextDeg`; `legCurved = wp.curved`; `offCourse.reset()`; **`courseSmoother.reset()`, `smoothedCourse = nil`** (the old leg's course lagged ~16 s after each turn and produced false veers right after WP2/WP3).
   - Last: clears settle, `arrived = true`, `isNavigating = false`, `instruction = "Arrived: \(wp.say)"`, `distanceToNext = 0`.
-  - Otherwise: `immediate = manual || passedBy`; `settle = TurnSettle(anchor: wp.coordinate, radiusM: wp.radiusM, heldBearing: immediate ? nil : prev, nextBearing: wp.bearingNextDeg, isCrossing: wp.crossing && !immediate, startDistance: distance(lastFix, wp) or ∞, releasedAt: immediate ? now : nil)` with `now = lastFix?.timestamp ?? Date()`; `refreshSettling(now:)` (an immediate settle is cleared on the spot); `refreshInstruction()`.
+  - Otherwise: `immediate = manual || passedBy`; `settle = TurnSettle(anchor: wp.coordinate, radiusM: wp.radiusM, heldBearing: immediate ? nil : prev, nextBearing: Self.isTurn(from: prev, to: wp.bearingNextDeg) ? wp.bearingNextDeg : nil, isCrossing: wp.crossing && !immediate, startDistance: distance(lastFix, wp) or ∞, releasedAt: immediate ? now : nil)` with `now = lastFix?.timestamp ?? Date()`; `refreshSettling(now:)` (an immediate settle is cleared on the spot); `refreshInstruction()`. **Heading release only at a real turn**: at a straight-through crossing the heading already matches the next leg, so a heading release would end the curb silence on the fence-entry fix.
   - Then `onWaypointAdvanced?()` (after the instruction refresh so watch/Live Activity see the new leg), then `onArrived?()` if last.
 - `private refreshInstruction()` — `instruction = tracker.current.say` (or `"Arrived"`); recomputes distance and `targetBearing = effectiveBearing(live: tracker.targetBearing(from: lastFix))`, or, with no fix yet, `effectiveBearing(live: route.waypoints[waypointIndex − 1].bearingNextDeg)` (nil before WP1).
-- `private extension Array { subscript(safe:) }` — bounds-checked index.
+- `static func isTurn(from prev: Double?, to next: Double?) -> Bool` (in an `extension NavigationEngine`) — `next == nil` → false; `prev == nil` → true (`next != nil`); else `|wrap180(next − prev)| > 30`. Same ±30° as the turn wrist cue.
+- `private extension Array { subscript(safe:) }` — bounds-checked index. `private extension String { var sentenceCased }` — first character upper-cased.
 
-Veer is muted when any of: the turn is settling; the leg is `curved`; the fix is inside the current waypoint's passed-by zone (`isNearCurrent`); the fix is > 20 m, invalid, older than 5 s, or ≤ 0.5 m/s. The beacon is silent (`targetBearing == nil`) on a curved leg and while a crossing is settling; near a waypoint it follows the recorded leg bearing (tracker rule), never a live bearing pointing back at a missed waypoint.
+Veer is muted when any of: the turn is settling; the leg is `curved`; the fix is inside the current waypoint's passed-by zone (`isNearCurrent`); the fix is > 20 m, invalid, older than 5 s, or ≤ 0.5 m/s; or, while walking (> 0.7 m/s), there is no `smoothedCourse` (inside the just-reached corner's fence, less than 15 m of good track beyond it, or just after a veer cue). The beacon is silent (`targetBearing == nil`) on a curved leg and while a crossing is settling; near a waypoint it follows the recorded leg bearing (tracker rule), never a live bearing pointing back at a missed waypoint.
 
 Auto-recenter (AppModel, reads this engine): `recenterPending` is set at `beginRoute`, after every waypoint (`onWaypointAdvanced`) and when headphones connect mid-route; while pending the ticker renders the beacon with head yaw 0 (the AirPods yaw would double-count the body turn). `autoRecenterIfWalkingStraight(fix)` needs `recenterPending && !nav.isSettling && head.isConnected`, refuses within `recenterAfterCrossingM = 15` m of `nav.lastReached` when it was a crossing, then feeds `StraightWalkDetector.update(speed:accuracy:heading: location.heading, headYaw: head.headYawDeg ?? 0)`; on true → `head.recenter()`, pending cleared, log `recenter` `auto: true`. Any failed guard resets the detector.
 
 ⚠ Do not change `veerMaxAccuracy` independently of `GeofenceTracker.maxAccuracy` (20 m) — the "GPS weak" line promises fences are paused; verified by `geofenceGatesOnAccuracyAndSpeedExceptArrival`, `invalidSpeedOrAccuracyDoesNotPassIntermediateGate`.
-⚠ Do not change the ±30° turn delta, the veer gate or its mute conditions, or the settle construction in `reached` without re-running `offCourseNeedsThreeSecondsThenCoolsDown`, `offCourseResetsWhenBackOnBearing`, `walkingPastAWaypointCountsAsReached`, `missedFenceIsSkippedWhenTheNextOneIsEntered`, `targetBearingUsesTheLegNearTheWaypoint`, the `TurnSettle` tests in `NavSupportTests`, and the CHANGELOG step-10 device walk ("walk past WP2 on the far side → 'Passed Illinois Street sidewalk…' and no Veer; at Goodwin keep walking to the corner → no Veer until you turn, beacon then swings north; at Green St stand at the curb with your head turned → no clicks until you face north; Repeat on the watch mid-line → the line again + distance"). No unit test covers `NavigationEngine` itself (app target); the XCUITest `testGuideStartsAndStopsDemoRoute` only asserts Next changes the instruction, Repeat exists and does not advance, and Repeat is gone after Stop.
+⚠ Do not change the ±30° turn delta, `isTurn`, the veer gate or its mute conditions, the smoothed-course switch at 0.7 m/s and its resets (per waypoint, inside the corner fence, after a veer), the arrival-hint zone / standing rule, or the settle construction in `reached` without re-running `CourseSmootherTests`, `make e2e` (`clean`: no veer and exact wrist cues; `gps_jitter`: ≤ 3 veers; `wrong_turn`: ≥ 1 "Veer right."), `offCourseNeedsThreeSecondsThenCoolsDown`, `offCourseResetsWhenBackOnBearing`, `walkingPastAWaypointCountsAsReached`, `missedFenceIsSkippedWhenTheNextOneIsEntered`, `targetBearingUsesTheLegNearTheWaypoint`, the `TurnSettle` tests in `NavSupportTests`, and the CHANGELOG step-10 device walk ("walk past WP2 on the far side → 'Passed Illinois Street sidewalk…' and no Veer; at Goodwin keep walking to the corner → no Veer until you turn, beacon then swings north; at Green St stand at the curb with your head turned → no clicks until you face north; Repeat on the watch mid-line → the line again + distance"). No unit test covers `NavigationEngine` itself (app target); the XCUITest `testGuideStartsAndStopsDemoRoute` only asserts Next changes the instruction, Repeat exists and does not advance, and Repeat is gone after Stop.
 
 ---
 
@@ -1140,7 +1463,7 @@ Purpose: small pure state machines moved out of app classes in step 10 so they c
 | `minSpeed` | 0.5 m/s | moving = `speed > 0.5`; stopped (crossing) = `speed < 0.5` (−1 counts as stopped) |
 | `maxAccuracy` | 20 m | good = `accuracy ∈ [0, 20]` |
 
-Stored: `anchor: Coordinate`, `heldBearing: Double?` (nil → fall back to live), `nextBearing: Double?` (nil → no heading release), `isCrossing: Bool`, `config`, `recedeM`; `public private(set)` `minDistance` (starts at `startDistance`), `releaseAt: TimeInterval?`, `movingSeconds`; private `recedeHits`, `stoppedHits`, `lastTime`.
+Stored: `anchor: Coordinate`, `heldBearing: Double?` (nil → fall back to live), `nextBearing: Double?` (nil → no heading release; since Step 11 `NavigationEngine` passes nil whenever the waypoint is not a > 30° turn — `isTurn` — so a straight-through crossing is released only at the curb), `isCrossing: Bool`, `config`, `recedeM`; `public private(set)` `minDistance` (starts at `startDistance`), `releaseAt: TimeInterval?`, `movingSeconds`; private `recedeHits`, `stoppedHits`, `lastTime`.
 
 - `init(anchor:radiusM:heldBearing:nextBearing:isCrossing:startDistance:releasedAt: TimeInterval? = nil, config: Config = Config())` — non-nil `releasedAt` = manual / passed-by advance, live immediately.
 - `isLive(at now:) -> Bool` — `releaseAt != nil && now >= releaseAt`, or `movingSeconds >= maxMovingSeconds`.
@@ -1240,7 +1563,7 @@ Purpose: JSONL log of everything needed to reproduce a walk, one file per app se
 
 - `start()` — idempotent (`guard handle == nil`); creates the file, opens a write handle, writes a `session` event, starts the 2 s flush loop. Called once from `AppModel.start()`. (Comment: never call `ProcessInfo.hostName` here — blocking reverse DNS on main.)
 - `stop()` — cancels flush task, flushes, closes handle.
-- `lanes(_ r: LaneReport, cue: CueKind, thermal: String, battery: Int)` — throttled snapshot; fields below.
+- `lanes(_ r: LaneReport, cue: CueKind, thermal: String, battery: Int, fps: Double = 0)` — throttled snapshot; fields below. `AppModel.handle` passes `fps: depth.fps`.
 - `event(_ kind: String, _ fields: [String: Any] = [:])` — appends `{"t": seconds since t0, "kind": kind, …fields}` if `JSONSerialization.isValidJSONObject`; increments `linesWritten`; flushes when the buffer exceeds 16 KB. Silently drops invalid objects (e.g. NaN doubles — callers pass through `num`).
 - `flush()` — writes buffer to the handle; `AppModel.scenePhaseChanged(.background)` calls it so nothing is lost on suspend.
 - `private static num(_: Float) -> Double`, `num(_: Double) -> Double` — finite-only rounding.
@@ -1250,19 +1573,23 @@ Trip log record kinds (every line has `t` (s since logger creation, 3 dp) and `k
 | kind | Fields | Emitted from |
 |---|---|---|
 | `session` | `file`, `os` | `TripLogger.start()` |
-| `start` | `lidar: Bool`, `mesh: Bool`, `haptics: Bool` | `AppModel.start()` |
-| `lanes` | `ar_t` (ARKit monotonic clock, 3 dp), `head: [Float×N]`, `torso: [Float×N]` (2 dp, −1 = invalid), `trusted: Bool`, `omega` (rad/s), `cue` (`CueKind` raw: `clear/center/left/right/head`), `thermal: String`, `battery: Int`, `mesh` (centre-hit classification or "") | `AppModel.handle(report)` ≤ 2 Hz |
+| `start` | `lidar: Bool`, `mesh: Bool`, `haptics: Bool`, `vision: String` (`describer.providerName`, e.g. "Muse + On-device" / "On-device") | `AppModel.start()` |
+| `lanes` | `ar_t` (ARKit monotonic clock, 3 dp), `head: [Float×N]`, `torso: [Float×N]` (2 dp, −1 = invalid), `trusted: Bool`, `omega` (rad/s), `cue` (`CueKind` raw: `clear/center/left/right/head`), `thermal: String`, `battery: Int`, `mesh` (centre-hit classification or ""), `tilt` (`cameraTiltDownDeg`, degrees below the horizon, 2 dp, or JSON `null` before the first trusted frame), `fps` (`DepthEngine.fps`, published depth rate) — the last two for tuning the mount from the log | `AppModel.handle(report)` ≤ 2 Hz |
 | `cue` | `kind` (`CueKind` raw or `"clear"`), `ar_t`, optional `distance` (m, centre approach) | cue router |
-| `speech` | `text`, `priority` (`"nav"`, `"obstacle"`, or `"\(SpeechPriority)"` = `safety`/`obstacle` for cue speech), optional `repeat: true` | nav lines (`onSpeak`), Repeat (`onRepeat`), obstacle names, cue speech, arrival summary. Not logged: audio-route lines, `announceChannels()` lines, "Recentered." |
+| `speech` | `text`, `priority` (`"nav"`, `"obstacle"`, or `"\(SpeechPriority)"` = `safety`/`obstacle` for cue speech), optional `repeat: true` | nav lines (`onSpeak`, incl. the arrival hint), Repeat (`onRepeat`), obstacle names, cue speech, arrival summary. Not logged as `speech`: audio-route lines, `announceChannels()` lines, "Recentered.", camera/location-denied and thermal lines, hazard lines (those are `hazard` records) |
+| `hazard` | `kind` (`GroundHazardKind` raw, `"sign"` or `"vision"`), `text` (the spoken line), `source` (`ground` / `sign` / `vision`) | `AppModel.recordHazard` (ground hazards after the frame is encoded, so slightly after the speech) |
 | `gps` | `lat`, `lon`, `acc` (m, −1 invalid), `speed` (m/s, −1 invalid) | every `LocationService.onFix` |
 | `navcue` | `cue` (`NavCue` raw: `turnLeft/turnRight/crossing/arrived/obstacle`) | `nav.onNavCue` |
 | `waypoint` | `index` (= `nav.waypointIndex`, count reached) | `nav.onWaypointAdvanced` (also after a passed-by or manual advance) |
 | `arrived` | — | `nav.onArrived` |
-| `route` | `action: "start"` + `name`, `waypoints: Int`, `headphones: String` (`audioRoute.outputName`, `"Speaker"` without headphones), `watch: Bool` (`watch.isReachable`); or `action: "stop"` | `beginRoute` / `stopRoute` |
+| `route` | `action: "start"` + `name`, `waypoints: Int`, `headphones: String` (`audioRoute.outputName`, `"Speaker"` without headphones), `watch: Bool` (`watch.isReachable`); `action: "stop"`; or `action: "restart"` (a start while a route was running) | `beginRoute` / `stopRoute` / `endRouteQuietly` |
 | `audioroute` | `connected: Bool`, `name: String` | `AppModel.wireAudioRoute` (`AudioRouteMonitor.onChange`, only on a headphone state flip) |
 | `recenter` | optional `auto: true` | manual `recenter()` / `autoRecenterIfWalkingStraight` |
 | `repeat` | — | `AppModel.repeatInstruction()` |
-| `describe` | `provider` | `describeScene()` |
+| `describe` | `provider`, or `source: "cameraControl"` | `describeScene()`, `cameraControlPressed()` |
+| `describe_result` | `text` (the sentence, "" on failure), `error` ("" on success), `ms` (round trip, −1 unknown), `provider`, `frame` (Street View replay file name, "" on the phone) | `SceneDescriber.onResult` → `AppModel.wireDescriber` — every "Where am I" outcome |
+| `scan` | `texts` (up to 8 recognized strings), `said` (the sign line, "" when none), `frame` | `HazardScanner.scanSigns` via `onDiagnostic` — every sign scan (every 3 s while "Read signs" is on) |
+| `hazard_watch` | `reply` (raw model reply), `ms`, `provider`, `frame`, `said` (spoken caution or ""), optional `dropped: "stale"`; or `error`, `provider` | `HazardScanner.runWatch` via `onDiagnostic` — every hazard-watch reply |
 | `watch` | `command` (`WatchToPhone` raw: `nextWaypoint/describe/recenter/repeatLast`) or `test` (`NavCue` raw) | watch command / debug button |
 
 Invariants: `gps` fields use raw `Double`s (not `num`) — CoreLocation never yields NaN, but a new caller passing NaN would drop the line. `ar_t` (ARKit clock) and `t` (wall since t0) are different clocks; correlate lane/cue records via `ar_t` and nav records via `t`/`gps`. Keep `lanes` throttled — the depth pipeline reports at camera rate.
@@ -1287,6 +1614,7 @@ Purpose: the arrival card's numbers — elapsed time, GPS-integrated distance, s
 
 - `start()` — idempotent; resets counters, `startSteps(from: now)`, starts ticker updating `elapsed` each second and calling `refreshHealthKitSteps()` every 10 s (HealthKit is not live). Called by `AppModel.beginRoute()` (triggers Motion + HealthKit prompts at route start by design).
 - `stop() async` — guard tracking; stops ticker and pedometer, freezes `elapsed`, `await refreshHealthKitStepsNow()`. Callers speaking the summary must `await` it (`AppModel.nav.onArrived` does; `stopRoute` fires-and-forgets).
+- `cancel()` — guard tracking; **synchronous** stop without the final HealthKit refresh: `isTracking = false`, cancels the ticker, `pedometer.stopUpdates()`. Caller: `AppModel.endRouteQuietly()` when a route is restarted mid-walk — the old trip must be closed before the new `start()`, whose `isTracking` guard would otherwise make it a no-op.
 - `ingest(_ fix: GeoFix)` — guard tracking and accuracy gate; `defer { lastFix = fix }`; adds haversine distance from previous fix only when `speed > 0.5` and `d < 100`. Called on every `onFix`, right after `nav.update(fix:)`, whether or not a route is navigating (the `isTracking` guard decides).
 - `spokenSummary(destination: String) -> String` — `"<destination trimmed of '.' and ' '>. <distance>, <N minute(s)>[, <steps> steps]."`; minutes rounded. Also the arrival card's accessibility label.
 - `private startSteps(from:)` — always starts the pedometer (HealthKit never reveals a denied *read*), then if `HKHealthStore.isHealthDataAvailable()` requests read auth for `.stepCount` and refreshes. Completion hops to `@MainActor` via `Task`.
@@ -1318,6 +1646,20 @@ Contract type: `NavActivityAttributes` (`ios/Shared/LiveActivity/NavActivityAttr
 
 ---
 
+### `ios/CaneKit/Trip/HazardLog.swift` (Step 11)
+
+Purpose: the hazard map — every hazard the app announces (LiDAR drop-offs / holes / curbs / low obstacles, signs, vision-model cautions) with the current GPS fix and, when there is one, the camera frame. "Every cane is a sidewalk sensor": the potholes and closures the maps have not caught up with. Visible in Files → On My iPhone → CaneKit (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and shareable from `HazardsCard`.
+
+**`final class HazardLog`** — `@MainActor @Observable`; owned by `AppModel.hazardLog`. File writes are small and infrequent (tens of hazards per walk), so they run on main.
+- Published: `records: [HazardRecord]` (`private(set)`, this session, newest last; `HazardsCard` shows the count), `lastError: String?` (`private(set)`), `fileWritten: Bool` (`private(set)`, true once the GeoJSON exists — the share button appears only then). `var maxPhotos = 200`.
+- Private: `directory` = `URL.documentsDirectory/hazards/`, `session` = ISO 8601 launch time with `:` → `-`.
+- `fileURL: URL` — `hazards/hazards-<session>.geojson` (one file per app session).
+- `record(kind: String, text: String, fix: GeoFix?, jpeg: Data?)` — creates the directory; if `jpeg` is given and fewer than `maxPhotos` records have a photo, writes `hazard-<session>-<n>.jpg` (`n = records.count + 1`) — **a failed photo never costs the hazard** (`try?`, `photo` stays nil); appends `HazardRecord(kind:, text:, latitude/longitude: fix or 0, accuracy: fix?.accuracy ?? −1, time: now since 1970, photo:)` — **no fix → recorded at (0, 0) with accuracy −1** so nothing is lost (`HazardGeoJSON` writes a null geometry for it; the JSONL `hazard` event keeps the context); then rewrites the whole GeoJSON (`HazardGeoJSON.encode(records)`, `.atomic`), `fileWritten = true`, `lastError = nil`. Any directory/encode/write throw → `lastError = "Hazard log: …"`.
+- Caller: `AppModel.recordHazard` only (from `groundHazardFound` with a 768 px frame, and from `hazards.onHazard` with the scanner's frame).
+- ⚠ Keep `[lon, lat]` order and the property names — they are pinned by `HazardTests.hazardMapIsValidGeoJSON` and read by geojson.io / QGIS / My Maps. Verify on a device walk by sharing the map after the walk.
+
+---
+
 ## Module `watch-widget-shared`
 
 Phone↔watch link (WatchConnectivity), the watchOS companion app, the Live Activity widget extension, and the `NavActivityAttributes` payload shared between app and widget. The wire contract (`NavCue`, `PhoneToWatch`, `WatchToPhone`, `WatchEnvelope`) lives in `ios/Logic/Sources/CaneKitLogic/WatchMessage.swift`, and the crown gesture rule (`CrownAccumulator`) in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`; both are summarised here because files in this module depend on them.
@@ -1329,7 +1671,8 @@ AppModel (phone, MainActor)
   ├─ watch: PhoneWatchLink ──WCSession.sendMessage / updateApplicationContext──▶ WatchModel (watch, MainActor)
   │     ▲ onCommand(WatchToPhone) ◀──WCSession.sendMessage(replyHandler:)───────┘  (buttons + crown; phone replies ["ok": Bool])
   │     • nav.onNavCue        → watch.send(nav:)                    (waypoint reached: turn/crossing/arrived; veer: turnLeft/turnRight;
-  │                                                                   passed-by advance sends nothing)
+  │                                                                   passed-by advance sends nothing; the same cue also buzzes the cane via haptics.playNav)
+  │     • groundHazardFound   → watch.send(obstacle: .center, now:) (only if phoneCannotBuzz || fallbackToWatch; the wrist plays .click)
   │     • handle(report)      → watch.send(obstacle:now:)           (only if phoneCannotBuzz (= !haptics.isHealthy || haptics.silenced) || fallbackToWatch)
   │     • pushStatusToWatch() → watch.send(status:distanceM:)       (every GPS fix while nav.isNavigating, beginRoute, onWaypointAdvanced,
   │                                                                   onArrived, stopRoute; the link's dedupe sends only on a new instruction or a ≥5 m distance change)
@@ -1388,7 +1731,7 @@ Functions:
 **`SessionRelay`** — `nonisolated private final class: NSObject, WCSessionDelegate, @unchecked Sendable`. All WCSession delegate callbacks arrive on a background queue; this class only decodes into `Sendable` values and calls `@Sendable` closures (`onStateChange(paired, installed, reachable, error?)`, `onCommand(WatchToPhone)`). Never touches main-actor state directly.
 - `session(_:activationDidCompleteWith:error:)`, `sessionReachabilityDidChange`, `sessionWatchStateDidChange` → `publish` (state + optional error).
 - `sessionDidBecomeInactive` — no-op. `sessionDidDeactivate` — calls `session.activate()` again (user switched watches).
-- `session(_:didReceiveMessage:)` → decode with `WatchEnvelope.decodeWatchToPhone`, forward if non-nil. The `replyHandler:` variant (the one the current watch uses) forwards the same way and **answers `["ok": cmd != nil]`** — `false` means the watch is newer than this phone build.
+- `session(_:didReceiveMessage:)` → decode with `WatchEnvelope.decodeWatchToPhone`, forward if non-nil. The `replyHandler:` variant (the one the current watch uses) forwards the same way and **answers `["ok": cmd != nil]` at once, on the WatchConnectivity queue, before the main-actor handler runs** (so the watch is never left waiting on phone-side work) — `false` means the watch is newer than this phone build.
 
 Invariants: the closures set in `activate()` capture `self` weakly; never call `WCSession` APIs from the relay other than `activate()`; the reply handler is always called exactly once; `lastObstacleSent` uses the same clock as `CueDecider` (`report.timestamp`) so the 1 s throttle aligns with the decider's ≤1 Hz repeat.
 ⚠ Do not change the 1 s obstacle throttle or the reachability guards without the device test in CHANGELOG "Step 5": toggle "Mirror obstacle cues to the watch" → wrist taps ≤ 300 ms after the phone buzz; lower the wrist 30 s → cues still arrive.
@@ -1412,19 +1755,20 @@ Published:
 - `distanceM: Int?` — from `.status`, **`d >= 0 ? d : nil`** (the phone's `-1` sentinel becomes `nil`); `nil` until first status.
 - `phoneReachable: Bool` — `WCSession.isReachable` mirrored.
 - `private(set) lastCue: String` = `"—"`; set to `cue.rawValue` or `"obstacle <kind>"`. Not rendered by the current view.
-- `private(set) keepAlive: String` — `"workout"` / `"runtime"` / `"none"`; only set to a running value once the session actually reports running. Not rendered by the current view (the footer that showed it is gone).
+- `private(set) keepAlive: String` — `"workout"` / `"runtime"` / `"runtime (expiring)"` (the runtime session warned it will expire but is still running) / `"none"`; only set to a running value once the session actually reports running. Not rendered by the current view (the footer that showed it is gone).
 - `private(set) lastError: String?` — rendered as the red line at the bottom of the screen.
 
-Private: `started` (idempotency), `relay = WatchSessionRelay()`, `healthStore = HKHealthStore()`, `workout: HKWorkoutSession?`, `workoutRelay`, `runtime: WKExtendedRuntimeSession?`, `runtimeRelay`, `crown = CrownAccumulator()` (CaneKitLogic).
+Private: `started` (idempotency), `relay = WatchSessionRelay()`, `healthStore = HKHealthStore()`, `workout: HKWorkoutSession?`, `workoutRelay`, `runtime: WKExtendedRuntimeSession?`, `runtimeRelay`, `crown = CrownAccumulator()` (CaneKitLogic), `stopTask: Task<Void, Never>?` (the pending delayed keep-alive stop), `keepAliveStarting: Bool` (true while HealthKit authorization for a keep-alive start is pending).
 
 Functions:
 - `start()` — idempotent (`guard !started, WCSession.isSupported()`); SwiftUI `.task` may run it more than once. Wires `relay.onMessage → handle(msg)` and `relay.onReachability → phoneReachable = …` **plus a re-decode of `WCSession.default.receivedApplicationContext` on every reachability callback** (activation completion and each reachability change), so a status sent while asleep is applied on wake. Then `delegate = relay`, `activate()`, `startKeepAlive()`.
-- `private handle(_ msg: PhoneToWatch)` — `.nav(cue)` → `play(haptic(for: cue))`, `lastCue`; `.obstacle(kind)` → play mapped haptic if non-nil, `lastCue`; `.status(text, d)` → `instruction`, `distanceM` (negative → `nil`).
+- `private handle(_ msg: PhoneToWatch)` — `.nav(cue)` → `play(haptic(for: cue))`, `lastCue`; `.obstacle(kind)` → play mapped haptic if non-nil, `lastCue`; `.status(text, d)` → `instruction`, `distanceM` (negative → `nil`), then `updateKeepAlive(forInstruction: text)`.
 - `private static haptic(for: NavCue) -> WKHapticType` and `haptic(forObstacle: CueKind) -> WKHapticType?` — the haptic map below.
 - `private play(_ type: WKHapticType)` — `WKInterfaceDevice.current().play(type)`.
-- `send(_ cmd: WatchToPhone)` — guard `.activated && isReachable && encodable`, else `lastError = "Phone not reachable"` and plays **`.retry`** (never `.failure`: that pattern is reserved for "head height"). On success `lastError = nil`, `sendMessage(dict, replyHandler:, errorHandler:)`, then plays **`.click`** immediately as the press confirm. Reply handler: `ok = reply["ok"] as? Bool ?? true` (a missing key counts as ok); `ok == false` → on the main actor `lastError = "Update the phone app"` and a follow-up **`.retry`** (so an unknown command, e.g. Repeat on an older phone build, is click-then-retry). Error handler: `lastError = error.localizedDescription` on the main actor.
+- `send(_ cmd: WatchToPhone)` — guard `.activated && isReachable && encodable`, else `lastError = "Phone not reachable"` and plays **`.retry`** (never `.failure`: that pattern is reserved for "head height"). On success `lastError = nil`, `sendMessage(dict, replyHandler:, errorHandler:)`, then plays **`.click`** immediately as the press confirm. Reply handler: `ok = reply["ok"] as? Bool ?? true` (a missing key counts as ok); `ok == false` → on the main actor `lastError = "Update the phone app"` and a follow-up **`.retry`** (so an unknown command, e.g. Repeat on an older phone build, is click-then-retry). Error handler (asynchronous transport failure after the confirm click): `lastError = error.localizedDescription` **and a `.retry` haptic** on the main actor — the wrist already clicked "sent", so a late failure must be felt too (Muse M8).
 - `crownMoved(delta: Double, now: TimeInterval)` — `if crown.move(delta:now:) { send(.nextWaypoint) }`. Called from the view's `.onChange(of: crown)` with `now = Date().timeIntervalSinceReferenceDate`.
-- `private startKeepAlive()` / `startWorkout()` / `startRuntimeSession()`; `stopKeepAlive()` (internal) — keep-alive chain (below). `stopKeepAlive()` ends the workout, invalidates the runtime session, sets `keepAlive = "none"`; nothing calls it today.
+- `private startKeepAlive()` / `startWorkout()` / `startRuntimeSession()`; `stopKeepAlive()` (internal) — keep-alive chain (below). `stopKeepAlive()` ends the workout (`workout = nil`), invalidates the runtime session (`runtime = nil`), sets `keepAlive = "none"`; called only by `updateKeepAlive`'s delayed stop.
+- `private updateKeepAlive(forInstruction text: String)` — the workout keep-alive runs only while a route runs (it used to never stop, draining the watch all day — Muse M7). Cancels any pending `stopTask`, then: an instruction starting **"Arrived"** (the phone sends `"Arrived: <say>"`) → unless `keepAlive == "none"`, schedules `stopKeepAlive()` **60 s** later (so the arrival tap and summary still land); any other text except `"No route"`, with `keepAlive == "none"` and no `workout` / `runtime` object → `startKeepAlive()`. **"No route" deliberately does not stop it**: a suspended watch could never restart the keep-alive for the next route (the phone's first status of a new route only reaches a running watch app).
 
 **Haptic map** (`WKHapticType`) — ⚠ Do not change without re-running the CHANGELOG Step 5 device test (Left/Right/Cross/Arrive buttons on the phone Watch card → four distinguishable wrist taps; also the sanity check in `docs/devices_setup.md`):
 
@@ -1443,6 +1787,7 @@ Functions:
 | send confirm | `.click` |
 | send failed (unreachable / not activated) | `.retry` |
 | phone replied `ok: false` | `.retry` (after the confirm `.click`) |
+| send transport error after the confirm | `.retry` (after the confirm `.click`) |
 
 **Crown rule** — `CrownAccumulator` (`public struct: Sendable, Equatable`, `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`); `mutating func move(delta: Double, now: TimeInterval) -> Bool` returns true when this movement completes the gesture. Private state: `windowStart: TimeInterval?`, `travel: Double`, `lastFire = -.infinity`. ⚠ Do not change without `make test` (`crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve`, `crownDebouncesBackToBackGestures` in `NavSupportTests.swift`) and the device test "crown three clicks → phone says 'Next.'":
 
@@ -1453,18 +1798,21 @@ Functions:
 | `debounce` | `0.8` s since the last fire (`now - lastFire >= debounce`) | reaching 3 detents always zeroes travel and the window; inside the debounce it returns false, so another full 3 detents are needed |
 | action | `WatchModel.send(.nextWaypoint)` | phone: `nav.next()` if navigating (speaks the skipped waypoint's line), else speaks "No route running." |
 
-**Keep-alive fallback chain** (`startKeepAlive`) — needed because `WKInterfaceDevice.play` is a no-op when the app is not frontmost:
+**Keep-alive fallback chain** (`startKeepAlive`) — needed because `WKInterfaceDevice.play` is a no-op when the app is not frontmost. Started by `start()` at launch and re-started by `updateKeepAlive` when a route's status arrives after an arrival stop; stopped 60 s after an "Arrived…" status:
 
+0. **One start at a time**: `guard !keepAliveStarting`; `keepAliveStarting = true` (HealthKit authorization is async, and a second call while it is pending would start two workout sessions). It is cleared on the no-HealthKit path and in the authorization callback.
 1. `HKHealthStore.isHealthDataAvailable()` false → `startRuntimeSession()`.
 2. `healthStore.requestAuthorization(toShare: [HKObjectType.workoutType()], read: [HKQuantityType(.stepCount)])`. Refused/error → `lastError = message ?? "HealthKit refused"`, `startRuntimeSession()`. (The `stepCount` read grant is requested here for the phone's TripTracker merge; this module never reads it.)
-3. `startWorkout()`: `HKWorkoutConfiguration` (`activityType = .walking`, `locationType = .outdoor`), `HKWorkoutSession(healthStore:configuration:)`, `session.startActivity(with: Date())`. `WorkoutRelay` reports `running = (toState == .running)`: running → `keepAlive = "workout"`, `lastError = nil`; not running **and** (`keepAlive == "workout"` or an error) → `keepAlive = "none"`, `lastError = "Workout: …"` (only when there is an error), `startRuntimeSession()`. Intermediate states (`.prepared` etc.) before the first `.running` do not trigger the fallback. `HKWorkoutSession` init throwing → `lastError = "Workout: …"`, `startRuntimeSession()`.
-4. `startRuntimeSession()`: guarded by `runtime == nil` (never two at once). `WKExtendedRuntimeSession().start()`; `RuntimeRelay`: `DidStart` → `keepAlive = "runtime"`; `WillExpire` → `onChange(false, "expiring")`; `didInvalidateWith` → `onChange(false, error ?? "invalidated (<reason>)")`. Any non-running → `keepAlive = "none"`, `runtime = nil`, `lastError = "Runtime session: …"`. **There is no automatic re-arm after expiry/invalidation.** The session type comes from `WKBackgroundModes` in `Info.plist` (`workout-processing`, `mindfulness`), and the entitlement `com.apple.developer.healthkit = true` (`healthkit.access = []`) in `CaneKitWatch.entitlements`. `WKRunsIndependentlyOfCompanionApp = false`; `WKCompanionAppBundleIdentifier = com.aritro.canekit`; usage strings `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription`, `NSMotionUsageDescription`.
-⚠ Do not change the chain, the plist background modes, or the entitlement without the device test "lower the wrist for 30 s → cues still arrive (workout keep-alive)".
+3. `startWorkout()`: `HKWorkoutConfiguration` (`activityType = .walking`, `locationType = .outdoor`), `HKWorkoutSession(healthStore:configuration:)`, `session.startActivity(with: Date())`. `WorkoutRelay` reports `running = (toState == .running)`: running → `keepAlive = "workout"`, `lastError = nil`; not running **and** (`keepAlive == "workout"` or an error) → `keepAlive = "none"`, **`workout = nil`** (a dead session must not block a later restart, which requires `workout == nil`), `lastError = "Workout: …"` (only when there is an error), `startRuntimeSession()`. Intermediate states (`.prepared` etc.) before the first `.running` do not trigger the fallback. `HKWorkoutSession` init throwing → `lastError = "Workout: …"`, `startRuntimeSession()`.
+4. `startRuntimeSession()`: guarded by `runtime == nil` (never two at once). `WKExtendedRuntimeSession().start()`; the `RuntimeRelay` reports a `RuntimeEvent`: `.started` (`DidStart`) → `keepAlive = "runtime"`; `.expiring` (`WillExpire`) → `keepAlive = "runtime (expiring)"` — **still running, kept**; `.ended(String?)` (`didInvalidateWith`: the error text, `"invalidated (<reason>)"`, or **nil for a normal end** with reason `.none`) → `keepAlive = "none"`, `runtime = nil`, and `lastError = "Runtime session: …"` only when there is text. **There is no automatic re-arm after expiry/invalidation.** The session type comes from `WKBackgroundModes` in `Info.plist` (`workout-processing`, `mindfulness`), and the entitlement `com.apple.developer.healthkit = true` (`healthkit.access = []`) in `CaneKitWatch.entitlements`. `WKRunsIndependentlyOfCompanionApp = false`; `WKCompanionAppBundleIdentifier = com.aritro.canekit`; usage strings `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription`, `NSMotionUsageDescription`.
+⚠ Do not change the chain, `updateKeepAlive`'s start/stop rules (only "Arrived…" stops, after 60 s; "No route" never does), the plist background modes, or the entitlement without the device tests "lower the wrist for 30 s → cues still arrive (workout keep-alive)" and "arrive → the workout ends about a minute later; start another route → wrist cues work again".
 
 **Relays** (all `nonisolated private final class: NSObject, …, @unchecked Sendable`; delegate callbacks arrive off the main actor and are hopped via `Task { @MainActor … }` in the model's closures):
 - `WatchSessionRelay: WCSessionDelegate` — `onMessage: (@Sendable (PhoneToWatch) -> Void)?`, `onReachability: (@Sendable (Bool) -> Void)?`. `activationDidCompleteWith` and `sessionReachabilityDidChange` → `onReachability(session.isReachable)`; `didReceiveMessage` and `didReceiveApplicationContext` both decode with `WatchEnvelope.decodePhoneToWatch` → `onMessage`. (No `didBecomeInactive`/`didDeactivate`: watchOS does not require them.)
 - `WorkoutRelay: HKWorkoutSessionDelegate` — `init(onChange: @escaping @Sendable (Bool, String?) -> Void)`; `didChangeTo` → `(toState == .running, nil)`; `didFailWithError` → `(false, description)`.
-- `RuntimeRelay: WKExtendedRuntimeSessionDelegate` — same `onChange` shape; see step 4 above.
+- `RuntimeRelay: WKExtendedRuntimeSessionDelegate` — `init(onChange: @escaping @Sendable (RuntimeEvent) -> Void)`; see step 4 above.
+- `nonisolated private enum RuntimeEvent: Sendable` — `started`, `expiring` (about to expire, still running), `ended(String?)`.
+- **Stale-callback guard** (review round 5): each relay closure captures `ObjectIdentifier` of the session it was created for, and the main-actor handler returns unless `self.workout` / `self.runtime` is still that session — callbacks from a session already ended or replaced (e.g. `stopKeepAlive()` invalidating on purpose) must not show an error or clear a newer session.
 
 ---
 
@@ -1567,8 +1915,8 @@ Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps
 
 | What | Test | How to run |
 |---|---|---|
-| Envelope encode/decode, unknown payload → nil | `ios/Logic/Tests/CaneKitLogicTests/WatchMessageTests.swift` | `make test` (`scripts/test.sh`); also the required `logic-tests` job in `.github/workflows/ci.yml` |
-| Crown gesture (3 detents in 1 s either direction, rhythmic sleeve ignored, 0.8 s debounce) | `crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve`, `crownDebouncesBackToBackGestures` in `ios/Logic/Tests/CaneKitLogicTests/NavSupportTests.swift` | `make test` / CI `logic-tests` |
+| Envelope encode/decode, unknown payload → nil | `ios/Logic/Tests/CaneKitLogicTests/WatchMessageTests.swift` | `make test` (`scripts/test.sh`); also the `logic-tests` job in `.github/workflows/ci.yml` (manual) |
+| Crown gesture (3 detents in 1 s either direction, rhythmic sleeve ignored, 0.8 s debounce) | `crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve`, `crownDebouncesBackToBackGestures` in `ios/Logic/Tests/CaneKitLogicTests/NavSupportTests.swift` | `make test` / CI `logic-tests` (manual) |
 | Haptic map, reply `ok` handling, obstacle throttle, keep-alive, watch layout, Live Activity coalescing | **no unit tests** (all live in app/watch targets) | device test in `CHANGELOG.md` "Step 5 — Watch" (Reachable pill; four distinct wrist taps; crown ×3 → "Next."; Describe/Recenter acknowledged; mirror ≤ 300 ms; wrist down 30 s) and the Apple Watch checklist + sanity check in `docs/devices_setup.md` |
 | Phone Watch card layout | `ios/CaneKitUITests/CaneKitVisualTour.swift` `testTour` (simulator, no watch; idle scroll shots) | `make tour` (PNGs in `SHOTS`, default `build/shots`) or `make uitest` |
 
@@ -1576,7 +1924,7 @@ Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps
 
 ## Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI
 
-Covers `ios/CaneKit/UI/*.swift`, `ios/CaneKitUITests/*.swift`, `ios/project.yml`, `ios/scripts/gen.sh`, `ios/scripts/test.sh`, `ios/Makefile`, `ios/Secrets.example.plist`, the `ios/local.mk` convention, `.github/workflows/ci.yml`, and the rules in `docs/design.md` that the Swift implements.
+Covers `ios/CaneKit/UI/*.swift`, `ios/CaneKitUITests/*.swift`, `ios/project.yml`, `ios/scripts/gen.sh`, `ios/scripts/test.sh`, `ios/scripts/e2e.py`, `ios/scripts/vision_probe.swift`, `ios/scripts/streetview/`, `ios/Makefile`, `ios/Secrets.example.plist`, the `ios/local.mk` convention, `.github/workflows/ci.yml`, and the rules in `docs/design.md` that the Swift implements.
 
 All UI types are `struct … : View` in the `CaneKit` app target, which compiles with `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` — every view, property and helper below is **MainActor** unless marked otherwise. The only `nonisolated` symbol in the module is `CKColor.dynamic`. Views read `AppModel` via `@Environment(AppModel.self)` (an `@Observable final class`, injected in the app entry) and never own state of their own except `@ScaledMetric`.
 
@@ -1624,7 +1972,7 @@ All members are `static let … : Color` built by `dynamic(...)`, so every colou
 | `body` | `.body` | toggles, description text, Go label (semibold) |
 | `pill` | `.subheadline` rounded bold | status pills (uppercased + kerning 0.9 in the view) |
 | `secondary` | `.subheadline` | hints, error lines; smallest user-facing size |
-| `mono` | `.footnote` monospaced, monospacedDigit | `DebugFooter` only; must be `accessibilityHidden(true)` |
+| `mono` | `.footnote` monospaced, monospacedDigit | **currently unused**; allowed only inside `accessibilityHidden(true)` developer views |
 
 #### `enum CKSpacing` (4 pt base)
 | `xs` 4 | `sm` 8 | `md` 12 | `lg` 16 | `xl` 24 | `xxl` 32 | `gutter` 20 |
@@ -1657,17 +2005,17 @@ All members are `static let … : Color` built by `dynamic(...)`, so every colou
 #### `struct CKCard<Content: View>: View`
 - Fields: `title: String? = nil`, `@ViewBuilder content`; env `colorSchemeContrast`.
 - Body: `VStack(alignment: .leading, spacing: md)` with optional title (`CKFont.label`, `textSecondary`, `.isHeader`) then content; padding `lg`; full width; `surface` fill in `RoundedRectangle(20, .continuous)`; `border` stroke of `border(for:)` width; `accessibilityElement(children: .contain)`; label `Text(title)` or `Text("")` (comment: an empty label would override children, so only titled cards are labelled).
-- Contract: `CKCard(title: "Guide"/"Obstacles"/"Haptics"/"Watch"/"Mount"/"This phone"/"Arrived"/"This trip")` are the rotor stops.
+- Contract: `CKCard(title: "Guide"/"Obstacles"/"Haptics"/"Hazards"/"Watch"/"Mount"/"This phone"/"Arrived"/"This trip")` are the rotor stops.
 
 ---
 
 ### ios/CaneKit/UI/ContentView.swift
 
-Purpose: root screen — a `NavigationStack` > `ScrollView` > `VStack(spacing: xl)` stacking, in order: `GuideCard()`, `ArrivalCardView()` (only if `model.nav.isNavigating || model.nav.arrived`), `statusCard`, `LaneGridView(report: model.depth.report)`, `HapticsCard()`, `WatchCard()`, `mountSettings($model)`, `capabilityCard`, `DebugFooter()`. Padding `gutter`; background `CKColor.background`; `.navigationTitle("CaneKit")`. A `.background(CameraControlInteraction { model.cameraControlPressed() })` (in `CaneKit/Scene/CameraControlInteraction.swift`) counts Camera Control / volume presses for the footer.
+Purpose: root screen — a `NavigationStack` > `ScrollView` > `VStack(spacing: xl)` stacking, in order: `GuideCard()`, `ArrivalCardView()` (only if `model.nav.isNavigating || model.nav.arrived`), `statusCard`, `LaneGridView(report: model.depth.report)`, `HapticsCard()`, **`HazardsCard()`**, `WatchCard()`, `mountSettings($model)`, `capabilityCard`. Padding `gutter`; background `CKColor.background`; `.navigationTitle("CaneKit")`. A `.background(CameraControlInteraction { model.cameraControlPressed() })` (in `CaneKit/Scene/CameraControlInteraction.swift`) routes Camera Control / volume presses to "Where am I" (the press counter is no longer shown). The card order is the VoiceOver focus order.
 
 - `struct ContentView: View` — `@Environment(AppModel.self) private var model`; `@Bindable var model = model` inside `body` for toggle bindings.
 - `private var statusCard: some View` — untitled `CKCard`; icon `checkmark.circle.fill` (`laneClear`) if `model.lidarSupported` else `xmark.octagon.fill` (`laneUrgent`), hidden from VO; `Text(model.status)` in `CKFont.instruction`; card is `accessibilityElement(children: .combine)`, label `"Status: \(model.status)"`, trait `.updatesFrequently`. (`model.status` forwards `depth.status`.)
-- `private func mountSettings(_ model: Bindable<AppModel>) -> some View` — `CKCard(title: "Mount")` with four system `Toggle`s (labels are the XCUITest `switches[...]` keys):
+- `private func mountSettings(_ model: Bindable<AppModel>) -> some View` — `CKCard(title: "Mount")`: first `mountAimRow`, then four system `Toggle`s (labels are the XCUITest `switches[...]` keys):
 
 | Toggle label | Binding (`AppModel`, persisted via `Settings.bool`) | Hint |
 |---|---|---|
@@ -1676,6 +2024,7 @@ Purpose: root screen — a `NavigationStack` > `ScrollView` > `VStack(spacing: x
 | "Audio beacon while navigating" | `beaconEnabled` (default true) | "A soft click from the direction to walk, through the AirPods" |
 | "Write trip log" | `loggingEnabled` (default true) | "Saves a JSONL log of lanes, cues and location to the Files app" |
 
+- `@ViewBuilder private var mountAimRow: some View` — live camera aim + depth rate so the mount's hinge can be set by reading the phone: when `model.depth.report.cameraTiltDownDeg` exists → `Label` with `"\(MountTilt.status(downDeg:).text) · \(Int(depth.fps.rounded())) fps"` (e.g. "Camera tilt 5° down, good · 15 fps") in `CKFont.secondary`, icon `checkmark.circle.fill` (`laneClear`) when `ok` else `exclamationmark.triangle.fill` (`laneUrgent`); one accessibility element labelled `"<status text>. Depth N frames per second"`. No tilt yet but LiDAR supported → "Camera tilt: hold the cane still for a reading" (`textSecondary`). Nothing on a non-LiDAR phone.
 - `private var capabilityCard: some View` — `CKCard(title: "This phone")` with three `capabilityRow`s: "LiDAR depth" (`model.lidarSupported`), "Mesh classification (door / wall / seat)" (`model.meshClassificationSupported`), "Logic package linked" (`Self.logicPackageOK`).
 - `private func capabilityRow(_ title: String, _ ok: Bool) -> some View` — `Label` with check/octagon icon; a11y label `"\(title): available|not available"`.
 - `private static var logicPackageOK: Bool` — `GeigerRate.hertz(distance: 1.0) == 4`; proves the SwiftPM link at runtime. ⚠ Do not change without re-running the `GeigerRate` tests in `ios/Logic` (`make test`) — the literal 4 Hz @ 1.0 m is the Geiger curve's contract.
@@ -1769,11 +2118,21 @@ Purpose: trip summary — distance, minutes, steps — shown while walking ("Thi
 
 ---
 
-### ios/CaneKit/UI/DebugFooter.swift
+### ios/CaneKit/UI/HazardsCard.swift (Step 11)
 
-Purpose: developer strip, `CKFont.mono`, `textSecondary`, **`accessibilityHidden(true)`** (design.md §0/§7: never in the VoiceOver tree).
+Purpose: the "Hazards" card — toggles for the three hazard sources, the last thing each one said, which backend the hazard watch uses, the hazard-map count with a share button, and an optional live camera view for a sighted spotter / the demo video. Sits between `HapticsCard` and `WatchCard`.
 
-- `struct DebugFooter: View` — four `Text` lines: `fps %.0f · |ω| %.2f rad/s · frames N` (`model.depth.fps`, `.report.rotationRate`, `.framesProcessed`); `tracking … · thermal … · battery N% · mesh on|off` (`depth.tracking`, `model.thermalName`, `batteryPercent`, `depth.meshEnabled`); `Camera Control: no events yet | N press(es) · last cue …` (`cameraControlPresses`, `lastCueDescription`); `log <fileName|off> · N lines` (`model.logger.fileName`, `linesWritten`).
+- `struct HazardsCard: View` — `@Environment(AppModel.self) model`; `@State private var frame: UIImage?` (latest live-view frame). Body inside `CKCard(title: "Hazards")`, all `CKFont.body` / `textPrimary`:
+  - `Toggle("Detect drop-offs", isOn: $model.groundHazardsEnabled)` — hint "LiDAR warns about curbs, holes and drop-offs 1.5 to 3.5 meters ahead" (default off).
+  - `Toggle("Read signs", isOn: $model.signsEnabled)` — hint "Reads signs like sidewalk closed or detour, on the phone, offline" (default on).
+  - `Toggle("Hazard watch", isOn: $model.hazardWatchEnabled)` — hint "While walking a route, checks the path for cones, barriers and scooters every 8 seconds" (default off).
+  - Pill row: `CKStatusPill(text: model.hazards.watchProvider, .neutral, "eye", spoken: "Hazard watch uses …")` and `"\(model.hazardLog.records.count) mapped"` (`mappin.and.ellipse`, spoken "N hazards on the map"), then `Spacer`.
+  - Detection rows via `private func detection(_ source:, _ text:)` (caption `source.uppercased()` in `CKFont.pill` / `textSecondary` + the line in `CKFont.body`; one combined a11y element): "LIDAR" ← `model.lastGroundHazard`, "SIGN" ← `model.hazards.lastSign`, "WATCH" ← `model.hazards.lastCaution` — each only when non-nil.
+  - Error line `model.hazards.lastError ?? model.hazardLog.lastError` in `CKFont.secondary` / `laneUrgent`.
+  - When `model.hazardLog.fileWritten`: `ShareLink(item: model.hazardLog.fileURL)` labelled "Share hazard map" (`square.and.arrow.up`, `minHeight: CKMetrics.touchTarget`), `CKBigButtonStyle(.secondary)`, hint "Shares a GeoJSON map of every hazard found on this walk".
+  - `Toggle("Live camera view", isOn: $model.liveViewEnabled)` — hint "Shows what the camera sees, for a sighted helper" (not persisted). When on: the `frame` image (`scaledToFit`, clipped to `CKRadius.button`) or "Camera warming up"; **`accessibilityHidden(true)`** (carries nothing a blind user needs); `.task(id: model.liveViewEnabled) { await refreshLoop() }`.
+- `private func refreshLoop() async` — first `frame = nil` (never flash a stale frame from a previous session of the view), then while not cancelled and `liveViewEnabled`: `await model.liveFrameJPEG()` (480 px; nil while backgrounded or while `hazards.paused`) → `UIImage` → `frame`; sleep 330 ms (~3 Hz). Stops when the toggle goes off (the `.task(id:)` is cancelled); SwiftUI keeps it alive while the card is merely scrolled off-screen.
+- The four toggle labels are not (yet) XCUITest contract strings — no test queries them — but keep them stable for VoiceOver users.
 
 ---
 
@@ -1781,9 +2140,10 @@ Purpose: developer strip, `CKFont.mono`, `textSecondary`, **`accessibilityHidden
 
 Purpose: XCUITests that drive the real app in the simulator (`make uitest`). Target compiles with `SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated` (XCTest is not MainActor-friendly). `final class CaneKitUITests: XCTestCase`, `continueAfterFailure = false`.
 
-- `setUp()` — `XCUIApplication()`, sets `launchEnvironment["CANEKIT_UITEST"] = "1"`, `launch()`. `AppModel.start()` reads it: with `CANEKIT_UITEST == "1"` it skips `location.requestAuthorization()` so the three-choice location alert cannot race the first tap (`make sim-grant` pre-grants location + motion as well). The app separately reads `CANEKIT_DEMO_ROUTE=1` / `--demo-route` to auto-start the route; the tests do not set it.
+- `setUp()` — `XCUIApplication()`, sets `launchEnvironment["CANEKIT_UITEST"] = "1"`, `launch()`. The app reads it twice: `AppModel.start()` skips `location.requestAuthorization()` so the three-choice location alert cannot race the first tap (`make sim-grant` pre-grants location + motion as well), and **`SpeechQueue.muted` is true, so the test run makes no sound** (speech timing is simulated; the beacon stays silent). The app separately reads `CANEKIT_DEMO_ROUTE=1` / `--demo-route` to auto-start the route; the tests do not set it.
 - `testGuideStartsAndStopsDemoRoute` — waits (10 s) for `buttons["Start demo route"]`, taps; waits for `buttons["Stop route"]` (10 s) and a `staticText` whose label contains "Townsend" (5 s; waypoint 1 `say`); taps `"Next"`, waits for a label containing "Illinois Street" (5 s; waypoint 2); asserts `buttons["Repeat"]` exists, taps it, asserts the "Illinois Street" text still exists (Repeat must not advance); taps `"Recenter"`, taps Stop; asserts Start reappears (5 s) and `buttons["Repeat"]` no longer exists. ⚠ Depends on `route_isr_cif.json` waypoint 1/2 `say` text and on `NavigationEngine.next()` advancing the instruction. Note: waypoint 1's `say` already ends "…down to the Illinois Street sidewalk.", so the "Illinois Street" wait alone does not prove Next advanced.
-- `testWhereAmIWithoutKeyReportsGracefully` — taps `buttons["Where am I"]`; passes if a `staticText` containing "key" appears within 5 s **or** the button is enabled again (no crash, no stuck "Describing…").
+- `testWhereAmIWithoutKeyReportsGracefully` — taps `buttons["Where am I"]`; **no key is needed any more** (cloud → on-device fallback), and the simulator has no camera, so it asserts a `staticText` whose label `CONTAINS[c] 'camera'` (`SceneDescriber.lastError` "No camera frame") **or** `BEGINSWITH 'Scene:'` (an answer, `GuideCard`'s a11y label) appears within **8 s**, then that `buttons["Where am I"]` exists again within 5 s (no hang, no crash).
+- `testWhereAmIDescribesAStreetViewFrame() throws` — **skipped** (`XCTSkip`) unless the runner env has `CANEKIT_FRAME_DIR` (`make uitest-streetview` puts `TEST_RUNNER_CANEKIT_FRAME_DIR=<abs path of scripts/streetview>` in xcodebuild's environment). Relaunches the app with `launchEnvironment["CANEKIT_FRAME_DIR"] = dir` (so `FrameReplay` replaces the camera with the Street View JPEG nearest the simulated fix), taps "Where am I", waits up to **45 s** for a `staticText` beginning "Scene:" (the on-device describer: Vision + Foundation Models or the template), attaches a screenshot named `where-am-i-streetview: <label>` (`keepAlways`) and prints `WHERE-AM-I: <label>`. The JPEGs are git-ignored; capture them per `ios/scripts/streetview/README.md`.
 - `testHapticTestButtonsAndSilenceToggle` — taps each of `"Test left haptic"`, `"Test center haptic"`, `"Test right haptic"`, `"Test head haptic"` (10 s wait each); finds `switches["Silence haptics"]`, taps it twice directly (on/off, not via `flip`). No haptic assertion (simulator).
 - `testMountTogglesPersist` — `switches["Mirror left / right"]`; records `value`, `flip()`s, `waitUntil(3 s)` value changed, flips back. (Asserts the tap changes the value; persistence itself is via `Settings.bool` in `AppModel`.)
 - `private func flip(_ toggle: XCUIElement)` — SwiftUI `Toggle` is a switch whose centre is the label; taps the nested `switches.firstMatch` if it exists and differs, else the coordinate at normalized `(0.94, 0.5)` (the knob). ⚠ Keep this helper in sync between both test files.
@@ -1795,9 +2155,9 @@ Purpose: XCUITests that drive the real app in the simulator (`make uitest`). Tar
 
 Purpose: a "camera", not a pass/fail suite — walks every reachable simulator state and saves one PNG per state (`make tour`). `final class CaneKitVisualTour: XCTestCase`, `continueAfterFailure = true`, same `setUp` as above, `shotIndex` counter.
 
-- `testTour()` — order of shots: `01-idle-top`, `02-idle-middle`, `03-idle-bottom` (scrolling), scroll to top, tap Start, wait for Stop, pause 1.5 s → `navigating`; `Repeat` (0.5 s) → `after-repeat`; `Next` (1.0 s) → `after-next`; `Recenter` (0.5 s) → `after-recenter`; `navigating-middle`, `navigating-bottom`; scroll top; tap each haptic test button if present (0.3 s); flip "Silence haptics" → `haptics-silenced` (via `snapElement`), flip back; tap "Where am I" (1.5 s) → `where-am-i-no-key`; scroll top; Stop, wait for Start → `stopped`; tap `Go` empty → `go-empty`. Filenames are `String(format: "%02d-%@", shotIndex, name)`.
+- `testTour()` — order of shots: `01-idle-top`, `02-idle-middle`, `03-idle-bottom` (scrolling), scroll to top, tap Start, wait for Stop, pause 1.5 s → `navigating`; `Repeat` (0.5 s) → `after-repeat`; `Next` (1.0 s) → `after-next`; `Recenter` (0.5 s) → `after-recenter`; `navigating-middle`, `navigating-bottom`; scroll top; tap each haptic test button if present (0.3 s); flip "Silence haptics" → `haptics-silenced` (via `snapElement`), flip back; tap "Where am I" (1.5 s) → `where-am-i-no-key` (the name predates the on-device fallback; in the simulator it shows the no-camera state); scroll top; Stop, wait for Start → `stopped`; tap `Go` empty → `go-empty`. Filenames are `String(format: "%02d-%@", shotIndex, name)`.
 - `snap(_:)` — `XCUIScreen.main.screenshot().pngRepresentation` → `save`. `snapElement(_:_:)` — `app.swipeUp()` first if the element is not hittable, then full-screen snap.
-- `save(_:name:)` — if env `CANEKIT_SHOTS` is set, writes `<dir>/<name>.png` (errors ignored); **always** also `add`s an `XCTAttachment` (`public.png`, `lifetime = .keepAlways`) so the `.xcresult` holds the images. The Makefile passes `TEST_RUNNER_CANEKIT_SHOTS=…`; xcodebuild strips the `TEST_RUNNER_` prefix into the test-runner environment.
+- `save(_:name:)` — if env `CANEKIT_SHOTS` is set, writes `<dir>/<name>.png` (errors ignored); **always** also `add`s an `XCTAttachment` (`public.png`, `lifetime = .keepAlways`) so the `.xcresult` holds the images. The Makefile sets `TEST_RUNNER_CANEKIT_SHOTS=…` in xcodebuild's environment; xcodebuild strips the `TEST_RUNNER_` prefix into the test-runner environment.
 - `scrollDown()` = `swipeUp` + 0.4 s; `scrollToTop()` = 4× `swipeDown` + 0.4 s; `pause(_:)` = RunLoop spin; `flip(_:)` identical to the other file.
 
 ---
@@ -1835,6 +2195,8 @@ Regenerate with `scripts/gen.sh`; `CaneKit.xcodeproj` is git-ignored and never h
 | `UIRequiredDeviceCapabilities` | `[arkit, arm64]` | LiDAR/ARKit required |
 | `UIBackgroundModes` | `[audio, location]` | beacon + speech keep running; GPS in background |
 | `NSSupportsLiveActivities` | true | widget target |
+| `UIFileSharingEnabled` | true | Step 11: Documents (JSONL trip logs, `hazards/` GeoJSON + photos) show up in Files → On My iPhone → CaneKit — they were unreachable on the phone |
+| `LSSupportsOpeningDocumentsInPlace` | true | Step 11: pairs with the above so Files can open them in place |
 | `ITSAppUsesNonExemptEncryption` | false | |
 | `NSCameraUsageDescription` | "CaneKit uses the camera and LiDAR to detect obstacles between your waist and head." | ARKit depth |
 | `NSLocationWhenInUseUsageDescription` | "…uses your location and heading to guide you along the route." | |
@@ -1862,7 +2224,7 @@ Regenerate with `scripts/gen.sh`; `CaneKit.xcodeproj` is git-ignored and never h
 
 ### ios/scripts/test.sh
 
-Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (79 tests, incl. `NavSupportTests`). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
+Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (124 tests: CueDecider 14, GeoMath 20, NavSupport 19, LaneMath 12, Route 4, VLMCodec 8, WatchMessage 3, Hazard 25, CourseSmoother 3). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
 
 ### ios/Makefile (run from `ios/`)
 
@@ -1878,20 +2240,59 @@ Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (79 tests, incl. `N
 | `launch` | `check-env`; `xcrun devicectl device process launch --device $(DEVICE) $(BUNDLE)` |
 | `run` | `gen build install launch` |
 | `sim` | `$(XCB) -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build` |
-| `sim-grant` | `xcrun simctl boot "$(SIM)"`, then `xcrun simctl privacy "$(SIM)" grant location $(BUNDLE)` and `… grant motion $(BUNDLE)`; every line `-`-prefixed (errors ignored). Pre-answers permission prompts so no system alert races the first tap |
-| `uitest` | depends on `sim-grant`; `$(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO -only-testing:CaneKitUITests test` |
-| `tour` | depends on `sim-grant`; `mkdir -p $(SHOTS)`; same destination, `-only-testing:CaneKitUITests/CaneKitVisualTour TEST_RUNNER_CANEKIT_SHOTS=$(abspath $(SHOTS)) test` |
+| `sim-grant` | `xcrun simctl boot "$(SIM)"`, then `xcrun simctl privacy "$(SIM)" grant location $(BUNDLE)` and `… grant motion $(BUNDLE)`; every line `-`-prefixed (errors ignored). Pre-answers permission prompts so no system alert races the first tap. Prerequisite of `uitest`, `uitest-streetview`, `tour` and `e2e` |
+| `uitest` | depends on `sim-grant`; `$(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO -only-testing:CaneKitUITests test` (the Street View test skips itself here) |
+| `uitest-streetview` | depends on `sim-grant`; variable `STREETVIEW ?= scripts/streetview`; `TEST_RUNNER_CANEKIT_FRAME_DIR=$(abspath $(STREETVIEW)) $(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO -only-testing:CaneKitUITests/CaneKitUITests/testWhereAmIDescribesAStreetViewFrame test` — "Where am I" on a real street scene via `FrameReplay`; needs the git-ignored JPEGs next to `frames.json` |
+| `tour` | depends on `sim-grant`; `mkdir -p $(SHOTS)`; `TEST_RUNNER_CANEKIT_SHOTS=$(abspath $(SHOTS)) $(XCB) …same destination… -only-testing:CaneKitUITests/CaneKitVisualTour test` |
+| `e2e` | depends on `sim` **and** `sim-grant`; variable `SCENARIO ?= all`; `python3 scripts/e2e.py --sim "$(SIM)" --scenario $(SCENARIO)` — GPS replay of the demo route through the real app, asserting on its JSONL trip log; report + logs in `build/e2e/`; ~20 min for the four GPS scenarios; `SCENARIO=streetview` reruns `clean` with Street View frames as the camera; always muted (`CANEKIT_MUTE`) |
+
+⚠ `TEST_RUNNER_*` variables must be in xcodebuild's **environment** (a prefix before `$(XCB)`): xcodebuild strips the prefix and hands the rest to the test runner. Written after the command, as `uitest-streetview` and `tour` used to, they are only build settings and never reach the runner (review round 5).
 | `sim17` | `xcrun simctl create "iPhone 17 Pro Max" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max com.apple.CoreSimulator.SimRuntime.iOS-27-0` (Xcode 27 does not create that device by default; run once) |
 | `devices` | `xcrun devicectl list devices` |
 | `clean` | `rm -rf $(DERIVED) CaneKit.xcodeproj Logic/.build` |
 
-`.PHONY` lists every target: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant.
+`.PHONY` lists every target: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant e2e uitest-streetview. The header comment block lists `make e2e` but not `uitest-streetview`.
 
 Commit gate (AGENTS.md rule 10): `make test` and `make sim` green on every commit; UI changes also need `make uitest` + `make tour` on the iPhone 17 Pro Max / iOS 27 simulator.
 
+### ios/scripts/e2e.py (Step 11)
+
+Purpose: end-to-end GPS replay of the demo route through the **real app** in the iOS simulator, asserting on what the app actually said and did (its JSONL trip log). Needs no LiDAR, haptics, AirPods or watch — it exercises navigation, speech decisions, the route file and the log (plus, opt-in, the camera features over Street View frames). Python 3, stdlib only. Run via `make e2e` (builds `make sim` first) or `scripts/e2e.py --scenario clean` from `ios/`.
+
+- Paths / constants: `ROUTE` = `CaneKit/Resources/route_isr_cif.json` (reads `waypoints` — `lat`, `lon`, `id`), `APP` = `build/Build/Products/Debug-iphonesimulator/CaneKit.app` (missing → exit "run `make sim` first"), `OUT` = `build/e2e/`, `STREETVIEW` = `scripts/streetview`, `BUNDLE = com.aritro.canekit`, `EARTH = 6_371_000` m.
+- Geometry helpers: `offset(lat, lon, north_m, east_m)`, `dist(a, b)` (haversine m), `densify(points, step_m)`, `path_length(points)`.
+- `scenario_paths(wps, seed)` — **scenarios**:
+
+| Scenario | Path | Pass criteria (`check`) |
+|---|---|---|
+| `clean` | every waypoint in order | waypoints `1…9`; wrist cues exactly `["turnRight", "turnRight", "crossing", "crossing", "crossing", "arrived"]` (WP2 +41°, WP3 +92°, crossings WP4/6/7, arrival; WP8's −28° is under the 30° threshold); no "Veer…" lines; no "Passed …" lines |
+| `missed_fence` | WP2 passed 22 m to the SE (16 m S, 15 m E: outside its 15 m fence, inside 2× radius); WP8 skipped by cutting 28 m north of it | at least one "Passed …" line, and none that starts "Passed CIF is" or "Passed Illinois Street sidewalk." (a sentence instead of a waypoint `name`) |
+| `gps_jitter` | the clean path densified every 5 m with ±6 m uniform noise (`random.Random(seed)`), start and end pinned | at most 3 "Veer…" lines |
+| `wrong_turn` | at Goodwin (WP3) keep walking 60 m west, then come back and continue | at least one "Veer right." |
+| `streetview` (**opt-in**, not in `all`) | the clean path, launched with `SIMCTL_CHILD_CANEKIT_FRAME_DIR=<ios/scripts/streetview>` (so `FrameReplay` feeds the nearest Street View JPEG as the camera), `SIMCTL_CHILD_CANEKIT_DESCRIBE_EVERY_WAYPOINT=1` and `SIMCTL_CHILD_CANEKIT_HAZARD_WATCH=1` | same as `clean`, plus ≥ 8 of the 10 "Where am I" requests (start + 9 waypoints) answered, counted from `describe_result` log events with a `text`, and at least one `scan` log event. The app reads `CANEKIT_DESCRIBE_EVERY_WAYPOINT` (`AppModel.describeEveryWaypoint`: describe at route start and every waypoint) and `CANEKIT_HAZARD_WATCH` (`wireHazards`: hazard watch on without touching the persisted setting). Needs the git-ignored JPEGs; exits early if `scripts/streetview/frames.json` is missing |
+
+  Every scenario must also: log `route {action: start}`, log `arrived`, keep waypoint indices ascending, and speak the arrival trip summary (a `speech` line containing "kilometers" or "meters,").
+- Simulator plumbing: `udid_for(name)` (available iOS devices; missing → "Create it: make sim17"), `prepare(udid)` (boot, `bootstatus -b`, grant location + motion), `container(udid)`, `newest_log(udid, after)` (newest `Documents/canekit-*.jsonl` modified after launch − 2 s), `read_events(log)` (skips a half-written last line).
+- `launch_and_wait_for_route(udid, attempts=3, extra_env=None)` — **route-start retry**: `simctl launch --terminate-running-process` with env `SIMCTL_CHILD_CANEKIT_DEMO_ROUTE=1` (the app's demo-route hook), **`SIMCTL_CHILD_CANEKIT_MUTE=1`** (`SpeechQueue.muted`: silent run, same queue timing) and any `extra_env`; polls the log for up to 20 s for `route {action: start}`, then waits 4 s for the intro. The simulator occasionally drops a launch that races the previous process's teardown (a session line and nothing else), so it relaunches up to 3 times before raising.
+- `run_scenario(udid, name, points, speed)` — terminate, clear location, install, park GPS at the first point, launch (above; `streetview` adds the frame dir), `simctl location start --speed=<speed> --interval=1 <points…>`; polls every 5 s until `arrived` (+6 s for the summary) or a **tick-based budget** = Σ over segments of `max(1, ceil(dist / speed))` s + 75 s (simctl spends at least one `--interval` tick on every vertex, so a densified path such as `gps_jitter` takes far longer than length / speed — review round 5: it could never arrive); clears location, terminates, copies the log to `build/e2e/<name>.jsonl`.
+- `check(name, events)` — returns failures (above). Helpers `speech(events)`, `navcues(events)`.
+- `main()` — args `--sim` (default "iPhone 17 Pro Max"), `--scenario` (`all` = the four GPS scenarios, or one of `clean`, `missed_fence`, `gps_jitter`, `wrong_turn`, `streetview`), `--speed` (m/s, default 4 — ~4 min per run), `--seed` (default 7). **Deletes `build/e2e/report.json` at start** (never a stale PASS behind a crashed run); runs each scenario in **`try` / `except` / `finally`** (a harness error becomes that scenario's failure `harness error: …` and the others still run; `finally` clears the simulated location and terminates the app); **rewrites `report.json` after every scenario** (per scenario: pass, failures, seconds, path_m, waypoints, navcues, speech, **hazards** = the `text` of every `hazard` log event, `describes` (`describe_result`: frame, text, error, ms), `scan_texts` (sorted unique `texts` of `scan` events) and `hazard_watch` (`hazard_watch` events: frame, reply, said, dropped, error)). Exit 0 only if every requested scenario passes.
+- ⚠ The `clean` / `streetview` wrist-cue list and the waypoint count are pinned to `route_isr_cif.json`; edit them together (and `RouteTests.shippedRouteFileIsConsistent`). The script depends on the trip-log kinds `route`, `arrived`, `waypoint`, `navcue`, `speech`, `hazard` — renaming them in `TripLogger`/`AppModel` breaks it.
+
+### ios/scripts/vision_probe.swift (Step 11)
+
+Purpose: run the app's on-device camera logic over a folder of images **on the Mac** — the same Vision requests as `OnDeviceVision` (classification with threshold 0.25 and the `boring` label set, top 6 labels; text recognition at `.accurate` with `minimumTextHeightFraction = 1/128` as in `HazardScanner`, confidence ≥ 0.5), the same sign-phrase matching as `SignPolicy` (normalised, whole-word, plus stacked lines joined) and the same exact-identifier hazard map as `OnDeviceHazards` (confidence ≥ 0.35). Usage: `swift ios/scripts/vision_probe.swift ios/scripts/streetview` (reads `frames.json` there: `file`, `lat`, `lon`, optional `heading`). Prints per frame: labels ("sees"), text, and what CaneKit would say ("Sign: …." / "Caution: … ahead." / "(nothing)"). Differences from the phone: text recognition is `.accurate` (the phone uses `.fast`), and the hazard line is **not** gated on LiDAR (the phone's `lidarAhead`).
+- **`ios/scripts/sign_probe.swift`** (companion): pastes a white "SIDEWALK CLOSED" sign onto every route frame (960×1280 portrait, JPEG 0.8, as the app's sign scan) at letter heights 6–40 px, runs the app's exact text request (`.fast`, language correction, 1/128) and Vision's default, and prints the smallest letters read on every frame and the equivalent distance (≈ 931 px/m at 1 m for the 17 Pro Max main camera on a 1280 px frame). 2026-09-11: app settings read 10 px letters everywhere (1/80 was 16 px) → 7.5 cm letters from ≈ 7 m, 15 cm from ≈ 14 m; the default only 40 px → 1.7 m / 3.5 m. OCR time unchanged (~7 ms per frame on the Mac).
+- ⚠ Keeps its own copies `signPhrases` and `hazardMap` — keep them in sync with `SignPolicy.phrases` (`Hazards.swift`) and `OnDeviceHazards.map` (`OnDeviceVision.swift`).
+
+### ios/scripts/streetview/ (Step 11)
+
+- `frames.json` (meant to be committed with `README.md` — only the JPEGs are git-ignored) — 14 viewpoints along ISR Townsend Hall → CIF: `file`, `lat`, `lon`, `heading` (walking direction). Read by `FrameReplay` (app, simulator) and `vision_probe.swift`.
+- `*.jpg` — Google Street View captures, **git-ignored** (`.gitignore: ios/scripts/streetview/*.jpg`; Google's imagery, local test input only). `README.md` explains how to capture them (Maps pano URL per viewpoint at pitch −8, fov 90; screenshot at 1493×812, crop rows 185–700) and records the 2026-09-11 run: Vision recognised the indoor start, crosswalks (86–95 %), a manhole, trash can, stairs; text recognition read **nothing** from mid-road viewpoints (signs ~30 px tall), so the sign reader stayed silent the whole route; railings score "fence" 44–62 % all along the route — which is why the on-device hazard watch only names a label when LiDAR confirms an obstacle and ships off by default.
+
 ### ios/local.mk convention
 
-Git-ignored (root `.gitignore`: `ios/local.mk`, also `ios/.project.phone-only.yml`, `ios/CaneKit/Resources/Secrets.plist`, `ios/CaneKit.xcodeproj/`, `ios/build/`). Contains exactly:
+Git-ignored (root `.gitignore`: `ios/local.mk`, also `ios/.project.phone-only.yml`, `ios/CaneKit/Resources/Secrets.plist`, `ios/CaneKit.xcodeproj/`, `ios/build/`, `ios/scripts/streetview/*.jpg`, `__pycache__/`, `*.pyc`). Contains exactly:
 ```
 TEAM   = ABCDE12345                # security find-identity -v -p codesigning
 DEVICE = 00008150-000A1B2C3D4E5F   # make devices
@@ -1904,7 +2305,7 @@ Copied to `CaneKit/Resources/Secrets.plist` (git-ignored) by `gen.sh`; bundled a
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VLM_PROVIDER` | `custom` | `custom` / `anthropic` / `gemini` / `openai`; empty = first provider with a key |
+| `VLM_PROVIDER` | `custom` | `custom` / `anthropic` / `gemini` / `openai` / `ondevice` (on-device only); empty = first provider with a key. Any cloud provider automatically falls back to the on-device describer; with no key at all, on-device is used |
 | `CUSTOM_BASE_URL` / `CUSTOM_API_KEY` / `CUSTOM_MODEL` | "" | any OpenAI-compatible chat endpoint (base URL without `/chat/completions`) |
 | `ELEVENLABS_API_KEY` | "" | natural voice; empty → system voice (the "System" pill in `HapticsCard`) |
 | `ELEVENLABS_VOICE_ID` | `21m00Tcm4TlvDq8ikWAM` | |
@@ -1913,28 +2314,28 @@ Copied to `CaneKit/Resources/Secrets.plist` (git-ignored) by `gen.sh`; bundled a
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | "" / `gemini-2.5-flash` | |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | "" / `gpt-4o-mini` | |
 
-With no VLM key, "Where am I" must report the missing key (what `testWhereAmIWithoutKeyReportsGracefully` relies on). CI builds with this file as-is (all keys empty).
+With no VLM key, "Where am I" uses the on-device describer (Apple Vision + Foundation Models or its template) — it never reports a missing key any more; `testWhereAmIWithoutKeyReportsGracefully` only needs the no-camera message or an answer. CI builds with this file as-is (all keys empty).
 
 ### .github/workflows/ci.yml
 
-Workflow `CI`, on `push` to `main` and every `pull_request`; `concurrency: ci-${{ github.ref }}`, `cancel-in-progress: true`. Nothing signs or touches a device.
+Workflow `CI`, **manual only** (`on: workflow_dispatch`; the `push` / `pull_request` triggers are commented out until the private repo's Actions billing is fixed — the local `make test && make sim && make uitest && make e2e` gate is authoritative); `concurrency: ci-${{ github.ref }}`, `cancel-in-progress: true`. Nothing signs or touches a device.
 
 | Job | Runner / limit | Steps | Gate |
 |---|---|---|---|
-| `logic-tests` ("CaneKitLogic unit tests") | `macos-latest`, 20 min | checkout; select the newest `/Applications/Xcode*.app` (`sort -V | tail -1`, `sudo xcode-select -s`); `swift test` in `ios/Logic` | **required** |
+| `logic-tests` ("CaneKitLogic unit tests (Linux)") | `ubuntu-latest` in container `swift:6.2`, 15 min | checkout; `swift test` in `ios/Logic` (Foundation + Swift Testing only, so it runs on Linux at 1× minute cost) | the logic gate when run |
 | `sim-build` ("Simulator build (informational)") | `macos-latest`, 40 min, `continue-on-error: true` | checkout; newest Xcode; `brew install xcodegen`; `WATCH=0 scripts/gen.sh` (phone-only, no watch embed); `make sim` in `ios/` | informational until hosted runners ship Xcode 27 |
 
-CI does not run `make uitest` / `make tour` (no simulator test step).
+CI does not run `make uitest` / `make tour` / `make e2e` (no simulator test step).
 
 ---
 
 ### docs/design.md — rules the UI code implements
 
 - **Five rules**: words first (speech is primary, screen mirrors it); three-way redundancy on every hazard (fill + glyph/word + number → `LaneTile` shows metres + level word on a fill); big and few (72 pt `CKBigButton`s); ivory-on-ink brand accent, never a hue; nothing that carries meaning animates (grid updates at 15 Hz with no transitions).
-- **Typography** (§1): system faces only — SF Pro for prose, SF Rounded ≥ semibold for numbers/buttons/pills, SF Mono only in the hidden dev footer; tabular digits wherever a number changes; hero distance via `@ScaledMetric(relativeTo: .largeTitle)` base 64 (code clamps at 80); instructions never truncate; smallest user-facing size is `.subheadline`.
+- **Typography** (§1): system faces only — SF Pro for prose, SF Rounded ≥ semibold for numbers/buttons/pills, SF Mono only in hidden developer views (none ships today, so `CKFont.mono` is unused); tabular digits wherever a number changes; hero distance via `@ScaledMetric(relativeTo: .largeTitle)` base 64 (code clamps at 80); instructions never truncate; smallest user-facing size is `.subheadline`.
 - **Colour** (§2): warm neutrals, three variants per token (light/dark/HC) resolved by UIKit traits; `ink` on every coloured fill; lane ladder identical in light and dark; app follows system appearance (`UIUserInterfaceStyle Automatic`); demo runs in Dark Mode with Increase Contrast off.
 - **Spacing / radius / targets** (§3): 4 pt base tokens above; big buttons 72 pt, all other interactive controls on the phone ≥ 60 pt (`CKMetrics.touchTarget`); tiles are display only; no shadows — a card is a fill and a hairline (1 pt, 3 pt HC).
 - **Motion** (§4): only the button press animates (scale 0.97 / 120 ms spring; Reduce Motion → opacity 0.85, haptic kept); no layout or colour animation on the grid.
 - **Cue mapping** (§5): 25° on-course tolerance for the bearing pill; TRUSTED/SWEEPING pill flips on `isTrusted`; no VoiceOver announcements duplicating `SpeechQueue` — screen state is exposed via `accessibilityValue` + `.updatesFrequently` only.
-- **Accessibility** (§6/§7): every button has a visible word plus a symbol and a hint; pills carry `spoken` when terse; cards are `.contain` containers with `.isHeader` titles; rows of the grid are single elements; dev footer `accessibilityHidden`; no `accessibilitySortPriority` (visual order is focus order); no colour-only meaning; no text under 15 pt for the user; no custom fonts; no icon-only buttons.
-- **Divergence to know**: design.md §6 describes a 4-tab layout (Guide · Depth · Route · Settings), sheet-presented arrival card, and labels such as "Describe surroundings" / "Next waypoint" / "Recentre beacon". The shipped code is a single scrolling `ContentView` with inline cards and the labels documented above ("Where am I", "Repeat", "Next", "Recenter", "Start demo route", "Stop route"). design.md §3 also says 48 pt minimum on the watch, while `WatchTheme.swift` uses `WKSpacing.touchTarget = 44`. The tests follow the code; per the file header, the Swift wins.
+- **Accessibility** (§6/§7): every button has a visible word plus a symbol and a hint; pills carry `spoken` when terse; cards are `.contain` containers with `.isHeader` titles; rows of the grid are single elements; developer-only views and the HazardsCard live camera image are `accessibilityHidden`; no `accessibilitySortPriority` (visual order is focus order); no colour-only meaning; no text under 15 pt for the user; no custom fonts; no icon-only buttons.
+- **Divergence to know**: design.md §6 describes a 4-tab layout (Guide · Depth · Route · Settings), sheet-presented arrival card, and labels such as "Describe surroundings" / "Next waypoint" / "Recentre beacon". The shipped code is a single scrolling `ContentView` with inline cards (including the Step 11 Hazards card, which design.md does not describe yet) and the labels documented above ("Where am I", "Repeat", "Next", "Recenter", "Start demo route", "Stop route"). design.md §3 also says 48 pt minimum on the watch, while `WatchTheme.swift` uses `WKSpacing.touchTarget = 44`. The tests follow the code; per the file header, the Swift wins.

@@ -12,56 +12,106 @@
 //  speech plays. Without AirPods motion data headYaw is 0 and the same graph pans from the
 //  compass alone.
 //
+//  Audio-session rules (AGENTS.md hard rule 7): the engine plays on the app's single `.playback`
+//  / `.default` / `[.duckOthers]` session configured by `SpeechQueue.configureAudioSession()`;
+//  this file never calls `setCategory`. It only re-activates the session (`setActive(true)`)
+//  when recovering from an interruption. Rendering is `.HRTF` with a mono source
+//  (`.spatializeIfMono`) and `outputType = .headphones`; no Bluetooth/HFP options anywhere,
+//  because HFP would drop AirPods to mono call audio and the click would lose its direction.
+//  Deliberate behaviour (AGENTS.md): the beacon only plays into headphones — `render()` is
+//  silent unless `headphonesConnected`.
+//
+//  Threading / isolation: `@MainActor`. AVAudioEngine does its real-time rendering on its own
+//  audio thread; we only change node parameters (position, listener yaw, volume) from main,
+//  which AVAudioEngine supports. Both NotificationCenter observers use `queue: .main`, so
+//  `MainActor.assumeIsolated` is legal inside them (hard rule 1); only the decoded
+//  `InterruptionType` crosses in. The restart-retry `Task` inherits the main actor.
+//
+//  Inputs (all main actor, from AppModel): `setHeading` on every compass update, and a 10 Hz
+//  ticker that pushes `setSpeaking` (SpeechQueue.isSpeaking), `setHeadYaw` (0 until the
+//  auto-recenter has re-zeroed the AirPods on the new leg) and `setTarget` (nil when not
+//  navigating, or while NavigationEngine keeps the beacon silent — settling at a crossing, a
+//  curved leg). `start()` / `stop()` bracket a route (`AppModel.beginRoute`; `stopRoute` and
+//  arrival).
+//
 
 import AVFoundation
 import Foundation
 import Observation
 
+/// Head-tracked (or compass-panned) spatial click that points the way to walk. Owned by
+/// `AppModel`; one instance, one AVAudioEngine graph for the app's lifetime.
 @MainActor
 @Observable
 final class BeaconEngine {
 
     // MARK: Published
 
+    /// True between a successful `start()` and `stop()`. Not cleared when the system stops the
+    /// engine during an interruption — that is what lets `restartEngine` bring it back.
     private(set) var isRunning = false
+    /// Last start/restart failure (debug); nil after a successful (re)start.
     private(set) var lastError: String?
     /// The bearing error currently rendered (debug).
+    /// Degrees in (−180, 180], positive = target is to the right of the user's facing; nil when
+    /// silent for lack of input.
     private(set) var renderedError: Double?
     /// 0…1, what the mixer is set to (debug).
+    /// Also drives the GuideCard pill ("Beacon N%"), so it must be 0 whenever nothing plays.
     private(set) var renderedVolume: Float = 0
+    /// User setting (persisted by AppModel). False silences immediately; turning it back on
+    /// takes effect at the next input update (≤ 100 ms via the ticker).
     var enabled = true {
         didSet { if !enabled { silence() } }
     }
     /// Only render into headphones: a spatial click out of the cane-mounted speaker is noise
     /// for everyone and carries no direction. Set by the AudioRouteMonitor.
+    /// (via `AppModel.wireAudioRoute()`); re-renders immediately on change.
     var headphonesConnected = false {
         didSet { render() }
     }
 
     // MARK: Private
 
+    /// The one audio graph: player → environment → main mixer → output.
     @ObservationIgnored private let engine = AVAudioEngine()
+    /// Mono source node looping `clickBuffer`; its `position` is the target direction.
     @ObservationIgnored private let player = AVAudioPlayerNode()
+    /// HRTF spatialiser; its listener yaw is the user's absolute facing.
     @ObservationIgnored private let environment = AVAudioEnvironmentNode()
+    /// 400 ms mono buffer (40 ms click + silence) looped forever → a 2.5 Hz tick.
     @ObservationIgnored private var clickBuffer: AVAudioPCMBuffer?
+    /// `AVAudioEngineConfigurationChange` observer (route change, e.g. AirPods connect).
     @ObservationIgnored private var configObserver: NSObjectProtocol?
+    /// `AVAudioSession.interruptionNotification` observer (call, Siri).
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
+    /// Where to walk, degrees true (0 = north, clockwise); nil = silent.
     @ObservationIgnored private var targetBearing: Double?
+    /// Phone/body heading, degrees true; nil = silent (no compass yet).
     @ObservationIgnored private var heading: Double?
+    /// Head yaw relative to the recentred forward, degrees, right-positive.
     @ObservationIgnored private var headYaw: Double = 0
+    /// Speech is playing → volume × `duckWhileSpeaking`.
     @ObservationIgnored private var speaking = false
     /// Nodes are attached exactly once; a second `start()` (second route) only restarts the engine.
     @ObservationIgnored private var graphBuilt = false
 
     /// Silent inside this error; full volume at `fullVolumeError`.
+    /// Degrees. Inside ±10° the user is on course, so silence *is* the "keep going" signal.
     var silentError: Double = 10
+    /// Degrees of bearing error at which volume reaches 1.0 (linear ramp from `silentError`).
     var fullVolumeError: Double = 90
+    /// Volume multiplier (0…1) applied while speech plays so instructions stay intelligible.
     var duckWhileSpeaking: Float = 0.3
 
     init() {}
 
     // MARK: Lifecycle
 
+    /// Build the graph on first use, start the engine, (re)start the click loop, install the
+    /// route/interruption observers (once) and render the current inputs. Idempotent while
+    /// running. On failure sets `lastError` and leaves `isRunning == false`. Caller:
+    /// `AppModel.beginRoute`. Requires the app audio session to be configured already.
     func start() {
         guard !isRunning else { return }
         do {
@@ -97,6 +147,10 @@ final class BeaconEngine {
         }
     }
 
+    /// Stop the click and the engine (graph and observers stay for the next route). After this
+    /// `restartEngine` is a no-op, so interruptions no longer revive the beacon. Does not reset
+    /// `renderedVolume`; the next input update (any `set…`) renders silence since
+    /// `isRunning` is false. Callers: `AppModel.stopRoute` and the arrival handler.
     func stop() {
         player.stop()
         engine.stop()
@@ -104,6 +158,8 @@ final class BeaconEngine {
     }
 
     /// One looping click, never two: stop first (drops any scheduled buffer), then schedule + play.
+    /// Starts at the last `renderedVolume`, so a restart does not blip at full volume before
+    /// the next `render()`.
     private func restartLoop() {
         player.stop()
         if let clickBuffer {
@@ -115,6 +171,11 @@ final class BeaconEngine {
 
     /// AirPods connect/disconnect re-configures the engine, and a phone call / Siri interrupts
     /// the audio session (the engine stops silently): restart the graph in both cases.
+    ///
+    /// Installed once (first `start()`), never removed. Both observers use `queue: .main`, which
+    /// is what makes `MainActor.assumeIsolated` legal in their closures. Interruption `.began`
+    /// only zeroes the published volume (the system already stopped the audio); `.ended`
+    /// restarts. `SpeechQueue` handles the same interruption for speech independently.
     private func observeRouteChanges() {
         guard configObserver == nil else { return }
         configObserver = NotificationCenter.default.addObserver(
@@ -134,9 +195,20 @@ final class BeaconEngine {
         }
     }
 
+    /// Called when the app returns to the foreground: the engine can stop across a screen lock
+    /// without an interruption notification; restart it if a route is running (Muse M4).
+    func resumeIfNeeded() {
+        guard isRunning, !engine.isRunning else { return }
+        restartEngine()
+    }
+
     /// Bring a stopped engine back with its loop; a no-op when the beacon is not in use.
     /// Activation can fail right at `.ended` while the call's session winds down, so retry up to
     /// three times, a second apart — otherwise the click would be gone for the rest of the walk.
+    ///
+    /// Re-activates the shared session (never re-categorises it), starts the engine if the
+    /// system stopped it, reschedules the loop and re-renders. `attempt` counts retries (0…3).
+    /// Main actor; retries run in a main-actor `Task`.
     private func restartEngine(attempt: Int = 0) {
         guard isRunning else { return }
         do {
@@ -170,11 +242,15 @@ final class BeaconEngine {
     }
 
     /// Head yaw relative to the recentred forward direction, degrees, right-positive.
+    /// AppModel passes 0 while `recenterPending` (after a turn the old reference would
+    /// double-count the body turn the heading already contains — AGENTS.md).
     func setHeadYaw(_ yaw: Double) {
         headYaw = yaw
         render()
     }
 
+    /// Duck to `duckWhileSpeaking` while `SpeechQueue.isSpeaking` (pushed by AppModel's 10 Hz
+    /// ticker, so ducking lags speech start by ≤ 100 ms).
     func setSpeaking(_ on: Bool) {
         speaking = on
         render()
@@ -182,8 +258,15 @@ final class BeaconEngine {
 
     // MARK: Render
 
+    /// Apply the current inputs to the graph (main actor; called after every input change).
+    ///
+    /// Silent (volume 0, `renderedError` nil) unless running, enabled, in headphones, with both a
+    /// target and a heading. Otherwise: source at the absolute target bearing 10 m out, listener
+    /// yawed to the absolute facing (heading + head yaw, negated because AVAudio yaw is CCW),
+    /// error wrapped to (−180, 180], volume ramped linearly from 0 at `silentError` to 1 at
+    /// `fullVolumeError`, then ducked while speaking.
     private func render() {
-        guard isRunning, enabled, headphonesConnected, let θ = targetBearing, let h = heading else {
+        guard isRunning, enabled, headphonesConnected, !SpeechQueue.muted, let θ = targetBearing, let h = heading else {
             silence()
             return
         }
@@ -205,6 +288,8 @@ final class BeaconEngine {
         player.volume = volume
     }
 
+    /// Zero the published volume/error and, if the graph is running, the player volume. The loop
+    /// keeps playing silently so un-silencing is instant (no reschedule).
     private func silence() {
         renderedVolume = 0
         renderedError = nil
@@ -212,6 +297,9 @@ final class BeaconEngine {
     }
 
     /// 40 ms decaying 1.2 kHz sine followed by silence to 400 ms — a soft, periodic tick.
+    /// Peak amplitude 0.6, exponential decay e^(−90 t) (≈ −31 dB by the end of the click).
+    /// Looped, the 400 ms buffer gives 2.5 clicks per second. `format` must be mono Float32
+    /// (48 kHz standard format from `start()`); returns nil if the buffer cannot be allocated.
     private static func makeClick(format: AVAudioFormat) -> AVAudioPCMBuffer? {
         let sampleRate = format.sampleRate
         let total = AVAudioFrameCount(sampleRate * 0.4)

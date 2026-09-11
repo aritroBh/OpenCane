@@ -27,7 +27,9 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 | `ios/CaneKitUITests/` | XCUITests + the screenshot tour |
 | `ios/project.yml`, `ios/scripts/gen.sh`, `ios/Makefile` | XcodeGen project + CLI build/test/install |
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
-| `docs/` | `design.md` (UI/cue design system), `route_isr_cif.md` (route evidence), `todo.md`, `ideas.md`, `CODE_REFERENCE.md` |
+| `docs/` | `README.md` (index), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` |
+| `hardware/` | Phone-to-cane mount: design brief + parametric OpenSCAD (Sagar) |
+| `graphify-out/` | Knowledge graph of the repo: `graphify query "<question>"`, `GRAPH_REPORT.md`, `graph.html` |
 
 ## Hard rules
 
@@ -64,6 +66,44 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
     it once). Run the Muse review (`muse exec`, read-only, from a scratch dir) on the diff. Commit message
     ends with a one-line `test on device: …` note. Add a `CHANGELOG.md` entry and tick `docs/todo.md`.
 
+## How we engineer (the bar for every change, human or AI)
+
+This is how CaneKit was built, and it is the standard for anyone who touches it. A blind person
+walks on this code; "it compiled" is not done.
+
+1. **Evidence before claims.** Never say something works, is fixed or is safe without a command
+   whose output proves it (test run, build log, e2e report, harness numbers, trip log). Measure
+   before assuming: the sign-reading range, the curb-warning distance and the false-veer count all
+   came from a probe or a simulation, not a guess. When you cannot verify something, say so.
+2. **Test first for every rule with a number in it.** The decision goes in `ios/Logic` (pure, no
+   UIKit/ARKit) with a Swift Testing test written *before* or *with* the fix, ideally from real
+   data (the SceneVocabulary tests use the labels Vision returned on the route; the veer fix was
+   proven by a harness that runs the real NavigationEngine over 72 simulated walks). A bug fix
+   starts with a failing test that reproduces it.
+3. **Adversarial review, several independent reviewers, every round.** After each chunk of work:
+   a multi-agent review (finders + skeptics who try to refute each finding), **plus Muse**
+   (`muse exec … --workspace <scratch>`, read-only) **plus Antigravity** (`agy -p …`, pointed at a
+   *copy* of the repo — it has edited files despite a read-only prompt). Keep review prompts small
+   and focused on the diff; broad prompts time out. Then **verify every finding yourself** before
+   acting: fix what is real, and reject what is not *with evidence* in `CHANGELOG.md` (e.g. the
+   "swap max/min" proposal that would have reverted the mid-bin curb fix).
+4. **Verify end to end, silently.** `make test`, `make sim`, `make uitest`, `make e2e` (and
+   `SCENARIO=streetview` when the camera path changed) on the iPhone 17 Pro Max simulator. All
+   automation runs muted (`CANEKIT_MUTE=1` / `CANEKIT_UITEST=1`); never make noise on the Mac.
+5. **Make the invisible visible.** If a test cannot see why something passed, it is not a test:
+   log what the system saw, not only what it said (`scan`, `hazard_watch`, `describe_result`,
+   `tilt`, `fps` in the trip log). A green e2e with no evidence of the camera path was a failure.
+6. **Safety beats features.** Anything new and untuned on the real cane ships **off by default**
+   (drop-offs, hazard watch). Never trade guidance away for a stricter check (a refused camera
+   warns loudly but still guides). Never speak something the sensors did not see (model
+   sentences must pass `SceneVocabulary.isFaithful`).
+7. **Document in the same commit.** Every file has a header, every type and function a doc
+   comment that says what, why, who calls it and what pins it (⚠ lines name the tests). Update
+   `docs/CODE_REFERENCE.md`, `CHANGELOG.md` (with a "test on device" line) and `docs/todo.md` with
+   the code. Refresh the knowledge graph (`graphify update .`). The code wins over any doc; fix the doc.
+8. **Small, reviewable steps, strict to-do lists.** Write the plan as a checklist, tick it as you
+   go, commit per step with a message that ends in `test on device: …`.
+
 ## Commands
 
 ```sh
@@ -73,6 +113,7 @@ make sim             # build the app for the iOS simulator (no LiDAR / haptics /
 make uitest          # XCUITests on the iPhone 17 Pro Max simulator
 make tour            # screenshot every screen state → ios/build/shots
 make sim17           # create the iPhone 17 Pro Max (iOS 27) simulator once
+make e2e             # GPS-replay end-to-end scenarios through the real app (SCENARIO=clean …)
 make devices         # find DEVICE for ios/local.mk
 make run             # gen + build + install + launch on the phone (needs TEAM/DEVICE in ios/local.mk)
 ```
@@ -95,7 +136,7 @@ app container's Documents folder.
   it says "Passed <place>. <next place> in N meters." Skip-ahead says "Passed one waypoint." + the real line.
 - `"curved": true` on a waypoint (WP1) = the next leg is not straight: no veer, beacon silent.
 - Repeat speaks the last line actually spoken (not the upcoming waypoint) and bypasses queue coalescing.
-- Auto-recenter of the AirPods head reference: `StraightWalkDetector` (3 fixes > 0.9 m/s, steady
+- Auto-recenter of the AirPods head reference: `StraightWalkDetector` (3 fixes > 0.6 m/s, steady
   course, still head), never within 15 m of a crossing, never on a timer. Until it happens the beacon
   ignores head yaw (the old reference would double-count the body turn).
 - The beacon only plays into headphones (`AudioRouteMonitor`); connect/disconnect is spoken.
@@ -109,6 +150,45 @@ app container's Documents folder.
 - `SpeechQueue` has a watchdog (6 s + text length / 6) that unsticks a stalled backend.
 - Location permission is requested at launch (with a sighted helper present; skipped under
   `CANEKIT_UITEST=1`); Motion and HealthKit at route start.
+
+- Hazards the maps do not know about (Step 11): LiDAR ground hazards (drop-off / hole / curb /
+  low obstacle) need a near-field ground reference, an edge jump against the previous *two* 30 cm
+  bins (a curb face mid-bin splits its jump), and 3 of 5 frames agreeing on the hazard's position in
+  the world (distance + metres walked). Comparing with the previous *two* bins means ramps steeper
+  than ~11 % (7 cm over 60 cm) can read as a drop-off or step; ≤ 10 % (ADA ramps are ≤ 8.3 %) stay
+  silent (tested). Do not swap `max`/`min` there: that reverts to adjacent-bin only and a curb face
+  landing mid-bin is missed again (Antigravity round 6 proposed it; rejected with the tests). The ground path has its own looser gyro gate (1.5 rad/s, raw
+  depth, ≤ 10 Hz) because a 1 Hz sweep leaves too few 0.6 rad/s frames to warn before the cane tip
+  gets there. A rise in the last scan bin is not classified yet (step vs low obstacle is a guess).
+  Spoken at `.safety` with 4 heavy cane taps; the same hazard (same kind, within 1 m) is repeated
+  only when 1 m closer or after 30 s, so standing at a curb does not nag. **Off by default**
+  ("Detect drop-offs") until tuned on the real cane. Signs are read on-device every 3 s, text down to
+  1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured by `ios/scripts/sign_probe.swift`),
+  and each phrase, with every phrase inside it, is spoken at most once a minute. "STOP" is
+  deliberately not a phrase (a STOP sign faces drivers and would be read at every corner). The hazard watch (**off by default**) asks the vision model every 8 s only while
+  walking a route; the cloud gets 2.5 s, then on-device answers; a reply older than ~4 m of walking
+  is dropped and one older than 2 s loses its distance; "NONE" is silent. Every announced hazard is
+  written to Documents/hazards/*.geojson with GPS (the nav engine's last fix after arrival; null
+  geometry with no fix) + photo.
+- The lane grid has no gravity correction (a fixed bottom `groundSkipFraction` is ground), so the
+  mount must aim the camera 3–8° below the horizon (`MountTilt`; hardware/mount/DESIGN.md). The
+  Mount card shows the live tilt and fps; do not "fix" a buzzing-on-empty-sidewalk report in code
+  before checking that line.
+- The retained camera frame is dropped when ARKit pauses: after a lock/unlock "Where am I" and the
+  sign scan wait for a fresh frame rather than describing where the walker used to be.
+- "Where am I" never needs a key: cloud provider → on-device fallback (Vision + Apple's on-device
+  model, template when Apple Intelligence is off). On-device scene words go through
+  `SceneVocabulary`: Vision identifiers not in its table ("conveyance", "portal", "machine") are
+  dropped on purpose and synonyms merge; add a group, never pass raw identifiers to speech. The front camera is deliberately unused: it
+  faces the walker on the cane, and ARKit owns the capture pipeline.
+- Veer decisions use a 15 m course smoother while walking; the beacon keeps the raw heading.
+  The gyro gate applies to the compass only, never to the GPS course. The smoother is kept empty
+  while the fix is inside the fence of the corner just reached (its first course would be a diagonal
+  across the corner) and is reset after every veer cue (so a corrected walker is not told again).
+- The arrival hint ("You are close to …, press Next to finish") is clock-driven from the 10 Hz
+  ticker (`NavigationEngine.tick`), because CoreLocation stops sending fixes while you stand still.
+- Route cues are felt on the cane as long soft buzzes (turn left 1, right 2, crossing 3, arrived
+  long-short-long) — deliberately unlike the crisp obstacle taps.
 
 ## Where the plan and history live
 

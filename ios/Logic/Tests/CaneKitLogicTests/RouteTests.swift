@@ -1,3 +1,18 @@
+//
+//  RouteTests.swift
+//  CaneKitLogicTests
+//
+//  Purpose: pins Waypoint.swift — the MapKit-steps → waypoints converter, the snake_case route
+//  JSON schema, the bearing sanity check, and the shipped demo route file itself
+//  (ios/CaneKit/Resources/route_isr_cif.json), so a hand edit the night before the demo cannot
+//  silently break crossings, turn fences, names or bearings.
+//
+//  Key invariants / fixtures:
+//    · `a`…`d` are points along the real ISR → Goodwin → Springfield path.
+//    · The shipped-route pins (crossings [4, 6, 7], curved [1], 12 m turns on 3/6/8) must be
+//      updated on purpose whenever the route JSON changes.
+//
+
 import Foundation
 import Testing
 @testable import CaneKitLogic
@@ -7,6 +22,7 @@ private let b = Coordinate(latitude: 40.1096, longitude: -88.2244)
 private let c = Coordinate(latitude: 40.1107, longitude: -88.2244)
 private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
 
+/// Any MapKit destination becomes speakable waypoints: next step's line, crossing flag, 15/20 m fences.
 @Test func mapKitStepsBecomeWaypoints() {
     let steps = [
         RouteStepInput(points: [], instructions: ""),                          // MapKit's empty first step
@@ -29,6 +45,7 @@ private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
     #expect(w[2].bearingNextDeg == nil)
 }
 
+/// The hand-written route JSON (snake_case, optional bearing on the last waypoint) loads and round-trips.
 @Test func routeFileDecodesSnakeCaseSchema() throws {
     let json = """
     { "name": "ISR to CIF", "waypoints": [
@@ -50,6 +67,7 @@ private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
     #expect(s.contains("radius_m") && s.contains("bearing_next_deg"))
 }
 
+/// Demo-day guard: the shipped route still has the right crossings, turn fences, names and spacing.
 /// The real route file shipped in the app bundle must decode, walk ISR → CIF in order, and have
 /// recorded bearings that agree with its own coordinates (catches hand-edit typos on Friday).
 @Test func shippedRouteFileIsConsistent() throws {
@@ -96,6 +114,7 @@ private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
     #expect(total > 700 && total < 1300)
 }
 
+/// A recorded bearing typo (180° instead of ~0°) in a hand-edited route is caught.
 @Test func bearingConsistencyCheckCatchesTypos() {
     let good = Route(name: "g", waypoints: [
         Waypoint(id: 1, lat: b.latitude, lon: b.longitude, radiusM: 15, say: "", crossing: false,

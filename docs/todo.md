@@ -71,11 +71,38 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] Commit "Step 10 (pre-device)" + push (1de6efb)
 - **test on device:** see CHANGELOG Step 10 and docs/devices_setup.md
 
+## Step 11 — Hazards the maps don't know, on-device vision, stress harness (pre-device)
+- [x] LiDAR ground hazards (GroundSampler + GroundHazardDetector), 4-tap cane haptic, off by default
+- [x] On-device sign reading (Vision text down to 1/128 of the frame, 7.5 cm letters from ≈ 7 m measured, once a minute per phrase)
+- [x] Hazard watch (cloud 2.5 s → on-device; stale replies dropped), off by default
+- [x] Keyless "Where am I" (Apple Vision + Foundation Models, template fallback)
+- [x] Hazard map GeoJSON + photos, Share on the Hazards card; Files app sharing on
+- [x] Route cues as long buzzes on the cane; debug footer removed
+- [x] CourseSmoother veer (15 m); corner-fence reset; reset after each veer cue
+- [x] Muse full-app review fixes (H1–H3, M1–M8, L2/L5/L6)
+- [x] Round-4 and round-5 adversarial reviews (28 + 22 findings) fixed; nav harness 0 false veers / 72 walks
+- [x] Logic tests (124 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
+- [x] Street View mock of ISR → CIF: FrameReplay, `make uitest-streetview`, `make e2e SCENARIO=streetview`, vision_probe
+- [x] graphify knowledge graph (`graphify-out/`, `graphify query`)
+- [x] docs/stress_test_plan.md, docs/README.md, hardware/mount (phone-to-cane mount for Sagar)
+- [x] Muse + Antigravity check of the final diff (rounds 6–7 and the docs review)
+- [ ] Commit "Step 11 + 12 (pre-device)" + push
+- **test on device:** see CHANGELOG Step 11 and docs/stress_test_plan.md
+
+## Step 12 — Google Street View mock of ISR → CIF (pre-device)
+- [x] Trip-log `scan`, `hazard_watch`, `describe_result` records; FrameReplay frame names
+- [x] Street View e2e: hazard watch on, "Where am I" at start + every waypoint, ≥ 8 of 10 described
+- [x] `SceneVocabulary`: plain pedestrian nouns instead of Vision taxonomy words (5 tests)
+- [x] `sign_probe.swift`: measured sign range; text floor 1/128 (7.5 cm letters ≈ 7 m); STOP dropped, PUSH BUTTON added
+- [x] "CaneKit ready." no longer spoken after "Camera access is off"
+- [x] docs/TEAM_HANDOFF.md + README / docs index / iOS README refreshed; Muse + Antigravity docs review folded in
+- **test on device:** see CHANGELOG Step 12
+
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
 - [x] TripLogger JSONL (Documents folder; AirDrop from Files)
-- [x] Simulator build + run on iPhone 18 Pro sim (iOS 27) — UI verified by screenshot
+- [x] Simulator build + run on the iOS 27 simulator (now the iPhone 17 Pro Max, the demo phone) — UI verified by screenshot
 - [ ] Go/no-go checklist rehearsed before any blindfolded walk
 - [ ] Open (not fixed, from the review's unverified list): accidental taps on the clamped screen (Stop / Mirror have no
       lock), obstacle sensing stopping silently on screen lock (use Guided Access + keep the screen on), compass

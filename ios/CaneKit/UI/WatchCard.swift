@@ -5,11 +5,22 @@
 //  Step 5 controls: link state, fallback toggle, and buttons that send each wrist cue so the
 //  haptic map can be felt without walking a route.
 //
+//  Implements docs/design.md §5 (the "Shown (watch)" / wrist-haptic column: one button per
+//  NavCue) and the "Mirror cues to watch" row of §6.5.
+//
+//  Accessibility contract: the link pill speaks "Watch: <state>" and updates live; each send
+//  button is labelled "Send <cue> cue to the watch" and is disabled (VoiceOver: "dimmed") while
+//  the watch is unreachable. No XCUITest queries this card (the simulator has no watch), so
+//  none of its strings are a test contract; the visual tour only photographs it.
+//
 
 import CaneKitLogic
 import SwiftUI
 
+/// "Watch" card: WatchConnectivity link state, last command received from the watch, the
+/// mirror-obstacles-to-watch toggle, and four wrist-cue test buttons.
 struct WatchCard: View {
+    /// App-wide owner of `watch` (PhoneWatchLink) and the `fallbackToWatch` setting.
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -39,6 +50,8 @@ struct WatchCard: View {
         }
     }
 
+    /// Link pill word. First failing check wins: "Unsupported" → "Not paired" →
+    /// "App not installed" → "Reachable" / "Asleep" (paired and installed but not reachable).
     private var linkWord: String {
         if !model.watch.isSupported { return "Unsupported" }
         if !model.watch.isPaired { return "Not paired" }
@@ -46,6 +59,15 @@ struct WatchCard: View {
         return model.watch.isReachable ? "Reachable" : "Asleep"
     }
 
+    /// A 60 pt button that sends one `NavCue` to the watch so its wrist haptic can be felt
+    /// without walking a route. Disabled unless the watch is reachable.
+    ///
+    /// Accessibility: label "Send <title lowercased> cue to the watch"; the icon + caption are
+    /// the visible word-plus-symbol pair.
+    /// - Parameters:
+    ///   - title: visible caption and the word inside the VoiceOver label.
+    ///   - symbol: SF Symbol drawn above the caption.
+    ///   - cue: the navigation cue sent via `AppModel.watchTest(_:)`.
     private func testButton(_ title: String, _ symbol: String, _ cue: NavCue) -> some View {
         Button {
             model.watchTest(cue)

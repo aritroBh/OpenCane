@@ -1,3 +1,21 @@
+//
+//  NavSupportTests.swift
+//  CaneKitLogicTests
+//
+//  Purpose: pins NavSupport.swift — `TurnSettle` (when a new leg may drive the beacon / veer
+//  cues), `StraightWalkDetector` (AirPods auto-recenter), `CueSpeechPolicy` (which obstacle
+//  cues are spoken) and `CrownAccumulator` (watch crown "Next"). Each case is a walk bug the
+//  Step 10 review found or a spec'd behaviour of the corner / curb / crown.
+//
+//  Key invariants / fixtures:
+//    · `corner` sits at 40.11, −88.224; `south(m)` / `north(m)` offset it by metres
+//      (1° lat ≈ 111 195 m), so the user approaches from the south and the new leg is north.
+//    · `settle(...)` = radius 12 m, held bearing 270°, next bearing 0°, start 12 m away.
+//    · `fix(_:t:speed:acc:)` defaults to a good walking fix: 1.2 m/s, 5 m accuracy.
+//    · Results of `mutating` calls are bound to locals (`r1`, `first`, …) and then checked
+//      with `#expect`, rather than calling the mutating method inside the macro.
+//
+
 import Foundation
 import Testing
 @testable import CaneKitLogic
@@ -17,6 +35,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: TurnSettle
 
+/// Entering a turn fence early keeps the old leg's bearing until 6 m from the corner plus 4 s.
 @Test func settleHoldsThePreviousLegUntilNearTheCornerPlusGrace() {
     var s = settle()
     let r1 = s.update(fix(south(12), t: 0))
@@ -30,6 +49,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.isLive(at: 6))
 }
 
+/// One GPS jump away from the corner does not release the turn early (spurious "Veer").
 @Test func settleDoesNotReleaseOnOneJitteryFix() {
     var s = settle()
     _ = s.update(fix(south(12), t: 0))
@@ -39,6 +59,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.bearing(live: 0, at: 10) == 270)
 }
 
+/// GPS offset never gets within 6 m, but two receding fixes show the user rounded the corner.
 @Test func settleReleasesAfterTwoConsecutiveRecedingFixes() {
     var s = settle()
     // GPS offset keeps the fix > 6 m from the corner: closest approach 8 m, then receding.
@@ -50,6 +71,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.releaseAt == 15)                          // 11 + 4 s grace
 }
 
+/// A fix drifting near the corner while the user stands or has poor GPS is not a turn.
 @Test func stationaryOrPoorFixesNeverReleaseByDistance() {
     var s = settle()
     _ = s.update(fix(south(12), t: 0))
@@ -59,6 +81,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.releaseAt == nil)
 }
 
+/// A minute waiting at a curb does not burn the 25 s cap; 25 s of walking does release.
 @Test func settleCapCountsMovingTimeOnly() {
     var s = settle()
     var t = 0.0
@@ -68,6 +91,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.isLive(at: t))
 }
 
+/// At a street crossing the beacon is silent ("Listen for traffic") until two stationary fixes at the curb.
 @Test func crossingSilencesTheBeaconAndReleasesAtTheCurb() {
     var s = settle(crossing: true)
     _ = s.update(fix(south(10), t: 0))
@@ -79,6 +103,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.bearing(live: 270, at: 2) == 270)
 }
 
+/// Turning the body (cane) to within 30° of the new leg releases the settle at once.
 @Test func turningTheBodyReleasesImmediately() {
     var s = settle(held: 270, next: 0)
     s.update(heading: 300, now: 1)                      // not yet
@@ -87,12 +112,14 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(s.releaseAt == 2)
 }
 
+/// After a manual Next or passed-by, the user is already past the corner: the new leg is live immediately.
 @Test func manualOrPassedByAdvanceIsLiveAtOnce() {
     let s = settle(released: 5)
     #expect(s.isLive(at: 5))
     #expect(s.bearing(live: 10, at: 5) == 10)
 }
 
+/// With no previous leg bearing to hold, the beacon uses the live bearing while settling.
 @Test func noHeldBearingFallsBackToLive() {
     let s = settle(held: nil)
     #expect(s.bearing(live: 42, at: 0) == 42)
@@ -100,6 +127,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: StraightWalkDetector
 
+/// Three steady walking fixes with a still head trigger the AirPods auto-recenter.
 @Test func straightWalkNeedsThreeSteadyFixesCountingTheFirst() {
     var d = StraightWalkDetector()
     let r4 = d.update(speed: 1.2, accuracy: 5, heading: 0, headYaw: 0)
@@ -110,6 +138,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(r6)
 }
 
+/// A course change, a curb stop, a head turn, no heading or bad GPS each restart the recenter count.
 @Test func straightWalkRestartsOnATurnAStopOrAHeadTurn() {
     var d = StraightWalkDetector()
     _ = d.update(speed: 1.2, accuracy: 5, heading: 0, headYaw: 0)
@@ -131,6 +160,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: CueSpeechPolicy
 
+/// Under a low branch "Head height." is spoken once while the haptic re-fires every second.
 @Test func headHeightIsSpokenOncePerEpisode() {
     var p = CueSpeechPolicy()
     let r13 = p.line(for: .head, phoneCannotBuzz: false, now: 0)
@@ -144,6 +174,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(r16?.tier == .safety)   // new episode
 }
 
+/// Stepping in and out under an overhang does not repeat "Head height." inside 4 s.
 @Test func headEpisodesAreRateLimitedAcrossEpisodes() {
     var p = CueSpeechPolicy()
     let r17 = p.line(for: .head, phoneCannotBuzz: false, now: 0)
@@ -153,6 +184,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(r18 == nil)   // < 4 s since the last one
 }
 
+/// Left / right / ahead are spoken only when haptics are down or silenced, each at most every 4 s.
 @Test func sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz() {
     var p = CueSpeechPolicy()
     let r19 = p.line(for: .left, phoneCannotBuzz: false, now: 0)
@@ -169,6 +201,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: CrownAccumulator
 
+/// A deliberate three-detent crown turn (either direction) within 1 s means Next.
 @Test func crownFiresOnThreeDetentsWithinASecond() {
     var c = CrownAccumulator()
     let r24 = c.move(delta: 1, now: 0)
@@ -179,6 +212,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(r26)
 }
 
+/// A sleeve brushing the crown once per arm swing never adds up to a Next.
 @Test func crownIgnoresARhythmicSleeve() {
     var c = CrownAccumulator()
     let r27 = c.move(delta: 1, now: 0)
@@ -191,6 +225,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(!r30)
 }
 
+/// Two quick crown gestures inside 0.8 s skip only one waypoint.
 @Test func crownDebouncesBackToBackGestures() {
     var c = CrownAccumulator()
     let r31 = c.move(delta: 3, now: 0.6)
@@ -203,6 +238,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: Step 10 round 3 (Muse review)
 
+/// A silent (buzzed) side cue between head re-fires does not re-speak "Head height."
 @Test func aBuzzedSideCueDoesNotSplitAHeadEpisode() {
     var p = CueSpeechPolicy()
     let first = p.line(for: .head, phoneCannotBuzz: false, now: 0)
@@ -213,6 +249,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(again == nil)
 }
 
+/// Stopping 11 m short of a crossing (tying a shoe) keeps the beacon silent.
 @Test func aPauseShortOfTheCurbDoesNotReleaseACrossing() {
     var s = settle(crossing: true)
     _ = s.update(fix(south(12), t: 0))

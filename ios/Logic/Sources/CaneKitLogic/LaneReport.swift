@@ -4,6 +4,17 @@
 //
 //  What the depth pipeline publishes, ~15 Hz. Value type so it can cross actors.
 //
+//  Purpose: the single value `DepthEngine` hands to `AppModel` per depth frame — the lane grid,
+//  whether the frame is trustworthy (cane not sweeping), and the classified mesh face at the
+//  image centre for obstacle names. Also the colour rule for the debug lane grid.
+//
+//  Key invariants:
+//    · All distances in metres; `rotationRate` in rad/s; `timestamp` in seconds on ARKit's
+//      monotonic clock (the `now` `CueDecider` receives).
+//    · `ObstacleClass` raw values mirror `ARMeshClassification` (order must stay in sync).
+//    · `depthAvailable == false` or `isTrusted == false` → `CueDecider` emits nothing.
+//  Tests: `tileLevels` (LaneMathTests.swift); the report itself is exercised by CueDeciderTests.
+//
 
 import Foundation
 
@@ -24,49 +35,97 @@ public enum ObstacleClass: Int, Sendable, Codable, CaseIterable {
     }
 }
 
+/// A classified mesh face found along the centre ray.
 public struct MeshHit: Sendable, Equatable {
+    /// What the face is (ARKit classification).
     public var classification: ObstacleClass
+    /// Distance from the camera to the face, metres.
     public var distance: Float
+    /// Creates a hit from its classification and distance (metres).
     public init(classification: ObstacleClass, distance: Float) {
         self.classification = classification
         self.distance = distance
     }
 }
 
+/// One depth frame's worth of obstacle information, as published by the depth pipeline.
 public struct LaneReport: Sendable, Equatable {
+    /// Per-lane head / torso depths (metres) from `LaneMath`.
     public var grid: LaneGrid
     /// False while the cane is being swept (|ω| ≥ threshold): depth is smeared, cues freeze.
     public var isTrusted: Bool
-    /// |rotation rate| rad/s, for the debug footer.
+    /// |rotation rate| rad/s (logged as `omega` in the trip log).
     public var rotationRate: Float
+    /// Frame time, seconds (ARKit's monotonic clock).
     public var timestamp: TimeInterval
     /// False until the first depth frame (or on non-LiDAR devices).
     public var depthAvailable: Bool
     /// Nearest classified mesh face at the image centre, if any.
     public var centerHit: MeshHit?
+    /// Confirmed LiDAR ground hazard ahead (drop-off, hole, curb, low obstacle), if any.
+    /// Set by `DepthFrameProcessor` from `GroundHazardDetector` (evaluated up to ~7 Hz, confirmed over frames).
+    public var groundHazard: GroundHazard?
+    /// How far the camera looks below the horizon, degrees (positive = down), smoothed over
+    /// ~1 s of trusted frames; nil before the first frame. See `MountTilt`.
+    public var cameraTiltDownDeg: Float?
 
+    /// Every parameter defaults to the "no depth yet" state (empty grid, trusted, no data).
     public init(grid: LaneGrid = .empty,
                 isTrusted: Bool = true,
                 rotationRate: Float = 0,
                 timestamp: TimeInterval = 0,
                 depthAvailable: Bool = false,
-                centerHit: MeshHit? = nil) {
+                centerHit: MeshHit? = nil,
+                groundHazard: GroundHazard? = nil,
+                cameraTiltDownDeg: Float? = nil) {
         self.grid = grid
         self.isTrusted = isTrusted
         self.rotationRate = rotationRate
         self.timestamp = timestamp
         self.depthAvailable = depthAvailable
         self.centerHit = centerHit
+        self.groundHazard = groundHazard
+        self.cameraTiltDownDeg = cameraTiltDownDeg
     }
 
+    /// Shortcut for `grid.head` (metres; 0 left, 1 centre, 2 right).
     public var head: [Float] { grid.head }
+    /// Shortcut for `grid.torso` (metres; 0 left, 1 centre, 2 right).
     public var torso: [Float] { grid.torso }
+}
+
+/// The mount's camera aim. The lane grid skips a fixed bottom fraction of the image as ground
+/// (`LaneConfig.groundSkipFraction`, no gravity correction), so the phone must look only a little
+/// below the horizon: at ~10° down the torso lanes already read bare pavement near 2 m (the
+/// centre-approach threshold) and the cane buzzes on an empty sidewalk; at 0° or above the ground
+/// detector loses its 0.8–1.5 m ground reference. hardware/mount/DESIGN.md and pitch_model.py
+/// derive the 3–8° window. Pinned by `mountTiltWindow`.
+public enum MountTilt {
+    /// Degrees below the horizon that work with the current lane grid.
+    public static let aim: ClosedRange<Float> = 3...8
+
+    /// One line for the Mount card and whether the aim is inside `aim`:
+    /// "Camera tilt 5° down, good", "Camera tilt 12° down: tilt the phone up",
+    /// "Camera tilt 2° up: tilt the phone down", "Camera level: tilt the phone down".
+    public static func status(downDeg d: Float) -> (text: String, ok: Bool) {
+        let n = Int(abs(d).rounded())
+        if n == 0 { return ("Camera level: tilt the phone down", false) }
+        let dir = d < 0 ? "up" : "down"
+        if aim.contains(d) { return ("Camera tilt \(n)° \(dir), good", true) }
+        return (d > aim.upperBound ? "Camera tilt \(n)° \(dir): tilt the phone up"
+                                   : "Camera tilt \(n)° \(dir): tilt the phone down", false)
+    }
 }
 
 /// Tile colouring for the debug grid: green ≥ 2.0 m, yellow ≥ 1.2 m, red < 0.7 m (orange between).
 public enum TileLevel: Sendable {
     case clear, far, near, urgent, noData
 
+    /// - Parameters:
+    ///   - distance: cell depth, metres (`.infinity` = clear).
+    ///   - hasData: false before the first depth frame / on non-LiDAR devices.
+    /// - Returns: `.noData` without data; `.clear` for non-finite or ≥ 2.0 m; `.far` ≥ 1.2 m;
+    ///   `.near` ≥ 0.7 m; else `.urgent`. Pinned by `tileLevels`.
     public static func level(for distance: Float, hasData: Bool) -> TileLevel {
         guard hasData, distance.isFinite else { return hasData ? .clear : .noData }
         if distance < 0.7 { return .urgent }

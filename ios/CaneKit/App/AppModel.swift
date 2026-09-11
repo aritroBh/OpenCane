@@ -2,8 +2,29 @@
 //  AppModel.swift
 //  CaneKit
 //
-//  Central owner of every engine and of the user settings. Lives on the main actor (the project
-//  default); engines that run off-main publish Sendable value types back to it.
+//  Purpose: central owner of every engine and of the user settings, and the glue between them:
+//  the depth "cue router" (LaneReport → haptics / watch / speech / log), navigation and
+//  headphone-route wiring, the route start/stop sequence, watch commands, auto-recenter of the
+//  AirPods head reference, and thermal/battery observation.
+//
+//  Owner: `CaneKitApp` creates exactly one instance (`@State`) for the process lifetime and
+//  injects it into SwiftUI with `.environment(model)`; App Intents reach it via `AppModel.shared`.
+//  Module `app-core` in docs/CODE_REFERENCE.md.
+//
+//  Threading / isolation: `@MainActor` (the project default, SWIFT_DEFAULT_ACTOR_ISOLATION =
+//  MainActor). Engines that run off-main (DepthEngine's ARKit queue, CoreLocation) publish
+//  Sendable value types (`LaneReport`, `GeoFix`) back through closures installed here, which are
+//  always invoked on the main actor. `MainActor.assumeIsolated` is used only inside
+//  NotificationCenter observers registered with `queue: .main` (AGENTS.md hard rule 1).
+//
+//  Key invariants:
+//    · `start()` runs once; its order (audio session → haptics → ARKit) is load-bearing.
+//    · Cue-router timing uses the ARKit clock (`report.timestamp`), never wall time.
+//    · The `.head` cue is never suppressed (AGENTS.md hard rule 8); "Head height." is spoken
+//      once per obstacle episode, never every second.
+//    · Decisions with numbers in them live in CaneKitLogic (CueDecider, CueSpeechPolicy,
+//      StraightWalkDetector); this class only owns state, timing and effects (hard rule 3).
+//    · `commonLines` must stay byte-identical to the strings spoken elsewhere (prefetch cache).
 //
 //  Engines by step:
 //    step 2 DepthEngine · step 3 HapticPlayer · step 4 SpeechQueue/ObstacleNamer ·
@@ -12,16 +33,21 @@
 //
 
 import ARKit
+import AVFoundation
 import CaneKitLogic
 import CoreLocation
 import Observation
 import SwiftUI
 
+/// The single app-wide model: owns every engine, persists settings, and routes events between
+/// engines. SwiftUI views read its published state; nothing else creates engines.
 @MainActor
 @Observable
 final class AppModel {
 
     /// The live instance, for App Intents (Action button) that run inside the app process.
+    /// Set in `init`; weak so it never extends the model's lifetime. Read by
+    /// `IntentSupport.model()`, which polls for it on a cold lock-screen launch.
     private(set) static weak var shared: AppModel?
 
     // MARK: Engines
@@ -46,26 +72,38 @@ final class AppModel {
     let head = HeadPoseTracker()
     /// Headphones present? (beacon gate, spoken connect/disconnect lines).
     let audioRoute = AudioRouteMonitor()
-    /// "Where am I" (step 8).
+    /// "Where am I" (step 8). Built in `init` because it needs `depth.processor` and `speech`.
     let describer: SceneDescriber
     /// Elapsed / distance / steps for the arrival card (step 9).
     let trip = TripTracker()
     /// Dynamic Island / lock screen (step 9).
     let liveActivity = LiveActivityController()
+    /// LiDAR facts handed to the on-device describer ("Obstacle ahead at 1.4 meters.").
+    let sceneContext: SceneContext
+    /// Camera hazards: signs (on-device) + hazard watch (cloud → on-device, or on-device).
+    let hazards: HazardScanner
+    /// Hazard map: every announced hazard with GPS + photo → Documents/hazards/*.geojson.
+    let hazardLog = HazardLog()
+    /// Last LiDAR ground hazard spoken ("Drop-off ahead, two meters."), for the Hazards card.
+    private(set) var lastGroundHazard: String?
+    /// When a confirmed ground hazard is worth saying again (CaneKitLogic, HazardTests).
+    @ObservationIgnored private var groundPolicy = GroundHazardPolicy()
 
-    /// Route picker state.
+    /// Route picker state: the destination text typed in the route field (read/write from the UI).
     var destinationQuery = ""
+    /// Last route-building failure shown under the route picker; nil when there is none.
+    /// "Type a destination first" is also an accessibility/test string (AGENTS.md hard rule 9).
     private(set) var routeError: String?
+    /// True while `startMapKitRoute()` waits for a fix and MapKit directions (UI shows progress).
     private(set) var isBuildingRoute = false
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
+    /// ⚠ Its timing contract is the AR clock; see `handle(_:)`.
     @ObservationIgnored private let decider = CueDecider()
     /// "door ahead, two meters" from the mesh classification (step 4).
     @ObservationIgnored private let namer = ObstacleNamer()
     /// Kind currently decided as active (for the UI); `.clear` when nothing is in range.
     private(set) var activeCue: CueKind = .clear
-    /// Last discrete cue fired and when (debug footer).
-    private(set) var lastCueDescription = "—"
 
     // MARK: Device capabilities (fixed for the life of the process)
 
@@ -80,53 +118,90 @@ final class AppModel {
     var status: String { depth.status }
     /// Set once `start()` has run; guards against double starts from `.task` re-entry.
     private(set) var started = false
-    /// Thermal state name for the debug footer; the watchdog (step 9) acts on it.
+    /// Thermal state name; the watchdog (step 9) acts on it.
+    /// One of `nominal|fair|serious|critical|unknown`; also written into every `lanes` log line.
     private(set) var thermalName = "nominal"
     /// 0–100, or -1 when unknown (simulator).
     private(set) var batteryPercent = -1
-    /// Camera Control spike counter (step 2): how many `.began` events reached us under ARKit.
-    private(set) var cameraControlPresses = 0
 
     // MARK: Settings (persisted; each `didSet` pushes into the engines that care)
+    //
+    // Each setting is a UserDefaults key of the same name (see `Settings`). `didSet` does not run
+    // for the initial value, so `init()` pushes the loaded values into the engines once.
 
     /// Phone mounted upright (portrait, camera at the top). See ios/README.md §6 for the remap.
+    /// Pushed to `depth.apply(portrait:mirror:)` via `pushDepthSettings()`.
     var portraitMode: Bool = Settings.bool("portraitMode", default: true) {
         didSet { Settings.set(portraitMode, "portraitMode"); pushDepthSettings() }
     }
     /// Swap left/right if the mount points the camera the other way.
+    /// Toggled by the "Mirror left / right" control (accessibility label is a UI-test contract).
     var mirrorLeftRight: Bool = Settings.bool("mirrorLeftRight", default: false) {
         didSet { Settings.set(mirrorLeftRight, "mirrorLeftRight"); pushDepthSettings() }
     }
     /// Master haptic silence (state machine keeps running so speech/watch stay in sync).
+    /// While silenced, obstacle cues are mirrored to the watch and spoken (see `handle(_:)`).
     var hapticsSilenced: Bool = Settings.bool("hapticsSilenced", default: false) {
         didSet { Settings.set(hapticsSilenced, "hapticsSilenced"); haptics.silenced = hapticsSilenced }
     }
-    /// Write the JSONL trip log.
+    /// Write the JSONL trip log. Mirrored into `logger.enabled`; turning it off flushes the buffer.
     var loggingEnabled: Bool = Settings.bool("loggingEnabled", default: true) {
         didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
     /// Speak obstacle names ("door ahead, two meters"). Off = haptics only.
+    /// Read on every report in `handle(_:)`; not pushed anywhere.
     var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: true) {
         didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
     }
-    /// Spatial click toward the next waypoint while navigating.
+    /// Spatial click toward the next waypoint while navigating. Mirrored into `beacon.enabled`.
     var beaconEnabled: Bool = Settings.bool("beaconEnabled", default: true) {
         didSet { Settings.set(beaconEnabled, "beaconEnabled"); beacon.enabled = beaconEnabled }
     }
     /// Mirror every obstacle cue to the watch even while the phone engine is healthy.
+    /// Read in `handle(_:)` only.
     var fallbackToWatch: Bool = Settings.bool("fallbackToWatch", default: false) {
         didSet { Settings.set(fallbackToWatch, "fallbackToWatch") }
     }
+    /// LiDAR drop-off / hole / curb warnings (Hazards card).
+    /// Default OFF until validated on the phone (the review's sweep simulation; AGENTS.md).
+    var groundHazardsEnabled: Bool = Settings.bool("groundHazardsEnabled", default: false) {
+        didSet { Settings.set(groundHazardsEnabled, "groundHazardsEnabled"); pushDepthSettings() }
+    }
+    /// On-device sign reading (Hazards card).
+    var signsEnabled: Bool = Settings.bool("signsEnabled", default: true) {
+        didSet { Settings.set(signsEnabled, "signsEnabled"); hazards.signsEnabled = signsEnabled }
+    }
+    /// Periodic vision-model hazard check while walking a route (Hazards card).
+    /// Default OFF until validated on the phone.
+    var hazardWatchEnabled: Bool = Settings.bool("hazardWatchEnabled", default: false) {
+        didSet { Settings.set(hazardWatchEnabled, "hazardWatchEnabled"); hazards.watchEnabled = hazardWatchEnabled }
+    }
+    /// Live camera view on the Hazards card (sighted helper / demo video). Not persisted: off at launch.
+    var liveViewEnabled = false
 
     // MARK: Lifecycle
 
+    /// Token for the `thermalStateDidChangeNotification` observer (kept alive for the process).
     @ObservationIgnored private var thermalObserver: NSObjectProtocol?
+    /// Token for the `batteryLevelDidChangeNotification` observer (kept alive for the process).
     @ObservationIgnored private var batteryObserver: NSObjectProtocol?
 
+    /// The 10 Hz beacon-sync loop (`startTicker`); non-nil only while a route is active.
     @ObservationIgnored private var ticker: Task<Void, Never>?
 
+    /// Builds `describer` (needs `depth.processor` + `speech`), pushes the persisted settings into
+    /// the engines (property `didSet`s do not fire for initial values) and registers `shared`.
+    /// Starts nothing: engines start in `start()`, called from the root view's `.task`.
     init() {
-        describer = SceneDescriber(processor: depth.processor, speech: speech)
+        // One vision client for "Where am I" and the hazard watch: cloud with on-device fallback
+        // when a key is set, on-device otherwise — never nil, works with no network.
+        let context = SceneContext()
+        sceneContext = context
+        let client = VLMClientFactory.resolved(context: context)
+        describer = SceneDescriber(processor: depth.processor, speech: speech, client: client)
+        hazards = HazardScanner(processor: depth.processor, watchClient: client)
+        hazards.signsEnabled = signsEnabled
+        hazards.watchEnabled = hazardWatchEnabled
         pushDepthSettings()
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
@@ -135,13 +210,35 @@ final class AppModel {
     }
 
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
+    /// Logs a `describe` event with the provider name, then hands off to `SceneDescriber`
+    /// (which waits for a camera frame and speaks at `.scene` priority).
     func describeScene() {
         logger.event("describe", ["provider": describer.providerName ?? "none"])
         describer.describe()
     }
 
+    /// Automation hook (`CANEKIT_DESCRIBE_EVERY_WAYPOINT=1`, used by `make e2e SCENARIO=streetview`):
+    /// ask "Where am I" at route start and at every waypoint, so the Street View mock logs what
+    /// the describer says at each corner of the route. Off unless the variable is set.
+    static let describeEveryWaypoint = ProcessInfo.processInfo.environment["CANEKIT_DESCRIBE_EVERY_WAYPOINT"] == "1"
+
+    /// Logs every "Where am I" outcome (sentence or error, latency, replay frame) as
+    /// `describe_result`, so a walk log shows what was actually said. Wired once in `start()`.
+    private func wireDescriber() {
+        describer.onResult = { [weak self] text, error, ms, frame in
+            self?.logger.event("describe_result", [
+                "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
+                "provider": self?.describer.providerName ?? "none",
+                "frame": frame,
+            ])
+        }
+    }
+
     /// 10 Hz sync of the inputs the beacon needs that have no callback of their own
     /// (speech ducking, head yaw). Cheap; runs only while a route is active.
+    /// Idempotent (`guard ticker == nil`). Started by `beginRoute`, stopped by `stopRoute` and
+    /// on arrival. Pushes `speech.isSpeaking`, head yaw (0 while a recenter is pending) and the
+    /// nav target bearing (nil = beacon silent) into `BeaconEngine`.
     private func startTicker() {
         guard ticker == nil else { return }
         ticker = Task { [weak self] in
@@ -153,17 +250,23 @@ final class AppModel {
                 // the reference is re-zeroed on the new leg, render from the heading alone.
                 self.beacon.setHeadYaw(self.recenterPending ? 0 : (self.head.headYawDeg ?? 0))
                 self.beacon.setTarget(bearing: self.nav.isNavigating ? self.nav.targetBearing : nil)
+                // Clock-driven nav checks (arrival hint while standing still: no fixes arrive).
+                self.nav.tick(now: Date().timeIntervalSinceReferenceDate)
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
     }
 
+    /// Cancels the beacon-sync loop; safe to call when it is not running.
     private func stopTicker() {
         ticker?.cancel()
         ticker = nil
     }
 
     /// Called once from the root view's `.task`. Starts the engines that exist at this step.
+    /// Idempotent (`guard !started`), so `.task` re-entry is safe.
+    /// ⚠ Do not reorder audio session → haptics → ARKit without a device test (AirPods route and
+    /// Taptic engine ownership depend on it; AGENTS.md hard rule 7: one `.playback` session).
     func start() {
         guard !started else { return }
         started = true
@@ -185,10 +288,15 @@ final class AppModel {
             self?.handle(report)
         }
         depth.start()
+        wireHazards()
+        wireDescriber()
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
-                               "haptics": haptics.isHealthy])
+                               "haptics": haptics.isHealthy, "vision": describer.providerName ?? "none"])
+        let cameraDenied = announceCameraDenied()
         speech.prefetch(Self.commonLines)
-        speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
+        if !cameraDenied {
+            speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
+        }
         // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
         // CANEKIT_DEMO_ROUTE=1 environment variable starts guidance at launch.
         if CommandLine.arguments.contains("--demo-route")
@@ -200,15 +308,24 @@ final class AppModel {
     /// Foreground/background transitions. ARKit pauses itself in the background; we pause the
     /// engine explicitly so the gyro stops too, and resume without resetting tracking. Core
     /// Haptics stops its engine on suspend, so it is restarted on `.active`.
+    /// Called by `CaneKitApp`'s `.onChange(of: scenePhase)`; no-op until `start()` has run.
+    /// On `.background` the cue state machines are reset and the trip log is flushed so nothing
+    /// is lost if the process is suspended.
     func scenePhaseChanged(_ phase: ScenePhase) {
         guard started else { return }
         switch phase {
         case .active:
+            isForeground = true
             haptics.resume()
             depth.resume()
+            beacon.resumeIfNeeded()          // the engine can die across a screen lock (Muse M4)
+            hazards.start()
         case .inactive:
             break
         case .background:
+            isForeground = false
+            hazards.stop()                   // no scanning a frozen last frame in the background
+            sceneContext.set("")             // LiDAR facts from here are stale once we come back
             depth.pause()
             haptics.stopAll()
             decider.reset()
@@ -224,6 +341,12 @@ final class AppModel {
 
     /// Every depth report lands here (~15 Hz): decide → render on the phone (step 3);
     /// step 4 adds the ObstacleNamer, step 5 the watch mirror.
+    /// Installed as `depth.onReport` in `start()`; always on the main actor.
+    /// `now` is always `report.timestamp` (ARKit clock, seconds) — never wall time: the decider's
+    /// repeat / 400 ms change intervals and `CueSpeechPolicy`'s intervals are in that clock.
+    /// ⚠ Do not change the decider/`now` contract without re-running `CueDeciderTests`
+    /// (`cueChangeNeeds400ms`, `hysteresisHoldsUntilPlusFifteenCentimetres`,
+    /// `centerApproachFiresThenUpdatesDistance`).
     private func handle(_ report: LaneReport) {
         if let output = decider.update(report, now: report.timestamp) {
             switch output {
@@ -237,11 +360,11 @@ final class AppModel {
                     watch.send(obstacle: cue.kind, now: report.timestamp)
                 }
                 speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: report.timestamp)
-                lastCueDescription = "\(cue.kind.rawValue) @ \(String(format: "%.1f", report.timestamp))s"
                 var fields: [String: Any] = ["kind": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
                 logger.event("cue", fields)
             case .updateCenter(let d):
+                // Continuous approach ramp: haptics only (no watch, no speech).
                 activeCue = .center
                 haptics.setApproach(distance: d)
             case .stop:
@@ -255,10 +378,17 @@ final class AppModel {
             speech.say(line, .obstacle, ttl: 4)      // > namer interval + one utterance
             logger.event("speech", ["text": line, "priority": "obstacle"])
         }
-        logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent)
+        if groundHazardsEnabled, let g = report.groundHazard,
+           groundPolicy.shouldAnnounce(g, now: report.timestamp) {
+            groundHazardFound(g, now: report.timestamp)
+        }
+        sceneContext.set(Self.contextLine(report))
+        // Every report; the logger throttles `lanes` records to `laneRate` (2 Hz).
+        logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)
     }
 
     /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
+    /// Replaced with a fresh value at every `beginRoute`; `cleared()` on the decider's `.stop`.
     @ObservationIgnored private var cueSpeech = CueSpeechPolicy()
 
     /// Voice channel for obstacle cues. "Head height." is spoken once per obstacle episode (plan:
@@ -266,6 +396,11 @@ final class AppModel {
     /// clamp may damp the tap), never re-spoken every few seconds under the same branch (that
     /// cut crossing lines to pieces). Left / right / ahead are spoken only when the phone cannot
     /// buzz; otherwise the Taptic pattern is the channel.
+    /// Tier `.safety` maps to `SpeechPriority.safety` (top of the queue, AGENTS.md hard rule 8);
+    /// everything else to `.obstacle`. `now` is the AR clock.
+    /// ⚠ Do not add a further suppression path for `.head` without a device head-height test and
+    /// re-running `NavSupportTests` (`headHeightIsSpokenOncePerEpisode`,
+    /// `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`).
     private func speakCueIfNeeded(_ cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) {
         guard let (text, tier) = cueSpeech.line(for: cue, phoneCannotBuzz: phoneCannotBuzz, now: now) else { return }
         let priority: SpeechPriority = tier == .safety ? .safety : .obstacle
@@ -274,10 +409,126 @@ final class AppModel {
         logger.event("speech", ["text": text, "priority": "\(priority)"])
     }
 
+    // MARK: Hazards the maps do not know about (LiDAR ground, signs, hazard watch)
+
+    /// Wires the camera hazard scanner (signs + hazard watch) and starts it. Called once from
+    /// `start()` after the depth engine, because the scanner reads its camera frames.
+    private func wireHazards() {
+        hazards.isNavigating = { [weak self] in self?.nav.isNavigating ?? false }
+        hazards.currentSpeed = { [weak self] in self?.location.fix?.speed ?? 0 }
+        hazards.onDiagnostic = { [weak self] kind, fields in self?.logger.event(kind, fields) }
+        // Simulator e2e hook (`CANEKIT_HAZARD_WATCH=1`): run the hazard watch without touching the
+        // persisted setting, so the Street View mock exercises the whole camera path.
+        if ProcessInfo.processInfo.environment["CANEKIT_HAZARD_WATCH"] == "1" { hazards.watchEnabled = true }
+        hazards.onHazard = { [weak self] text, source, jpeg in
+            // Signs and vision cautions: obstacle priority (below route lines, above scene).
+            self?.speech.say(text, .obstacle, ttl: 6)
+            self?.recordHazard(kind: source.rawValue, text: text, source: source, jpeg: jpeg)
+        }
+        hazards.start()
+    }
+
+    /// A confirmed LiDAR ground hazard worth saying: cane buzz (4 heavy taps), the wrist when the
+    /// phone cannot buzz, a spoken line at safety priority (a drop-off is as urgent as head
+    /// height), and a hazard-map entry with the frame.
+    private func groundHazardFound(_ g: GroundHazard, now: TimeInterval) {
+        lastGroundHazard = g.spokenLine
+        haptics.playGroundHazard()
+        if !haptics.isHealthy || haptics.silenced || fallbackToWatch {
+            watch.send(obstacle: .center, now: now)
+        }
+        speech.say(g.spokenLine, .safety, ttl: 3)
+        let processor = depth.processor
+        Task { [weak self] in
+            let jpeg = await Self.frame(processor, maxDimension: 768)
+            self?.recordHazard(kind: g.kind.rawValue, text: g.spokenLine, source: .ground, jpeg: jpeg)
+        }
+    }
+
+    /// Hazard map + trip log entry for any hazard source.
+    /// Uses the navigation engine's last fix when location has stopped (after arrival), so a
+    /// sign read at the CIF door still lands at the door, not at 0, 0 (review round 5) — but only
+    /// if that fix is under 2 minutes old; an older one could be a different place entirely
+    /// (Muse round 6). The same age gate applies to the live fix (GPS lost under a roof keeps a
+    /// stale one; Muse + Antigravity round 7). No fresh fix gives a null geometry.
+    private func recordHazard(kind: String, text: String, source: HazardSource, jpeg: Data?) {
+        let now = Date().timeIntervalSinceReferenceDate
+        let fix = [location.fix, nav.lastFix].compactMap { $0 }.first { now - $0.timestamp < 120 }
+        hazardLog.record(kind: kind, text: text, fix: fix, jpeg: jpeg)
+        logger.event("hazard", ["kind": kind, "text": text, "source": source.rawValue])
+    }
+
+    /// The LiDAR facts the on-device describer may use ("Obstacle ahead at 1.4 meters. Hole
+    /// ahead, two meters."). Empty when nothing is within 3 m.
+    /// "Ahead" is the centre lane only (torso + head, filtered): side lanes and the unfiltered
+    /// centre window made it true almost always on a sidewalk, which left the LiDAR gate for
+    /// on-device hazard labels permanently open (review round 5).
+    static func contextLine(_ r: LaneReport) -> String {
+        guard r.depthAvailable else { return "" }
+        var parts: [String] = []
+        let centre = [r.torso, r.head].compactMap { $0.count == 3 ? $0[1] : nil }
+        let ahead = centre.min() ?? .infinity
+        if ahead.isFinite, ahead < 3 { parts.append("Obstacle ahead at \(SpokenDistance.phrase(ahead)).") }
+        if r.head.count == 3, r.head[1].isFinite, r.head[1] < 1.5 { parts.append("Something at head height.") }
+        if let g = r.groundHazard { parts.append(g.spokenLine) }
+        if let hit = r.centerHit, let name = hit.classification.spokenName {
+            parts.append("The obstacle ahead looks like a \(name).")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// Latest camera frame as a small JPEG for the Hazards card's live view (~3 Hz).
+    /// Nil in the background and while hot (thermal pause): the view is optional, the lanes are not.
+    func liveFrameJPEG() async -> Data? {
+        guard isForeground, !hazards.paused else { return nil }
+        return await Self.frame(depth.processor, maxDimension: 480)
+    }
+
+    /// False while backgrounded: camera consumers stop instead of re-reading a frozen frame.
+    @ObservationIgnored private var isForeground = true
+
+    /// JPEG encode off the main actor.
+    @concurrent
+    private static func frame(_ p: DepthFrameProcessor, maxDimension: CGFloat) async -> Data? {
+        p.jpegSnapshot(maxDimension: maxDimension, quality: 0.6)
+    }
+
+    /// Camera refused → the whole obstacle channel is dead; say so instead of "CaneKit ready."
+    /// and silence (Muse H3). `.notDetermined` is fine: ARKit prompts on first run.
+    /// - Returns: true when the camera is refused (so `start()` skips "CaneKit ready.", which
+    ///   would contradict the warning; Antigravity docs review).
+    @discardableResult
+    private func announceCameraDenied() -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        guard status == .denied || status == .restricted else { return false }
+        routeError = "Camera is off for CaneKit"
+        speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)
+        return true
+    }
+
+    /// Stop the running route without speaking (used before starting another one).
+    private func endRouteQuietly() {
+        nav.stop()
+        beacon.stop()
+        head.stop()
+        stopTicker()
+        trip.cancel()                        // synchronous: the new trip.start() must not be no-op'd
+        liveActivity.end()
+        speech.stopAll()
+        logger.event("route", ["action": "restart"])
+    }
+
+    /// Thermal: was the phone already hot at the last update (announce transitions only).
+    @ObservationIgnored private var wasHot = false
+
     // MARK: Headphones / watch presence
 
     /// Beacon only into headphones; say when they come and go so a blind user knows why the
     /// click vanished (and that speech is now coming out of the cane).
+    /// Called once from `start()`. `onChange` fires only on a headphone state flip, so the initial
+    /// state is seeded by hand after `audioRoute.start()`. A connect mid-route restarts head
+    /// tracking and marks a recenter as pending (the new AirPods have no forward reference yet);
+    /// a disconnect does not stop the head tracker.
     private func wireAudioRoute() {
         audioRoute.onChange = { [weak self] connected, name in
             guard let self else { return }
@@ -288,13 +539,19 @@ final class AppModel {
                 if self.nav.isNavigating { self.head.start(); self.recenterPending = true }
             } else {
                 self.speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)
+                self.head.stop()                 // no AirPods, no motion: stop the manager
             }
+        }
+        audioRoute.onImmediateChange = { [weak self] connected in
+            self?.beacon.headphonesConnected = connected      // no debounce for silencing the click
         }
         audioRoute.start()
         beacon.headphonesConnected = audioRoute.headphonesConnected
     }
 
     /// Spoken once at route start so the walker knows which channels are live before moving.
+    /// Last step of `beginRoute`; each line is `.nav` with a 20 s TTL, queued after the intro.
+    /// These lines are not written to the trip log.
     private func announceChannels() {
         var lines: [String] = []
         if !audioRoute.headphonesConnected {
@@ -311,9 +568,26 @@ final class AppModel {
 
     // MARK: Navigation (step 6)
 
+    /// Installs every LocationService and NavigationEngine callback. Called once from `start()`.
+    ///
+    /// - `location.onFix`: feeds `nav` and `trip`; while navigating also updates the Live
+    ///   Activity, pushes status to the watch (the link dedups) and tries an auto-recenter;
+    ///   logs `gps`. Fix timestamps are wall clock (`timeIntervalSinceReferenceDate`).
+    /// - `location.onHeading`: gyro-gated here (not in LocationService) — a compass reading taken
+    ///   mid cane-sweep is noise; the gate only applies while depth is running. Uses wall-clock
+    ///   `now`, the same clock as `GeoFix.timestamp` (distinct from the AR clock).
+    /// - `nav.onSpeak` → `speech.say(ttl: 12)`; `nav.onRepeat` → `speech.sayAgain` (bypasses the
+    ///   queue's coalescing: the line may still be playing — AGENTS.md "Repeat speaks the last
+    ///   line actually spoken").
+    /// - `nav.onNavCue` → watch tap + Live Activity glyph kind.
+    /// - `nav.onWaypointAdvanced` → recenter becomes pending (re-zeroed only once walking
+    ///   straight, never on a timer).
+    /// - `nav.onArrived` → stops beacon/head/ticker, ends the Live Activity, then speaks the trip
+    ///   summary after `await trip.stop()` refreshes the step count.
     private func wireNavigation() {
         location.onFix = { [weak self] fix in
             guard let self else { return }
+            FrameReplay.shared.update(position: fix.coordinate)   // simulator Street View e2e only
             self.nav.update(fix: fix)
             self.trip.ingest(fix)
             if self.nav.isNavigating {
@@ -326,10 +600,12 @@ final class AppModel {
             self.logger.event("gps", ["lat": fix.coordinate.latitude, "lon": fix.coordinate.longitude,
                                       "acc": fix.accuracy, "speed": fix.speed])
         }
-        location.onHeading = { [weak self] h in
+        location.onHeading = { [weak self] h, fromCourse in
             guard let self else { return }
-            // Gyro gate: a compass reading taken mid-sweep is noise.
-            guard self.depth.report.isTrusted || !self.depth.isRunning else { return }
+            // Gyro gate the compass only: a compass reading taken mid-sweep is noise, but the GPS
+            // course is immune to the sweep (Muse review H1 — gating it froze the heading while
+            // walking with a normal sweep).
+            guard fromCourse || self.depth.report.isTrusted || !self.depth.isRunning else { return }
             self.nav.update(heading: h, now: Date().timeIntervalSinceReferenceDate)
             self.beacon.setHeading(h)
         }
@@ -343,12 +619,14 @@ final class AppModel {
         }
         nav.onNavCue = { [weak self] cue in
             self?.watch.send(nav: cue)
+            if cue != .obstacle { self?.haptics.playNav(cue) }   // felt on the cane too
             self?.lastNavKind = cue.rawValue
             self?.logger.event("navcue", ["cue": cue.rawValue])
         }
         nav.onWaypointAdvanced = { [weak self] in
             guard let self else { return }
             self.logger.event("waypoint", ["index": self.nav.waypointIndex])
+            if Self.describeEveryWaypoint { self.describeScene() }
             self.pushStatusToWatch()
             // The head reference is re-zeroed on the new leg, but only once the user is
             // demonstrably walking it straight (never on a timer: at a curb they are stopped
@@ -359,8 +637,10 @@ final class AppModel {
         nav.onArrived = { [weak self] in
             guard let self else { return }
             self.logger.event("arrived")
+            if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
+            self.location.stop()                 // GPS off after arrival (Muse M2)
             self.stopTicker()
             self.pushStatusToWatch()
             self.liveActivity.end(final: self.nav.instruction)
@@ -379,9 +659,14 @@ final class AppModel {
     }
 
     /// Last wrist cue kind, for the Live Activity glyph.
+    /// A `NavCue.rawValue` ("turnLeft" / "turnRight" / "crossing" / "arrived"); reset to
+    /// "straight" at `beginRoute`. A passed-by advance sends no cue, so the kind is kept.
+    /// Any new value must also be handled by the widget's glyph switch (NavLiveActivity.swift).
     @ObservationIgnored private var lastNavKind = "straight"
 
     /// The user is facing the way to walk: zero the head yaw there.
+    /// Manual trigger (phone "Recenter" button, watch Recenter). Clears `recenterPending`, so
+    /// the beacon starts using head yaw again; speaks "Recentered." (2 s TTL) and logs `recenter`.
     func recenter() {
         head.recenter()
         recenterPending = false
@@ -390,6 +675,8 @@ final class AppModel {
     }
 
     /// Say the current instruction again (phone button, watch "Repeat", Siri).
+    /// Delegates to `nav.repeatInstruction()`, which speaks the last line actually spoken plus
+    /// the distance to the next waypoint, through `onRepeat` (bypasses queue coalescing).
     func repeatInstruction() {
         nav.repeatInstruction()
         logger.event("repeat")
@@ -399,15 +686,27 @@ final class AppModel {
 
     /// Set at route start and after every waypoint; cleared once a recenter happens. While set,
     /// the beacon renders from the phone heading alone (see startTicker).
+    /// Also set when headphones connect mid-route (`wireAudioRoute`).
     @ObservationIgnored private var recenterPending = false
-    /// CaneKitLogic.StraightWalkDetector (unit-tested): 3 fixes > 0.9 m/s, steady course, still head.
+    /// CaneKitLogic.StraightWalkDetector (unit-tested): 3 consecutive fixes (the first counts) at
+    /// > 0.6 m/s with accuracy ≤ 20 m, course steady within 15° and head yaw within 8°.
+    /// Library defaults are the source of truth (`StraightWalkDetector` in NavSupport.swift;
+    /// AGENTS.md quotes the same 0.6 m/s).
     @ObservationIgnored private var straightWalk = StraightWalkDetector()
     /// After a crossing the user steps off the curb with the head still turned toward traffic:
     /// only re-zero once they are this far past the crossing waypoint.
+    /// Metres. ⚠ AGENTS.md: never auto-recenter within 15 m of a crossing — do not lower this
+    /// without a device walk test at a curb.
     private let recenterAfterCrossingM: Double = 15
 
     /// Walking straight on the new leg with a still head and no turn in progress: the head is
     /// straight, so this pose becomes the beacon's forward.
+    /// Called per GPS fix while navigating (from `location.onFix`). Any failed guard resets the
+    /// detector; never fires on a timer, while a turn is settling, without AirPods, or within
+    /// `recenterAfterCrossingM` of a just-reached crossing.
+    /// ⚠ Do not loosen the detector gates or the crossing exclusion without a device walk test
+    /// (covered by `straightWalkNeedsThreeSteadyFixesCountingTheFirst`,
+    /// `straightWalkRestartsOnATurnAStopOrAHeadTurn`).
     private func autoRecenterIfWalkingStraight(_ fix: GeoFix) {
         guard recenterPending, !nav.isSettling, head.isConnected else { straightWalk.reset(); return }
         if let wp = nav.lastReached, wp.crossing,
@@ -424,6 +723,9 @@ final class AppModel {
     }
 
     /// Start the bundled demo route (ISR Townsend Hall → CIF).
+    /// Triggered by the "Start demo route" button, `StartDemoRouteIntent`, and at launch by the
+    /// `--demo-route` / `CANEKIT_DEMO_ROUTE=1` automation hook. On failure sets `routeError` and
+    /// says "Route file missing."
     func startDemoRoute() {
         do {
             let route = try RouteSource.bundled()
@@ -435,9 +737,13 @@ final class AppModel {
     }
 
     /// Build a live MapKit walking route to `destinationQuery` from the current fix.
+    /// Starts location if needed and waits up to 30 × 500 ms (15 s) for a first fix. Errors are
+    /// both shown (`routeError`) and spoken. `isBuildingRoute` is cleared on every exit path.
     func startMapKitRoute() {
         let query = destinationQuery.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { routeError = "Type a destination first"; return }
+        // Location refused: say so now, not after a 15 s wait for a fix that never comes.
+        guard !announceLocationDenied() else { return }
         location.start()
         isBuildingRoute = true
         routeError = nil
@@ -467,6 +773,9 @@ final class AppModel {
         }
     }
 
+    /// Stop guidance ("Stop route" button). Tears down nav, location, beacon, head tracking, the
+    /// ticker, the trip tracker (fire-and-forget) and the Live Activity, then clears the speech
+    /// queue so queued waypoint lines cannot play after Stop, and says "Route stopped."
     func stopRoute() {
         nav.stop()
         location.stop()
@@ -482,6 +791,9 @@ final class AppModel {
     }
 
     /// Lines the natural voice should have ready before they are needed.
+    /// Prefetched in `start()` and again in `beginRoute`.
+    /// ⚠ Must stay byte-identical to the strings spoken in NavigationEngine, CueSpeechPolicy and
+    /// this file, or the prefetch cache misses and the line waits for synthesis.
     static let commonLines = [
         "CaneKit ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
@@ -489,8 +801,21 @@ final class AppModel {
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
     ]
 
+    /// Shared start sequence for both route sources. Order matters: prefetch → location →
+    /// `nav.start` (speaks the intro) → beacon/head → recenter pending → fresh cue-speech policy
+    /// → ticker → trip tracker (Motion + HealthKit prompts appear here, by design) → Live
+    /// Activity → log → watch status → channel announcements (queued after the intro).
     private func beginRoute(_ route: Route) {
+        // A second start mid-route (Action button / Siri) restarts cleanly (Muse M5).
+        if nav.isNavigating { endRouteQuietly() }
+        // Location refused: say so instead of "Route started" followed by silence (Muse H2).
+        if announceLocationDenied() { return }
         routeError = nil
+        // Camera refused: warn loudly (and keep the error on screen: it is set after the clear
+        // above), but still guide. GPS, the beacon and the watch work without the camera, and a
+        // blind walker is better off with guidance and no obstacle cues than with nothing.
+        announceCameraDenied()
+        groundPolicy.reset()
         // Every waypoint line and the route intro, synthesized now so they play instantly.
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
@@ -509,16 +834,30 @@ final class AppModel {
                                "headphones": audioRoute.outputName, "watch": watch.isReachable])
         pushStatusToWatch()
         announceChannels()
+        if Self.describeEveryWaypoint { describeScene() }   // the start (ISR) is a corner too
     }
 
+    /// When location access is refused: shows and speaks how to fix it, returns true (the caller
+    /// stops). Shared by `beginRoute` and `startMapKitRoute` (Muse H2, review round 5).
+    private func announceLocationDenied() -> Bool {
+        guard location.authorizationDenied else { return false }
+        routeError = "Location is off for CaneKit"
+        speech.say("Location access is off. Turn on Location for CaneKit in Settings to navigate.", .nav, ttl: 20)
+        return true
+    }
+
+    /// Sends the current instruction + distance to the watch. `-1` means "no distance" (the watch
+    /// maps it to nil). `PhoneWatchLink` drops same-text updates that moved < 5 m.
     private func pushStatusToWatch() {
         watch.send(status: nav.instruction, distanceM: nav.distanceToNext ?? -1)
     }
 
     // MARK: Watch commands
 
-    /// Next / Describe / Recenter from the wrist. The describer (step 8) and the beacon (step 7)
-    /// hook in here; until then those two are acknowledged aloud.
+    /// Next / Describe / Recenter / Repeat from the wrist (buttons and the crown "Next" gesture).
+    /// Installed as `watch.onCommand` in `start()`; logs a `watch` event first.
+    /// ⚠ `WatchToPhone` lives in CaneKitLogic (WatchMessage.swift): adding a case requires
+    /// updating this `switch` and re-running `WatchMessageTests.watchToPhoneRoundTrips`.
     private func handleWatchCommand(_ cmd: WatchToPhone) {
         logger.event("watch", ["command": cmd.rawValue])
         switch cmd {
@@ -531,12 +870,14 @@ final class AppModel {
     }
 
     /// Debug buttons on the Watch card.
+    /// Sends a raw `NavCue` tap to the watch and logs `watch {test}`.
     func watchTest(_ cue: NavCue) {
         watch.send(nav: cue)
         logger.event("watch", ["test": cue.rawValue])
     }
 
     /// Debug button: prove the audio route (AirPods) and the queue/interrupt behaviour.
+    /// Queues a `.scene` line then an `.obstacle` line; the obstacle line should interrupt it.
     func speechTest() {
         speech.say("Scene test: sidewalk ahead, bike rack at ten o'clock, two meters.", .scene)
         speech.say("Door ahead, one meter.", .obstacle)
@@ -544,17 +885,22 @@ final class AppModel {
 
 
     /// Camera Control / volume press reached the app while ARKit owns the camera.
+    /// Logged (`describe {source: cameraControl}` in the trip log is the step-2 spike readout),
+    /// then treated like "Where am I".
     func cameraControlPressed() {
-        cameraControlPresses += 1
+        logger.event("describe", ["source": "cameraControl"])
         describeScene()
     }
 
     // MARK: Private
 
+    /// Pushes `portraitMode` / `mirrorLeftRight` into the depth engine's lane remap.
     private func pushDepthSettings() {
-        depth.apply(portrait: portraitMode, mirror: mirrorLeftRight)
+        depth.apply(portrait: portraitMode, mirror: mirrorLeftRight, groundHazards: groundHazardsEnabled)
     }
 
+    /// Enables battery monitoring, reads the initial values and subscribes to thermal / battery
+    /// notifications for the process lifetime. Called once from `start()`.
     private func observeThermalAndBattery() {
         UIDevice.current.isBatteryMonitoringEnabled = true
         updateBattery()
@@ -572,6 +918,9 @@ final class AppModel {
         }
     }
 
+    /// Maps the thermal state to `thermalName` and applies the cheapest downgrade: mesh
+    /// classification off at `.serious` or `.critical` (obstacle names then go silent; the lane
+    /// haptics keep running).
     private func updateThermal() {
         switch ProcessInfo.processInfo.thermalState {
         case .nominal: thermalName = "nominal"
@@ -583,8 +932,13 @@ final class AppModel {
         // Step 2 already honours the cheapest downgrade: no mesh at .serious or worse.
         let hot = ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
         depth.setMeshClassification(!hot)
+        // Say it once per transition: names going silent without a word is confusing (Muse L5).
+        hazards.paused = hot                 // camera extras off while hot; lanes + haptics stay
+        if hot, !wasHot, started { speech.say("Phone is hot. Door and wall names and sign reading paused.", .nav, ttl: 10) }
+        wasHot = hot
     }
 
+    /// `batteryLevel` is 0…1, or negative when unknown (simulator) → `batteryPercent` 0–100 / -1.
     private func updateBattery() {
         let level = UIDevice.current.batteryLevel
         batteryPercent = level < 0 ? -1 : Int((level * 100).rounded())
@@ -592,10 +946,13 @@ final class AppModel {
 }
 
 /// Thin UserDefaults wrapper so settings stay one-liners above.
+/// Keys are the AppModel property names; main-actor by the target default.
 enum Settings {
+    /// Stored Bool for `key`, or `d` when the key has never been written (not `false`).
     static func bool(_ key: String, default d: Bool) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? d
     }
+    /// Persists `value` under `key` in `UserDefaults.standard`.
     static func set(_ value: Bool, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }

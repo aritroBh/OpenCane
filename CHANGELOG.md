@@ -2,6 +2,130 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 12 — Google Street View mock of ISR → CIF: what failed and the fixes (Fri Sep 11, pre-device)
+The 14 Street View frames of the route (local-only, `ios/scripts/streetview/`) now drive the camera in
+the simulator end to end, and the log shows what the camera saw, not only what was spoken.
+- **Found: "Where am I" spoke Vision's taxonomy.** At Green Street the on-device template would say
+  "Automobile, machine and vehicle in view.", at Springfield "Conveyance, portal and manhole in view.",
+  in the ISR lounge "Furniture, table and conveyance in view." **Fix:** `SceneVocabulary` (CaneKitLogic,
+  5 tests built from the real Street View labels) keeps pedestrian nouns only, merges synonyms, drops
+  hypernyms and says crossing information first: "Ahead: the street and cars.", "Ahead: a crosswalk,
+  a path and the street.", "Ahead: tables, chairs and windows." It feeds both the template and the facts
+  given to Apple's on-device model.
+- **Found: sign reading range was a guess.** `ios/scripts/sign_probe.swift` pastes a "SIDEWALK CLOSED"
+  sign onto every route frame at many sizes and runs the app's exact text request. Measured: the old
+  1/80 floor read 7.5 cm letters from ≈ 4.4 m (Vision's default only 1.7 m). **Fix:** 1/128 → 7.5 cm
+  letters from ≈ 7 m and 15 cm from ≈ 14 m on every frame, with no measurable extra OCR time
+  (~7 ms/frame on the Mac). At walking pace that is two 3 s scans before you reach a sign, not one.
+- **Found: STOP signs would be read at every corner.** With the longer range a STOP sign (a drivers'
+  sign) reads from across an intersection. **Fix:** "STOP" is no longer a sign phrase; "PUSH BUTTON"
+  (a crossing sign a walker can use) is. Test `stopSignsAreForDriversPushButtonIsForWalkers`.
+- **Found: the camera path was invisible.** The Street View e2e "passed" with no record of any sign scan
+  or description. **Fix:** new trip-log records `scan` (text read, line said, frame), `hazard_watch`
+  (raw reply, latency, dropped/why, error) and `describe_result` (what "Where am I" actually said,
+  error, ms), useful on the phone too. `make e2e SCENARIO=streetview` now turns on the hazard watch,
+  asks "Where am I" at the start and every waypoint (`CANEKIT_DESCRIBE_EVERY_WAYPOINT`), fails unless
+  ≥ 8 of 10 corners are described, and reports per-corner sentences.
+- **Found: far storefront words would be read** (Muse + Antigravity): with 1/128 text, "EXIT" / "PUSH"
+  across the street matches. **Fix:** one-word phrases need the text line ≥ 1/80 of the frame tall
+  (close); multi-word safety phrases ("SIDEWALK CLOSED") still read from far (`SignPolicy.SeenText`,
+  `shortPhraseMinHeight`, test `farTextReadsSafetySignsButNotStorefrontWords`). The measured range is
+  for a flat, frontal sign in good light; expect less on a moving cane.
+- **Found: Apple's on-device model invented facts.** On a Street View corner "Where am I" said "No
+  hazards detected. Distance: 0 meters." **Fix:** a new prompt (name what is there; numbers only from
+  the facts; never "no hazards") and `SceneVocabulary.isFaithful`: the model's sentence is spoken only
+  if it names something detected and invents no numbers, else the template speaks (test
+  `modelSentencesMustBeFaithfulToTheFacts`).
+- **Found (Muse + Antigravity): people, ice and houseplants.** People were filtered out entirely (a busy
+  sidewalk said "nothing"); ice and snow ranked below benches; an indoor "plant" became "bushes".
+  Fixed with tests (`peopleIceAndPlantsAreSaidSensibly`). Diagnostics now record the frame that was
+  *sent*, not the one current when the reply came back; the arrival corner is described too.
+- **Rejected:** refusing to start a route when the camera is off (Antigravity). Guidance works without
+  the camera; the app warns loudly and still guides. The on-screen error now survives (it was cleared
+  right after being set). Antigravity also edited files during a "read-only" review; its edits were
+  audited one by one and reviews now run it on a copy of the repo.
+- **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
+  contributor, human or AI, works the same way.
+- **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is
+  now skipped when the camera is refused.
+- **Teammate handoff:** `docs/TEAM_HANDOFF.md` (read first after a pull), README / docs index / iOS README
+  refreshed, doc drift fixed after Muse + Antigravity reviewed the teammate-facing docs.
+- Test on device: in airplane mode, "Where am I" at a street corner says plain words ("Ahead: a
+  crosswalk…"), never "conveyance" or "portal"; a printed "SIDEWALK CLOSED" sign (7.5 cm letters) is read
+  from ~6–7 m; walking past a STOP sign says nothing; the trip log has `scan` and `describe_result` lines.
+
+## Step 11 — Hazards the maps don't know, on-device vision, stress harness (Fri Sep 11, pre-device)
+- **LiDAR ground hazards.** `GroundSampler` projects the depth map into the walker's
+  gravity-aligned frame; `GroundHazardDetector` (CaneKitLogic) finds drop-offs, holes, curbs up and
+  low obstacles 1.5–3.5 m ahead in the walking corridor, ignoring smooth ramps and anything taller
+  than 50 cm (the lane grid's job), confirmed on 3 of 5 trusted frames. Spoken at safety priority
+  ("Drop-off ahead, two meters.") with 4 heavy taps on the cane.
+- **Signs, on-device.** Vision text recognition every 3 s: "Sign: sidewalk closed." / detour /
+  construction / stop / exit…, each at most once a minute. Offline.
+- **Hazard watch.** While walking a route, one frame every 8 s to the vision model asking only for
+  path hazards (cones, barriers, trenches, scooters, low branches); "NONE" is silent.
+- **On-device "Where am I".** Apple Vision (scene labels + text) + Apple's on-device language
+  model phrase one sentence with the LiDAR facts; a template when Apple Intelligence is off. Cloud
+  providers now fall back to it automatically, fail fast (8 s), and a key is no longer required.
+- **Hazard map.** Every announced hazard → `Documents/hazards/hazards-<session>.geojson` with GPS and
+  a photo; "Share hazard map" on the new Hazards card, which also has a live camera view.
+- **Route cues on the cane.** Long soft buzzes (turn left 1, right 2, crossing 3, arrived
+  long-short-long) alongside the watch.
+- **Review fixes (Muse + Antigravity full-app reviews):** GPS course no longer dropped by the sweep
+  gate; location / camera denied are spoken instead of silent; GPS stops after arrival; a second
+  route start restarts cleanly; beacon restarts on foreground; natural-voice circuit breaker on weak
+  networks; interruption fallback never drains over a live call; AirPods route flaps debounced; head
+  tracker stops when AirPods disconnect; watch workout stops after arrival and restarts next route;
+  late watch send failures tap `.retry`; heat downgrade is announced; no force-unwrapped URLs from
+  Secrets. Rejected with evidence: `@concurrent` and `HKQuantityType(.stepCount)` "don't compile"
+  (both valid; the build is green).
+- **Jitter-proof veer.** `CourseSmoother` (15 m / 5-fix ends) feeds the veer decision while walking:
+  simulated ±6 m jitter produced 28 false veers with per-fix course, zero across 20 runs smoothed.
+  An arrival hint is spoken after 20 s near the destination without arrival.
+- **Stress harness.** `make e2e`: GPS-replay scenarios through the real app in the simulator
+  (clean, missed_fence, gps_jitter, wrong_turn) asserting on the trip log. The debug footer is gone.
+- **Round-5 review (22 confirmed findings, all fixed).** A 61-agent adversarial review with
+  ray-cast and nav-engine simulations found, and this step fixes:
+  - *Curbs warned too late under a real sweep* (confirmed only 1.2–1.7 m ahead at 1.2 m/s): the
+    ground path now has its own 1.5 rad/s gate on raw depth, ~7 evaluations/s (simulated: 2.3–2.6 m).
+    A curb face landing mid-bin is found (edge vs the previous two bins); the distance is the nearer
+    edge; a rise in the last bin waits for a closer look.
+  - *False "Veer" after the WP2/WP3/WP6 corners on every clean walk*: the course smoother stays empty
+    inside the corner's fence and resets after each veer cue. Nav harness running the real
+    NavigationEngine: 0 false veers in 72 walks (clean, ±2 m jitter, ±15°/25° course noise), and an
+    injected 35° veer caught once in 18/18 walks.
+  - *The 2.5 s voice deadline repeated a finished line in the robot voice*: fetch and deadline are
+    now mutually exclusive.
+  - *Stale camera after unlock*: the paused frame is dropped; LiDAR context cleared on background.
+  - Standing at a curb no longer repeats the warning every 6 s (same hazard: 1 m closer or 30 s);
+    partial sign reads ("CLOSED" after "SIDEWALK CLOSED") stay quiet; signs read from farther
+    (small text); hazard-watch cloud cut off at 2.5 s, stale replies dropped or lose their
+    distance; the on-device LiDAR gate uses the centre lane only; hazards after arrival keep their
+    location (null geometry with no fix); arrival hint works while standing still; a typed
+    destination with Location off is refused at once; haptic engine retries after non-suspension
+    stops; watch keep-alive ignores callbacks from old sessions; live view pauses when hot.
+  - e2e: tick-based time budget (gps_jitter could never arrive), per-scenario error isolation, no
+    stale report, and an opt-in `streetview` scenario (Street View frames as the camera).
+    `make tour` / `make uitest-streetview` never passed their folder to the test runner
+    (`TEST_RUNNER_*` was a trailing build setting); it is now in xcodebuild's environment.
+- **Round-6 check (Muse + Antigravity on the round-5 fixes).** Muse: the "head height" context line
+  now uses the centre lane only too; a hazard is geotagged with the nav engine's last fix only if it
+  is under 2 minutes old; the haptic engine is not retried during a call (restarted on the
+  interruption's end) and retry loops never stack. Antigravity's "swap max/min in the edge test"
+  was rejected: it reverts the mid-bin curb fix (the tests show the fix finds the curb and 10 %
+  ramps stay silent); the ~11 % ramp trade-off is documented in AGENTS.md.
+- **Phone-to-cane mount (hardware/mount/, for Sagar).** Printed PETG clamp for the 28.75 mm pole with
+  a 5°-detent hinge, OpenSCAD model, test coupons, a pitch model and a T0–T11 bench protocol. Its key
+  finding: the lane grid has no gravity correction, so the camera must aim 3–8° below the horizon,
+  not 10–20°. The Mount card now shows "Camera tilt N° down · N fps" live (`MountTilt`, tested), and
+  every `lanes` log line carries `tilt` and `fps`.
+- Test on device: Mount card reads "Camera tilt …, good" with the cane held normally and the cane stays
+  quiet on an empty sidewalk; turn on "Detect drop-offs", then walk at a curb sweeping normally → the warning
+  comes ≥ 2 m before the edge, once, and not again while you stand there; point the cane at a curb 2 m ahead → "Drop-off ahead, two meters." + 4 taps; hold a
+  printed "SIDEWALK CLOSED" sign in view → "Sign: sidewalk closed." once; airplane mode + "Where am I" →
+  an on-device sentence; walk past a waypoint → cane buzzes as well as the watch; Share hazard map →
+  a GeoJSON that opens in geojson.io.
+
 ## Step 10 — Two adversarial review rounds, AirPods/Watch presence, XCUITests (Fri Sep 11, pre-device)
 Round 1 (full-app review, 65 agents) and round 2 (review of the round-1 fixes, 5 dimensions, 30+
 findings) and a Muse review of the result are folded in. Verified by 79 logic tests, a green simulator build, 6 XCUITests and the
