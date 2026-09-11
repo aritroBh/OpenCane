@@ -322,7 +322,6 @@ final class AppModel {
         guard started else { return }
         switch phase {
         case .active:
-            isForeground = true
             haptics.resume()
             depth.resume()
             beacon.resumeIfNeeded()          // the engine can die across a screen lock (Muse M4)
@@ -339,7 +338,6 @@ final class AppModel {
                 lockWarningGiven = true
                 speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .nav, ttl: 10)
             }
-            isForeground = false
             hazards.stop()                   // no scanning a frozen last frame in the background
             sceneContext.set("")             // LiDAR facts from here are stale once we come back
             depth.pause()
@@ -503,17 +501,7 @@ final class AppModel {
         return parts.joined(separator: " ")
     }
 
-    /// Latest camera frame as a small JPEG for the Hazards card's live view (~3 Hz).
-    /// Nil in the background and while hot (thermal pause): the view is optional, the lanes are not.
-    func liveFrameJPEG() async -> Data? {
-        guard isForeground, !hazards.paused else { return nil }
-        return await Self.frame(depth.processor, maxDimension: 480)
-    }
-
-    /// False while backgrounded: camera consumers stop instead of re-reading a frozen frame.
-    @ObservationIgnored private var isForeground = true
-
-    /// JPEG encode off the main actor.
+    /// JPEG encode off the main actor (the ground-hazard photo for the hazard map).
     @concurrent
     private static func frame(_ p: DepthFrameProcessor, maxDimension: CGFloat) async -> Data? {
         p.jpegSnapshot(maxDimension: maxDimension, quality: 0.6)

@@ -5,21 +5,21 @@
 //  "Hazards" card: the camera's second job made visible. Toggles for the three hazard sources
 //  (LiDAR drop-offs / potholes / curbs, sign reading, hazard watch), the last thing each one said,
 //  which backend the hazard watch uses, the hazard-map count with a share button, and an optional
-//  live camera view for the sighted spotter and the demo video.
+//  live camera view for the sighted spotter and the demo video: `LiveCameraView`, ARKit's own
+//  frames on the GPU at the camera's frame rate (it replaced a ~3 Hz JPEG refresh loop).
 //
 //  Implements docs/design.md (cards, pills, toggles, big buttons). Accessibility: every toggle is
 //  a labelled switch ("Detect drop-offs", "Read signs", "Hazard watch", "Live camera view");
-//  the live view image is hidden from VoiceOver (it carries no information a blind user needs).
+//  the live view is hidden from VoiceOver (it carries no information a blind user needs).
 //
 
 import CaneKitLogic
 import SwiftUI
-import UIKit
 
 struct HazardsCard: View {
     @Environment(AppModel.self) private var model
-    /// Latest camera frame for the live view (refreshed ~3 Hz only while the toggle is on).
-    @State private var frame: UIImage?
+    /// Backgrounded or locked: ARKit is paused, so the preview must not show a frozen frame.
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var model = model
@@ -61,20 +61,42 @@ struct HazardsCard: View {
             Toggle("Live camera view", isOn: $model.liveViewEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .accessibilityHint("Shows what the camera sees, for a sighted helper")
-            if model.liveViewEnabled {
-                Group {
-                    if let frame {
-                        Image(uiImage: frame).resizable().scaledToFit()
-                    } else {
-                        Text("Camera warming up").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
-                    }
-                }
+            liveView
+        }
+    }
+
+    /// Under the "Live camera view" switch: nothing when off; a caption while the phone is hot
+    /// (the view is optional, the lanes are not) or while ARKit is not running; else the GPU
+    /// `LiveCameraView` of the app's own ARSession at the camera's frame rate (30, or 60 with the
+    /// Mount card switch), in the camera's 3:4 portrait shape so the whole frame shows. The
+    /// decision is `LiveView.state` (CaneKitLogic, pinned by LiveViewTests); the whole block is
+    /// hidden from VoiceOver (it carries nothing a blind user needs).
+    @ViewBuilder private var liveView: some View {
+        switch LiveView.state(enabled: model.liveViewEnabled, hot: model.hazards.paused,
+                              cameraRunning: model.depth.isRunning,
+                              highFrameRate: model.highFrameRateCamera,
+                              foreground: scenePhase == .active) {
+        case .off:
+            EmptyView()
+        case .hot:
+            liveCaption("Live view paused: phone is hot")
+        case .cameraOff:
+            liveCaption("Camera off")
+        case .live(let fps):
+            LiveCameraView(session: model.depth.arSession, framesPerSecond: fps)
+                .aspectRatio(3.0 / 4.0, contentMode: .fit)     // 4:3 sensor, portrait UI
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: CKRadius.button, style: .continuous))
                 .accessibilityHidden(true)
-                .task(id: model.liveViewEnabled) { await refreshLoop() }
-            }
         }
+    }
+
+    /// Small grey line standing in for the live view (hot / camera off); hidden from VoiceOver
+    /// like the view itself. Called only by `liveView`.
+    private func liveCaption(_ text: String) -> some View {
+        Text(text).font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(text)   // a paused view or a dead camera must be spoken (Muse review)
     }
 
     /// One detection row: a small caption and the spoken line.
@@ -84,17 +106,5 @@ struct HazardsCard: View {
             Text(text).font(CKFont.body).foregroundStyle(CKColor.textPrimary)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    /// ~3 Hz while the toggle is on and the app is in the foreground (SwiftUI keeps the task
-    /// alive while the card is scrolled off-screen inside the List/ScrollView; the encode is a
-    /// 480 px JPEG, cheap next to ARKit, and it pauses when hot — `liveFrameJPEG` returns nil).
-    /// Starts blank so a re-enable never flashes an old frame.
-    private func refreshLoop() async {
-        frame = nil
-        while !Task.isCancelled, model.liveViewEnabled {
-            if let data = await model.liveFrameJPEG(), let img = UIImage(data: data) { frame = img }
-            try? await Task.sleep(for: .milliseconds(330))
-        }
     }
 }
