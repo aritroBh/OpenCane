@@ -101,6 +101,65 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Install on the phone, verify each item from the trip log, push
 - [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
 
+### Scene understanding: the decision, and why (researched 2026-09-11, 65 agents)
+
+**Question asked:** run Gemma 4 2B/4B locally via Cactus so the app can name everything it sees,
+instead of the fixed 1,303-label Apple classifier that returned *nothing* on the phone tonight.
+
+**Answer: no local VLM before this demo. Use the cloud client that is already in the repo, gated.**
+
+- **Cactus is disqualified by an open bug, not by taste.** github.com/cactus-compute/cactus issue
+  #802 (filed 2026-09-01, still open): `cactus_complete` **with an image never returns** — the Metal
+  backend deadlocks in `waitUntilCompleted` during chunked media prefill, on iOS and macOS. Metal is
+  the default backend on iPhone; the suggested workaround is CPU. v2.2.0 (2026-09-08) shipped without
+  touching it. Separately, an independent iPhone 17 Pro benchmark found the CQ4 build `cactus run`
+  ships by default scores **3.0 % on GSM8K** where the build they demoted scores 87 %. Licence is
+  source-available (free under $2M funding *and* revenue), not open source.
+- **Gemma 4 E2B locally is disqualified by cost and coverage, not capability.** It needs SPM packages
+  (AGENTS.md hard rule 2), **~3.0 GB** charged footprint for the 4-bit build on an iPhone 17 Pro —
+  text-only, before an image encoder, ARKit, LiDAR and audio — a 1.8–3.6 GB first-run download, and
+  **MLX does not run in the iOS simulator**, so `make sim`, `make uitest` and `make e2e` would all
+  break. No iPhone vision-encoder latency for Gemma 4 has been published by anyone; we would be
+  measuring it for the first time, on the demo phone, the night before.
+- **Gemma 3 / 3n:** the LiteRT repos are manually gated on HuggingFace — an approval delay we cannot
+  absorb. If we ever do go local, go Gemma 4 E2B (Apache-2.0, ungated), not Gemma 3.
+- **Apple FastVLM 0.5B:** right shape, but its model licence is research-only and excludes product
+  development.
+- **Apple FoundationModels with the image (iOS 27):** the best *future* path — first-party, no
+  packages, no key, no network — and already built on `feat/fm-image-describe`, off by default. Not
+  the demo path: it needs an iOS 26 availability waiver, and handed a solid white frame it said
+  *"The path ahead is clear and unobstructed"* 4 times out of 4.
+
+**What we do instead:** `ios/CaneKit/Scene/VLMClient.swift` already ships a working Gemini client with
+cloud-primary / on-device fallback and unit-tested codecs. It needs a key, not code.
+
+- [!] **Gemini key — waiting on Aritro** (optional; the app works without it). See below.
+- [ ] Gate the cloud reply — `SceneVocabulary.isFaithful` runs on the on-device path **only**, so a
+      cloud sentence is currently spoken ungated. Measured hallucinations of exactly this class on our
+      own route frames: "S 5th St", "S Grand Blvd". In progress on `fix/cloud-scene-gate`.
+- [ ] Fix the prompt: it asks for clock-face directions and distances in metres. VLMs read clock
+      directions from the *image's* frame rather than the walker's, and distance is the one thing they
+      are measurably worst at (below chance — GuideDog, ACL 2026). LiDAR supplies every number.
+- [ ] Measure the real round trip from the phone on campus cellular and write down p50 and max. Do not
+      quote anyone's benchmark at the demo; quote ours.
+- [ ] Leave the hazard watch **off** for the demo (it is the only thing that would call a model in a
+      loop).
+
+**The line to say out loud at the demo:** *the model names things; LiDAR measures them. No number the
+sensors did not see is ever spoken.*
+
+### Gemini setup (optional, 3 minutes, Aritro only)
+
+1. aistudio.google.com → **Get API key** → **Create API key**. Copy it.
+2. In `ios/CaneKit/Resources/Secrets.plist` set `VLM_PROVIDER` to `gemini`, paste `GEMINI_API_KEY`,
+   and set `GEMINI_MODEL` to `gemini-3.5-flash-lite` (fastest measured of 53 models: 2.70 s average).
+3. ⚠ **Privacy, decide deliberately:** Google's pricing page marks "content used to improve our
+   products" as **Yes** on every free-tier row and **No** on every paid row. This app points a camera
+   at strangers on the Quad. Attach billing to the project, or accept that free-tier frames may be
+   used for training. Either is a choice; making it by accident is not.
+4. Kill switch if it misbehaves on stage: turn off Wi-Fi and cellular. `waitsForConnectivity = false`
+   means the request fails at once and the on-device describer answers. Nothing else is affected.
+
 ### ElevenLabs setup (2 minutes, Aritro only — nobody else can do this)
 
 The natural voice is already written, reviewed and merged (`ios/CaneKit/Speech/ElevenLabsVoice.swift`).
