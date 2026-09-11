@@ -3,6 +3,52 @@
 The short version for Sagar and Aarav. The full picture is in
 [`TEAM_HANDOFF.md`](TEAM_HANDOFF.md); start with its "Start here (5 minutes)" section.
 
+## Status right now (Fri 2026-09-11, ~15:30 CT) — read this first
+
+- **Main branch is tested and pushed.** 146 logic tests pass; the app builds, installs and runs on
+  Aritro's iPhone 17 Pro Max (iOS 27).
+- **Proven on the real phone (desk test):**
+  - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
+    (Apple Vision + Apple's on-device model; no key or network needed);
+  - depth at 30 reports/s, heat nominal.
+- **Fixed after the phone test:**
+  - false "Hole ahead" while hand-held (ground hazards now need the mount's tilt);
+  - a 10 Hz timing bug;
+  - "Where am I" mixing two moments.
+- **In progress on branches (not merged yet; merged to main only after tests + reviews pass):**
+  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in CaneKit",
+    "where am I", "repeat", "next", "stop"), a "Navigate to CIF from here" button, better
+    destination search (campus place list + nearest result), a trip-log fix;
+  - `feat/live-view-gpu`: smooth live camera view;
+  - `feat/fm-image-describe`: "Where am I" from the image with Apple's model (iOS 27), off by default;
+  - `experiment/gemma-cactus`: Gemma 4 E2B on-device via Cactus — experiment only.
+- **The live checklist is `docs/todo.md` → "TONIGHT".** Every item is ticked only after it was
+  verified.
+
+## Setup checklist for tonight (do these in order)
+
+1. **Pull:** `git pull`, then `cd ios && make test` (146 tests).
+2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
+   `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
+   `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
+   Rebuild and install after changing it, because the file is baked into the app. Without a key,
+   Apple's voice speaks.
+3. **Install on a phone:** see "Installing on the phone" below. Keep `ios/local.mk` values on their
+   own lines; a comment after a value broke the first build.
+4. **AirPods Pro:**
+   - pair them;
+   - Settings → Bluetooth → ⓘ → **Spatial Audio Off**, **Head Tracking Off** (CaneKit does its own);
+   - allow Motion & Fitness when asked.
+   - Full steps: `docs/devices_setup.md` → AirPods.
+5. **Apple Watch:**
+   - it must be paired with the same iPhone;
+   - turn on Developer Mode on the watch (Settings → Privacy & Security; if it is missing, open
+     Xcode → Window → Devices and Simulators with the iPhone plugged in until the watch appears);
+   - in the iPhone's Watch app: General → **Automatic App Install**, or Available Apps → CaneKit →
+     Install;
+   - open CaneKit on the watch.
+   - Full steps: `docs/devices_setup.md` → Apple Watch.
+
 ## State of things
 
 - The app is done and tested on the Mac and simulator: 146 logic tests, UI tests, and replays of

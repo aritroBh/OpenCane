@@ -5,6 +5,12 @@ Aarav. It says what exists, what is proven, what is not, what each of us does ne
 decisions are already made so nobody re-litigates them at 2 a.m. Everything here links to the doc
 that has the detail.
 
+> **Latest status, branches in flight and tonight's setup checklist: [`TEAM_BRIEF.md`](TEAM_BRIEF.md)
+> → "Status right now". Live checklist: [`todo.md`](todo.md) → "TONIGHT".** AI agents working in this
+> repo: read `AGENTS.md` ("How we engineer" is the bar) and `CLAUDE.md` first, then this file, then
+> query the graph (`graphify query "…"`); never merge an in-flight branch without its tests, a
+> simulator build and a Muse + Antigravity review.
+
 ## 0. Start here (5 minutes)
 
 1. `git pull`, then `cd ios && make test` (146 logic tests, needs only the Command Line Tools).
