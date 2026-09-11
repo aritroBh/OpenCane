@@ -115,6 +115,10 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   gap). Tests `plainGoodSentencesStillPass`, `factWordsAreAllowedAndDistanceIsANumber`. Rejected —
   "the first head cue after unlock replays a stale cue": the decider is reset on background, so any
   head cue after unlock is a fresh LiDAR detection and should be spoken.
+- **First real-phone build (iPhone 17 Pro Max, iOS 27.0):** signed with the free Personal Team,
+  installed. Found: a comment after the value in `ios/local.mk` (the format the docs showed) left
+  trailing spaces in `DEVICE`, so xcodebuild could not find the phone; the Makefile now strips
+  `TEAM` and `DEVICE`. First launch needs Settings → General → VPN & Device Management → Trust.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

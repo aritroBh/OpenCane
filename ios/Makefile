@@ -21,6 +21,10 @@
 # and take OU=. Not the 10 characters in parentheses of "Apple Development: Name (…)".
 
 -include local.mk
+# A comment after the value in local.mk ("DEVICE = 0000…   # make devices") leaves trailing spaces
+# in the variable, and xcodebuild then cannot find the phone. Strip them.
+TEAM   := $(strip $(TEAM))
+DEVICE := $(strip $(DEVICE))
 
 TEAM   ?=
 DEVICE ?=
