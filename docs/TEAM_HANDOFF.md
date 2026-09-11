@@ -22,7 +22,7 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 124 pass | `make test` |
+| Logic tests (every rule with a number in it) | 128 pass | `make test` |
 | App + watch + widget build, Swift 6 strict | green | `make sim` |
 | UI tests + screenshot tour | 7 pass (one needs the local Street View frames) | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
@@ -52,7 +52,7 @@ The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench test
 ```sh
 git pull
 cd ios
-make test          # 124 logic tests; needs only the Command Line Tools
+make test          # 128 logic tests; needs only the Command Line Tools
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build

@@ -502,9 +502,18 @@ final class AppModel {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         guard status == .denied || status == .restricted else { return false }
         routeError = "Camera is off for CaneKit"
-        speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)
+        // Launch and route start both check: speak it once a minute, not twice in a row
+        // (Antigravity, final review: the demo-route launch queued the 20 s warning twice).
+        let now = Date()
+        if now.timeIntervalSince(cameraDeniedSpokenAt) > 60 {
+            cameraDeniedSpokenAt = now
+            speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)
+        }
         return true
     }
+
+    /// When the camera-denied warning was last spoken (`announceCameraDenied`).
+    @ObservationIgnored private var cameraDeniedSpokenAt = Date.distantPast
 
     /// Stop the running route without speaking (used before starting another one).
     private func endRouteQuietly() {

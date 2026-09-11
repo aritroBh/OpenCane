@@ -38,11 +38,12 @@ nonisolated struct VisionDetections: Sendable, Equatable {
     /// Lets `SignPolicy` require one-word phrases to be close (`shortPhraseMinHeight`).
     var textHeights: [Float] = []
 
-    /// `texts` + `textHeights` in the shape `SignPolicy.line(for:now:)` wants.
+    /// `texts` + `textHeights` in the shape `SignPolicy.line(for:now:)` wants. A missing height
+    /// counts as far (0), so it can never bypass the close-text rule (Muse, final review).
     var seenTexts: [SignPolicy.SeenText] {
         texts.enumerated().map { i, t in
             SignPolicy.SeenText(text: t.text, confidence: t.confidence,
-                                height: i < textHeights.count ? textHeights[i] : 1)
+                                height: i < textHeights.count ? textHeights[i] : 0)
         }
     }
 
@@ -162,7 +163,9 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         if !lidar.isEmpty { lines.append("Depth sensor: \(lidar)") }
         let things = SceneVocabulary.nouns(d.labels, max: 5)
         if !things.isEmpty { lines.append("Camera sees: " + things.joined(separator: ", ")) }
-        let signs = d.texts.filter { $0.confidence >= 0.5 }.map(\.text).prefix(3)
+        // Only text that looks like words: Street View OCR junk ("11", "J.I") became invented
+        // distances in the model's sentence.
+        let signs = SceneVocabulary.readableTexts(d.texts.filter { $0.confidence >= 0.5 }.map(\.text)).prefix(3)
         if !signs.isEmpty { lines.append("Visible text: " + signs.map { "\"\($0)\"" }.joined(separator: ", ")) }
         return lines.isEmpty ? "Nothing detected." : lines.joined(separator: "\n")
     }
@@ -192,7 +195,8 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         if !lidar.isEmpty { parts.append(lidar) }
         if let scene = SceneVocabulary.sentence(d.labels) { parts.append(scene) }
         var policy = SignPolicy()
-        if let sign = policy.line(for: d.texts, now: 0) { parts.append(sign) }
+        // Sized text, like the sign scanner: a tiny far "EXIT" must not be read here either.
+        if let sign = policy.line(for: d.seenTexts, now: 0) { parts.append(sign) }
         return parts.isEmpty ? "Nothing recognized ahead." : parts.joined(separator: " ")
     }
 }

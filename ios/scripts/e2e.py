@@ -285,8 +285,16 @@ def check(name: str, events: list[dict]) -> list[str]:
             errs = sorted({e.get("error", "") for e in described if e.get("error")})
             fails.append(f"only {len(good)} of {len(described)} 'Where am I' requests answered "
                          f"(want ≥ 8 of 10: start + 9 waypoints); errors: {errs}")
-        if not any(e.get("kind") == "scan" for e in events):
-            fails.append("no sign scans logged: is the camera stand-in (FrameReplay) active?")
+        # The camera must actually move along the route (Muse, Step 12: a stuck nearest frame or a
+        # dead hazard watch would otherwise still pass).
+        described_frames = {e.get("frame") for e in good if e.get("frame")}
+        if len(described_frames) < 6:
+            fails.append(f"'Where am I' saw only {len(described_frames)} distinct Street View frames (want ≥ 6)")
+        scan_frames = {e.get("frame") for e in events if e.get("kind") == "scan" and e.get("frame")}
+        if len(scan_frames) < 5:
+            fails.append(f"sign scans saw only {len(scan_frames)} distinct frames (want ≥ 5): is FrameReplay following the GPS?")
+        if not any(e.get("kind") == "hazard_watch" for e in events):
+            fails.append("no hazard-watch replies logged (CANEKIT_HAZARD_WATCH=1 should turn it on)")
     elif name == "wrong_turn":
         if not any(v == "Veer right." for v in veers):
             fails.append(f"expected 'Veer right.' after overshooting west at Goodwin, got {veers}")

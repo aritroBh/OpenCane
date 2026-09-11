@@ -292,11 +292,15 @@ public struct SignPolicy: Sendable, Equatable {
         let usable = seen.filter { $0.confidence >= minConfidence }
         // Vision returns one observation per printed line, and real signs stack their words
         // ("SIDEWALK" over "CLOSED"): also match all lines joined in reading order.
-        func haystacks(minHeight: Float) -> [String] {
-            let lines = usable.filter { $0.height >= minHeight }.map { Self.normalize($0.text) }
-            return lines.map { " \($0) " } + [" " + lines.joined(separator: " ") + " "]
+        // Only *close* lines are joined: joining far lines let an unrelated distant "ROAD" and a
+        // shop's "CLOSED" read as "ROAD CLOSED" (Muse, final review). A far multi-word phrase must
+        // sit in one observation.
+        func lines(minHeight: Float) -> [String] {
+            usable.filter { $0.height >= minHeight }.map { Self.normalize($0.text) }
         }
-        let anySize = haystacks(minHeight: 0), close = haystacks(minHeight: shortPhraseMinHeight)
+        let closeLines = lines(minHeight: shortPhraseMinHeight)
+        let close = closeLines.map { " \($0) " } + [" " + closeLines.joined(separator: " ") + " "]
+        let anySize = lines(minHeight: 0).map { " \($0) " } + [close.last ?? ""]
         var matched: [String] = []
         for phrase in Self.phrases {
             let haystacks = phrase.contains(" ") ? anySize : close

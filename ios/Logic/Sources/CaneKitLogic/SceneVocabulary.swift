@@ -132,17 +132,86 @@ public enum SceneVocabulary {
     /// appears in `facts`, and it is short enough to speak (≤ 30 words). Otherwise the caller
     /// speaks the deterministic template instead.
     public static func isFaithful(_ sentence: String, facts: String, nouns: [String]) -> Bool {
-        let lower = sentence.lowercased()
-        let words = lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        let words = tokens(sentence)
         guard !words.isEmpty, words.count <= 30 else { return false }
         if !nouns.isEmpty {
-            let heads = nouns.compactMap { $0.lowercased().split(separator: " ").last.map(String.init) }
-            guard heads.contains(where: { h in words.contains { $0 == h || $0.hasPrefix(h) || h.hasPrefix($0) && $0.count >= 4 } })
-            else { return false }
+            // Accept the noun or any synonym the vocabulary merged into it ("road" for "the street",
+            // "car" for "cars", "crossing" for "a crosswalk"), compared on a simple stem. Exact stem
+            // equality only: prefix matching let "businesses" count as "bus" (Muse, final review).
+            let terms = Set(nouns.flatMap(synonyms(of:)).map(stem))
+            guard words.contains(where: { terms.contains(stem($0)) }) else { return false }
         }
-        let numbers = words.filter { $0.allSatisfy(\.isNumber) }
-        let factNumbers = Set(facts.split(whereSeparator: { !$0.isNumber }).map(String.init))
-        return numbers.allSatisfy { factNumbers.contains(String($0)) }
+        // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
+        // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
+        return numbers(in: sentence).isSubset(of: numbers(in: facts))
+    }
+
+    /// Lower-case word and digit tokens ("1.5" → "1", "5").
+    static func tokens(_ s: String) -> [String] {
+        s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    }
+
+    /// Every number mentioned, as decimal strings, decimals kept whole ("1.4" stays "1.4", so an
+    /// invented "4" is not hidden inside it; Antigravity, final review): digits, number words
+    /// ("two" → "2"), "one and a half" → "1.5", a lone "half" → "0.5".
+    static func numbers(in text: String) -> Set<String> {
+        var out = Set<String>()
+        let lower = text.lowercased()
+        if let re = try? NSRegularExpression(pattern: #"\d+(\.\d+)?"#) {
+            let ns = lower as NSString
+            for m in re.matches(in: lower, range: NSRange(location: 0, length: ns.length)) {
+                out.insert(ns.substring(with: m.range))
+            }
+        }
+        let w = lower.split(whereSeparator: { !$0.isLetter }).map(String.init)
+        for (i, t) in w.enumerated() {
+            if t == "half" {
+                if i < 3 || w[i - 1] != "a" || w[i - 2] != "and" { out.insert("0.5") }
+                continue
+            }
+            guard let d = numberWords[t] else { continue }
+            let andAHalf = i + 3 < w.count && w[i + 1] == "and" && w[i + 2] == "a" && w[i + 3] == "half"
+            out.insert(andAHalf ? d + ".5" : d)
+        }
+        return out
+    }
+
+    /// Number words the model or `SpokenDistance` might use, as digits.
+    static let numberWords: [String: String] = [
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+        "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
+        "fifteen": "15", "twenty": "20", "thirty": "30",
+    ]
+
+    /// The noun's own words (minus articles) plus every Vision identifier merged into it, split on
+    /// "_" ("zebra_crossing" → "zebra", "crossing").
+    static func synonyms(of noun: String) -> [String] {
+        let own = tokens(noun).filter { !["a", "an", "the"].contains($0) }
+        let ids = groups.first { $0.noun == noun }?.ids.flatMap { $0.split(separator: "_").map(String.init) } ?? []
+        return own + ids
+    }
+
+    /// A tiny English stem: "cars" → "car", "bushes" → "bush", "benches" → "bench", "glass" stays.
+    static func stem(_ w: String) -> String {
+        if w.hasSuffix("es"), w.count > 4, ["s", "sh", "ch", "x"].contains(where: { w.dropLast(2).hasSuffix($0) }) {
+            return String(w.dropLast(2))
+        }
+        if w.hasSuffix("s"), !w.hasSuffix("ss"), w.count > 3 { return String(w.dropLast()) }
+        return w
+    }
+
+    /// Recognized text worth showing the language model: at least one run of 3+ letters, and
+    /// letters make up most of it. On the Street View frames Vision "read" junk like "11", "J.I",
+    /// "£xJ" off road markings, and the model turned "11" into "11 meters to the edge".
+    public static func readableTexts(_ texts: [String]) -> [String] {
+        texts.filter { t in
+            let chars = t.filter { !$0.isWhitespace }
+            guard !chars.isEmpty else { return false }
+            let letters = chars.filter(\.isLetter).count
+            var run = 0, best = 0
+            for c in t { run = c.isLetter ? run + 1 : 0; best = max(best, run) }
+            return best >= 3 && Double(letters) / Double(chars.count) >= 0.6
+        }
     }
 
     /// The template sentence's scene part: "Ahead: a crosswalk, the street and cars." or nil.

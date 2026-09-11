@@ -6,6 +6,15 @@ the 28.75 mm non-metal stick, near the grip, with the LiDAR and rear camera faci
 Apple Watch) is off the shelf. This folder replaces the old `cad/` drafts for the phone mount;
 those drafts assumed a 12.7 mm cane and an ESP32 grip.
 
+**Sagar owns this folder.** Everything here is a starting point drafted on the software side from
+Apple's dimensional drawings and a pitch model. Change the concept, the CAD tool, the geometry and
+the print plan with your own ideas and experience. The app needs only four things from any mount:
+the phone upright with the rear camera and LiDAR clear and facing forward; the camera 3–8° below
+the horizon with the cane held normally (the Mount card shows it live); a firm enough grip that the
+phone's buzz is felt in the handle, with nothing magnetic near the phone's bottom edge (compass);
+and the shaft out of the camera's view. The full team context is in
+[`docs/TEAM_HANDOFF.md`](../docs/TEAM_HANDOFF.md).
+
 **Status (2026-09-11):** designed, not yet rendered or printed. Nobody has opened the SCAD files
 in OpenSCAD yet. Step 1 below comes first.
 

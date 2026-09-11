@@ -81,7 +81,7 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] CourseSmoother veer (15 m); corner-fence reset; reset after each veer cue
 - [x] Muse full-app review fixes (H1–H3, M1–M8, L2/L5/L6)
 - [x] Round-4 and round-5 adversarial reviews (28 + 22 findings) fixed; nav harness 0 false veers / 72 walks
-- [x] Logic tests (124 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
+- [x] Logic tests (128 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
 - [x] Street View mock of ISR → CIF: FrameReplay, `make uitest-streetview`, `make e2e SCENARIO=streetview`, vision_probe
 - [x] graphify knowledge graph (`graphify-out/`, `graphify query`)
 - [x] docs/stress_test_plan.md, docs/README.md, hardware/mount (phone-to-cane mount for Sagar)
@@ -95,6 +95,10 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no X
 - [x] `SceneVocabulary`: plain pedestrian nouns instead of Vision taxonomy words (5 tests)
 - [x] `sign_probe.swift`: measured sign range; text floor 1/128 (7.5 cm letters ≈ 7 m); STOP dropped, PUSH BUTTON added
 - [x] "CaneKit ready." no longer spoken after "Camera access is off"
+- [x] On-device model gate (`isFaithful`: names a detected thing, no invented numbers), OCR-junk filter, new prompt
+- [x] One-word sign phrases must be close (`shortPhraseMinHeight` 1/80); people / ice / plants in the vocabulary
+- [x] Engineering bar written into AGENTS.md + CLAUDE.md; hardware/ handed to Sagar
+- [x] Commit b1c35bd pushed (Steps 11–12); follow-up commit with the model-gate fixes
 - [x] docs/TEAM_HANDOFF.md + README / docs index / iOS README refreshed; Muse + Antigravity docs review folded in
 - **test on device:** see CHANGELOG Step 12
 

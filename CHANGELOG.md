@@ -35,7 +35,11 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   hazards detected. Distance: 0 meters." **Fix:** a new prompt (name what is there; numbers only from
   the facts; never "no hazards") and `SceneVocabulary.isFaithful`: the model's sentence is spoken only
   if it names something detected and invents no numbers, else the template speaks (test
-  `modelSentencesMustBeFaithfulToTheFacts`).
+  `modelSentencesMustBeFaithfulToTheFacts`). The unguarded Street View e2e showed the model said "No
+  hazards detected. Distance: zero meters." at 7 of 10 corners and turned OCR junk ("11", "J.I" off
+  road markings) into "11 meters to the edge". Now spelled-out numbers are checked too and only
+  word-like text (`SceneVocabulary.readableTexts`) reaches the model; all four real bad sentences are
+  test fixtures (`streetViewModelNonsenseIsRejectedAndOCRJunkFiltered`).
 - **Found (Muse + Antigravity): people, ice and houseplants.** People were filtered out entirely (a busy
   sidewalk said "nothing"); ice and snow ranked below benches; an indoor "plant" became "bushes".
   Fixed with tests (`peopleIceAndPlantsAreSaidSensibly`). Diagnostics now record the frame that was
@@ -44,6 +48,14 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   the camera; the app warns loudly and still guides. The on-screen error now survives (it was cleared
   right after being set). Antigravity also edited files during a "read-only" review; its edits were
   audited one by one and reviews now run it on a copy of the repo.
+- **Final review of b1c35bd (Muse + Antigravity on a repo copy), all fixed with tests:** the model gate
+  now accepts synonyms and plurals ("road", "car", "crossing"), rejects prefix look-alikes
+  ("businesses" ≠ "bus"), and compares numbers with spelled facts and decimals kept whole ("two
+  meters" allows "2"; "1.4" does not license an invented "4"); far text lines are never joined (a
+  distant "ROAD" + a shop's "CLOSED" is not a sign) and missing text heights count as far; the "Where
+  am I" template uses sized text too; the camera-denied warning is spoken once, not twice in a row.
+  Tests `faithfulnessUnderstandsSynonymsAndSpelledNumbers`, `decimalsInTheFactsStayWhole`,
+  `farLinesAreNotJoinedIntoAPhantomSign`.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

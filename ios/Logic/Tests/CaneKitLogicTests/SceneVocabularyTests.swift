@@ -70,3 +70,40 @@ import Testing
     let withDepth = "Depth sensor: Obstacle ahead at 2 meters.\nCamera sees: a door"
     #expect(SceneVocabulary.isFaithful("A door ahead, 2 meters away.", facts: withDepth, nouns: ["a door"]))
 }
+
+/// Real Street View e2e output of Apple's on-device model (before the gate): every one must be
+/// rejected. OCR junk from the same run never reaches the model; real sign text does.
+@Test func streetViewModelNonsenseIsRejectedAndOCRJunkFiltered() {
+    let facts = "Camera sees: the street, cars"
+    let nouns = ["the street", "cars"]
+    for bad in ["No hazards detected. Distance: zero meters.",
+                "No hazards detected. Distance measured: zero meters.",
+                "11 meters to the edge, uneven surface ahead.",
+                "Hazard: text at 1 meter, text at 11 meters."] {
+        #expect(!SceneVocabulary.isFaithful(bad, facts: facts, nouns: nouns))
+    }
+    let junk = ["11", "111", "J.I", "JJ", "Ji", "Pr", "li", "{4J J", "{• J", "£xJ"]
+    #expect(SceneVocabulary.readableTexts(junk).isEmpty)
+    #expect(SceneVocabulary.readableTexts(["SIDEWALK CLOSED", "Green St", "EXIT"]) == ["SIDEWALK CLOSED", "Green St", "EXIT"])
+}
+
+/// Muse final review: spelled facts allow digits, synonyms count, prefixes do not.
+@Test func faithfulnessUnderstandsSynonymsAndSpelledNumbers() {
+    let facts = "Depth sensor: Obstacle ahead at two meters.\nCamera sees: the street, cars"
+    let nouns = ["the street", "cars"]
+    #expect(SceneVocabulary.isFaithful("Road ahead with a car, 2 meters away.", facts: facts, nouns: nouns))
+    #expect(!SceneVocabulary.isFaithful("Cars on the street, three meters ahead.", facts: facts, nouns: nouns))
+    #expect(!SceneVocabulary.isFaithful("Businesses line the block.", facts: "Camera sees: a bus", nouns: ["a bus"]))
+    #expect(SceneVocabulary.isFaithful("A crossing is just ahead.", facts: "Camera sees: a crosswalk", nouns: ["a crosswalk"]))
+    #expect(SceneVocabulary.isFaithful("Door ahead, one and a half meters.",
+                                       facts: "Obstacle ahead at one and a half meters. Camera sees: a door", nouns: ["a door"]))
+}
+
+/// Antigravity final review: "1.4" in the facts must not license an invented "4".
+@Test func decimalsInTheFactsStayWhole() {
+    let facts = "Depth sensor: Obstacle ahead at 1.4 meters.\nCamera sees: a door"
+    #expect(!SceneVocabulary.isFaithful("A door ahead, 4 meters away.", facts: facts, nouns: ["a door"]))
+    #expect(SceneVocabulary.isFaithful("A door ahead, 1.4 meters away.", facts: facts, nouns: ["a door"]))
+    #expect(SceneVocabulary.isFaithful("A door, 1.5 meters ahead.",
+                                       facts: "Obstacle ahead at one and a half meters. Camera sees: a door", nouns: ["a door"]))
+}

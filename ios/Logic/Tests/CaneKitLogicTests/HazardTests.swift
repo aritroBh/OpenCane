@@ -338,6 +338,18 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(nearExit == "Sign: exit.")
 }
 
+/// Far lines are never joined: a distant "ROAD" and a shop's "CLOSED" are not a ROAD CLOSED sign.
+@Test func farLinesAreNotJoinedIntoAPhantomSign() {
+    var p = SignPolicy()
+    let far: Float = 1.0 / 120
+    let phantom = p.line(for: [SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: far),
+                               SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: far)], now: 0)
+    #expect(phantom == nil)
+    let real = p.line(for: [SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: 1.0 / 30),
+                            SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: 1.0 / 30)], now: 1)
+    #expect(real == "Sign: road closed.")
+}
+
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.
 @Test func aPartialReadOfTheSameSignIsQuiet() {
     var p = SignPolicy()
