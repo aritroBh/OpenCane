@@ -55,12 +55,13 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     /// nil when no key is configured.
     /// Reads `ELEVENLABS_API_KEY` (required), `ELEVENLABS_VOICE_ID` (default
-    /// "21m00Tcm4TlvDq8ikWAM", a premade voice) and `ELEVENLABS_MODEL` (default
-    /// "eleven_flash_v2_5", the low-latency model). Empty values count as missing (`Secrets`).
+    /// "EXAVITQu4vr4xnSDxMaL", Bella — the voice Aritro chose for the demo) and
+    /// `ELEVENLABS_MODEL` (default "eleven_flash_v2_5", the low-latency model). Empty values
+    /// count as missing (`Secrets`), so the defaults here are what a fresh clone gets.
     static func fromSecrets() -> ElevenLabsVoice? {
         guard let key = Secrets.string("ELEVENLABS_API_KEY") else { return nil }
         return ElevenLabsVoice(apiKey: key,
-                               voiceID: Secrets.string("ELEVENLABS_VOICE_ID") ?? "21m00Tcm4TlvDq8ikWAM",
+                               voiceID: Secrets.string("ELEVENLABS_VOICE_ID") ?? "EXAVITQu4vr4xnSDxMaL",
                                model: Secrets.string("ELEVENLABS_MODEL") ?? "eleven_flash_v2_5")
     }
 
@@ -195,8 +196,13 @@ nonisolated struct ElevenLabsVoice: Sendable {
         let body: [String: Any] = [
             "text": text,
             "model_id": model,
-            // Calm, confident delivery; slight style for warmth.
-            "voice_settings": ["stability": 0.5, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": true],
+            // Exactly the two settings Aritro's reference payload for this voice and model sends.
+            // `style` and `use_speaker_boost` were here before and are now deliberately absent:
+            // `style` is a v2-only setting and `eleven_flash_v2_5` can reject the request with a
+            // 422 for it, which on the first run with a real key looks identical to a bad key.
+            // Two settings that are certain to be accepted beat four that might not be, for a
+            // voice whose only job is to be understood on a street corner.
+            "voice_settings": ["stability": 0.4, "similarity_boost": 0.75],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
