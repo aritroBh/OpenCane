@@ -106,25 +106,28 @@ Core ≈ $110. With fallbacks + headphones ≈ $200.
 
 ## 5. Software (Aritro): the phone is the product
 
-### 5.1 Architecture
+### 5.1 Architecture (phone-only, see §9; superseded the ESP32 diagram on Sep 10)
 
 ```
-iPhone 17 Pro Max
-  ├─ ARKit sceneDepth (LiDAR, 60 Hz, ~5 m) → 3 cols × 2 rows lanes (torso / head), 10th-pct depth per cell
-  ├─ ARKit meshWithClassification → door / wall / floor / seat / window raycast from screen center
-  ├─ Core Motion gyro → sweep gate (trust frame only when |ω| < 0.6 rad/s)
-  ├─ HapticLogic → hysteresis + rate limit → "H:<L|R|B>:<1-4>:<ms>"
-  ├─ CoreBluetooth central ──BLE UART──▶ ESP32-S3 "CANE" ──PWM──▶ L / R coin motors
-  ├─ AVSpeechSynthesizer → open-ear headphones
-  ├─ Gemini 2.5 Flash (one JPEG on tap / Action button / Camera Control) → "sidewalk, bike rack left, crosswalk ahead"
-  ├─ CLLocationUpdate.liveUpdates + waypoint geofences → turn / crossing cues
-  ├─ Head-tracked audio beacon (AirPods) or stereo pan → continuous bearing
-  └─ HealthKit steps → arrival card
+iPhone 17 Pro Max (clamped to the shaft)
+  ├─ ARKit sceneDepth + smoothedSceneDepth (LiDAR, ~5 m) → 3 cols × 2 rows lanes (torso / head), 10th-pct depth per cell, 15 Hz
+  ├─ ARKit meshWithClassification → door / wall / seat / window at screen center (indoors; sunlight kills it)
+  ├─ Core Motion gyro → sweep gate (frame trusted only when |ω| < 0.6 rad/s)
+  ├─ HapticLogic (hysteresis + rate limit) → Core Haptics on the phone's Taptic Engine → the cane shakes
+  │     center: tap rate ∝ 1/distance (2 m → 0.5 m) · left: 2 taps · right: 3 taps · head row: sharp double hit
+  ├─ SpeechQueue (AVSpeechSynthesizer, priority, interruptible) → AirPods
+  ├─ WatchConnectivity → Apple Watch: turn / crossing / arrived on the wrist; Crown + buttons = Next / Describe / Recenter;
+  │     mirrors obstacle cues if the phone haptic engine fails
+  ├─ CLLocationUpdate.liveUpdates + CLHeading + waypoint geofences (route_isr_cif.json, MapKit walking as fallback)
+  ├─ AVAudioEnvironmentNode beacon, head-tracked via CMHeadphoneMotionManager (AirPods Pro) or stereo pan from heading
+  ├─ "Where am I": Action button App Shortcut / Camera Control / watch → one JPEG → VLM (Muse, Anthropic, Gemini, OpenAI) → speech
+  └─ HealthKit steps + elapsed + distance → arrival card · Live Activity in the Dynamic Island · thermal watchdog
 ```
 
-Protocol both sides speak: `H:<L|R|B>:<1-4>:<ms>` (motor, intensity, duration), `P:<1-4>` (patterns: 1 double-pulse both, 2 left triple, 3 right triple, 4 long both = stop), `S:<0|1>` silence. ESP32 notifies `D:<mm>,B:<pct>` at 10 Hz.
-
-Starter code: `ios/` (SwiftUI: DepthEngine, HapticLogic, CaneBLE, SceneDescriber, README with Info.plist keys) and `firmware/` (NimBLE 2.x, motor PWM, parser, ToF fail-safe). Neither compiled. Expect 20–40 min of Xcode fixes, mostly Swift 6 isolation and `@Observable` on NSObject delegates.
+Code: `ios/` — see `ios/README.md` for the build workflow, the verified spec deviations (head-pose entitlement,
+watch side button, Camera Control) and the test strategy. Build log: `CHANGELOG.md`.
+The ESP32 protocol (`H:<L|R|B>:<1-4>:<ms>`, `P:<1-4>`, `S:<0|1>`, `D:<mm>,B:<pct>`) lives on in `firmware/` and
+`ios/stretch/CaneBLE.swift` for the stretch goal only.
 
 ### 5.2 iPhone 17 Pro Max exploits, ranked by payoff ÷ hours
 

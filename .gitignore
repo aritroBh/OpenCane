@@ -1,0 +1,24 @@
+# Xcode / Swift
+ios/CaneKit.xcodeproj/
+ios/build/
+ios/**/xcuserdata/
+ios/**/*.xcworkspace/xcuserdata/
+ios/Logic/.build/
+ios/Logic/.swiftpm/
+.build/
+DerivedData/
+*.xcuserstate
+*.mobileprovision
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Secrets (copy Secrets.example.plist → Secrets.plist and fill in keys)
+ios/CaneKit/Resources/Secrets.plist
+
+# macOS
+.DS_Store
+
+# PlatformIO / Arduino (stretch)
+firmware/**/.pio/
