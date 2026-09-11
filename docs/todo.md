@@ -83,9 +83,13 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [x] False "Hole ahead" indoors: ground hazards judged only with a mount-like tilt (0-15 deg) and a
       plausible ground height (0.5-1.3 m below the camera); drop-off and hole frames agree as one hazard
 - [x] Screen-lock warning once per route (no spam); Muse + Antigravity final-review fixes
+- [!] **ElevenLabs natural voice — waiting on Aritro.** Code is done and merged (cache, prefetch,
+      2.5 s timeout, circuit breaker, Apple-voice fallback). It is off only because
+      `ELEVENLABS_API_KEY` in `ios/CaneKit/Resources/Secrets.plist` is empty. See "ElevenLabs
+      setup" below.
 - [ ] Voice control: Siri App Shortcuts for start route, navigate to CIF, where am I, repeat, next, stop
 - [ ] "Navigate to CIF from here" (Apple Maps walking directions from the live GPS fix)
-- [ ] Live camera view at the camera's frame rate (GPU view instead of a 3 Hz JPEG)
+- [x] Live camera view at the camera's frame rate (GPU view instead of a 3 Hz JPEG), preview capped at 30 fps
 - [ ] Trip-log fix: cue / hazard records keep their record type (field name collision)
 - [ ] A/B: Apple's on-device model *with the image* (iOS 27), every object backed by Vision/LiDAR
 - [ ] Experiment branch: Gemma 4 E2B via Cactus, measured on the phone (latency, heat, made-up objects)
@@ -93,6 +97,29 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Muse + Antigravity + Claude workflow review of all of the above; fix or reject with evidence
 - [ ] Install on the phone, verify each item from the trip log, push
 - [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
+
+### ElevenLabs setup (2 minutes, Aritro only — nobody else can do this)
+
+The natural voice is already written, reviewed and merged (`ios/CaneKit/Speech/ElevenLabsVoice.swift`).
+It stays silent for one reason: no key. Every line is cached as an mp3 on disk keyed by
+voice + model + text, so a line the app has spoken once replays instantly and costs nothing; a miss
+waits at most 2.5 s and then falls back to the Apple voice, and after a failure the app stops trying
+for 60 s so a weak network can never stall a cue.
+
+1. Sign in at elevenlabs.io → click your avatar (bottom left) → **API Keys** → **Create API key**.
+   Copy it. The free tier's 10,000 characters a month is far more than the demo needs, because the
+   route lines are prefetched once and then cached.
+2. Pick the voice: **Voices** → play a few → on the voice you like, the **⋮** menu → **Copy voice ID**.
+   Skip this to use the default (`21m00Tcm4TlvDq8ikWAM`, a calm premade voice).
+3. Open `ios/CaneKit/Resources/Secrets.plist` (git-ignored, never committed) and paste:
+   - `ELEVENLABS_API_KEY` → the key from step 1
+   - `ELEVENLABS_VOICE_ID` → the ID from step 2, if you picked one
+   - `ELEVENLABS_MODEL` → leave as `eleven_flash_v2_5` (lowest latency of the ElevenLabs models)
+4. `cd ios && make build install launch`.
+5. Verify on the phone: tap **Speech test** on the Haptics card. The pill next to "Speaking" reads
+   **System** with no key and flips to **ElevenLabs** once a line has played through the new voice.
+   If it stays System, the key is wrong or the network is down — the app still speaks, just in
+   Apple's voice, so a bad key can never break the demo.
 
 ## Step 11 — Hazards the maps don't know, on-device vision, stress harness (pre-device)
 - [x] LiDAR ground hazards (GroundSampler + GroundHazardDetector), 4-tap cane haptic, off by default
