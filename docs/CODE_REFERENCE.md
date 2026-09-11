@@ -34,7 +34,7 @@ around them only own state, timing and effects. The module sections below have t
 
 ```mermaid
 flowchart LR
-  subgraph Depth["Obstacles (~15 Hz)"]
+  subgraph Depth["Obstacles (~30 Hz)"]
     AR["ARKit depth frame<br/>(60 Hz, LiDAR)"] --> DFP["DepthFrameProcessor<br/>(gyro gate, LaneMath, MeshClassifier)"]
     DFP --> LR["LaneReport"]
     LR --> CD["CueDecider<br/>(AppModel.handle)"]
@@ -175,7 +175,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 
 ---
 
-### `LaneReport.swift` — what the depth pipeline publishes (~15 Hz); value type so it can cross actors
+### `LaneReport.swift` — what the depth pipeline publishes (~30 Hz); value type so it can cross actors
 - **`enum ObstacleClass: Int, Sendable, Codable, CaseIterable`** — `none=0, wall, floor, ceiling, table, seat, window, door` — mirrors ARKit mesh classification raw values (order must stay in sync with `ARMeshClassification`). `spokenName: String?` → "wall"/"table"/"seat"/"window"/"door"; `nil` for `none/floor/ceiling` (never announced).
 - **`struct MeshHit: Sendable, Equatable`** — `classification: ObstacleClass`, `distance: Float` (m).
 - **`struct LaneReport: Sendable, Equatable`** — `grid: LaneGrid` (default `.empty`), `isTrusted: Bool` (default `true`; false while cane is sweeping, |ω| ≥ app threshold → cues freeze), `rotationRate: Float` (|rad/s|; logged as `omega` in the `lanes` trip-log record, not shown on screen), `timestamp: TimeInterval`, `depthAvailable: Bool` (default `false`; false until first depth frame / non-LiDAR), `centerHit: MeshHit?`, `groundHazard: GroundHazard?` (default `nil`; the latest *confirmed* LiDAR ground hazard from `GroundHazardDetector`, set by `DepthFrameProcessor` and re-attached to every report until the next trusted evaluation replaces it — see `Hazards.swift`). `cameraTiltDownDeg: Float?` (default `nil`; degrees the camera looks below the horizon, positive = down, a ~1 s EMA over trusted frames from `DepthFrameProcessor.trackTilt`; nil before the first trusted frame). `init(grid:isTrusted:rotationRate:timestamp:depthAvailable:centerHit:groundHazard:cameraTiltDownDeg:)`, all defaulted. Computed `head`/`torso` forward to `grid`.
@@ -185,6 +185,8 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - **`enum TileLevel: Sendable`** — `clear, far, near, urgent, noData`. `static func level(for distance: Float, hasData: Bool) -> TileLevel`: `!hasData → .noData`; non-finite → `.clear`; `< 0.7 → .urgent`; `< 1.2 → .near`; `< 2.0 → .far`; else `.clear`. Used by `LaneGridView` debug tiles. Pinned by `tileLevels`.
 
 ---
+
+- **`public struct PublishGate`** — `maxRate`, `shouldPublish(at:) -> Bool` with a 4 ms tolerance (a plain `≥ 1/maxRate` check ran a 15 Hz cap at exactly 10 Hz on 30 Hz frames on the real phone). Pinned by `publishGateHitsFifteenHertzFromThirtyHertzFrames` (30 and 60 Hz input → 15/s).
 
 ### `CueDecider.swift` — LaneReport → haptic cue with hysteresis and rate limiting (decides *what/when*; player is elsewhere)
 - **`enum HapticCue: Sendable, Equatable`** — `centerApproach(distance: Float)`, `left`, `right`, `head`; `kind: CueKind`.
@@ -447,7 +449,7 @@ Apple Vision's classifier returns a taxonomy, not speech: on the Street View fra
 
 ---
 
-### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 138 tests
+### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 144 tests
 **CueDeciderTests.swift** (14; helper `report(head:torso:trusted:)` builds a trusted, depth-available report)
 - `centerApproachFiresThenUpdatesDistance` — first centre frame → `.fire(.centerApproach)`, next → `.updateCenter`, `active == .center`.
 - `centerDistanceIsClampedToNearFloor` — 0.3 m reports as 0.5 m (`centerNear`).
@@ -530,7 +532,7 @@ Apple Vision's classifier returns a taxonomy, not speech: on the Street View fra
 - CI: `.github/workflows/ci.yml` (manual `workflow_dispatch` only for now) job `logic-tests` runs plain `swift test` in `ios/Logic` on Linux (`swift:6.2` container); the `sim-build` job (macOS, newest Xcode) is informational (`continue-on-error`). Tests must therefore also pass on Linux Foundation (e.g. `CourseSmootherTests` uses its own LCG rather than a seeded Foundation RNG).
 
 ### Cross-module contracts (who uses what)
-- `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~15 Hz.
+- `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~30 Hz.
 - `AppModel` (MainActor) owns `CueDecider`; feeds each `LaneReport` with `now`; routes `CueOutput` to `HapticPlayer` (which uses `GeigerRate.hertz`), mirrors `CueKind` to the watch via `PhoneToWatch.obstacle`, and asks `CueSpeechPolicy` which cues to speak (`cleared()` on `.stop`).
 - `AppModel` owns `StraightWalkDetector` (auto-recenter; gated on `nav.isSettling` / `nav.lastReached`) and sends `PhoneToWatch.status` on every fix and waypoint change (`distanceM` −1 = unknown; `PhoneWatchLink` drops a status with the same text and < 5 m change).
 - `NavigationEngine` (MainActor) owns `GeofenceTracker` + `OffCourseDetector` + `TurnSettle?` + `CourseSmoother`; adapts `CLLocation → GeoFix`; computes `bearingError` via `GeoMath`; veer muted while settling, on `Waypoint.curved` legs, and when `GeofenceTracker.isNearCurrent`; speaks `Waypoint.placeName` for passed-by and Repeat; publishes `targetBearing`/`bearingError` to `BeaconEngine` and `GuideCard`.
@@ -580,7 +582,7 @@ Three files: the `@main` entry, the `AppModel` that owns every engine and all se
 
 | Property | Type | Step | Notes |
 |---|---|---|---|
-| `depth` | `DepthEngine` | 2 | LiDAR lanes + gyro gate + ground hazards. `onReport` → `handle(_:)` (~15 Hz); `report.isTrusted`, `isRunning`, `apply(portrait:mirror:groundHazards:)`, `pause/resume`, `setMeshClassification(_:)`, `processor` (camera frames for the describer, scanner and live view). |
+| `depth` | `DepthEngine` | 2 | LiDAR lanes + gyro gate + ground hazards. `onReport` → `handle(_:)` (~30 Hz); `report.isTrusted`, `isRunning`, `apply(portrait:mirror:groundHazards:)`, `pause/resume`, `setMeshClassification(_:)`, `processor` (camera frames for the describer, scanner and live view). |
 | `haptics` | `HapticPlayer` | 3 | Taptic renderer. `silenced`, `isHealthy`, `play`, `setApproach(distance:)`, `stopAll`, `start/resume`, `playNav(_:)` (route buzzes on the cane), `playGroundHazard()` (4 heavy taps). |
 | `logger` | `TripLogger` | — | JSONL trip log. `enabled`, `start`, `event`, `lanes`, `flush`. |
 | `speech` | `SpeechQueue` | 4 | Single voice. `say(_:_:ttl:)` (default ttl 8), `sayAgain(_:_:ttl:)` (default ttl 12; bypasses coalescing so a line still playing is re-spoken), `prefetch`, `stopAll`, `isSpeaking`, `configureAudioSession`. |
@@ -668,7 +670,7 @@ Each is a stored `var` initialised from `Settings.bool(key, default:)`; `didSet`
   - `.background`: `isForeground = false`, `hazards.stop()` (no scanning a frozen last frame), **`sceneContext.set("")`** (LiDAR facts are stale once we come back), `depth.pause()` (stops gyro and drops the retained camera frame), `haptics.stopAll()`, `decider.reset()`, `namer.reset()`, `activeCue = .clear`, `logger.flush()`.
 - **`startTicker()` / `stopTicker()`** — private; a `Task` at 10 Hz while a route is active pushing `speech.isSpeaking` → `beacon.setSpeaking`, `recenterPending ? 0 : (head.headYawDeg ?? 0)` → `beacon.setHeadYaw`, `nav.isNavigating ? nav.targetBearing : nil` → `beacon.setTarget(bearing:)`, and **`nav.tick(now: Date().timeIntervalSinceReferenceDate)`** (clock-driven nav checks — the arrival hint while standing still, when no fixes arrive). Idempotent (`guard ticker == nil`). Head yaw is forced to 0 while a recenter is pending: after a turn the AirPods yaw (relative to the old reference) already contains the body turn the phone heading has, so adding both would double-count it.
 
-#### Cue router — `handle(_ report: LaneReport)` (private, ~15 Hz, called from `depth.onReport`)
+#### Cue router — `handle(_ report: LaneReport)` (private, ~30 Hz, called from `depth.onReport`)
 
 1. `decider.update(report, now: report.timestamp)` (AR clock, seconds) →
    - `.fire(cue)`: `activeCue = cue.kind`; `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)`; `speakCueIfNeeded(cue, phoneCannotBuzz:, now:)`; log `cue` (`kind`, `ar_t`, plus `distance` for `.centerApproach`).
@@ -776,7 +778,7 @@ Phrases: `"Where am I in <app>"`, `"<app> describe the scene"` (`eye`); `"Start 
 
 ## Module `depth-haptics` — `ios/CaneKit/Depth/*.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift`
 
-Pipeline: ARKit frame (60 Hz, `canekit.depth` queue) → `DepthFrameProcessor` (rate-capped to 15 Hz, gyro gate, `LaneMath.computeLanes`, throttled `MeshClassifier` lookup, and — when enabled — walk tracking + `GroundSampler` → `GroundHazardDetector` on frames under the ground path's own 1.5 rad/s gyro gate) → `AsyncStream<LaneReport>` (newest-only) → `DepthEngine` (main actor, `@Observable`) → `onReport` → `AppModel.handle(_:)` → `CueDecider` → `HapticPlayer.play/setApproach/stopAll` (plus the watch mirror, `CueSpeechPolicy` speech, `ObstacleNamer` and the ground-hazard path `GroundHazardPolicy` → `groundHazardFound` → `HapticPlayer.playGroundHazard`, all in `AppModel`). Pure logic (`LaneMath`, `LaneConfig`, `LaneGrid`, `LaneReport`, `MeshHit`, `ObstacleClass`, `HapticCue`, `CueKind`, `GeigerRate`, `GroundSample`, `GroundHazardDetector`) lives in `CaneKitLogic`; this module only wraps ARKit / CoreMotion / CoreHaptics around it. `FrameReplay` (simulator only) substitutes Street View JPEGs for the camera image.
+Pipeline: ARKit frame (60 Hz, `canekit.depth` queue) → `DepthFrameProcessor` (rate-capped to 30 Hz by `PublishGate`, gyro gate, `LaneMath.computeLanes`, throttled `MeshClassifier` lookup, and — when enabled — walk tracking + `GroundSampler` → `GroundHazardDetector` on frames under the ground path's own 1.5 rad/s gyro gate) → `AsyncStream<LaneReport>` (newest-only) → `DepthEngine` (main actor, `@Observable`) → `onReport` → `AppModel.handle(_:)` → `CueDecider` → `HapticPlayer.play/setApproach/stopAll` (plus the watch mirror, `CueSpeechPolicy` speech, `ObstacleNamer` and the ground-hazard path `GroundHazardPolicy` → `groundHazardFound` → `HapticPlayer.playGroundHazard`, all in `AppModel`). Pure logic (`LaneMath`, `LaneConfig`, `LaneGrid`, `LaneReport`, `MeshHit`, `ObstacleClass`, `HapticCue`, `CueKind`, `GeigerRate`, `GroundSample`, `GroundHazardDetector`) lives in `CaneKitLogic`; this module only wraps ARKit / CoreMotion / CoreHaptics around it. `FrameReplay` (simulator only) substitutes Street View JPEGs for the camera image.
 
 ### `ios/CaneKit/Depth/DepthFrameProcessor.swift`
 
@@ -788,7 +790,8 @@ Purpose: the only hot path off the main actor. Converts each `ARFrame` into a Se
 |---|---|---|
 | `lane` | `LaneConfig()` | see LaneConfig table below |
 | `sweepThreshold` | `0.6` | rad/s; \|gyro\| ≥ this → frame `isTrusted == false` (cane mid-sweep) |
-| `maxRate` | `15` | Hz publish cap (ARKit delivers 60) |
+| `maxRate` | `30` | Hz publish cap via `PublishGate` (CaneKitLogic, tolerance 4 ms; a plain `≥ 1/15` check ran at exactly 10 Hz on 30 Hz frames on the real iPhone). CueDecider is timed in seconds, so 30 Hz needs no logic change. Measured on the iPhone 17 Pro Max: 30 reports/s, thermal nominal |
+| `meshEveryNthFrame` (at 30 Hz) | `8` | ≈ 4 Hz mesh lookups (unchanged cost) |
 | `meshLookupEnabled` | `true` | run `MeshClassifier` at image centre (~10–15 % CPU) |
 | `meshEveryNthFrame` | `4` | mesh lookup on every 4th *published* frame ≈ 4 Hz |
 | `groundHazardsEnabled` | `true` (struct default) — but `AppModel.pushDepthSettings()` writes `AppModel.groundHazardsEnabled`, which defaults **false**, from `init` | walk tracking + ground-hazard evaluation; false → `lastGroundHazard = nil` and `groundDetector.reset()` every frame |
@@ -818,7 +821,7 @@ Lane grid: usable height = `sceneH × 0.75`, split into 2 equal bands (band 0 = 
 - `private var rotationRate: Float` — `√(x²+y²+z²)` of `gyroData.rotationRate`, 0 when no data.
 - `session(_:didUpdate:)` (on `queue`):
   1. Retains `frame.capturedImage` in `latestImage` under `imageLock` — **one buffer only**; ARKit's pool stalls if more are held.
-  2. Rate gate: returns unless `frame.timestamp - lastPublished ≥ 1/maxRate`; increments `publishedCount`.
+  2. Rate gate: `publishGate.shouldPublish(at: frame.timestamp)` (CaneKitLogic `PublishGate`, `maxRate` from settings); increments `publishedCount`.
   3. `trusted = rotationRate < sweepThreshold`; if trusted → `trackTilt(frame)`.
   4. `computeGrid` nil → yields `LaneReport(grid: .empty, isTrusted:, rotationRate:, timestamp:, depthAvailable: false, centerHit: nil, cameraTiltDownDeg: tiltDownDeg)`.
   5. Mesh: if `meshLookupEnabled && publishedCount % max(1, meshEveryNthFrame) == 0` → `lastMeshHit = MeshClassifier.nearestFace(to: grid.centerDepth, in: frame)`; if lookup disabled → `lastMeshHit = nil`; otherwise the previous hit is **reused** (stale by up to 3 frames by design).
@@ -834,7 +837,7 @@ Lane grid: usable height = `sceneH × 0.75`, split into 2 equal bands (band 0 = 
 - `var hasCameraFrame: Bool` — `true` when `FrameReplay.shared.isActive`, else `latestImage != nil` — i.e. a frame retained since the session last (re)started; **false again after `dropLatestImage()`** (SceneDescriber's "camera warming up" guard polls this up to 30 × 100 ms).
 
 ⚠ Do not change `rotateForPortrait` mapping, band/lane split, `groundSkipFraction`, `percentile`, `minConfidence`, `minSamplesPerCell` or the 0.05 m validity floor without re-running `LaneMathTests` (`uniformWallReadsSameEverywhere`, `leftWallOnlyHitsLeftLanes`, `mirrorSwapsLeftAndRight`, `headRowIsTopBand`, `groundBandIsSkipped`, `lowConfidencePixelsAreIgnored`, `tenthPercentileNeedsMoreThanTenPercentOfCell`, `zeroAndNaNDepthsAreInvalid`, `landscapeModeUsesBufferAsScene`, `rawEntrypointHonoursPaddedRowStrides`).
-⚠ Do not change `sweepThreshold` (0.6 rad/s), `maxRate` (15 Hz) or `meshEveryNthFrame` without a device walk test on the cane: `CueDecider` timing constants (`minChangeInterval` 0.4 s, `repeatInterval` 1 s) assume ~15 Hz, and the untrusted-frame freeze (`untrustedFramesFreezeState`) assumes sweeps exceed 0.6 rad/s.
+⚠ Do not change `sweepThreshold` (0.6 rad/s), `maxRate` (30 Hz, measured on the phone) or `meshEveryNthFrame` without a device walk test on the cane: `CueDecider` timing constants (`minChangeInterval` 0.4 s, `repeatInterval` 1 s) assume ~15 Hz, and the untrusted-frame freeze (`untrustedFramesFreezeState`) assumes sweeps exceed 0.6 rad/s.
 ⚠ Never retain more than one `CVPixelBuffer` from ARKit, and never let `ARFrame`/`ARMeshAnchor` escape the delegate callback.
 ⚠ Do not tie the ground path back to the lanes' 0.6 rad/s gate (or remove its own 1.5 rad/s gate), drop `trackWalk`'s `|step| < 1` guard, or pass the camera forward instead of `walkDirection` without re-running `HazardTests` (`sweepFramesDoNotConfirm`, `aCurbYouWalkTowardStillConfirms`, `staleEvaluationsExpire`) and a sweeping-cane device walk toward a real curb.
 
@@ -872,7 +875,7 @@ Purpose: main-actor owner of the `ARSession`; configures LiDAR depth + mesh clas
 
 **`@MainActor @Observable final class DepthEngine`**
 
-Published (all `private(set)`): `report: LaneReport` (~15 Hz), `status: String` (header text via `AppModel.status`: "Depth idle" / "Waiting for depth…" / "Depth OK" / "Depth paused" / "Depth resuming…" / "AR error: …" / "AR interrupted" / "AR resumed" / "Mesh classification on" / "Mesh classification off (thermal)" / "No LiDAR / sceneDepth on this device"), `fps: Double` (rolling over a 2 s window of report timestamps), `framesProcessed: Int`, `isRunning: Bool`, `meshEnabled: Bool` (default `true`), `tracking: String` ("normal", "limited (motion)", "limited (features)", "initializing", "relocalizing", "not available", "limited", "—"). `ContentView` feeds `report` to `LaneGridView` and shows `status`; `fps`, `framesProcessed`, `tracking` and `meshEnabled` currently have no on-screen reader.
+Published (all `private(set)`): `report: LaneReport` (~30 Hz), `status: String` (header text via `AppModel.status`: "Depth idle" / "Waiting for depth…" / "Depth OK" / "Depth paused" / "Depth resuming…" / "AR error: …" / "AR interrupted" / "AR resumed" / "Mesh classification on" / "Mesh classification off (thermal)" / "No LiDAR / sceneDepth on this device"), `fps: Double` (rolling over a 2 s window of report timestamps), `framesProcessed: Int`, `isRunning: Bool`, `meshEnabled: Bool` (default `true`), `tracking: String` ("normal", "limited (motion)", "limited (features)", "initializing", "relocalizing", "not available", "limited", "—"). `ContentView` feeds `report` to `LaneGridView` and shows `status`; `fps`, `framesProcessed`, `tracking` and `meshEnabled` currently have no on-screen reader.
 
 - `@ObservationIgnored var onReport: ((LaneReport) -> Void)?` — invoked on the main actor for every report; `AppModel.start()` sets it to `handle(report)` (the cue router).
 - `static let supportsDepth` = `ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)`; `static let supportsMesh` = `supportsSceneReconstruction(.meshWithClassification)`. Read by `AppModel.lidarSupported` / `meshClassificationSupported`.
@@ -960,7 +963,7 @@ Geiger loop (`startApproachLoopIfNeeded` / `fireTap`): one `Task` on the main ac
 - `buildPlayers()` now builds the four obstacle players plus `groundPlayer` and the four `navPlayers`; a media-server reset rebuilds all of them.
 - `test(_ kind: CueKind)` — debug buttons (HapticsCard) bypass the decider; `.center` plays `centerApproach(distance: 1.0)` (4 Hz) and auto-stops after 2 s; `.clear` → `stopAll()`. (There is no test button for the nav buzzes or the ground pattern.)
 
-Cross-module contract (`AppModel.handle(_:)`, ~15 Hz): `.fire(cue)` → `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)` (the link drops the same kind within 1 s); then `speakCueIfNeeded` → `CueSpeechPolicy.line(for:phoneCannotBuzz:now:)` ("Head height." once per episode at `.safety`, ≥ 4 s between episodes; "Left." / "Right." / "Ahead, <distance>." only when `phoneCannotBuzz`, per kind ≥ 4 s, at `.obstacle`; spoken with ttl 6 s). `.updateCenter(d)` → `setApproach`; `.stop` → `stopAll` + `cueSpeech.cleared()` (next head cue is a new episode). `cueSpeech` is reset at route start. `AppModel.hapticsSilenced` (UserDefaults) mirrors into `haptics.silenced`. `announceChannels()` at route start says "Haptics unavailable. Obstacle cues will be spoken." when `!haptics.isHealthy && !watch.isReachable`. Outside the cue router: `nav.onNavCue` → `playNav(cue)` (every cue but `.obstacle`), and `AppModel.groundHazardFound` → `playGroundHazard()` (with the same `phoneCannotBuzz || fallbackToWatch` wrist mirror, sent as `.obstacle(.center)`).
+Cross-module contract (`AppModel.handle(_:)`, ~30 Hz): `.fire(cue)` → `haptics.play(cue)`; `phoneCannotBuzz = !haptics.isHealthy || haptics.silenced`; if `phoneCannotBuzz || fallbackToWatch` → `watch.send(obstacle: cue.kind, now:)` (the link drops the same kind within 1 s); then `speakCueIfNeeded` → `CueSpeechPolicy.line(for:phoneCannotBuzz:now:)` ("Head height." once per episode at `.safety`, ≥ 4 s between episodes; "Left." / "Right." / "Ahead, <distance>." only when `phoneCannotBuzz`, per kind ≥ 4 s, at `.obstacle`; spoken with ttl 6 s). `.updateCenter(d)` → `setApproach`; `.stop` → `stopAll` + `cueSpeech.cleared()` (next head cue is a new episode). `cueSpeech` is reset at route start. `AppModel.hapticsSilenced` (UserDefaults) mirrors into `haptics.silenced`. `announceChannels()` at route start says "Haptics unavailable. Obstacle cues will be spoken." when `!haptics.isHealthy && !watch.isReachable`. Outside the cue router: `nav.onNavCue` → `playNav(cue)` (every cue but `.obstacle`), and `AppModel.groundHazardFound` → `playGroundHazard()` (with the same `phoneCannotBuzz || fallbackToWatch` wrist mirror, sent as `.obstacle(.center)`).
 
 ⚠ Do not change the Geiger rate curve (`GeigerRate.hertz`) without re-running `CueDeciderTests.geigerRateScalesWithInverseDistance`; do not change tap counts/gaps (2×120 ms left, 3×100 ms right, 2×80 ms head, 4×70 ms ground) or the route buzzes (1 / 2 / 3 long, long-short-long, continuous and dull) without a device test on the cane and updating docs/design.md §5 and AGENTS.md ("Route cues are felt on the cane as long soft buzzes") — the user distinguishes left/right by tap count and route from obstacle by texture, and the watch mirror uses the same `CueKind` / `NavCue` vocabulary.
 ⚠ Do not change what counts as `phoneCannotBuzz` (engine down or silenced) without re-running `NavSupportTests` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`) — it decides both the wrist mirror and whether side cues are spoken.
@@ -973,7 +976,7 @@ Cross-module contract (`AppModel.handle(_:)`, ~15 Hz): `.fire(cue)` → `haptics
 Owner of everything the user *hears* that is not a haptic: the single speech queue and its two TTS backends, the headphone-route monitor, the spatial-audio beacon and the AirPods head-yaw it needs, the "Where am I" camera→VLM→speech path plus the key plumbing behind it, and (Step 11) the camera hazard scanner and the on-device vision stack that works with no key and no network. Everything in this module is instantiated once by `AppModel` (`ios/CaneKit/App/AppModel.swift`); nothing here talks to ARKit, haptics or the watch directly (the scanner only reads `DepthFrameProcessor.jpegSnapshot`). The pure rules that decide *what* reaches this module (`CueSpeechPolicy`, `StraightWalkDetector`, `TurnSettle`) live in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`; the sign / hazard-reply rules (`SignPolicy`, `HazardWatchPolicy`, `HazardPrompt`) in `Hazards.swift`.
 
 Verification handles used below:
-- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (Swift Testing, 138 tests). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`), `HazardTests.swift` (sign phrases, hazard-watch replies) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker`, `ObstacleNamer`, `HazardScanner` or `OnDeviceVision` is unit-tested — they are device-only (or simulator-only via FrameReplay).
+- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (Swift Testing, 144 tests). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`), `HazardTests.swift` (sign phrases, hazard-watch replies) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker`, `ObstacleNamer`, `HazardScanner` or `OnDeviceVision` is unit-tested — they are device-only (or simulator-only via FrameReplay).
 - **UI tests** (`make uitest` → `sim-grant` first, simulator; `CANEKIT_UITEST=1` also mutes speech via `SpeechQueue.muted`): `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (no camera in the simulator → "No camera frame" or a "Scene:" answer, button back); `testWhereAmIDescribesAStreetViewFrame` (`make uitest-streetview`: on-device describer over a Street View frame); `testGuideStartsAndStopsDemoRoute` (Repeat exists, does not advance the route, disappears after Stop — the `sayAgain` path, audio not asserted).
 - **`make e2e`** (`ios/scripts/e2e.py`, launched with `CANEKIT_MUTE=1`) asserts on what `SpeechQueue` was asked to say, via the trip log.
 - **`swift ios/scripts/vision_probe.swift ios/scripts/streetview`** runs the same Vision requests, sign phrases and hazard map as `OnDeviceVision` on the Mac.
@@ -1303,7 +1306,7 @@ Purpose: spike — Camera Control button (iPhone 16+) and volume buttons via `AV
 
 ## Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity
 
-Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController,HazardLog}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`, `CourseSmoother`, `HazardRecord`/`HazardGeoJSON`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport,CourseSmoother,Hazards}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests,CourseSmootherTests,HazardTests}.swift` (138 logic tests in total; `make test` / `ios/scripts/test.sh`; `logic-tests` job in `.github/workflows/ci.yml`, manual for now). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
+Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController,HazardLog}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`, `CourseSmoother`, `HazardRecord`/`HazardGeoJSON`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport,CourseSmoother,Hazards}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests,CourseSmootherTests,HazardTests}.swift` (144 logic tests in total; `make test` / `ios/scripts/test.sh`; `logic-tests` job in `.github/workflows/ci.yml`, manual for now). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
 
 ### Data flow (who calls whom)
 
@@ -2077,7 +2080,7 @@ Purpose: the 3×2 depth grid (Head / Torso × Left / Center / Right) with the TR
   - `text`: `"—"` if `!hasData`; `"clear"` if non-finite or `≥ 4.5` m; else `"%.1f m"`. **4.5 m is the "clear" display cutoff** (visual + spoken), distinct from the 2.0 m colour threshold.
   - `levelWord`: urgent→"STOP", near→"NEAR", far→"FAR", clear→"CLEAR", noData→"NO DATA".
   - `fill`: urgent→`laneUrgent`, near→`laneNear`, far→`laneFar`, clear→`laneClear`, noData→`laneNoData`.
-- Invariant (design.md §4): no animation, no colour cross-fade on tiles; the grid re-renders at the depth engine's 15 Hz with instant changes.
+- Invariant (design.md §4): no animation, no colour cross-fade on tiles; the grid re-renders at the depth engine's 30 Hz with instant changes.
 
 ---
 
@@ -2228,7 +2231,7 @@ Regenerate with `scripts/gen.sh`; `CaneKit.xcodeproj` is git-ignored and never h
 
 ### ios/scripts/test.sh
 
-Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (138 tests: CueDecider 14, GeoMath 20, NavSupport 19, LaneMath 12, Route 4, VLMCodec 8, WatchMessage 3, Hazard 25, CourseSmoother 3). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
+Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (144 tests: CueDecider 14, GeoMath 20, NavSupport 19, LaneMath 12, Route 4, VLMCodec 8, WatchMessage 3, Hazard 25, CourseSmoother 3). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
 
 ### ios/Makefile (run from `ios/`)
 

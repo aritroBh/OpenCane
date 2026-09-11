@@ -5,7 +5,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## State of things
 
-- The app is done and tested on the Mac and simulator: 138 logic tests, UI tests, and replays of
+- The app is done and tested on the Mac and simulator: 144 logic tests, UI tests, and replays of
   the ISR → CIF route, including missed turns, noisy GPS and wrong turns.
 - **Nothing has run on the real phone yet.** That is tonight's job;
   [`stress_test_plan.md`](stress_test_plan.md) has the checklist and the schedule.

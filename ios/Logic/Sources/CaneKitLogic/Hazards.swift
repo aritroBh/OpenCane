@@ -150,7 +150,15 @@ public struct GroundHazardDetector: Sendable {
             func edge(adjacentJump: Float) -> Float {
                 i >= 1 && abs(adjacentJump) < c.edgeJump ? bins[i - 1].start : bin.start
             }
-            if delta <= -c.dropThreshold, bin.height - max(p1, p2) <= -c.edgeJump {
+            // Missing bins before this one (shiny patch, puddle, occlusion): a ramp keeps sloping
+            // across the gap, so the edge must beat the slope a 10 % ramp covers over it
+            // (Antigravity final review: sparse returns made a ramp read as a drop-off).
+            let prevEnd = i >= 1 ? bins[i - 1].start + c.binSize : c.nearMax
+            let slack = 0.10 * max(0, bin.start - prevEnd)
+            if delta <= -c.dropThreshold, bin.height - max(p1, p2) <= -(c.edgeJump + slack) {
+                // Last bin: nothing beyond it yet, so drop-off vs hole is a guess; a wrong guess
+                // broke the 3-frame confirmation once it turned into a hole (Antigravity).
+                guard !later.isEmpty else { return nil }
                 // Comes back up within the scan → a hole; stays down → a drop-off.
                 let recovers = later.contains { $0 > -c.dropThreshold / 2 }
                 // A deep drop hides the ground just past its edge (occlusion shadow): the first
@@ -164,7 +172,7 @@ public struct GroundHazardDetector: Sendable {
             }
             // A tall surface filling part of a bin (wall, pole) must not read as a step: the
             // bin's upper returns must also stay under maxRise, not just its median.
-            if delta >= c.riseThreshold, delta <= c.maxRise, bin.height - min(p1, p2) >= c.edgeJump,
+            if delta >= c.riseThreshold, delta <= c.maxRise, bin.height - min(p1, p2) >= c.edgeJump + slack,
                Self.upperQuartile(corridor, from: bin.start, to: bin.start + c.binSize) - ground <= c.maxRise {
                 // Last bin: nothing beyond it yet, so step-up vs low obstacle is a guess — wait for
                 // a closer frame instead of saying one kind now and the other next second.
@@ -336,26 +344,27 @@ public struct SignPolicy: Sendable, Equatable {
         let usable = seen.filter { $0.confidence >= minConfidence }
         // Vision returns one observation per printed line, and real signs stack their words
         // ("SIDEWALK" over "CLOSED"): also match all lines joined in reading order.
-        // Only *close* lines are joined: joining far lines let an unrelated distant "ROAD" and a
-        // shop's "CLOSED" read as "ROAD CLOSED" (Muse, final review). A far multi-word phrase must
-        // sit in one observation.
-        func lines(minHeight: Float) -> [String] {
-            usable.filter { $0.height >= minHeight }.map { Self.normalize($0.text) }
-        }
-        let closeLines = lines(minHeight: shortPhraseMinHeight)
-        let close = closeLines.map { " \($0) " } + [" " + closeLines.joined(separator: " ") + " "]
-        // Far lines stacked on one sign (geometry says so) are joined top to bottom.
-        let far = usable.filter { $0.height < shortPhraseMinHeight && $0.box != nil }
-            .sorted { ($0.box?.minY ?? 0) > ($1.box?.minY ?? 0) }
-        var stackedJoins: [String] = []
-        for (i, upper) in far.enumerated() {
+        // Joining lines: with a position (real Vision text) only lines stacked on one sign are
+        // joined, at any size, so "SIDEWALK" (close) over "CLOSED" (just far) still reads, while a
+        // stencilled "ROAD" and a shop's "CLOSED" never make "ROAD CLOSED" (Muse + Antigravity
+        // final reviews). Without a position (test fixtures) close lines are joined as before.
+        let minClose = shortPhraseMinHeight
+        let isClose = { (t: SeenText) in t.height >= minClose }
+        let unboxedClose = usable.filter { $0.box == nil && isClose($0) }.map { Self.normalize($0.text) }
+        let boxed = usable.filter { $0.box != nil }.sorted { ($0.box?.minY ?? 0) > ($1.box?.minY ?? 0) }
+        var chains: [[SeenText]] = []
+        for (i, upper) in boxed.enumerated() {
             var chain = [upper]
-            for lower in far[(i + 1)...] where Self.stacked(chain[chain.count - 1], over: lower) { chain.append(lower) }
-            if chain.count > 1 {
-                stackedJoins.append(" " + chain.map { Self.normalize($0.text) }.joined(separator: " ") + " ")
-            }
+            for lower in boxed[(i + 1)...] where Self.stacked(chain[chain.count - 1], over: lower) { chain.append(lower) }
+            if chain.count > 1 { chains.append(chain) }
         }
-        let anySize = lines(minHeight: 0).map { " \($0) " } + [close.last ?? ""] + stackedJoins
+        func joined(_ c: [SeenText]) -> String { " " + c.map { Self.normalize($0.text) }.joined(separator: " ") + " " }
+        let close = usable.filter(isClose).map { " \(Self.normalize($0.text)) " }
+            + [" " + unboxedClose.joined(separator: " ") + " "]
+            + chains.filter { $0.allSatisfy(isClose) }.map(joined)
+        let anySize = usable.map { " \(Self.normalize($0.text)) " }
+            + [" " + unboxedClose.joined(separator: " ") + " "]
+            + chains.map(joined)
         var matched: [String] = []
         for phrase in Self.phrases {
             let haystacks = phrase.contains(" ") ? anySize : close
@@ -403,13 +412,17 @@ public struct HazardWatchPolicy: Sendable, Equatable {
     public var similarity: Double = 0.6
     public var repeatWindow: TimeInterval = 30
     private var lastAsk: TimeInterval = -.infinity
-    private var recent: [(words: Set<String>, time: TimeInterval)] = []
+    private var recent: [(words: Set<String>, distance: Double?, time: TimeInterval)] = []
 
     public init() {}
 
     public static func == (a: HazardWatchPolicy, b: HazardWatchPolicy) -> Bool {
         a.interval == b.interval && a.minSpeed == b.minSpeed
     }
+
+    /// Give back the slot `shouldAsk` just took, when no request could be sent (no fresh frame):
+    /// the next tick may try again instead of waiting a full interval (Muse final review).
+    public mutating func refund() { lastAsk = -.infinity }
 
     /// True when a new check should be sent now.
     public mutating func shouldAsk(now: TimeInterval, speed: Double) -> Bool {
@@ -429,10 +442,19 @@ public struct HazardWatchPolicy: Sendable, Equatable {
         let words = text.split(separator: " ").prefix(12)
         guard !words.isEmpty else { return nil }
         text = words.joined(separator: " ")
-        let set = Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) })
+        // Numbers do not vote on "same hazard?", but a same hazard reported ≥ 1 m closer is an
+        // update worth saying ("cones ahead, 2 meters" after "…, 5 meters"; Muse final review).
+        let tokens = words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        let set = Set(tokens.filter { Double($0) == nil })
+        let distance = tokens.compactMap(Double.init).first
         recent.removeAll { now - $0.time > repeatWindow }
-        if recent.contains(where: { Self.jaccard($0.words, set) >= similarity }) { return nil }
-        recent.append((set, now))
+        let repeated = recent.contains { r in
+            guard Self.jaccard(r.words, set) >= similarity else { return false }
+            if let d = distance, let old = r.distance, d <= old - 1 { return false }   // closer: update
+            return true
+        }
+        if repeated { return nil }
+        recent.append((set, distance, now))
         return "Caution: \(text)."
     }
 

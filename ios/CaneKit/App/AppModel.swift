@@ -293,7 +293,11 @@ final class AppModel {
         wireHazards()
         wireDescriber()
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
-                               "haptics": haptics.isHealthy, "vision": describer.providerName ?? "none"])
+                               "haptics": haptics.isHealthy, "vision": describer.providerName ?? "none",
+                               // What this phone can run alongside LiDAR (measured, not assumed).
+                               "video_format": depth.chosenFormat,
+                               "video_formats": DepthEngine.supportedFormats,
+                               "front_camera_with_lidar": DepthEngine.supportsFrontCameraWithLiDAR])
         let cameraDenied = announceCameraDenied()
         speech.prefetch(Self.commonLines)
         if !cameraDenied {
@@ -317,6 +321,7 @@ final class AppModel {
         guard started else { return }
         switch phase {
         case .active:
+            if !isForeground, nav.isNavigating { speech.say("Obstacle warnings back.", .nav, ttl: 5) }
             isForeground = true
             haptics.resume()
             depth.resume()
@@ -325,6 +330,12 @@ final class AppModel {
         case .inactive:
             break
         case .background:
+            // Mid-route lock: ARKit pauses, so obstacle warnings stop while GPS guidance and the
+            // beacon go on. Say so instead of letting confident guidance hide a dead safety
+            // channel (Muse final review).
+            if nav.isNavigating {
+                speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .safety, ttl: 10)
+            }
             isForeground = false
             hazards.stop()                   // no scanning a frozen last frame in the background
             sceneContext.set("")             // LiDAR facts from here are stale once we come back
@@ -418,7 +429,13 @@ final class AppModel {
     /// `start()` after the depth engine, because the scanner reads its camera frames.
     private func wireHazards() {
         hazards.isNavigating = { [weak self] in self?.nav.isNavigating ?? false }
-        hazards.currentSpeed = { [weak self] in self?.location.fix?.speed ?? 0 }
+        // Speed of a fix older than 5 s is not current: CoreLocation stops sending fixes while
+        // the walker stands still, so the last walking speed would keep the hazard watch asking
+        // at a curb (Antigravity final review).
+        hazards.currentSpeed = { [weak self] in
+            guard let f = self?.location.fix, Date().timeIntervalSinceReferenceDate - f.timestamp < 5 else { return 0 }
+            return f.speed
+        }
         hazards.onDiagnostic = { [weak self] kind, fields in self?.logger.event(kind, fields) }
         // Simulator e2e hook (`CANEKIT_HAZARD_WATCH=1`): run the hazard watch without touching the
         // persisted setting, so the Street View mock exercises the whole camera path.
@@ -575,8 +592,11 @@ final class AppModel {
         if watch.isPaired, !watch.isReachable {
             lines.append("Watch not reachable. Open CaneKit on the watch.")
         }
-        if !haptics.isHealthy && !watch.isReachable {
-            lines.append("Haptics unavailable. Obstacle cues will be spoken.")
+        // Always say where obstacle cues went when the cane cannot buzz (Muse: with the watch
+        // reachable this was silent, so cane silence read as "path clear").
+        if !haptics.isHealthy {
+            lines.append(watch.isReachable ? "Haptics unavailable. Obstacle cues on the watch."
+                                           : "Haptics unavailable. Obstacle cues will be spoken.")
         }
         for line in lines { speech.say(line, .nav, ttl: 20) }
     }
@@ -831,6 +851,7 @@ final class AppModel {
         // blind walker is better off with guidance and no obstacle cues than with nothing.
         announceCameraDenied()
         groundPolicy.reset()
+        lastGroundHazard = nil               // a new route must not show the last route's drop-off
         // Every waypoint line and the route intro, synthesized now so they play instantly.
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])

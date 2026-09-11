@@ -155,6 +155,7 @@ final class NavigationEngine {
         isSettling = false
         legCurved = false
         lastReached = nil
+        heading = nil                        // the last route's heading must not aim the new one (Muse)
         courseSmoother.reset()
         smoothedCourse = nil
         nearArrivalSince = nil

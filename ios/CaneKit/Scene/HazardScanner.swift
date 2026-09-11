@@ -152,7 +152,10 @@ final class HazardScanner {
 
     private func runWatch() async {
         defer { watchInFlight = false }
-        guard let jpeg = await Self.snapshot(processor, maxDimension: 768) else { return }
+        guard let jpeg = await Self.snapshot(processor, maxDimension: 768) else {
+            watchPolicy.refund()                 // no frame, no request: don't burn the 8 s slot
+            return
+        }
         let started = Date()
         let maxAge = Self.maxReplyAge(speed: currentSpeed())
         let frameName = FrameReplay.shared.currentName ?? ""

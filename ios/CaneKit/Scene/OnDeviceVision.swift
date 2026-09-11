@@ -171,10 +171,15 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
 
     func describe(jpeg: Data, prompt: String) async throws -> String {
         let hazardMode = prompt == HazardPrompt.text
+        // One LiDAR snapshot, taken as close to the frame as possible, for the facts, the prefix
+        // and the template alike. Reading it again after the model replied (~0.7 s later) mixed
+        // two moments on the real phone: "Obstacle ahead at half a meter… looks like a table. A
+        // door is one meter ahead." (first iPhone run; the facts had said door, one meter).
+        let lidar = context.get()
         let d = await OnDeviceVision.detect(jpeg: jpeg, readText: !hazardMode)
-        if hazardMode { return OnDeviceHazards.reply(for: d, lidarAhead: !context.get().isEmpty) }
+        if hazardMode { return OnDeviceHazards.reply(for: d, lidarAhead: !lidar.isEmpty) }
 
-        let facts = Self.facts(d, lidar: context.get())
+        let facts = Self.facts(d, lidar: lidar)
         // The model's sentence is only used when it is faithful to the facts (names something that
         // was detected, invents no numbers); otherwise the deterministic template speaks.
         if let sentence = await Self.phrase(facts),
@@ -182,11 +187,10 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
             // The LiDAR fact is the safety-relevant one: say it first, as the template does,
             // unless the model already gave its distance (Claude review workflow: the model
             // dropped "Obstacle ahead at 1.4 meters" entirely).
-            let lidar = context.get()
             if !lidar.isEmpty, !SceneVocabulary.mentionsDistance(sentence, from: lidar) { return lidar + " " + sentence }
             return sentence
         }
-        return Self.template(d, lidar: context.get())
+        return Self.template(d, lidar: lidar)
     }
 
     /// Plain-text facts handed to the language model (never the image). Scene labels go through

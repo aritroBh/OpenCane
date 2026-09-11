@@ -7,7 +7,7 @@ that has the detail.
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (138 logic tests, needs only the Command Line Tools).
+1. `git pull`, then `cd ios && make test` (144 logic tests, needs only the Command Line Tools).
 2. Find your row in §3 and do its first item.
 3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
    only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
@@ -34,14 +34,28 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 138 pass | `make test` |
+| Logic tests (every rule with a number in it) | 144 pass | `make test` |
 | App + watch + widget build, Swift 6 strict | green | `make sim` |
 | UI tests + screenshot tour | 7 pass (one needs the local Street View frames) | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
 | Real `NavigationEngine` in a scratch harness, 72 simulated walks | 0 false "Veer"; an injected 35° veer caught 18/18 | see CHANGELOG Step 11 |
 | Street View camera stand-in (Google Street View frames of the route) | see §8 | `make e2e SCENARIO=streetview`, `make uitest-streetview` |
 
-**Not proven, because nobody has run it on the real phone yet:** LiDAR distances through the clamp,
+**Proven on the real iPhone 17 Pro Max (iOS 27.0), desk test on Fri 2026-09-11 afternoon** (trip
+logs pulled off the phone):
+
+| Check | Result |
+|---|---|
+| Signed, installed, launched (free Personal Team) | yes; runs unplugged |
+| LiDAR depth, Taptic haptics, mesh classification | all available (`start` event) |
+| Obstacle names from the mesh | "table ahead, very close", "seat ahead, two meters" |
+| Head-height cue | fired and spoken ("Head height.") |
+| On-device "Where am I" (no key, no network) | Apple Vision labels + Apple's on-device model, e.g. "Chairs and desks are ahead…" in 0.7 s |
+| Depth reports | 30 per second (was 10: a timing bug the phone exposed; fixed) with the 1x camera at 60 fps |
+| Heat | nominal during the test |
+| Cameras available *with* LiDAR | only the 1x wide camera (up to 60 fps, 1920x1440); no 0.5x ultra-wide, no 120 fps; the front camera can run only as ARKit face tracking |
+
+**Not proven yet (needs walking outdoors / the other devices):** LiDAR distances through the clamp,
 how the haptics feel in the hand, the beacon's left/right, wrist-down watch taps, GPS fence timing on
 campus, heat and battery over a 20-minute walk, and the new ground-hazard thresholds. That is what
 [`stress_test_plan.md`](stress_test_plan.md) is for. Until those pass, **the blindfolded walk is a
@@ -64,7 +78,7 @@ The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench test
 ```sh
 git pull
 cd ios
-make test          # 138 logic tests; needs only the Command Line Tools
+make test          # 144 logic tests; needs only the Command Line Tools
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
@@ -114,7 +128,7 @@ up, the drop-off detector loses its ground reference. The numbers are in
 [`hardware/mount/DESIGN.md`](../hardware/mount/DESIGN.md) and `hardware/mount/pitch_model.py`.
 
 You set it by reading the phone: the **Mount** card's first line says
-`Camera tilt 5° down, good · N fps` (N is live, about 15). Hold the cane the way Aarav holds it and
+`Camera tilt 5° down, good · N fps` (N is live, about 30). Hold the cane the way Aarav holds it and
 click the hinge until it says **good**; chase "good", not the fps. The same number is in every
 trip-log `lanes` line as `tilt`.
 

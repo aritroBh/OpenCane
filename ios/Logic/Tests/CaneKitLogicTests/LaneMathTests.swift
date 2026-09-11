@@ -185,3 +185,14 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(MountTilt.downDegrees(cameraZColumnY: -down5) < 0)
     #expect(MountTilt.downDegrees(cameraZColumnY: 0) == 0)
 }
+
+/// 30 Hz ARKit frames through a 15 Hz cap publish every second frame (15 Hz), not every third
+/// (10 Hz, the real-phone bug); 60 Hz frames publish every fourth.
+@Test func publishGateHitsFifteenHertzFromThirtyHertzFrames() {
+    var g = PublishGate(maxRate: 15)
+    let published30 = (0..<300).filter { g.shouldPublish(at: 1000 + Double($0) / 30) }.count
+    #expect(published30 == 150)          // 10 s of 30 Hz input → 15 Hz
+    var h = PublishGate(maxRate: 15)
+    let published60 = (0..<600).filter { h.shouldPublish(at: 1000 + Double($0) / 60) }.count
+    #expect(published60 == 150)          // 10 s of 60 Hz input → 15 Hz
+}

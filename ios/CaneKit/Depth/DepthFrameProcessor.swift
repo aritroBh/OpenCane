@@ -45,13 +45,14 @@ struct ProcessorSettings: Sendable {
     var lane = LaneConfig()
     /// |gyro| above this (rad/s) marks the frame untrusted (the cane is mid-sweep).
     var sweepThreshold: Float = 0.6
-    /// Publish rate cap in Hz. ARKit runs at 60; the cue logic needs ~15.
-    var maxRate: Double = 15
+    /// Publish rate cap in Hz. ARKit delivers 30–60 frames/s; CueDecider is timed in seconds, not
+    /// frames, so 30 Hz halves obstacle latency with no logic change. Watch `thermal` in the log.
+    var maxRate: Double = 30
     /// Run the mesh-classification lookup at the image centre (step 4). Costs ~10–15 % CPU.
     /// Turned off by the thermal watchdog (`DepthEngine.setMeshClassification`).
     var meshLookupEnabled = true
-    /// Mesh lookups happen every Nth published frame (15 Hz / 4 ≈ 4 Hz).
-    var meshEveryNthFrame = 4
+    /// Mesh lookups happen every Nth published frame (30 Hz / 8 ≈ 4 Hz: the costly part stays put).
+    var meshEveryNthFrame = 8
     /// LiDAR ground-hazard detection (drop-offs, holes, curbs; GroundSampler + CaneKitLogic
     /// GroundHazardDetector). Evaluated on published frames at most every 0.1 s (~7 Hz).
     var groundHazardsEnabled = true
@@ -106,6 +107,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     static let maxFrameAge: TimeInterval = 2
     /// ARKit timestamp (s) of the last published report; drives the `maxRate` cap.
     private var lastPublished: TimeInterval = 0        // queue-only
+    /// Rate cap for published reports (queue-only); see `ProcessorSettings.maxRate`.
+    private var publishGate = PublishGate(maxRate: 15)
     /// Published-report counter (wrapping); selects every Nth frame for a mesh lookup.
     private var publishedCount = 0                     // queue-only
     /// Reusable sample buffer handed to `LaneMath.computeLanes` so the hot path never allocates.
@@ -180,13 +183,16 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
 
         let s = settings.withLock { $0 }
         let now = frame.timestamp
-        guard now - lastPublished >= 1.0 / s.maxRate else { return }
+        // PublishGate (CaneKitLogic) tolerates the floating-point hair that made a 15 Hz cap run at
+        // exactly 10 Hz on 30 Hz ARKit frames (first iPhone run).
+        publishGate.maxRate = s.maxRate
+        guard publishGate.shouldPublish(at: now) else { return }
         lastPublished = now
         publishedCount &+= 1
 
         let ω = rotationRate
         let trusted = ω < s.sweepThreshold
-        if trusted { trackTilt(frame) }
+        trackTilt(frame)   // every frame: the pose is gravity-aligned even mid-sweep (Muse); the EMA smooths the sweep
 
         guard let grid = computeGrid(frame: frame, config: s.lane) else {
             continuation.yield(LaneReport(grid: .empty, isTrusted: trusted, rotationRate: ω,

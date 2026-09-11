@@ -97,7 +97,7 @@ no blindfolded walk.
 
 | ID | Command (from `ios/`) | What it covers | Pass | Time |
 |---|---|---|---|---|
-| A1 | `make test` | 138 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file | 114/114 | < 1 min |
+| A1 | `make test` | 144 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file | 114/114 | < 1 min |
 | A2 | `make sim` | Swift 6 strict build for the simulator | 0 errors | ~3 min |
 | A3 | `make uitest` | 7 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggles, a11y labels, empty destination; the Street View "Where am I" test is skipped unless run with `make uitest-streetview` | 6/6 + 1 skipped | ~4 min |
 | A4 | `make tour` | PNG per screen state → `build/shots` | Every PNG reviewed: no truncated pill ("SPEAKI…"), no hyphenated "Recen-ter", instruction not clipped | ~3 min |
@@ -285,7 +285,7 @@ goes on the bug list with its log file name and video timestamp.
   - Open space: all torso tiles ≥ 2.0 m and **0 `cue` events in 60 s**. If the floor shows in the
     torso row, the mount angle is wrong and would run the Geiger loop forever: check the tilt line
     (at ~10° down or more the torso lanes read pavement near 2 m). Sagar re-angles.
-  - Depth keeps up for 60 s: the Mount card shows ~15 fps and `lanes` records (with `fps` and
+  - Depth keeps up for 60 s: the Mount card shows ~30 fps and `lanes` records (with `fps` and
     `tilt`) are continuous at 2 Hz.
 - **Log.** `lanes` torso/head/tilt/fps; `cue` count.
 

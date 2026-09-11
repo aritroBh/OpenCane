@@ -152,3 +152,10 @@ import Testing
     #expect(SceneVocabulary.mentionsDistance("A pole ahead, 1.4 meters away.", from: "Obstacle ahead at 1.4 meters."))
     #expect(SceneVocabulary.mentionsDistance("A pole two meters ahead.", from: "Obstacle ahead at two meters."))
 }
+
+/// Hazard words outside the object vocabulary ("cone", "barrier", "trench") also count as invented
+/// unless the facts mention them (Antigravity final review).
+@Test func inventedHazardWordsAreRejected() {
+    #expect(!SceneVocabulary.isFaithful("A cone ahead near the trees.", facts: "Camera sees: trees", nouns: ["trees"]))
+    #expect(!SceneVocabulary.isFaithful("Trees, and a barrier on the path.", facts: "Camera sees: trees", nouns: ["trees"]))
+}

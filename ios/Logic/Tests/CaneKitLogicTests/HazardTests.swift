@@ -396,6 +396,49 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(noGeometry == nil)
 }
 
+/// Final reviews (Muse + Antigravity, after 33fc636):
+/// a closer update of the same hazard is not swallowed as a near-duplicate (numbers do not vote).
+@Test func aCloserUpdateIsNotADuplicate() {
+    var p = HazardWatchPolicy()
+    let first = p.line(forReply: "Cones ahead, 5 meters", now: 0)
+    #expect(first != nil)
+    let closer = p.line(forReply: "Cones ahead, 2 meters", now: 9)
+    #expect(closer == "Caution: Cones ahead, 2 meters.")
+}
+
+/// A sign read across the close/far boundary (SIDEWALK close, CLOSED slightly smaller) is joined
+/// when stacked; two close but unrelated words are not.
+@Test func stackedJoinWorksAcrossTheHeightBoundaryAndCloseWordsNeedGeometry() {
+    var p = SignPolicy()
+    let near: Float = 1.0 / 60, far: Float = 1.0 / 90
+    let r = p.line(for: [
+        SignPolicy.SeenText(text: "SIDEWALK", confidence: 0.9, height: near, box: .init(minX: 0.40, maxX: 0.55, minY: 0.5 + near * 1.3)),
+        SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: far, box: .init(minX: 0.42, maxX: 0.52, minY: 0.5)),
+    ], now: 0)
+    #expect(r == "Sign: sidewalk closed.")
+    var q = SignPolicy()
+    let phantom = q.line(for: [
+        SignPolicy.SeenText(text: "ROAD", confidence: 0.9, height: near, box: .init(minX: 0.05, maxX: 0.15, minY: 0.3)),
+        SignPolicy.SeenText(text: "CLOSED", confidence: 0.9, height: near, box: .init(minX: 0.80, maxX: 0.92, minY: 0.6)),
+    ], now: 0)
+    #expect(phantom != "Sign: road closed.")
+}
+
+/// A 10 % ramp with a gap in the returns (shiny patch) is still not a drop-off; a real 1 m ledge
+/// behind an occlusion shadow still is.
+@Test func aRampWithMissingReturnsIsNotADropOff() {
+    let ramp = denseGround { $0 > 1.5 ? -(($0 - 1.5) * 0.10) : 0 }.filter { !($0.forward >= 2.1 && $0.forward < 3.0) }
+    #expect(GroundHazardDetector().classify(ramp) == nil)
+    let ledge = ground { $0 >= 2.0 ? -1.0 : 0 }.filter { $0.forward < 2.0 || $0.forward >= 2.9 }
+    #expect(GroundHazardDetector().classify(ledge)?.kind == .dropOff)
+}
+
+/// A drop in the very last bin waits (drop-off vs hole is a guess there; a wrong guess broke the
+/// 3-frame confirmation when it turned into a hole).
+@Test func aDropInTheLastBinWaitsForACloserLook() {
+    #expect(GroundHazardDetector().classify(ground { $0 >= 3.25 ? -0.2 : 0 }) == nil)
+}
+
 /// A partial read of a sign just spoken ("CLOSED" after "SIDEWALK CLOSED") is not re-announced.
 @Test func aPartialReadOfTheSameSignIsQuiet() {
     var p = SignPolicy()

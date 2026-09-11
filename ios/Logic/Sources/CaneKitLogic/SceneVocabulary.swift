@@ -214,7 +214,12 @@ public enum SceneVocabulary {
 
     /// Every object word the vocabulary knows (noun words minus articles, plus identifier parts),
     /// stemmed: a sentence may only use the ones that were detected.
-    static let vocabularyStems: Set<String> = Set(groups.flatMap { synonyms(of: $0.noun) }.map(stem))
+    static let vocabularyStems: Set<String> = Set((groups.flatMap { synonyms(of: $0.noun) } + hazardWords).map(stem))
+
+    /// Hazard words the model might invent that are not scene labels ("A cone ahead" by the trees;
+    /// Antigravity final review). They are allowed only when the facts contain them.
+    static let hazardWords = ["cone", "barrier", "barricade", "trench", "pothole", "hole", "curb",
+                              "construction", "branch", "bike", "ladder", "scaffolding", "wire", "step"]
 
     /// A tiny English stem: "cars" → "car", "bushes" → "bush", "benches" → "bench", "glass" stays.
     static func stem(_ w: String) -> String {

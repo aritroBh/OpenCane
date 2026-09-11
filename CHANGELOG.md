@@ -119,6 +119,27 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   installed. Found: a comment after the value in `ios/local.mk` (the format the docs showed) left
   trailing spaces in `DEVICE`, so xcodebuild could not find the phone; the Makefile now strips
   `TEAM` and `DEVICE`. First launch needs Settings → General → VPN & Device Management → Trust.
+- **Real-phone desk test (iPhone 17 Pro Max, iOS 27.0) — found and fixed:**
+  - *Depth ran at exactly 10 reports/s, not 15*: a `now − last ≥ 1/15` check fails by a hair on the
+    second 33.3 ms frame. `PublishGate` (CaneKitLogic, tested with 30 and 60 Hz input) fixes it; the
+    cap is now **30 reports/s** (CueDecider is timed in seconds, so no logic change), mesh lookups stay
+    ~4 Hz. Measured: 30/s, thermal nominal.
+  - *Camera*: ARKit with LiDAR offers only the 1x wide camera on this phone (up to 60 fps; no 0.5x,
+    no 120 fps; the front camera only as face tracking), logged in the `start` event. The app now
+    runs the full 4:3 frame at 60 fps (was 16:9 at 30).
+  - *"Where am I" mixed two moments*: the LiDAR context was read for the facts and again ~0.7 s later
+    for the prefix ("…looks like a table. A door is one meter ahead."). One snapshot per description.
+  - Proven: LiDAR, haptics, mesh names, head-height cue, on-device Vision + Apple's model.
+- **Final Muse + Antigravity reviews (after 33fc636), all addressed with tests:** a closer hazard-watch
+  update is not a duplicate; stacked sign lines join across the close/far boundary and close words
+  need geometry too; missing depth bins allow for ramp slope (no false drop-off); a drop in the last
+  bin waits; invented hazard words ("cone", "barrier") are rejected; the watch slot is refunded
+  without a frame; a mid-route screen lock *says* obstacle warnings are paused; a new route clears
+  the last drop-off line; haptics failure is always announced; the mount tilt updates every frame;
+  a new route forgets the old heading; the hazard watch ignores a stale fix's speed. Rejected —
+  waiting for a fresh fix before a typed-destination route (a standing walker's fix is still right
+  and iOS may not send a new one). Antigravity again edited and committed in its *copy*; the real
+  repo was untouched.
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

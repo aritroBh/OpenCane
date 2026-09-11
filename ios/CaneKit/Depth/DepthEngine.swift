@@ -194,12 +194,46 @@ final class DepthEngine {
         config.worldAlignment = .gravity
         config.planeDetection = []                       // we never use planes; saves CPU
         config.isAutoFocusEnabled = true
-        // Lowest-resolution colour stream at ≥ 30 fps: depth resolution is fixed at 256×192
-        // regardless, and the colour frame only feeds the occasional JPEG snapshot.
-        if let low = ARWorldTrackingConfiguration.supportedVideoFormats.last(where: { $0.framesPerSecond >= 30 }) {
-            config.videoFormat = low
+        // The best the iPhone 17 Pro Max offers *with* LiDAR (measured on the phone, 2026-09-11:
+        // world tracking exposes only the 1x wide camera, up to 60 fps; no ultra-wide, no 120):
+        // the full 4:3 frame (widest view; the sign-range numbers assume it) at 60 fps, the
+        // smallest such format. Fallback: any 60 fps format, then the old ≥ 30 fps choice.
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats
+        let fourThree = { (f: ARConfiguration.VideoFormat) in
+            abs(f.imageResolution.width / f.imageResolution.height - 4.0 / 3.0) < 0.01
         }
+        if let best = formats.filter({ $0.framesPerSecond >= 60 && fourThree($0) })
+            .min(by: { $0.imageResolution.width < $1.imageResolution.width })
+            ?? formats.first(where: { $0.framesPerSecond >= 60 })
+            ?? formats.last(where: { $0.framesPerSecond >= 30 }) {
+            config.videoFormat = best
+        }
+        chosenFormat = Self.describe(config.videoFormat)
         return config
+    }
+
+    /// The video format the session runs ("wide 1920x1440 @60"), for the trip log's `start` event.
+    private(set) var chosenFormat = ""
+
+    /// Every video format ARKit world tracking offers on this device, e.g. "wide 1920x1440 @60",
+    /// "ultrawide 1920x1440 @60" — so which cameras / frame rates can run *with* LiDAR is measured
+    /// on the phone, not assumed. Logged once at start.
+    static var supportedFormats: [String] {
+        ARWorldTrackingConfiguration.supportedVideoFormats.map(describe)
+    }
+
+    /// True when world tracking can also run the front (TrueDepth) camera for face tracking.
+    static var supportsFrontCameraWithLiDAR: Bool { ARWorldTrackingConfiguration.supportsUserFaceTracking }
+
+    private static func describe(_ f: ARConfiguration.VideoFormat) -> String {
+        let type: String
+        switch f.captureDeviceType {
+        case .builtInUltraWideCamera: type = "ultrawide"
+        case .builtInWideAngleCamera: type = "wide"
+        case .builtInTelephotoCamera: type = "tele"
+        default: type = "\(f.captureDeviceType.rawValue)"
+        }
+        return "\(type) \(Int(f.imageResolution.width))x\(Int(f.imageResolution.height)) @\(f.framesPerSecond)"
     }
 
     // MARK: Consumer

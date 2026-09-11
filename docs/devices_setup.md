@@ -108,7 +108,7 @@ Nothing in CaneKit talks to the Mac at runtime. The Mac only signs and installs.
    walker holds it, the Mount card's first line reads "Camera tilt N° down · N fps". Turn the
    mount's hinge until it says **good** (3–8° below the horizon; hardware/mount/DESIGN.md). Steeper
    than ~10° and the lanes see bare pavement near 2 m and the cane buzzes on an empty sidewalk;
-   level or up and the drop-off detector loses its ground reference. fps should sit near 15.
+   level or up and the drop-off detector loses its ground reference. fps should sit near 30.
 
 ## On-device vision (no key, no network)
 

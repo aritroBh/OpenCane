@@ -43,7 +43,7 @@ measurement, a state, or a button. No marketing surfaces.
 3. Big and few. While a route runs the Guide card has five big buttons (Where am I, Repeat, Next,
    Recenter, Stop route), never more than two per row; everything else lives in the cards below it.
 4. Ivory on near-black. The white cane is the brand; the accent is *cane white on ink*, not a hue.
-5. Nothing animates that carries meaning. The grid updates at 15 Hz with no transitions.
+5. Nothing animates that carries meaning. The grid updates at 30 Hz with no transitions.
 
 ---
 
@@ -183,7 +183,7 @@ Motion never carries information. The app owns exactly one animation, and it hon
 
 | Event | Normal | Reduce Motion |
 |---|---|---|
-| Depth grid update (15 Hz) | **None.** Fill, word and number change instantly. | Same |
+| Depth grid update (30 Hz) | **None.** Fill, word and number change instantly. | Same |
 | Big button press (`CKBigButtonStyle`, also Go and the test buttons) | Scale 0.97 on a 0.12 s spring; `.sensoryFeedback(.impact(weight: .light))` on release | Opacity 0.85 only; haptic kept |
 | Everything else (pills, distance, instruction, cards appearing) | Instant | Instant |
 
@@ -225,7 +225,7 @@ Old comments that say "P0 / P1 / P2" refer to the original spec: P0 ≈ `.safety
 
 ### 5.2 Obstacle cues (phone Taptic Engine, felt through the cane)
 
-Decided by `CueDecider` on every trusted depth report (~15 Hz). One cue at a time, priority **head >
+Decided by `CueDecider` on every trusted depth report (~30 Hz). One cue at a time, priority **head >
 centre > left > right**. A zone switches on below its threshold and off only 0.15 m beyond it
 (hysteresis); cue *changes* are ≥ 400 ms apart; a discrete cue (left / right / head) re-fires at most
 once per second while it stays active.
