@@ -13,6 +13,7 @@
 //  Depths in metres.
 //
 
+import Foundation
 import Testing
 @testable import CaneKitLogic
 
@@ -174,4 +175,13 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(MountTilt.status(downDeg: 0.3).text == "Camera level: tilt the phone down")
     #expect(MountTilt.status(downDeg: 2.6).ok)          // shows "3°", so it must say good
     #expect(!MountTilt.status(downDeg: 8.6).ok)         // shows "9°"
+}
+
+/// Camera pitched down 5°: look = (0, −sin 5°, −cos 5°), so the transform's Z column (= −look) has
+/// y = +sin 5° → +5 (down). Pitched up → negative. Level → 0.
+@Test func tiltSignIsDownPositive() {
+    let down5 = Float(sin(5.0 * Double.pi / 180))
+    #expect(abs(MountTilt.downDegrees(cameraZColumnY: down5) - 5) < 0.01)
+    #expect(MountTilt.downDegrees(cameraZColumnY: -down5) < 0)
+    #expect(MountTilt.downDegrees(cameraZColumnY: 0) == 0)
 }

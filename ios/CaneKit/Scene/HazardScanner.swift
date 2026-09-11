@@ -161,6 +161,9 @@ final class HazardScanner {
             let age = Date().timeIntervalSince(started)
             lastWatchMs = Int(age * 1000)
             lastError = nil
+            // Switched off (or paused hot) while the request was in flight: say nothing
+            // (Antigravity review: a reply arrived seconds after the toggle went off).
+            guard watchEnabled, !paused else { return }
             // A slow round trip describes where the walker *was*: drop it rather than announce a
             // hazard that is now behind them, and drop a stale distance from a late-but-usable one.
             var fields: [String: Any] = ["reply": reply, "ms": lastWatchMs ?? -1, "provider": watchProvider,
@@ -179,6 +182,7 @@ final class HazardScanner {
                 onHazard?(line, .vision, jpeg)
             }
         } catch {
+            lastWatchMs = nil                  // a failed request has no round trip to show
             lastError = "Hazard watch: \(error.localizedDescription)"
             onDiagnostic?("hazard_watch", ["error": error.localizedDescription, "provider": watchProvider])
         }

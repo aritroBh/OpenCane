@@ -99,7 +99,8 @@ nonisolated enum VLMClientFactory {
     /// `VLM_PROVIDER` uses custom → anthropic → gemini → openai. Called once by
     /// `SceneDescriber.init`.
     static func fromSecrets() -> (any VLMClient)? {
-        let requested = Secrets.string("VLM_PROVIDER").flatMap(VLMProvider.init(rawValue:))
+        // Case-insensitive: "Gemini" in Secrets.plist must not silently fall back (Antigravity review).
+        let requested = Secrets.string("VLM_PROVIDER").flatMap { VLMProvider(rawValue: $0.lowercased()) }
         let order: [VLMProvider] = requested.map { [$0] } ?? [.custom, .anthropic, .gemini, .openai]
         for provider in order {
             if let client = make(provider) { return client }

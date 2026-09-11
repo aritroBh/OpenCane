@@ -20,7 +20,7 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–11 have landed and are verified on the simulator: 131 logic tests, 7
+**Status.** Steps 0–11 have landed and are verified on the simulator: 132 logic tests, 7
 XCUITests (one needs the local Street View frames), the screenshot tour, and `make e2e` (GPS replay
 of the route through the real app, four scenarios, plus an opt-in Street View camera scenario).
 Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
@@ -103,7 +103,7 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 131 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
+| `make test` | `scripts/test.sh`: the 132 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -156,7 +156,7 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 131 Swift Testing tests. They cover lane extraction on
+- **Unit tests (`Logic/`, no device):** 132 Swift Testing tests. They cover lane extraction on
   synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
   math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
   VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy and the crown

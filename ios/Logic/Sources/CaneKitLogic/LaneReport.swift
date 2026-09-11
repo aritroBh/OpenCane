@@ -104,6 +104,14 @@ public enum MountTilt {
     /// Degrees below the horizon that work with the current lane grid.
     public static let aim: ClosedRange<Float> = 3...8
 
+    /// Camera angle below the horizon (degrees, positive = down) from the Y component of the
+    /// camera transform's Z column in ARKit's gravity-aligned world (+Y up). The camera looks
+    /// along −Z, so a camera pitched down θ has look.y = −sin θ and column2.y = +sin θ.
+    /// Pinned by `tiltSignIsDownPositive` (Antigravity claimed it was inverted; it is not).
+    public static func downDegrees(cameraZColumnY y: Float) -> Float {
+        asin(max(-1, min(1, y))) * 180 / .pi
+    }
+
     /// One line for the Mount card and whether the aim is inside `aim`:
     /// "Camera tilt 5° down, good", "Camera tilt 12° down: tilt the phone up",
     /// "Camera tilt 2° up: tilt the phone down", "Camera level: tilt the phone down".

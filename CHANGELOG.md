@@ -81,6 +81,12 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   labels at ~0 confidence, so it was removed again. Scene words are tested with `vision_probe.swift`
   on the Mac (real labels) and `SceneVocabularyTests`, and on the phone. The trip log's
   `describe_result.vision_error` shows this directly.
+- **Antigravity camera review:** fixed — `VLM_PROVIDER` is case-insensitive ("Gemini" no longer
+  silently ignored); a hazard-watch reply that lands after the watch was switched off (or paused hot)
+  is not spoken; a failed request clears its latency. Rejected with a test — "the tilt sign is
+  inverted": the formula moved to `MountTilt.downDegrees` and `tiltSignIsDownPositive` proves down is
+  positive. Rejected — ground-hazard "flicker" (a hazard the current frame no longer sees drops out
+  by design; the repeat policy prevents re-announcing it).
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

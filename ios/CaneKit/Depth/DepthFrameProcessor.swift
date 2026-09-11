@@ -234,9 +234,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Smooths the camera's angle below the horizon (queue-only). ARKit's world is gravity-aligned
     /// (+Y up) and the camera looks along −Z of `camera.transform`, whatever the device orientation.
     private func trackTilt(_ frame: ARFrame) {
-        let T = frame.camera.transform
-        let lookY = -T.columns.2.y                       // vertical part of the look direction
-        let deg = asin(max(-1, min(1, -lookY))) * 180 / .pi
+        let deg = MountTilt.downDegrees(cameraZColumnY: frame.camera.transform.columns.2.y)
         tiltDownDeg = tiltDownDeg.map { $0 + 0.07 * (deg - $0) } ?? deg
     }
 
