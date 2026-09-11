@@ -110,9 +110,6 @@ final class NavigationEngine {
     @ObservationIgnored private(set) var lastFix: GeoFix?
     /// Latest gyro-gated body heading, degrees true.
     @ObservationIgnored private var heading: Double?
-    /// Wall-clock time of the last heading update; veer needs a heading < 3 s old (the caller's
-    /// gyro gate can hold the compass back while the cane sweeps).
-    @ObservationIgnored private var headingTime: TimeInterval = -.infinity
     /// Direction of travel over ≥ 15 m (CaneKitLogic.CourseSmoother). Veer decisions use this
     /// while walking, so a few metres of GPS jitter never becomes "Veer left/right"
     /// (e2e gps_jitter: 28 false veers with the per-fix course).
@@ -305,7 +302,6 @@ final class NavigationEngine {
     func update(heading h: Double, now: TimeInterval) {
         guard isNavigating else { return }
         heading = h
-        headingTime = now
         if var s = settle {
             s.update(heading: h, now: now)
             settle = s
@@ -317,7 +313,7 @@ final class NavigationEngine {
         recomputeError()
         guard let raw = bearingError, let fix = lastFix, let tracker,
               fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy,
-              fix.speed > 0.5, now - fix.timestamp < 5, now - headingTime < 3,
+              fix.speed > 0.5, now - fix.timestamp < 5,
               !isSettling, !legCurved, !tracker.isNearCurrent(fix) else { return }
         // Walking: judge against the smoothed course (jitter-proof); standing/slow: the heading.
         var err = raw
@@ -397,12 +393,18 @@ final class NavigationEngine {
             }
             lastSpokenLine = line
             onSpeak?(line, .nav)
+            // GPS jumped past the destination's fence: still the arrival, so the wrist and the
+            // cane get the arrival pattern (Muse nav review: it was silent).
+            if isLast { onNavCue?(.arrived) }
         } else {
             // A skipped fence means the user is already past it: say so briefly, then the real line.
+            var prefix = ""
             if !skipped.isEmpty {
-                onSpeak?(skipped.count == 1 ? "Passed one waypoint." : "Passed \(skipped.count) waypoints.", .nav)
+                prefix = skipped.count == 1 ? "Passed one waypoint." : "Passed \(skipped.count) waypoints."
+                onSpeak?(prefix, .nav)
             }
-            lastSpokenLine = wp.say
+            // Repeat must say what was actually said, including the skip (Muse nav review).
+            lastSpokenLine = prefix.isEmpty ? wp.say : prefix + " " + wp.say
             onSpeak?(wp.say, .nav)
             // Wrist: crossing beats turn; turn direction from the change in bearing. A skipped
             // crossing still gets its tap — the user just walked across that street.

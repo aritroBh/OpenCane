@@ -87,6 +87,11 @@ the simulator end to end, and the log shows what the camera saw, not only what w
   inverted": the formula moved to `MountTilt.downDegrees` and `tiltSignIsDownPositive` proves down is
   positive. Rejected — ground-hazard "flicker" (a hazard the current frame no longer sees drops out
   by design; the repeat policy prevents re-announcing it).
+- **Muse nav review:** fixed — a GPS jump past the destination's fence (passed-by arrival) now gives
+  the arrival tap; Repeat after a skip-ahead includes "Passed one waypoint."; a heading-age check that
+  could never fail was removed (headings arrive current). Rejected — "Repeat dropped during a call"
+  (no caller uses a zero TTL; a 12 s Repeat expiring mid-call matches the queue's staleness rule and
+  Repeat works again after the call).
 - **Engineering bar written down:** `AGENTS.md` → "How we engineer" (and `CLAUDE.md`), so every
   contributor, human or AI, works the same way.
 - **Found: "CaneKit ready." after "Camera access is off"** (Antigravity docs review): the ready line is

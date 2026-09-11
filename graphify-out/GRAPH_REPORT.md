@@ -1,7 +1,7 @@
 # Graph Report - 54FoundersHack  (2026-09-11)
 
 ## Corpus Check
-- 111 files · ~199,608 words
+- 111 files · ~199,663 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
@@ -10,7 +10,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `136f695d`
+- Built from commit: `fae24829`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -122,7 +122,7 @@
 - Swift 6 approachable-concurrency build settings
 - NavCue
 - .speakCueIfNeeded
-- LiveActivityController.swift
+- NavigationEngine.swift
 - ElevenLabsVoice.swift
 - gen.sh
 
@@ -167,8 +167,8 @@ Cohesion: 0.20
 Nodes (10): AppModel, .extendedRange, .hapticsEnabled, .mirrorLeftRight, .portraitMode, .speechEnabled, .urgentDistance, .warnDistance (+2 more)
 
 ### Community 1 - "Foundation"
-Cohesion: 0.16
-Nodes (9): AVFoundation, CaneKitLogic, CoreBluetooth, CoreHaptics, CoreLocation, Element, Foundation, Array (+1 more)
+Cohesion: 0.17
+Nodes (8): ActivityKit, AVFoundation, CaneKitLogic, CoreBluetooth, CoreHaptics, CoreLocation, Foundation, Observation
 
 ### Community 2 - "CaneKitUITests"
 Cohesion: 0.09
@@ -295,8 +295,8 @@ Cohesion: 0.20
 Nodes (13): C, CourseSmoother, Double, Int, TimeInterval, GeoFix, aRealTurnShowsUpAfterTheBaseline(), at() (+5 more)
 
 ### Community 34 - ".samples"
-Cohesion: 0.33
-Nodes (6): GroundSampler, ARFrame, Float, Int, SIMD3, UInt8
+Cohesion: 0.20
+Nodes (8): ARKit, GroundSampler, ARFrame, Float, Int, SIMD3, UInt8, simd
 
 ### Community 35 - "HazardScanner"
 Cohesion: 0.16
@@ -339,8 +339,8 @@ Cohesion: 0.20
 Nodes (9): HKObserverQuery, Date, Double, Int, Never, Task, TimeInterval, Void (+1 more)
 
 ### Community 46 - "DepthFrameProcessor.swift"
-Cohesion: 0.21
-Nodes (6): ARKit, CoreImage, CoreMotion, CoreVideo, ImageIO, simd
+Cohesion: 0.32
+Nodes (4): CoreImage, CoreMotion, CoreVideo, ImageIO
 
 ### Community 47 - "Sendable"
 Cohesion: 0.18
@@ -576,7 +576,7 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `AGENTS.md` and `drafts/README.md`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `String` connect `String` to `AppModel`, `Foundation`, `CaneKitUITests`, `DepthEngine`, `NavSupportTests.swift`, `BeaconEngine`, `CaneBLE`, `HapticPlayer`, `Route`, `CKBigButtonStyle`, `VLMClient`, `LaneTile`, `NavigationEngine`, `VLMError`, `RuntimeRelay`, `ObstacleClass`, `AppModel`, `WKBigButton`, `NavLiveActivity`, `WatchModel`, `SpeechQueue`, `sign_probe.swift`, `View`, `.describe`, `Decodable`, `PhoneToWatch`, `HazardScanner`, `LiveActivityController`, `TripLogger`, `ElevenLabsVoice`, `SceneVocabularyTests.swift`, `TripTracker`, `.wireNavigation`, `Sendable`, `CKStatusPill`, `PhoneWatchLink`, `GuideCard`, `.say`, `CodingKeys`, `OnDeviceVision.swift`, `GroundHazard`, `.groundHazardFound`, `HazardRecord`, `DescribeError`, `NSObject`, `SessionObserver`, `.distanceMeters`, `Codable`, `SignPolicy`, `LocationService`, `Text`, `SceneDescriber`, `HazardWatchPolicy`, `VLMCodec.swift`, `WorkoutRelay`, `Waypoint`, `ArrivalCardView`, `NavCue`, `.speakCueIfNeeded`?**
+- **Why does `String` connect `String` to `AppModel`, `CaneKitUITests`, `DepthEngine`, `NavSupportTests.swift`, `BeaconEngine`, `CaneBLE`, `HapticPlayer`, `Route`, `CKBigButtonStyle`, `VLMClient`, `LaneTile`, `NavigationEngine`, `VLMError`, `RuntimeRelay`, `ObstacleClass`, `AppModel`, `WKBigButton`, `NavLiveActivity`, `WatchModel`, `SpeechQueue`, `sign_probe.swift`, `View`, `.describe`, `Decodable`, `PhoneToWatch`, `HazardScanner`, `LiveActivityController`, `TripLogger`, `ElevenLabsVoice`, `SceneVocabularyTests.swift`, `TripTracker`, `.wireNavigation`, `Sendable`, `CKStatusPill`, `PhoneWatchLink`, `GuideCard`, `.say`, `CodingKeys`, `OnDeviceVision.swift`, `GroundHazard`, `.groundHazardFound`, `HazardRecord`, `DescribeError`, `NSObject`, `SessionObserver`, `.distanceMeters`, `Codable`, `SignPolicy`, `LocationService`, `Text`, `SceneDescriber`, `HazardWatchPolicy`, `VLMCodec.swift`, `WorkoutRelay`, `Waypoint`, `ArrivalCardView`, `NavCue`, `.speakCueIfNeeded`, `NavigationEngine.swift`?**
   _High betweenness centrality (0.477) - this node is a cross-community bridge._
 - **Why does `AppModel` connect `AppModel` to `Foundation`, `NavSupportTests.swift`, `BeaconEngine`, `String`, `HapticPlayer`, `docs/README.md`, `NavigationEngine`, `ObstacleClass`, `SpeechQueue`, `DepthEngine`, `.describe`, `HazardScanner`, `LiveActivityController`, `TripLogger`, `TripTracker`, `.wireNavigation`, `SwiftUI`, `PhoneWatchLink`, `.say`, `.groundHazardFound`, `HazardRecord`, `NSObject`, `SignPolicy`, `LocationService`, `.speakCueIfNeeded`?**
   _High betweenness centrality (0.261) - this node is a cross-community bridge._
