@@ -375,6 +375,13 @@ final class AppModel {
         }
     }
 
+    /// Explicitly starts listening for voice input.
+    func startVoiceInput() {
+        if !voiceInput.isListening {
+            voiceInput.startListening()
+        }
+    }
+
     /// Handles a spoken query from voice input, Shortcuts, or Siri.
     func handleSpokenQuery(_ text: String) async {
         await conversation.handleQuery(text)
@@ -524,6 +531,9 @@ final class AppModel {
             Task { @MainActor [weak self] in
                 await self?.conversation.handleQuery(transcript)
             }
+        }
+        voiceInput.shouldRestorePlaybackSession = { [weak self] in
+            !(self?.sounds.isRunning ?? false)
         }
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy,

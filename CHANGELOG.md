@@ -9,6 +9,19 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 24 — Audio tap Swift 6 isolation fix, Action Button PTT toggle, and session coordination (Sat Sep 12)
+
+Fixes crash on physical device when pressing voice talk button (`EXC_BREAKPOINT / SIGTRAP` in `_swift_task_checkIsolatedSwift`):
+- **Core Audio tap isolation (`VoiceInputEngine.swift`, `SoundWatcher.swift`)**: Under Swift 6 `-default-actor-isolation MainActor`, closures passed to `AVAudioNode.installTap` inside `@MainActor` methods inherit main actor isolation by default. When the Core Audio render thread executes the block, runtime isolation checks fire `_dispatch_assert_queue_fail` (`SIGTRAP`). Moved `installTap` into `nonisolated final class` methods on `SpeechBufferBox` and `SoundAnalysisPump` with `[weak self]` capture, eliminating runtime actor assertions completely while ensuring zero retain cycles.
+- **Microphone format settle guard**: Guarded `recordingFormat` with `MicrophoneStart.isUsableInputFormat` before `installTap`, preventing uncaught Objective-C `NSInternalInconsistencyException` (`SIGABRT`) during initial Bluetooth/AirPods negotiation.
+- **Audio engine reuse**: Reused a single `@ObservationIgnored private let engine = AVAudioEngine()` on `VoiceInputEngine` (matching `SoundWatcher`), eliminating Core Audio render thread leaks across repeated push-to-talk queries.
+- **Action Button toggle & foregrounding (`TalkToOpenCaneIntent`, `HandsFreeIntents.swift`)**: Added `static let openAppWhenRun: Bool = true`. When the physical Action Button is pressed without a query parameter, it invokes `model.toggleVoiceInput()` (press 1 starts listening; press 2 stops and submits), rather than deadlocking in an idempotent start. Added `AudioServicesPlaySystemSound(1519)` tactile confirmation so the blind walker physically feels when listening begins.
+- **Microphone session coordination with `SoundWatcher`**: Added `shouldRestorePlaybackSession` on `VoiceInputEngine` wired to `!(sounds.isRunning)`. Releasing voice input does not force the shared audio session back to `.playback` if the siren/horn detector is active, preventing accidental deactivation of danger sound alerts.
+- **Adversarial reviews**: Verified with Muse headless audit and multi-perspective concurrency subagents (Codex / Luna / Meta 1.3 contributor perspective).
+- **Verification**: 359/359 unit tests green (`make test`), simulator build green (`make sim`), signed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2324).
+
+test on device: open Settings > Action Button > Shortcut > Talk to OpenCane; press Action Button; feel haptic tick; speak 'set a post here'; press Action Button again to submit.
+
 ## Step 23 — Conversational voice assistant with Action Button trigger, marker drops, and context memory (Sat Sep 12)
 
 Hands-free voice assistant mode designed specifically for blind white-cane users:

@@ -32,6 +32,13 @@ enum VoiceInputState: Equatable, Sendable {
 }
 
 /// Bridges non-Sendable AVAudioPCMBuffer from the realtime audio tap to SFSpeechAudioBufferRecognitionRequest.
+///
+/// ⚠ Core Audio Tap Isolation:
+/// `AVAudioNode.installTap` accepts an unannotated closure block executed on a realtime Core Audio thread.
+/// Under Swift 6 with `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`, installing the tap from within a `@MainActor`
+/// function infers the closure to be `@MainActor` isolated. When Core Audio invokes it off-main, the runtime
+/// triggers `_swift_task_checkIsolatedSwift` and traps with SIGTRAP (`_dispatch_assert_queue_fail`).
+/// By installing the tap from this `nonisolated` class method, the tap block is guaranteed nonisolated.
 private nonisolated final class SpeechBufferBox: @unchecked Sendable {
     private weak var request: SFSpeechAudioBufferRecognitionRequest?
 
@@ -41,6 +48,12 @@ private nonisolated final class SpeechBufferBox: @unchecked Sendable {
 
     func append(_ buffer: AVAudioPCMBuffer) {
         request?.append(buffer)
+    }
+
+    func installTap(on node: AVAudioNode, format: AVAudioFormat) {
+        node.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            self?.append(buffer)
+        }
     }
 }
 
@@ -60,15 +73,18 @@ final class VoiceInputEngine {
     private let recognizer: SFSpeechRecognizer?
 
     // MARK: - Internal Audio Pipeline
-    @ObservationIgnored private var engine: AVAudioEngine?
+    @ObservationIgnored private let engine = AVAudioEngine()
+    @ObservationIgnored private var bufferBox: SpeechBufferBox?
     @ObservationIgnored private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     @ObservationIgnored private var recognitionTask: SFSpeechRecognitionTask?
     @ObservationIgnored private var timeoutTask: Task<Void, Never>?
     @ObservationIgnored private var previousBeaconEnabled: Bool = false
 
-    // MARK: - Callbacks
+    // MARK: - Callbacks & Coordination
     /// Delivered on the main actor when transcription is finalized.
     var onTranscriptionFinalized: ((String) -> Void)?
+    /// Checked on teardown; returns false if another microphone feature (SoundWatcher) is live.
+    var shouldRestorePlaybackSession: (() -> Bool)?
 
     init(speech: SpeechQueue, beacon: BeaconEngine) {
         self.speech = speech
@@ -112,16 +128,18 @@ final class VoiceInputEngine {
         self.recognitionRequest = request
         self.latestTranscript = ""
 
-        // 4. Initialize AVAudioEngine
-        let audioEngine = AVAudioEngine()
-        self.engine = audioEngine
-        let inputNode = audioEngine.inputNode
+        // 4. Configure audio engine tap
+        let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        guard MicrophoneStart.isUsableInputFormat(sampleRate: recordingFormat.sampleRate, channels: recordingFormat.channelCount) else {
+            cleanupAudioPipeline()
+            fail(with: "Audio input format is settling.")
+            return
+        }
 
         let box = SpeechBufferBox(request)
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: recordingFormat) { buffer, _ in
-            box.append(buffer)
-        }
+        self.bufferBox = box
+        box.installTap(on: inputNode, format: recordingFormat)
 
         // 5. Start recognition task
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -139,10 +157,11 @@ final class VoiceInputEngine {
         }
 
         do {
-            audioEngine.prepare()
-            try audioEngine.start()
+            engine.prepare()
+            try engine.start()
             self.isListening = true
             self.state = .listening
+            AudioServicesPlaySystemSound(1519) // Crisp tactile feedback confirms recording started
         } catch {
             cleanupAudioPipeline()
             fail(with: "Audio engine could not start: \(error.localizedDescription)")
@@ -187,19 +206,21 @@ final class VoiceInputEngine {
     private func cleanupAudioPipeline() {
         isListening = false
 
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            if engine.isRunning { engine.stop() }
-            self.engine = nil
-        }
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
 
+        bufferBox = nil
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()
         recognitionTask = nil
 
-        // Restore .playback audio session immediately
-        _ = speech.setMicrophoneEnabled(false)
+        // Restore .playback audio session if no other microphone feature (like SoundWatcher) is using it
+        if let shouldRestore = shouldRestorePlaybackSession, shouldRestore() {
+            _ = speech.setMicrophoneEnabled(false)
+        } else if shouldRestorePlaybackSession == nil {
+            _ = speech.setMicrophoneEnabled(false)
+        }
 
         // Restore beacon state to previous setting
         beacon.enabled = previousBeaconEnabled
