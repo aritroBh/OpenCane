@@ -2,6 +2,62 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 34 — Cane events reach the family: the Grok Bot webhook client (Sat Sep 12)
+
+OpenCane can now tell someone. Cane detections become one JSON event POSTed to the Grok Bot
+routine **"OpenCane cane events"** (folder `opencane-cane-events`), which owns the alerting
+decision and the SMS. Same split as the VLM path: the wire schema and every threshold are pure and
+unit-tested in `CaneKitLogic`, the app owns only transport and keys.
+
+**New in `ios/Logic` (28 new tests, 383 total green):**
+
+- `GrokBotEvent.swift` — `OpenCaneEvent` and friends. The `CodingKeys` **are** the contract
+  (`accuracy_m`, `speed_mps`, `cane_id`, `battery_pct`, `obstacle.distance_m`, `lng` never `lon`),
+  so they are asserted as bytes: a rename fails silently at run time (HTTP 200, bot parses nothing,
+  no SMS), which is the worst way for this to break. A nil field is omitted, never null, because the
+  bot reads absent `severity` as "you infer it". `type` is an open `RawRepresentable`, not an enum,
+  so an unknown type decodes instead of throwing.
+- `FamilyAlertPolicy.swift` — when a detection is worth sending. The depth path runs at ~30 Hz and
+  GPS at ~1 Hz; forwarding either raw would burn the bot's run quota and, because the bot texts for
+  `warn`, buzz a family member's phone continuously. Limits: breadcrumb 120 s, obstacle 60 s and
+  only within 1.2 m, low battery once per discharge re-arming above 30 %. fall and sos are never
+  limited. `reset()` clears the rate limits but deliberately **not** the battery arming — the
+  battery does not recharge because a route started.
+
+**New in the app:**
+
+- `Alerts/GrokBotClient.swift` — POST with a bearer token, 10 s timeout, **one** retry on transport
+  failure and **none** on a non-2xx: a 401 will be a 401 again, and re-POSTing an accepted `fall`
+  would double-text the family. Logs status + body; never headers.
+- `Alerts/FamilyAlerts.swift` — the main-actor relay. Sends are fire-and-forget so a POST can never
+  delay a cue.
+- `AppModel`: breadcrumb from `location.onFix`, obstacle beside the spoken obstacle line (so the
+  event says what the walker just heard), low battery off the existing observer, `family.reset()`
+  at route start, and `sendFamilyTestEvent()` behind the new Settings button.
+- Settings → **Family alerts**: the opt-in (default **off** — it sends the walker's position off
+  the phone, and it is in `LaunchRecovery.optionalFeatureKeys`), a line explaining itself when no
+  webhook key is configured, and **"Send test event"**, which works even while the switch is off
+  because checking the chain is what you do before a walk.
+
+**Two things deliberately not done:**
+
+- ⚠ **No fall detector and no SOS control exist.** `FamilyAlerts.fall(…)` / `.sos(…)` are written
+  and tested, but only the test button calls them. Writing a fall detector is a numeric rule needing
+  real data and its own tests (AGENTS.md hard rule 3); inventing a threshold here would ship an
+  untested guess on the one event that matters most. Tracked in `docs/todo.md`.
+- ⚠ **A 200 never means an SMS was sent.** It means the bot accepted the call and started a run; the
+  bot decides who to text afterwards. `GrokBotResult.accepted`, the spoken line and the Settings row
+  are all worded that way on purpose.
+
+Keys live only in the git-ignored `Secrets.plist` (`OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY`, hard
+rule 4), read from the process environment first so an e2e run can point at a throwaway endpoint.
+Documented with a curl example in `ios/README.md §4.1`.
+
+test on device: Settings → Family alerts → Send test event, with the phone on Wi-Fi and then in
+Airplane Mode (expect "Could not reach Grok Bot" after the one retry, ~12 s, and no crash); then
+switch the toggle on and walk a route to see one breadcrumb every two minutes in the Grok Bot run
+log, and let the battery fall below 20 % to see exactly one `low_battery` event.
+
 ## Step 33 — Snappy tab switches: fade-in, one landing time (Sat Sep 12)
 
 **Device report:** moving between Guide / Sense / Settings feels sluggish.

@@ -149,6 +149,7 @@ display name, not the target name).
 | `CUSTOM_BASE_URL` / `CUSTOM_API_KEY` / `CUSTOM_MODEL` | Any OpenAI-compatible chat endpoint (Muse 1.3). The base URL goes without `/chat/completions`. |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`, `GEMINI_API_KEY` / `GEMINI_MODEL`, `OPENAI_API_KEY` / `OPENAI_MODEL` | The other "Where am I" providers |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | Natural voice. The defaults are a warm premade voice and `eleven_flash_v2_5`. |
+| `OPENCANE_GROKBOT_WEBHOOK_URL`, `OPENCANE_GROKBOT_WEBHOOK_KEY` | Family alerts (§4.1). Copied from the Grok Bot routine's webhook-trigger panel. Empty = the feature is off and says so in Settings. |
 
 With no ElevenLabs key the app uses the system voice. With no VLM key (or `VLM_PROVIDER` =
 `ondevice`), "Where am I" answers on the phone: Apple Vision plus Apple's on-device model, or a
@@ -156,6 +157,69 @@ template sentence when Apple Intelligence is off. A cloud key adds the cloud mod
 on-device describer as the fallback. The no-key UI test checks that "Where am I" never hangs or
 crashes. Keys ship in plaintext inside the .app, which is fine for a local install; rotate them
 after the event.
+
+### 4.1 Family alerts (Grok Bot)
+
+Cane detections are POSTed as one JSON event to the Grok Bot routine **"OpenCane cane events"**
+(folder `opencane-cane-events`), which decides whether to text family. Copy the **Webhook URL** and
+**key** from that routine's panel in Grok Bot into `Secrets.plist`:
+
+```xml
+<key>OPENCANE_GROKBOT_WEBHOOK_URL</key>
+<string>https://…</string>
+<key>OPENCANE_GROKBOT_WEBHOOK_KEY</key>
+<string>…</string>
+```
+
+Both names are also read from the **process environment first**, so an e2e or CI run can point at a
+throwaway endpoint without touching the plist:
+
+```sh
+export OPENCANE_GROKBOT_WEBHOOK_URL="https://…"
+export OPENCANE_GROKBOT_WEBHOOK_KEY="…"
+```
+
+The switch is **Settings → Family alerts → "Send cane events to family"**, off by default (it sends
+the walker's position off the phone). **"Send test event"** posts one sample `fall` event and speaks
+what came back; it works even while the switch is off, which is how you check the chain before a
+walk.
+
+What each detection becomes — thresholds in `FamilyAlertPolicy` (CaneKitLogic, unit-tested):
+
+| Detection | Event | Severity | Rate limit |
+|---|---|---|---|
+| Periodic GPS | `location` | `info` (chat-only) | one per 120 s |
+| Close obstacle (≤ 1.2 m) | `obstacle` | `warn` | one per 60 s |
+| Phone battery ≤ 20 % | `low_battery` | `warn` | once per discharge (re-arms above 30 %) |
+| Fall | `fall` | `critical` | never limited |
+| SOS | `sos` | `critical` | never limited |
+
+⚠ **No fall detector and no SOS control exist yet.** `FamilyAlerts.fall(…)` / `.sos(…)` are written
+and tested, but nothing calls them except the test button — see `docs/todo.md`.
+
+⚠ **HTTP 200 means the bot accepted the call and started a run — not that an SMS was sent.** The bot
+decides who to text afterwards, from `severity` and `type`. No string in the app says "family
+notified", and none should.
+
+Verify the webhook by hand:
+
+```sh
+curl -X POST "$OPENCANE_GROKBOT_WEBHOOK_URL" \
+  -H "Authorization: Bearer $OPENCANE_GROKBOT_WEBHOOK_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "fall",
+    "severity": "critical",
+    "timestamp": "2026-09-12T20:30:00Z",
+    "lat": 40.1106,
+    "lng": -88.2284,
+    "note": "Possible fall detected",
+    "cane_id": "opencane-01",
+    "user": "Tejas"
+  }'
+```
+
+A success looks like `{"success":true,"runUuid":"…"}`.
 
 Permissions are declared in `project.yml` and prompted on first use:
 

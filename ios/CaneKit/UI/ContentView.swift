@@ -138,6 +138,7 @@ private struct SettingsPage: View {
             HapticsCard()
             WatchCard()
             mountSettings($model)
+            familyAlertsCard($model)
             capabilityCard
         }
     }
@@ -163,6 +164,38 @@ private struct SettingsPage: View {
             // ⚠ test contract: switches["Write trip log"].
             Toggle("Write trip log", isOn: model.loggingEnabled)
                 .accessibilityHint("Saves a JSONL log of lanes, cues and location to the Files app")
+        }
+        .font(CKFont.body)
+        .foregroundStyle(CKColor.textPrimary)
+    }
+
+    /// "Family alerts" card: the opt-in plus the end-to-end test send.
+    ///
+    /// ⚠ Wording contract, not decoration: a 200 from the webhook means the Grok Bot routine
+    /// **started a run**, not that anyone was texted — the bot decides that afterwards from the
+    /// event's `severity` and `type`. No string here may say "family notified".
+    ///
+    /// The card explains itself when no webhook key is configured (Secrets.plist), because a
+    /// switch that silently does nothing is worse than one that says why.
+    /// - Parameter model: the `@Bindable` model from `body`.
+    private func familyAlertsCard(_ model: Bindable<AppModel>) -> some View {
+        CKCard(title: "Family alerts") {
+            Toggle("Send cane events to family", isOn: model.familyAlertsEnabled)
+                .accessibilityHint("Sends falls, close obstacles, low battery and a position every few minutes to the OpenCane Grok Bot, which decides whether to text your family")
+                .disabled(!self.model.family.isConfigured)
+            if !self.model.family.isConfigured {
+                Text("No webhook key. Add OPENCANE_GROKBOT_WEBHOOK_URL and _KEY to Secrets.plist.")
+                    .font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+            }
+            CKBigButton(title: "Send test event", systemImage: "antenna.radiowaves.left.and.right",
+                        role: .secondary,
+                        hint: "Posts one sample fall event to the Grok Bot routine and reports what it answered") {
+                Task { await self.model.sendFamilyTestEvent() }
+            }
+            if let status = self.model.family.lastStatus {
+                Text(status).font(CKFont.secondary).foregroundStyle(CKColor.textPrimary)
+                    .accessibilityLabel("Last family alert: \(status)")
+            }
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
