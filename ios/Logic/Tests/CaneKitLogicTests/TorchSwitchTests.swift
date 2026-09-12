@@ -8,10 +8,21 @@
 //  same instant it set the torch, before iOS updated it, so the switch snapped back, said the
 //  flashlight had failed, and the walker had to press twice for every change.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/TorchSwitch.swift` (`request`, `report`, `tick`,
+//  `displayed`, `isSettling`, `Configuration.settleSeconds` 2 s — a hypothesis, `Outcome.spokenLine`
+//  / `queueSeconds`, `allSpokenLines`). Callers: `AppModel.setTorch` (request), `observeTorch` (KVO
+//  on `isTorchActive` → report), the settle-deadline task (tick with `now: .infinity`) and
+//  `applyTorch` (speaks the outcome); `AppModel.commonLines` prefetches `allSpokenLines`.
+//  Also caught (Step 34 review): a quick OFF→ON announced as the device acting alone
+//  (`quickReversalSpeaksOnce`) and a deadline that never fired across system sleep
+//  (`infiniteTickAlwaysResolves`). Public API only.
+//
 
 import CaneKitLogic
 import Testing
 
+/// The flashlight switch state machine, driven with explicit times (seconds, any monotonic clock)
+/// exactly as `AppModel` drives it; no AVFoundation.
 @Suite("Torch switch")
 struct TorchSwitchTests {
 

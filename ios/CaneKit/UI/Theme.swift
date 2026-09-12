@@ -28,6 +28,11 @@
 //  Swift 6, default MainActor isolation (project.yml). The colour helper is `nonisolated`
 //  because UIKit may resolve dynamic colours off the main thread.
 //
+//  Owners / callers: every file in ios/CaneKit/UI (the watch has its own `WatchTheme.swift`).
+//  Tests: none unit-level (tokens are values); `CaneKitUITests` query the labels `CKBigButton`
+//  sets, and `make tour` (`CaneKitVisualTour`) is the visual check. Contrast ratios quoted below
+//  come from docs/design.md §2 and must be re-checked there when a hex value changes.
+//
 
 import SwiftUI
 import UIKit
@@ -111,7 +116,8 @@ enum CKColor {
 // MARK: - Type
 
 /// Text styles. System faces only: SF Pro for prose, SF Rounded for glanceable numbers and
-/// button labels, SF Mono for the developer footer. Everything scales with Dynamic Type.
+/// button labels, SF Mono reserved for developer-only views (`mono`, unused since the debug
+/// footer was removed in Step 11). Everything scales with Dynamic Type.
 ///
 /// Implements the scale table in docs/design.md §1. `secondary` (15 pt) is the smallest size a
 /// user ever reads; `mono` (13 pt) is allowed only inside `accessibilityHidden` developer views.
@@ -122,7 +128,9 @@ enum CKFont {
     }
     /// Metres inside a depth tile (28 pt base). Readable from a metre away.
     static let tile        = Font.system(.title, design: .rounded).weight(.bold).monospacedDigit()
-    /// Current instruction. Max 3 lines, then `minimumScaleFactor(0.8)`, never truncated.
+    /// Current instruction (`GuideCard`) and the Sense status line. No line cap is applied at the
+    /// call sites (`lineLimit(nil)` + vertical `fixedSize`): the text wraps and is never truncated
+    /// or shrunk — the spotter reads it over the walker's shoulder.
     static let instruction = Font.system(.title2, design: .default).weight(.semibold)
     /// Big button labels.
     static let button      = Font.system(.title3, design: .rounded).weight(.semibold)
@@ -134,7 +142,8 @@ enum CKFont {
     static let pill        = Font.system(.subheadline, design: .rounded).weight(.bold)
     /// Hints and secondary lines. The smallest user-facing size.
     static let secondary   = Font.subheadline
-    /// Developer footer only; the view must be `accessibilityHidden(true)`.
+    /// Developer-only views; the view must be `accessibilityHidden(true)`. Currently unused (the
+    /// debug footer it was made for is gone).
     static let mono        = Font.system(.footnote, design: .monospaced).monospacedDigit()
 }
 
@@ -154,7 +163,7 @@ enum CKSpacing {
     static let lg: CGFloat = 16     // card padding; between big buttons
     /// 24 pt: between sections (cards on the root scroll view).
     static let xl: CGFloat = 24     // between sections
-    /// 32 pt: above the button stack on Guide.
+    /// 32 pt: above the button stack on Guide (design.md §3). Not referenced by any view today.
     static let xxl: CGFloat = 32    // above the button stack on Guide
     /// 20 pt: screen-edge padding.
     static let gutter: CGFloat = 20 // screen edge
@@ -168,13 +177,15 @@ enum CKRadius {
     static let button: CGFloat = 18 // ¼ of the 72 pt height: a slab, not a pill
     /// Cards.
     static let card: CGFloat = 20
-    /// Status pills (effectively a capsule).
+    /// Status pills (effectively a capsule). Not referenced: `CKStatusPill` draws a `Capsule()`.
     static let pill: CGFloat = 999
 }
 
 /// Touch-target and stroke metrics (docs/design.md §3 "Touch targets", §8 "Border width").
 enum CKMetrics {
-    /// Minimum height of anything tappable on the phone. Big buttons use `bigButton`.
+    /// Minimum height of anything tappable on the phone that is not a `CKBigButton` (Go, the
+    /// destination field, its clear button and suggestion rows, the haptic / wrist test buttons,
+    /// the share button, each tab). Big buttons use `bigButton`.
     static let touchTarget: CGFloat = 60
     /// `CKBigButton` minimum height (design.md §3: 72 pt, full or half width).
     static let bigButton: CGFloat = 72
@@ -186,8 +197,10 @@ enum CKMetrics {
 
 // MARK: - CKBigButton
 
-/// The only button on Guide, Route and Arrival. ≥ 72 pt tall, full width by default, a word plus
-/// an SF Symbol, and a VoiceOver hint that says what happens (docs/design.md §6 has the copy).
+/// The action button of the app: every Guide button except Go and the destination field's own
+/// controls, plus "Speech test" and the self-test buttons. ≥ 72 pt tall, full width by default, a
+/// word plus an SF Symbol, and a VoiceOver hint that says what happens (docs/design.md §6 has the
+/// copy).
 ///
 /// Accessibility: label = `title` (⚠ test contract: XCUITests find it as `app.buttons[title]`),
 /// hint = `hint`, value = `value`; the SF Symbol is hidden so VoiceOver reads the word once.
@@ -210,6 +223,8 @@ struct CKBigButton: View {
     /// Tap handler. Runs on the main actor.
     let action: () -> Void
 
+    /// A `Button` whose label restacks icon-over-text when a row will not fit, framed to the
+    /// full width and `bigButton` height, styled by `CKBigButtonStyle`.
     var body: some View {
         Button(action: action) {
             // At accessibility text sizes the row won't fit, so the label stacks under the icon.
@@ -245,12 +260,18 @@ struct CKBigButton: View {
     }
 }
 
-/// Fill + border per role, press feedback that respects Reduce Motion, a visible focus ring.
+/// Fill + border per role and press feedback that respects Reduce Motion. (There is no custom
+/// focus ring; an older comment here promised one.)
 ///
 /// Implements docs/design.md §4 "Big button press": scale 0.97 on a 120 ms spring, or opacity
-/// 0.85 only under Reduce Motion; the light impact haptic is kept either way (it fires on
-/// release). Tab-switch motion and its selection haptic live on `CKTabBar` (§4, §7).
+/// 0.85 only under Reduce Motion; the light impact haptic is kept either way. ⚠ It fires on the
+/// **press-down** edge, not on release: `sensoryFeedback(_:trigger:condition:)` passes
+/// `(oldValue, newValue)`, so `$0 == false && $1` is "was not pressed, now is". design.md §4 and
+/// CODE_REFERENCE say "on release"; the code is the truth until someone decides otherwise.
+/// Tab-switch motion and its selection haptic live on `CKTabBar` (§4, §7).
 /// Disabled buttons drop to 40 % opacity; VoiceOver announces "dimmed" from `.disabled`.
+/// Also applied directly to plain `Button`s / `ShareLink`: Go, the haptic and wrist test buttons,
+/// "Share hazard map".
 struct CKBigButtonStyle: ButtonStyle {
     /// Picks fill, foreground and border; shared with `CKBigButton.Role`.
     let role: CKBigButton.Role
@@ -315,11 +336,14 @@ struct CKStatusPill: View {
     var tone: Tone = .neutral
     /// Optional leading SF Symbol (a companion; the element's label comes from the text).
     var systemImage: String? = nil
-    /// VoiceOver value when the visible text is too terse ("82%" → "Battery 82 percent").
+    /// VoiceOver **label** (not value) when the visible text is too terse ("82%" → "Battery 82
+    /// percent"); nil reads `text` as written (not uppercased).
     var spoken: String? = nil
     /// Set for pills that change on their own (TRUSTED/SWEEPING) so VoiceOver re-reads them.
     var updatesFrequently: Bool = false
 
+    /// Optional bold icon + uppercased, tracked, tabular text that never wraps (it scales down to
+    /// 80 % instead), on a `Capsule` fill at least 32 pt tall.
     var body: some View {
         HStack(spacing: CKSpacing.xs) {
             if let systemImage {
@@ -371,9 +395,9 @@ struct CKStatusPill: View {
 ///
 /// docs/design.md §3 (radius 20, `lg` padding, no shadow) and §8 ("`CKCard(title:)` groups
 /// children as one VoiceOver container"). The title is drawn as a `.isHeader` so the headings
-/// rotor stops on "Guide", "Obstacles", "Haptics", "Watch", "Mount", "This phone", "Arrived" /
-/// "This trip". An untitled card (ContentView's status card) gets an empty label here and sets
-/// its own label afterwards.
+/// rotor stops on "Guide", "Arrived" / "This trip" (Guide page); "Obstacles", "Hazards" (Sense);
+/// "Cues", "Haptics", "Watch", "Mount", "This phone" (Settings). An untitled card (the Sense
+/// page's status card) gets an empty label here and sets its own label afterwards.
 struct CKCard<Content: View>: View {
     /// Optional card heading; also the container's VoiceOver label.
     var title: String? = nil
@@ -382,6 +406,8 @@ struct CKCard<Content: View>: View {
     /// Increase Contrast thickens the card border to 3 pt.
     @Environment(\.colorSchemeContrast) private var contrast
 
+    /// Title (header trait) then the rows, `lg` padding, full width, `surface` fill in a
+    /// continuous `card`-radius shape with a hairline (3 pt under Increase Contrast). No shadow.
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CKRadius.card, style: .continuous)
         VStack(alignment: .leading, spacing: CKSpacing.md) {

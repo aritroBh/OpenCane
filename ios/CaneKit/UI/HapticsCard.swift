@@ -15,6 +15,13 @@
 //    ⚠ test contract switch: "Silence haptics" (`app.switches["Silence haptics"]`).
 //  Pills speak full sentences via `spoken`; the live ones carry `.updatesFrequently`.
 //
+//  Owner / caller: `SettingsPage` in ContentView.swift (after the Cues card).
+//  Data: `AppModel.haptics` (`HapticPlayer`), `AppModel.speech` (`SpeechQueue`: speaking state,
+//  voice backend, `voiceError`, `audioSessionError`), `activeCue`, `hapticsSilenced`,
+//  `obstacleNamesEnabled`.
+//  Tests: `CaneKitUITests.testHapticTestButtonsAndSilenceToggle` (the four buttons + the switch)
+//  and `CaneKitVisualTour`. The patterns themselves are felt on the device, not tested.
+//
 
 import CaneKitLogic
 import SwiftUI
@@ -25,6 +32,10 @@ struct HapticsCard: View {
     /// App-wide owner of `haptics`, `speech`, `activeCue` and the persisted toggles.
     @Environment(AppModel.self) private var model
 
+    /// Rows top to bottom: engine + active-cue pills, haptic error, "Silence haptics", the four
+    /// pattern buttons, "Speak obstacle names" (off by default; which names are said depends on
+    /// the Cues card), speaking + voice-backend pills, the quiet `voiceError` diagnostic, "Speech
+    /// test", and the audio-session error in red.
     var body: some View {
         @Bindable var model = model
         CKCard(title: "Haptics") {

@@ -17,6 +17,14 @@
 //    · The hard cap `maxListen` still applies: with words it is a submit, without words a timeout.
 //    · Deterministic: the caller passes `now`, so tests need no clock.
 //
+//  Owner: `VoiceInputEngine` (app, `ios/CaneKit/Conversation/`, main actor) creates one detector per
+//  listening session in `startEngine(attempt:sessionField:)`, polls it every `checkInterval` from
+//  its end ticker, and also checks it on every partial result (`recognitionUpdate` → `checkEnd`).
+//  `.endOfUtterance` → `stopListeningAndSubmit(reason: "silence")`, `.timeout` → `reason: "timeout"`;
+//  the reason is written to the `voice_end` trip-log record.
+//  Isolation: nonisolated `Sendable` value, held in one main-actor `var` and written back.
+//  Tests: UtteranceEndTests.swift (7).
+//
 
 import Foundation
 
@@ -26,8 +34,9 @@ import Foundation
 /// Why transcript stability and not audio energy: `SFSpeechRecognizer` already runs a voice
 /// activity detector and only emits a new partial result when it heard more words, so "the text
 /// stopped changing" is the same signal with none of the microphone-level tuning (street noise,
-/// wind on the cane) that an RMS gate would need. Caller: `VoiceInputEngine.startListening()`'s
-/// end ticker. ⚠ `UtteranceEndTests` pin every number and branch here.
+/// wind on the cane) that an RMS gate would need. Caller: `VoiceInputEngine.checkEnd()`, from the
+/// end ticker started in `startEngine(attempt:sessionField:)` and from `recognitionUpdate`.
+/// ⚠ `UtteranceEndTests` pin every number and branch here.
 public struct UtteranceEndDetector: Sendable, Equatable {
 
     /// Why listening should end, or that it should not.
@@ -72,10 +81,14 @@ public struct UtteranceEndDetector: Sendable, Equatable {
     }
 
     /// Record the latest transcript and decide. Idempotent after the first terminal verdict.
+    /// The cap is checked before the silence rule, so at `maxListen` a still-changing transcript is
+    /// submitted rather than lost (`theHardCapEndsAChangingTranscriptAsASubmit`). Trimmed text is
+    /// compared, so trailing whitespace from the recogniser is not a change.
     /// - Parameters:
     ///   - transcript: `bestTranscription.formattedString` of the latest partial result (or the
     ///     last one seen, on a plain tick). Whitespace-only counts as no words.
     ///   - now: the caller's clock, same base as `startedAt`.
+    /// - Returns: `.listening` until a terminal verdict, then that verdict forever.
     public mutating func update(transcript: String, now: Double) -> Verdict {
         if let ended { return ended }
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)

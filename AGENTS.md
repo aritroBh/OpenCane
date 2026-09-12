@@ -12,8 +12,8 @@ shipped code disagree, the code is the truth: fix this file (and say so in `CHAN
 OpenCane is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
 user along GPS waypoints and warns about waist-to-head obstacles. The **phone is the only computer**:
 an iPhone 17 Pro Max (iOS 27) clamped to a non-metal cane shaft — for the prototype a 27.65 mm broom
-handle, measured by the bore-ring coupons (CHANGELOG Step 21; the old 28.75 figure is retired) — plus AirPods Pro (beacon +
-speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
+handle, measured by the bore-ring coupons (CHANGELOG Step 21; the old 28.75 figure is retired) —
+plus AirPods Pro (beacon + speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
 external sensors. The demo route is ISR Townsend Hall → CIF on the UIUC campus
 (`ios/CaneKit/Resources/route_isr_cif.json`), but any destination works via MapKit walking directions.
 For the demo everything runs **untethered on the phone**; the Mac only signs and installs.
@@ -96,8 +96,9 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 7. **Audio session is one `.playback` session**, mode `.default`, `[.duckOthers]`, no Bluetooth options
    (HFP drops AirPods to phone-call quality). `CHHapticEngine(audioSession: nil)`. `.HRTF`, mono click.
    Do not "fix" the deviations listed in `ios/README.md §2` back to the original spec.
-   One opt-in exception exists: "Listen for sirens and horns" (off by default) needs an audio *input*,
-   so `SpeechQueue.setMicrophoneEnabled(_:)` moves the session to `.playAndRecord` with
+   One exception exists: an audio *input*, for "Listen for sirens and horns" (off by default, owner
+   `.soundRecognition`) or push-to-talk "Talk to OpenCane" (one utterance, owner `.voiceInput`).
+   `SpeechQueue.setMicrophoneEnabled(_:owner:)` moves the session to `.playAndRecord` with
    `[.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker]` — never `.allowBluetoothHFP` — and reverts to
    `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
    shipping code may call `setCategory` (the only other call is the debug `SensorProbe`, which runs only
@@ -440,5 +441,38 @@ bench has *disproved* must never sit in the file as though it were settled — m
 
 ## Where the plan and history live
 
-`~/.claude/plans/phone-is-king-glittery-bee.md` (approved plan, deviations, test strategy) — outside
-the repo. `CHANGELOG.md` has one entry per step with its device test list.
+- **Original plan:** `~/.claude/plans/phone-is-king-glittery-bee.md` (approved plan, deviations, test
+  strategy) — outside the repo, on the owner's Mac only.
+- **Build log:** `CHANGELOG.md`, one entry per step (newest first; Step 37 at `076fcaa`), each with
+  why, what changed, every review finding fixed or rejected with evidence, verification output, and a
+  `test on device:` list. Entries before Step 37 use the old cue-v2 step numbers (the talk floor was
+  inserted as 37 and later steps renumbered +1).
+- **Open work:** `docs/todo.md` — "Cue design v2 — Steps 35–45" is the current plan (38–45 open);
+  `docs/TEAM_HANDOFF.md` §10 is how an agent resumes it. Both status blocks are dated snapshots.
+- **Cue design research:** `docs/cue_design_v2.md` (Step 35: 4 researchers + 4 source fact-checkers,
+  74 kept findings, [H] marks hypotheses, not measurements; §3 is the design, §4 the ranked change
+  list). Speech-load research: `docs/auditory-load.md` (Step 30) and
+  `docs/superpowers/{plans,specs}/2026-09-12-speech-load*.md`.
+- **Measure first — `ios/scripts/cue_audit.py` via `cd ios && make audit`.** Before tuning any cue
+  number: it runs `--selftest`, then reads `LOG=path` or `--pull`s the newest `canekit-*.jsonl` off
+  the phone named by `DEVICE` in `ios/local.mk`. It says whether the walk was ON THE MOUNT (tilt
+  inside 3–8°), head band wall vs overhang, cues and lines per minute, suppressed lines,
+  `speech_dispatch` replays (mid-line vs from line start), cross-band pauses < 0.3 s, and any
+  `field_kind` / `field_t` app bug. A handheld log must not tune a distance. It mirrors app constants
+  by hand (`HEAD_ENTER_M = CueThresholds.head`, `MountTilt.aim`): move them together. Not part of
+  `make test`.
+- **Trip-log evidence:** trip logs are not in git. The app writes `canekit-<ISO time>.jsonl` to its
+  Documents folder ("Write trip log", on by default; Files → On My iPhone → OpenCane); `make audit`
+  pulls the newest, and `make e2e` keeps simulator logs in `ios/build/e2e/`. Cite a log by its
+  timestamp name and `t` in code comments and `CHANGELOG.md`. The logs behind Steps 34–37:
+  `2026-09-12T20-57-17Z` (torch, both-cameras, face tracking, first *handheld* cue baseline),
+  `22-02-03Z` (`back_rotation: 0`), `22-20-53Z` (per-camera rotation confirmed, cue profile taps,
+  5 of 58 lines restarted), `22-27-00Z` (37-minute handheld walk, 45 "Head height."). No log so far
+  was recorded on the mount; `docs/TEAM_HANDOFF.md` §2.3 has the table.
+- **Review and workflow expectations per step:** plan as a checklist in `docs/todo.md` (Muse on the
+  plan when large or risky) → test first in `ios/Logic` → build → adversarial multi-agent review +
+  Muse + Antigravity on the diff, every finding verified by hand and recorded in `CHANGELOG.md` as
+  fixed, rejected with evidence, or deferred to `docs/todo.md` → `make test`, `make sim`, `make uitest`
+  (+ `make tour` for UI), `make e2e` → `docs/CODE_REFERENCE.md`, `CHANGELOG.md`, `docs/todo.md`,
+  `graphify update .` in the same commit → commit message ending `test on device: …`. Say what is
+  not verified on the phone.

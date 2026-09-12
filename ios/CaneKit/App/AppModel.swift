@@ -14,8 +14,9 @@
 //  Why one class: every engine needs events from several others (a depth report feeds haptics,
 //  watch, speech, scene context and the log; a GPS fix feeds nav, trip, Live Activity, watch and
 //  auto-recenter). Keeping all wiring in one main-actor owner means there is exactly one place
-//  where the order of effects — and every trip-log field — is decided, and SwiftUI observes one
-//  object.
+//  where the order of effects is decided (and where most trip-log events are written; engines
+//  that log for themselves do it through `onDiagnostic` / `onEvent` closures installed here), and
+//  SwiftUI observes one object.
 //
 //  Owner: `CaneKitApp` creates exactly one instance (`@State`) for the process lifetime and
 //  injects it into SwiftUI with `.environment(model)`; App Intents reach it via `AppModel.shared`.
@@ -45,8 +46,10 @@
 //    · On a LiDAR phone with camera access a route never starts guidance before `DepthReadiness`
 //      reports ready (3 consecutive trusted frames, 5 s bound; `queueRouteStart`). The only
 //      routes that start at once are the documented degraded paths (no LiDAR, camera denied).
-//    · Nothing that pauses or re-runs ARKit (both cameras, face-tracking changes, self-tests) may
-//      run while a route is guiding or starting; each refusal is spoken, never silent.
+//    · Both cameras, front-camera head-tracking changes and the two sensor self-tests pause or
+//      re-run ARKit, so they are refused while a route is guiding or starting (the switches say
+//      why out loud; the debug self-tests only show it in `selfTestStatus`). ⚠ The 60 fps switch
+//      (`highFrameRateCamera`) also re-runs the session and has no such refusal today.
 //    · Trip-log field names `t` and `kind` belong to the record (`TripLogRecord`): events here
 //      name theirs `cue`, `type`, `source`, … (`ios/scripts/e2e.py` fails a run on `field_kind`).
 //
@@ -99,13 +102,16 @@ final class AppModel {
     let speech = SpeechQueue()
     /// WatchConnectivity link (step 5).
     let watch = PhoneWatchLink()
-    /// GPS + compass (step 6).
+    /// GPS + compass (step 6). Runs for the whole foreground session from `start()` (not only
+    /// during a route); stopped only when backgrounded with no route running.
     let location = LocationService()
-    /// Waypoint navigation (step 6).
+    /// Waypoint navigation (step 6). Owns the pure geofence / turn-settle / veer logic; speaks
+    /// through `onSpeak` / `onRepeat`, wired in `wireNavigation`.
     let nav = NavigationEngine()
-    /// Spatial-audio beacon (step 7).
+    /// Spatial-audio beacon (step 7). Renders only into headphones; `enabled` mirrors `beaconEnabled`.
     let beacon = BeaconEngine()
-    /// AirPods head yaw (step 7).
+    /// AirPods head yaw (step 7) and pitch (the nod-to-talk gesture). Started only while a route
+    /// runs (`startRouteNow`, or a mid-route AirPods connect).
     let head = HeadPoseTracker()
     /// Head yaw from the **front** camera's `ARFaceAnchor`, running beside LiDAR depth — the
     /// fallback that makes the AirPods optional (step 14).
@@ -124,7 +130,9 @@ final class AppModel {
     let trip = TripTracker()
     /// Dynamic Island / lock screen (step 9).
     let liveActivity = LiveActivityController()
-    /// LiDAR facts handed to the on-device describer ("1.4 meters ahead, obstacle.").
+    /// LiDAR facts handed to the on-device describer ("1.4 meters ahead, obstacle."). A
+    /// `Sendable` lock-guarded box: written here on the main actor (`contextLine` per report),
+    /// read off-main by the on-device VLM client. Built in `init` (the VLM client needs it).
     let sceneContext: SceneContext
     /// Camera hazards: signs (on-device) + hazard watch (cloud → on-device, or on-device).
     let hazards: HazardScanner
@@ -223,6 +231,8 @@ final class AppModel {
     /// One-line status for the header ("Depth OK", "No LiDAR", …).
     var status: String { depth.status }
     /// Set once `start()` has run; guards against double starts from `.task` re-entry.
+    /// Also what `IntentSupport.model()` waits for (an intent must not act on an unwired model)
+    /// and what `scenePhaseChanged` / `updateThermal` check before acting.
     private(set) var started = false
     /// Thermal state name, set by `updateThermal` (which also applies the heat downgrade).
     /// One of `nominal|fair|serious|critical|unknown`; also written into every `lanes` log line
@@ -310,7 +320,7 @@ final class AppModel {
         didSet { Settings.set(beaconEnabled, "beaconEnabled"); beacon.enabled = beaconEnabled }
     }
     /// Mirror every obstacle cue to the watch even while the phone engine is healthy.
-    /// Read in `handle(_:)` only.
+    /// Read in `handle(_:)` and `groundHazardFound`; not pushed anywhere.
     var fallbackToWatch: Bool = Settings.bool("fallbackToWatch", default: false) {
         didSet { Settings.set(fallbackToWatch, "fallbackToWatch") }
     }
@@ -453,7 +463,8 @@ final class AppModel {
         }
     }
 
-    /// Install the one `isTorchActive` observer. KVO calls back on an arbitrary thread, so the
+    /// Install the one `isTorchActive` observer (no-op after the first call). Caller: `setTorch`.
+    /// KVO calls back on an arbitrary thread, so the
     /// `@Sendable` closure only hops to the main actor (AGENTS.md hard rule 1). The hop re-reads
     /// `torchDevice.isTorchActive` rather than trusting `change.newValue`: unstructured main-actor
     /// tasks are not guaranteed FIFO, and reordered snapshots could leave the switch showing a
@@ -475,6 +486,11 @@ final class AppModel {
     /// Publish a `TorchSwitch` outcome: update the switch, speak its fixed line at `.scene` for
     /// `Outcome.queueSeconds` (4 s for a confirmation, 12 s for a failure or device change), log it.
     /// `.none` only refreshes the switch. Main actor.
+    /// - Parameters:
+    ///   - outcome: what `TorchSwitch.report` / `tick` decided.
+    ///   - active: the device's `isTorchActive` read on this hop (logged as `active`).
+    ///   - error: a thrown lock / set error's description, logged as `error` when present.
+    /// Callers: `setTorch` (thrown error), its deadline task, the KVO hop in `observeTorch`.
     private func applyTorch(_ outcome: TorchSwitch.Outcome, active: Bool, error: String? = nil) {
         torchEnabled = torchSwitch.displayed
         guard let line = outcome.spokenLine else { return }
@@ -1091,7 +1107,8 @@ final class AppModel {
     /// One `multicam_depth` record: could a future CaneKit show both cameras and *keep* a depth
     /// stream (AVFoundation) instead of pausing ARKit as this build does? Pure capability reading —
     /// no session, no camera, no permission — so it runs detached and never delays the launch.
-    /// The verdict itself is `MultiCamDepth` in CaneKitLogic, with tests.
+    /// The verdict itself is `MultiCamDepth` in CaneKitLogic, with tests (`MultiCamDepthTests`).
+    /// Caller: the last line of `start()`. The detached task hops back to the main actor only to log.
     private func logMultiCamDepthProbe() {
         Task.detached(priority: .utility) { [weak self] in
             let result = MultiCamDepthProbe.measure()
@@ -1191,6 +1208,7 @@ final class AppModel {
     /// in the same turn of the run loop as before. Nothing here can delay a warning that the
     /// system could otherwise have given: while the capture session holds the cameras there is no
     /// depth to warn from.
+    /// Caller: `scenePhaseChanged(.active)`.
     private func resumeARKitAfterCameraWork() {
         guard let work = bothCamerasWork else {
             resumeARKitPipelines()
@@ -1217,6 +1235,8 @@ final class AppModel {
     /// — the walker switched it off themselves and was told so out loud — and it comes back the
     /// moment the switch goes off (`setBothCameras(false)`) or the app is backgrounded (the
     /// teardown is queued, and the next `.active` waits for it and then lands here again).
+    /// Logs `both_cameras {action: arkit_resume_skipped_session_running}` when it refuses.
+    /// Caller: `resumeARKitAfterCameraWork` only (the two-camera off path resumes inline).
     private func resumeARKitPipelines() {
         guard !bothCameras.isRunning else {
             logger.event("both_cameras", ["action": "arkit_resume_skipped_session_running"])
@@ -1519,6 +1539,8 @@ final class AppModel {
     /// leave both cameras held with ARKit paused — the exact state this feature must never be left
     /// in. Chaining makes the last tap win, always.
     /// - Parameter body: main-actor work that starts or stops the session.
+    /// Callers: `setBothCameras` (on and off paths), `scenePhaseChanged(.background)` (teardown
+    /// only). Readers of the chain: `resumeARKitAfterCameraWork`, `queueRouteStart`.
     private func serializeBothCameras(_ body: @escaping @MainActor () async -> Void) {
         let previous = bothCamerasWork
         bothCamerasGeneration &+= 1
@@ -2575,7 +2597,8 @@ final class AppModel {
     }
 
     /// Enables battery monitoring, reads the initial values and subscribes to thermal / battery
-    /// notifications for the process lifetime. Called once from `start()`.
+    /// notifications for the process lifetime. Called once from `start()`. The observers capture
+    /// `[weak self]` and are never removed (the model lives as long as the process).
     private func observeThermalAndBattery() {
         UIDevice.current.isBatteryMonitoringEnabled = true
         updateBattery()
@@ -2595,7 +2618,11 @@ final class AppModel {
 
     /// Maps the thermal state to `thermalName` and applies the cheapest downgrade: mesh
     /// classification off at `.serious` or `.critical` (obstacle names then go silent; the lane
-    /// haptics keep running).
+    /// haptics keep running), and the camera hazard scanner paused (`hazards.paused`: signs and
+    /// the hazard watch; the live view shows "phone is hot"). LiDAR ground hazards are not paused.
+    /// The spoken notice is gated on `started`, which `start()` sets before its first
+    /// `observeThermalAndBattery()` read — so a phone that launches hot says so once, at launch.
+    /// Callers: `observeThermalAndBattery` (initial read and every thermal notification).
     private func updateThermal() {
         switch ProcessInfo.processInfo.thermalState {
         case .nominal: thermalName = "nominal"
@@ -2614,6 +2641,7 @@ final class AppModel {
     }
 
     /// `batteryLevel` is 0…1, or negative when unknown (simulator) → `batteryPercent` 0–100 / -1.
+    /// Callers: `observeThermalAndBattery` (initial read and every battery-level notification).
     private func updateBattery() {
         let level = UIDevice.current.batteryLevel
         batteryPercent = level < 0 ? -1 : Int((level * 100).rounded())
@@ -2622,6 +2650,14 @@ final class AppModel {
 
 /// Thin UserDefaults wrapper so settings stay one-liners above.
 /// Keys are the AppModel property names; main-actor by the target default.
+///
+/// Persisted keys today: `portraitMode`, `mirrorLeftRight`, `hapticsSilenced`, `loggingEnabled`,
+/// `obstacleNamesEnabled`, `cueLevel`, `cuePlace` (String raw values), `beaconEnabled`,
+/// `fallbackToWatch`, `groundHazardsEnabled`, `signsEnabled`, `hazardWatchEnabled`,
+/// `namePeopleEnabled`, `highFrameRateCamera`. Deliberately NOT persisted: `liveViewEnabled`,
+/// `bothCamerasEnabled`, `faceHeadTrackingEnabled`, `dangerSoundsEnabled`, `nodToTalkEnabled`,
+/// `torchEnabled`. The launch marker is a file, not a key (see `markerURL`).
+/// Tests: `LaunchRecoveryTests` (the recovery rule and its key list).
 enum Settings {
 
     /// How this launch is running — and the side effect that makes it true.
@@ -2683,8 +2719,9 @@ enum Settings {
     }
 
     /// This launch got far enough to be trusted: drop the marker so the next launch is normal.
-    /// Called by `AppModel.start()` after `LaunchRecovery.healthySeconds`, and at once when the
-    /// walker deliberately backgrounds the app (an app someone is using is an app that started).
+    /// Called from `AppModel.observeLaunchHealth()` (armed by `start()`): after
+    /// `LaunchRecovery.healthySeconds` (10 s), and at once when the walker deliberately backgrounds
+    /// the app (an app someone is using is an app that started). Idempotent (`try?` remove).
     static func markLaunchHealthy() {
         try? FileManager.default.removeItem(at: markerURL)
     }

@@ -22,7 +22,9 @@
 //  police_siren, ambulance_siren, fire_engine_siren, civil_defense_siren, emergency_vehicle,
 //  car_horn, air_horn, train_horn, bicycle_bell, car_passing_by, traffic_noise, engine,
 //  engine_idling, bus, truck, motorcycle — and "vehicle", "car", "honk", "car_alarm",
-//  "tire_squeal" and friends do **not**.
+//  "tire_squeal" and friends do **not**. (`bicycle_bell` exists but has since been removed from the
+//  horn set, and `car_alarm` from the siren set — `SoundAlerts.labels` says why; with today's
+//  28-label table that measurement implies 16 matches.)
 //
 //  Audio session — the real cost, stated plainly. `.playback` has no input, so this feature needs
 //  `.playAndRecord`, which AGENTS.md hard rule 7 and ios/README.md §2 deliberately forbid as the
@@ -37,7 +39,17 @@
 //  `routeChanged(from:to:)` here and stops the watcher. Speech, obstacle warnings and the
 //  beacon are the safety path; a microphone feature never outranks them.
 //
-//  Owner: `AppModel.sounds` (one instance).
+//  Owner: `AppModel.sounds` (one instance). Wiring: `AppModel.wireSounds()` (`onAlert` → speech
+//  `.nav` for a siren / `.obstacle` otherwise with `DangerSound.speechTTL`; `onFailure` → switch off
+//  + one `.obstacle` line, ttl 10; `onDiagnostic` → trip log). Readers: the Hazards card
+//  (`isAvailable`, `lastAlert`, `lastError`, `labelReport`) and `AppModel`'s push-to-talk restore
+//  guard (`ownsMicrophoneSession`).
+//
+//  Tests: none for this class (microphone, SoundAnalysis, device-only). Its decisions are pinned in
+//  CaneKitLogic `SoundAlertsTests`: `SoundAlertPolicy` gates / agreement / repeat intervals,
+//  `SoundAlerts.best(of:)`, `MicrophoneStart`, and the six `SoundRecognitionGuard` lifecycle
+//  scenarios (route flapping, HFP, permission race, analyzer death, startup settle). Device checks:
+//  CHANGELOG Step 28 "test on device" (AirPods HFP is still unmeasured).
 //
 //  ─────────────────────────────────────────────────────────────────────────────────────────────
 //  WHAT PRIORITY AN EMERGENCY SIREN GETS, AND WHY IT IS NOT `.safety`
@@ -87,7 +99,9 @@
 //  buffer also makes the analyser report a failure on what was a perfectly clean stop.
 //
 //  Key invariants:
-//    · Nothing runs until `start()`, and `start()` is only called from the Hazards card's switch.
+//    · Nothing runs until `start()`, and `start()` only runs while the (off-by-default) Hazards
+//      card switch is on: its `didSet`, and `AppModel.start()` / `scenePhaseChanged(.active)` when
+//      the persisted setting was already on.
 //    · A degraded audio route always wins: input and output ports are snapshotted, HFP/missing
 //      input or any output move restores `.playback`, `lastError` is set, and `isRunning` is false.
 //    · `stop()` always restores `.playback`, even if the engine failed half-way up.
@@ -119,37 +133,46 @@ final class SoundWatcher {
     /// True while the microphone tap and the analyser are live.
     private(set) var isRunning = false
     /// True while this watcher owns the shared microphone lease, including the short startup
-    /// interval before its tap/analyser has become live. `VoiceInputEngine` uses this to avoid
-    /// attempting to restore or replace the session during that interval.
+    /// interval before its tap/analyser has become live. `VoiceInputEngine` uses this (through
+    /// `AppModel`'s `shouldRestorePlaybackSession` closure) to avoid attempting to restore or replace
+    /// the session during that interval.
     var ownsMicrophoneSession: Bool { sessionHeld || isRunning }
     /// Last line spoken because of a sound ("Siren. Do not start crossing."), for the Hazards card.
     private(set) var lastAlert: String?
     /// Why the watcher is not running: a refused microphone, a degraded audio route, or an engine
     /// failure. Shown on the Hazards card in the warning colour; never cleared silently.
     private(set) var lastError: String?
-    /// "17 of 30 labels available" — proof in the UI that the classifier really has the labels
-    /// this build matches on.
+    /// "N of M labels available" (M = `SoundAlerts.candidateLabels.count`, 28 today) — proof in the UI
+    /// that the classifier really has the labels this build matches on. Set by `buildLabelTable`;
+    /// shown on the Hazards card only while running.
     private(set) var labelReport = ""
 
-    /// Fired on the main actor for each sound worth announcing. `AppModel` speaks it and logs it.
+    /// Fired on the main actor for each sound worth announcing (already through `SoundAlertPolicy`).
+    /// `AppModel` speaks `spokenLine` — a siren at `.nav`, horn / vehicle at `.obstacle` — and logs it.
     @ObservationIgnored var onAlert: ((DangerSound) -> Void)?
     /// Fired on the main actor, once, when the watcher gives up for any reason: microphone
     /// refused, audio route degraded, analyser dead, engine dead.
     ///
     /// By the time it fires the session has attempted to return to `.playback` and `isRunning` is
     /// false, so the handler's only job is the part this object cannot do: put
-    /// `AppModel.dangerSoundsEnabled` back to off and say the message once. A restore failure is
+    /// `AppModel.dangerSoundsEnabled` back to off and say the message once (`.obstacle`, ttl 10 —
+    /// a dead microphone is never more urgent than an obstacle or a route line). A restore failure is
     /// included in that cue. Without it the switch stayed on after a failed
     /// start, and every foregrounding retried, failed and announced again
     /// (`AppModel.wireSounds()`).
     @ObservationIgnored var onFailure: ((String) -> Void)?
-    /// Trip-log hook: `(kind, fields)`, wired by `AppModel.wireSounds()`.
+    /// Trip-log hook: `(kind, fields)`, wired by `AppModel.wireSounds()`. Kinds: `sound_watch`
+    /// (`action`: session, session_reverted, session_failed, format_wait, start, stop,
+    /// route_changed_stopped, interruption_stopped, interruption_ended_ignored, permission_revoked,
+    /// engine_configuration_failed, analysis_failed, session_restore_failed), `sound_watch_labels`
+    /// and `sound_alert`.
     @ObservationIgnored var onDiagnostic: ((String, [String: Any]) -> Void)?
 
     // MARK: Private
 
-    /// The one audio engine for the microphone tap; created lazily on first `start()` and reused,
-    /// because a fresh `AVAudioEngine` per start leaks render threads.
+    /// The one audio engine for the microphone tap; created with the watcher and reused by every
+    /// `start()`, because a fresh `AVAudioEngine` per start leaks render threads. Separate from
+    /// `BeaconEngine`'s and `VoiceInputEngine`'s engines.
     @ObservationIgnored private let engine = AVAudioEngine()
     /// Serial queue the analyser runs on (Apple: "running the stream analyzer on a dedicated
     /// dispatch queue" keeps the audio engine responsive). Every analyser call runs here.
@@ -220,6 +243,7 @@ final class SoundWatcher {
     /// without the model). Evaluated once; gates the Hazards card's switch.
     static let isAvailable: Bool = (try? SNClassifySoundRequest(classifierIdentifier: .version1)) != nil
 
+    /// Does nothing else: no permission prompt, no session change, no observers until `start()`.
     /// - Parameter speech: `AppModel.speech`, which owns the audio session.
     init(speech: SpeechQueue) {
         self.speech = speech
@@ -519,6 +543,10 @@ final class SoundWatcher {
     /// the walker still learns why the feature went away. A restore failure is surfaced through
     /// the existing `onFailure` cue when `reportRestoreFailure` is true; failure paths pass false
     /// so their primary reason and the restore detail are spoken once together.
+    /// - Parameter reportRestoreFailure: true (user stop) surfaces a failed `.playback` restore at
+    ///   once through `lastError` / `onFailure`; failure paths pass false and let `fail` merge it.
+    /// - Returns: the restore failure message, or nil when there was nothing to tear down or the
+    ///   restore succeeded.
     @discardableResult
     func stop(reportRestoreFailure: Bool = true) -> String? {
         // Before the early return, not after: a start that is still waiting for the prompt or the
@@ -600,9 +628,13 @@ final class SoundWatcher {
     /// AirPods negotiating HFP take a few hundred milliseconds, by which time the switch has
     /// already reported success. The spoken line deliberately does not read the port names out
     /// loud ("BluetoothHFP" means nothing to a walker); they go to the trip log instead.
+    /// ⚠ One exception: for the startup settle (same output, input unavailable → usable)
+    /// `SpeechQueue` keeps `.playAndRecord` and only moves its baseline; `lifecycle.routeChanged`
+    /// then does not stop, so this returns without touching the session.
     /// - Parameters:
     ///   - before: the route snapshot when the microphone was granted.
     ///   - after: the route snapshot now.
+    ///   - generation: `self.generation` when the hook was installed; a stale hook does nothing.
     private func routeChanged(from before: SoundRecognitionRoute, to after: SoundRecognitionRoute,
                               generation: Int) {
         guard self.generation == generation else { return }
@@ -640,6 +672,9 @@ final class SoundWatcher {
     /// call or Siri can leave SoundAnalysis alive but starved of frames; stopping immediately is
     /// safer than pretending a silent classifier is still listening. SpeechQueue handles its own
     /// speech interruption independently, so this only disables the optional sound watch.
+    /// - Parameters:
+    ///   - type: decoded from the notification on the main queue.
+    ///   - generation: `self.generation` when the observer was installed (`startGrantedSession`).
     private func interruptionChanged(_ type: AVAudioSession.InterruptionType, generation: Int) {
         guard self.generation == generation else { return }
         switch type {
@@ -661,6 +696,9 @@ final class SoundWatcher {
     /// while this object owns the microphone, at a bounded Logic-pinned cadence, and tear the task
     /// down with the rest of the session. Route/interruption callbacks also call this check through
     /// `permissionRevokedIfNeeded` for immediate coverage of those transitions.
+    /// Every `SoundRecognitionGuard.permissionPollInterval` (0.5 s) it also checks that the engine is
+    /// still running and treats a silently stopped engine as a configuration failure. Started once
+    /// the session is granted; cancelled by `stop()` and `fail`.
     private func startPermissionWatch() {
         permissionWatchTask?.cancel()
         permissionWatchTask = Task { @MainActor [weak self] in
@@ -690,6 +728,8 @@ final class SoundWatcher {
     /// An input format/configuration change invalidates the analyser's bound stream. Treat it as a
     /// hard failure even if SoundAnalysis has not emitted `didFailWithError` yet; the next buffer
     /// would otherwise be consumed by a stale tap with no trustworthy classifications.
+    /// - Parameter generation: the observer's captured run token; nil from the permission poll,
+    ///   which is itself cancelled on stop.
     private func engineConfigurationChanged(generation: Int? = nil) {
         if let generation, self.generation != generation { return }
         permissionRevokedIfNeeded()
@@ -722,6 +762,8 @@ final class SoundWatcher {
         }
     }
 
+    /// The short sentence a walker hears for each failure — plain words, no port names or error
+    /// codes; passed as `spoken` to `fail`, which `AppModel` speaks once at `.obstacle`.
     private func spokenFailureMessage(for reason: SoundRecognitionFailure) -> String {
         switch reason {
         case .outputRouteChanged, .inputRouteDegraded:
@@ -877,12 +919,17 @@ final class SoundWatcher {
 /// error — so a clean stop reported a failure to the walker.
 private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
 
+    /// The analyser this pump owns access to; touched only inside `queue`.
     private let analyzer: SNAudioStreamAnalyzer
+    /// `SoundWatcher.analysisQueue` — the single serial queue Apple requires for the analyser.
     private let queue: DispatchQueue
     /// True once `finish()` has run. **Only ever read or written inside `queue`**, which is what
     /// makes it race-free without a lock: the serial queue is the synchronisation.
     private var finished = false
 
+    /// - Parameters:
+    ///   - analyzer: already has its request added (on main, before any tap exists).
+    ///   - queue: the serial analysis queue.
     init(analyzer: SNAudioStreamAnalyzer, queue: DispatchQueue) {
         self.analyzer = analyzer
         self.queue = queue
@@ -890,6 +937,8 @@ private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
 
     /// Installs the audio tap from this `nonisolated` class so the tap closure does not inherit
     /// `@MainActor` isolation under Swift 6.
+    /// Buffer size 4096 frames (a request, not a guarantee); `format` must be the validated input
+    /// format (`MicrophoneStart.isUsableInputFormat`) or `installTap` traps.
     func installTap(on inputNode: AVAudioNode, format: AVAudioFormat) {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
             self?.feed(buffer, at: time.sampleTime)
@@ -930,7 +979,9 @@ private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
 /// Carries one non-`Sendable` `AVAudioPCMBuffer` across the tap → analysis-queue hop. Sound
 /// because the buffer is written once before the hop and read once after it, by one queue.
 private nonisolated final class SoundBufferBox: @unchecked Sendable {
+    /// The tap's buffer; never touched by the tap again after it is boxed.
     let buffer: AVAudioPCMBuffer
+    /// - Parameter buffer: handed over by `SoundAnalysisPump.feed`.
     init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
 }
 
@@ -950,6 +1001,8 @@ private nonisolated final class SoundResultsRelay: NSObject, SNResultsObserving,
     /// `SoundWatcher.analysisFailed`, which stops the watcher rather than only noting it.
     private let onFailure: @Sendable (String) -> Void
 
+    /// Both closures are built in `SoundWatcher.startEngine` with the run's generation captured and
+    /// a `Task { @MainActor … }` hop inside.
     init(onResult: @escaping @Sendable (String, Double) -> Void,
          onFailure: @escaping @Sendable (String) -> Void) {
         self.onResult = onResult

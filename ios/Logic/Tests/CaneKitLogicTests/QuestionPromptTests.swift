@@ -11,6 +11,12 @@
 //      picture does not answer; if that phrase were refused, the app would quietly speak a scene
 //      description instead and the walker would hear it as the answer to their question.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/QuestionPrompt.swift` (`clean`, `text(for:)`,
+//  `cannotTell`, `maxQuestionCharacters` 160), checked against the real `CloudSceneGate`.
+//  Caller: `SceneDescriber.ask` (cleans the question, sends `text(for:)` with one frame to the
+//  cloud model, gates the reply), reached from `AskSceneIntent` → `AppModel.askAboutScene`
+//  (HandsFreeIntents.swift, "Ask OpenCane").
+//
 
 import Testing
 @testable import CaneKitLogic

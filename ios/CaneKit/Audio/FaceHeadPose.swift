@@ -20,8 +20,16 @@
 //  never implies a selfie picture is on screen.
 //
 //  Owner: `AppModel.faceHead` (one instance). Fed by `DepthEngine.onFaceYaw` (main actor, from the
-//  AR session's anchor delegate); read by `AppModel.startTicker` through `HeadYawSelector`, which
-//  prefers AirPods and falls back to this.
+//  AR session's anchor delegate); aged by `AppModel.handle` on every depth report (`refresh`); read
+//  by `AppModel.startTicker` and `autoRecenterIfWalkingStraight` through `HeadYawSelector`, which
+//  prefers AirPods and falls back to this; `isTracking` also feeds the status summary
+//  (`HandsFreeIntents`, `ConversationCoordinator`) and `readout` the Hazards card and the
+//  front-camera self test. Off by default: the Hazards card's "Head tracking without AirPods"
+//  (`AppModel.faceHeadTrackingEnabled`), which is refused while a route guides or starts because
+//  changing it re-runs the AR session (Step 34, CaneKitLogic `FaceTrackingChange`).
+//
+//  Tests: `HeadYawSourcesTests` (the `FaceYawTracker` rules and `HeadYawSelector`); this wrapper
+//  itself is device-only.
 //
 //  Threading / isolation: `@MainActor @Observable`. Every numeric rule (smoothing, staleness,
 //  jump rejection, the reference) lives in CaneKitLogic `FaceYawTracker`, tested by
@@ -68,13 +76,16 @@ final class FaceHeadPose {
     /// on the ticker, which has no frame of its own.
     @ObservationIgnored private var lastNow: Double = 0
 
+    /// Starts inactive: samples are dropped until `start()`.
     init() {}
 
     // MARK: Lifecycle
 
     /// Begin using face samples. Clears the reference so the walker's pose at the next recenter
-    /// (or the first sample) becomes forward. Callers: `AppModel.beginRoute` and the Hazards
-    /// card's switch going on.
+    /// (or the first sample) becomes forward. Idempotent while active (a second call keeps the
+    /// reference). Callers (all only while `faceHeadTrackingEnabled`, except the self test):
+    /// `AppModel.start()` at launch, the setting's `didSet`, `startRouteNow`, `resumeARKitPipelines`
+    /// (foreground), the both-cameras off path, and the front-camera self test.
     func start() {
         guard !active else { return }
         active = true
@@ -84,7 +95,10 @@ final class FaceHeadPose {
         samples = 0
     }
 
-    /// Stop and forget (route stopped, arrival, the switch going off, ARKit paused).
+    /// Stop and forget: the reference, the yaw and `isTracking` (`samples` is kept for the readout
+    /// until the next `start()`). Callers: the setting going off, `scenePhaseChanged(.background)`
+    /// and both cameras going on (ARKit pauses, so no anchors can arrive), and the self test when it
+    /// turned tracking on only for itself. Not called when a route stops: the setting outlives routes.
     func stop() {
         active = false
         tracker.reset()
@@ -119,7 +133,9 @@ final class FaceHeadPose {
     }
 
     /// The walker's current head direction becomes "straight ahead" (Recenter button, watch
-    /// Recenter, auto-recenter when walking straight). Mirrors `HeadPoseTracker.recenter()`.
+    /// Recenter, auto-recenter when walking straight). Mirrors `HeadPoseTracker.recenter()`;
+    /// `AppModel` always recenters both sources together so switching between them needs no second
+    /// press. Harmless while stopped: the tracker has no smoothed yaw, so the reference becomes nil.
     func recenter() {
         tracker.recenter()
         refresh(now: lastNow)

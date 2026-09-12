@@ -2,6 +2,13 @@
 // Holds: ESP32 (XIAO ESP32-S3 by default), 2x 10mm coin ERM motors, 500mAh LiPo.
 // DRAFT: unrendered. Open in OpenSCAD, press F5, check every pocket before F6/export.
 // Print: split face down, no supports, PETG, 4 walls. TPU overgrip optional.
+// LEGACY (ESP32 era, cut 2026-09-10 when the app went phone-only): do not print for the demo.
+// Sized for a 12.7 mm aluminium/graphite shaft; the prototype stick is 27.65 mm (measured
+// 2026-09-12), so nothing here fits it. The live mount is hardware/mount_screwless/ (see
+// cad/README.md and hardware/README.md). Not rendered by any script (scripts/build_stl.ps1 covers
+// hardware/ only); no tests; no owner on the current team. Units: millimetres throughout.
+// Why it existed: housing for firmware/canekit_grip (XIAO ESP32-S3, two coin ERMs under thumb and
+// index finger, LiPo). Pocket sizes come from datasheets, never checked against parts.
 
 $fn = 64;
 
@@ -25,8 +32,10 @@ usb_w = 10; usb_h = 4;
 
 split_gap = 0.2;
 
+// Solid grip blank, axis along +Z from z = 0 to len.
 module shell() { cylinder(d = od, h = len); }
 
+// Through bore for the cane shaft (radial clearance shaft_clear), overlong so the cut is clean.
 module shaft_bore() {
     translate([0,0,-1]) cylinder(d = shaft_d + 2*shaft_clear, h = len + 2);
 }
@@ -48,12 +57,15 @@ module wire_channel() {
     // exit channel to the shaft (for ToF pod wire) at the bottom
     translate([-2, 0, -1]) cube([4, od/2, 10]);
 }
+// Two radial coin-motor pockets at +X / -X, 30 mm below the top end.
 module motor_pockets() {
     // one motor under the thumb (left), one under the index (right), 30 mm from top
     for (s = [-1, 1])
         translate([s*(od/2 - mot_h + 0.01), 0, len - 30])
             rotate([0, s*90, 0]) cylinder(d = mot_d, h = mot_h + 1);
 }
+// Three M3 clamp bolts across the split plane (z = 12, mid-length, len - 12), each with a hex nut
+// trap and a head recess.
 module bolts() {
     for (z = [12, len/2, len - 12])
         translate([0, 0, z]) rotate([90, 0, 0]) {
@@ -63,11 +75,13 @@ module bolts() {
             translate([0, 0, od/2 - 2.5]) cylinder(d = 6, h = 3);
         }
 }
+// Twelve shallow longitudinal flutes on the outside for grip.
 module grip_texture() {
     for (i = [0:11])
         rotate([0, 0, i*30]) translate([od/2 - 0.6, 0, 6]) cylinder(d = 2.2, h = len - 12);
 }
 
+// The whole sleeve before splitting: blank minus every cut above.
 module body() {
     difference() {
         shell();
@@ -82,6 +96,8 @@ module body() {
 }
 
 // split along XZ plane into two halves and lay both flat for printing
+// One half of the sleeve: sign > 0 keeps +Y (electronics bays), sign < 0 keeps -Y; split_gap is
+// removed around the split plane so the halves clamp the shaft when bolted.
 module half(sign) {
     intersection() {
         body();

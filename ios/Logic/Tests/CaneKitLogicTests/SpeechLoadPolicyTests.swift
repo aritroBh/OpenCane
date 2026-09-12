@@ -6,10 +6,19 @@
 //  change must never silence explicit or safety speech, and repeated optional obstacle names must
 //  not fill the spoken channel while the walker is moving.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/SpeechLoadPolicy.swift` (`admit(_:now:isBusy:)`,
+//  `reset()`, default `Configuration.minimumAmbientGap` 7 s — a reversible calibration hypothesis,
+//  pinned indirectly by the 16.99 s / 17 s boundary tests). Caller: `SpeechQueue` (app) calls
+//  `admit` right after trimming a line and before queue insertion; only `.ambientObstacleName`
+//  lines (mesh obstacle names, passed as `SpeechQueue.say(…, load: .ambientObstacleName)` by
+//  `AppModel`'s obstacle-name path) are ever suppressed. Public API only.
+//
 
 import CaneKitLogic
 import Testing
 
+/// Admission rules for optional narration: `.normal` always speaks; an optional obstacle name
+/// speaks at most once per 7 s window and never over a busy queue; bad time fails closed.
 @Suite("Speech load policy")
 struct SpeechLoadPolicyTests {
 

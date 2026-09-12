@@ -69,6 +69,10 @@ import Foundation
 
 // MARK: - Model methods the intents call
 
+/// The hands-free half of `AppModel`'s public surface: spoken status, one scene question, the
+/// cane-haptics switch and the voice-safe feature switches. An extension here (not in
+/// AppModel.swift) so the voice contract and its safety reasoning sit next to the intents that
+/// use it; it adds no stored state. Also called by `ConversationCoordinator`.
 extension AppModel {
 
     /// Speaks the answer to "is this thing working?": obstacle detection, GPS, audio, haptics,

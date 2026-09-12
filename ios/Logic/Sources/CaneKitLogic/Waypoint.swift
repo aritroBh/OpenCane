@@ -7,7 +7,11 @@
 //
 //  Purpose: one waypoint model shared by the hand-recorded demo route (ISR Townsend Hall → CIF)
 //  and routes built from MapKit walking directions, so `GeofenceTracker`, `TurnSettle` and the
-//  speech lines never care where a route came from. `RouteSource` (app) loads / builds these.
+//  speech lines never care where a route came from. `RouteSource` (app) loads / builds these:
+//  `RouteSource.bundled()` → `Route.load(from:)`; `RouteSource.walking(to:from:)` / `mapKit(to:from:)`
+//  → private `directions(to:name:from:)` → `RouteStepInput` per `MKRoute.Step` →
+//  `RouteBuilder.waypoints(from:destinationName:)`. `NavigationEngine` walks the result.
+//  Isolation: nonisolated `Sendable` values; no MapKit / CoreLocation types cross into here.
 //
 //  Key invariants:
 //    · `CodingKeys` are the on-disk JSON schema (snake_case `radius_m`, `bearing_next_deg`);
@@ -33,7 +37,8 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
     public var lon: Double
     /// Fence radius in metres (JSON `radius_m`). Entry fires up to this far before the corner.
     public var radiusM: Double
-    /// Spoken once when the geofence is entered.
+    /// Spoken once when the geofence is entered (not on a passed-by advance, where the line would
+    /// already be wrong — `NavigationEngine` says "Passed <place>." instead).
     public var say: String
     /// True when the user must cross a street here: the beacon is silent while settling and the
     /// line should say "Crossing".
@@ -57,7 +62,12 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
 
     /// Memberwise initialiser used by `RouteBuilder` and the tests.
     /// - Parameters:
+    ///   - id: 1-based position in the route.
+    ///   - lat: latitude, degrees.
+    ///   - lon: longitude, degrees.
     ///   - radiusM: fence radius, metres.
+    ///   - say: line spoken on fence entry.
+    ///   - crossing: a street crossing here.
     ///   - bearingNextDeg: next leg's bearing, degrees true; nil for the last waypoint.
     ///   - curved: next leg is not straight (mutes veer cues and the beacon on it).
     ///   - name: short spoken place name; nil → first sentence of `say`.
@@ -75,7 +85,9 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
     }
 
     /// Decodes the route-file schema; `bearing_next_deg`, `curved` (→ false) and `name` may be
-    /// absent. Encoding is synthesized. Pinned by `routeFileDecodesSnakeCaseSchema`.
+    /// absent. Encoding is synthesized (it always writes `curved` and omits nil optionals).
+    /// - Throws: `DecodingError` when `id`, `lat`, `lon`, `radius_m`, `say` or `crossing` is
+    ///   missing or mistyped. Pinned by `routeFileDecodesSnakeCaseSchema`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -92,7 +104,9 @@ public struct Waypoint: Sendable, Equatable, Codable, Identifiable {
     /// `lat` / `lon` as a `Coordinate` for `GeoMath`.
     public var coordinate: Coordinate { Coordinate(latitude: lat, longitude: lon) }
 
-    /// Spoken place name: `name` when set, else the first sentence of the spoken line.
+    /// Spoken place name: `name` when set (and non-empty), else the first sentence of the spoken
+    /// line (split at the first ".", space-trimmed — MapKit routes always take this fallback).
+    /// Used for "Passed <place>. <next place> in N meters." and Repeat's "Next, <place>, …".
     /// Pinned by `shippedRouteFileIsConsistent` (`waypoints[2].placeName == "Goodwin Avenue"`).
     public var placeName: String {
         if let name, !name.isEmpty { return name }
@@ -113,7 +127,8 @@ public struct Route: Sendable, Equatable, Codable {
         self.waypoints = waypoints
     }
 
-    /// Decodes a route JSON file.
+    /// Decodes a route JSON file. Plain `JSONDecoder`; no validation beyond the schema (run
+    /// `bearingInconsistencies` / `shippedRouteFileIsConsistent` for that). Caller: `RouteSource.bundled()`.
     /// - Parameter data: the file contents.
     /// - Throws: `DecodingError` when a required key is missing or mistyped.
     /// Pinned by `routeFileDecodesSnakeCaseSchema`, `shippedRouteFileIsConsistent`.
@@ -122,7 +137,8 @@ public struct Route: Sendable, Equatable, Codable {
     }
 
     /// Sanity check for hand-edited files: every recorded `bearing_next_deg` must be within
-    /// `tolerance` degrees of the geometric bearing to the next waypoint.
+    /// `tolerance` degrees of the geometric bearing to the next waypoint. Test-only today (no app
+    /// caller): it guards hand edits of `route_isr_cif.json` through `shippedRouteFileIsConsistent`.
     /// - Parameter tolerance: allowed disagreement, degrees (default 15°).
     /// - Returns: one entry per offending waypoint (id, recorded °, geometric °); empty = consistent.
     /// Pinned by `bearingConsistencyCheckCatchesTypos`, `shippedRouteFileIsConsistent`.
@@ -137,7 +153,8 @@ public struct Route: Sendable, Equatable, Codable {
     }
 }
 
-/// One MapKit walking step, reduced to what the converter needs.
+/// One MapKit walking step, reduced to what the converter needs. Built by
+/// `RouteSource.directions(to:name:from:)` from each `MKRoute.Step` (polyline → `Coordinate`s).
 public struct RouteStepInput: Sendable, Equatable {
     /// The step's polyline points in order (may be empty for MapKit's first "start" step).
     public var points: [Coordinate]
@@ -159,7 +176,10 @@ public enum RouteBuilder {
     ///   - steps: MapKit steps in order; steps with no points are dropped.
     ///   - destinationName: used in the last line, "Arrived at <destinationName>."
     /// - Returns: waypoints with ids `1...n`; empty instructions become "Continue."; the last has
-    ///   no bearing; `curved` is always false. Pinned by `mapKitStepsBecomeWaypoints`.
+    ///   no bearing; `curved` is always false; `name` is nil (so `placeName` falls back to the first
+    ///   sentence of `say`). `crossing` is a plain case-insensitive "cross" substring test on the
+    ///   instruction, so "Cross Green St" and "crosswalk" both count. Pinned by
+    ///   `mapKitStepsBecomeWaypoints`. Caller: `RouteSource.directions(to:name:from:)`.
     public static func waypoints(from steps: [RouteStepInput], destinationName: String = "destination") -> [Waypoint] {
         let usable = steps.filter { !$0.points.isEmpty }
         var out: [Waypoint] = []

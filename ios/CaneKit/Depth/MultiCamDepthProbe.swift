@@ -31,7 +31,13 @@
 //  business on the main thread at launch. It returns Sendable values only; the verdict itself is
 //  `MultiCamDepth` in CaneKitLogic, with tests.
 //
-//  Caller: `AppModel.start()`, in a detached task, once per launch.
+//  Caller: `AppModel.start()` → `logMultiCamDepthProbe()`, in a detached `.utility` task, once per
+//  launch; the record is written back on the main actor.
+//  Tests: `MultiCamDepthTests` pins the verdict, the sentence and `MultiCamCost`; this file's
+//  AVFoundation reads have no simulator equivalent (multi-cam is unsupported there, so the
+//  simulator always logs `multicam_supported: false`). Measured on the iPhone 17 Pro Max
+//  (CHANGELOG, LiDAR multi-cam audit): 12 multi-cam sets pair the front camera with rear LiDAR
+//  depth at 320×240.
 //
 
 import AVFoundation
@@ -79,6 +85,10 @@ nonisolated enum MultiCamDepthProbe {
     ]
 
     /// Measure. Safe to call at any time; does not start a session or ask for permission.
+    /// A device set counts toward `frontPlusDepthDeviceSets` when it holds a front camera *and* a
+    /// back camera with a multi-cam, depth-capable format. The format numbers come from the back
+    /// `builtInLiDARDepthCamera`, else the first back camera with such a format; with none, they
+    /// stay 0 / "". Enumerates every camera, so call it off the main actor.
     /// - Returns: the findings, the device sets in words, and the best depth-capable format.
     static func measure() -> Result {
         guard AVCaptureMultiCamSession.isMultiCamSupported else {
@@ -165,13 +175,13 @@ nonisolated enum MultiCamDepthProbe {
         }
     }
 
-    /// "1920x1440" for a format, for the log.
+    /// "1920x1440" for a format (video or depth), for the log.
     private static func dimensionText(_ format: AVCaptureDevice.Format) -> String {
         let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
         return "\(d.width)x\(d.height)"
     }
 
-    /// "front" / "back" / "unspecified".
+    /// "front" / "back" / "unspecified" ("unknown" for a future position), for `deviceSets`.
     private static func positionName(_ position: AVCaptureDevice.Position) -> String {
         switch position {
         case .front: return "front"

@@ -145,7 +145,11 @@ final class TripLogger {
     /// keeps a colliding field as `field_t` / `field_kind` (the 2026-09-11 phone log had hazard
     /// records turned into `"kind": "sign"` that way). Flushes early past 16 K characters.
     /// Silently drops objects `JSONSerialization` rejects (e.g. a NaN passed without `num`).
-    /// No-op while disabled.
+    /// No-op while disabled. `t` is wall-clock seconds since `t0` (3 dp).
+    /// - Parameters:
+    ///   - kind: the record type (`gps`, `speech`, `route`, … — tabled in docs/CODE_REFERENCE.md).
+    ///   - fields: JSON-serialisable values only (String, numbers, Bool, NSNull, arrays and
+    ///     dictionaries of those); never name one `t` or `kind` on purpose.
     func event(_ kind: String, _ fields: [String: Any] = [:]) {
         guard enabled else { return }
         let obj = TripLogRecord.make(t: Self.num(Date().timeIntervalSince(t0)), kind: kind, fields: fields)
@@ -158,8 +162,10 @@ final class TripLogger {
     }
 
     /// Write buffered lines now (called on background/suspend so nothing is lost).
-    /// Also called by the 2 s loop, `stop()` and when logging is disabled. Keeps the buffer when
-    /// there is no open handle.
+    /// Also called by the 2 s loop, `stop()`, `event` past 16 K characters and when logging is
+    /// disabled. Keeps the buffer when there is no open handle. A failed write is ignored (`try?`)
+    /// and the buffer is cleared anyway, so those lines are lost rather than retried.
+    /// Caller outside this class: `AppModel.scenePhaseChanged(.background)`.
     func flush() {
         guard !buffer.isEmpty, let handle else { return }
         if let data = buffer.data(using: .utf8) {
