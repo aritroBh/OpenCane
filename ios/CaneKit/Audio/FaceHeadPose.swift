@@ -108,7 +108,7 @@ final class FaceHeadPose {
     }
 
     /// Re-read the tracker with the freshest clock we have. Called by `AppModel.handle(_:)` on
-    /// every depth report (~15 Hz), so "no face for 0.7 s" becomes nil while the walker looks away
+    /// every depth report (~30 Hz normal / up to 60 Hz high-rate), so "no face for 0.7 s" becomes nil while the walker looks away
     /// even though no face anchor is arriving to trigger it.
     /// - Parameter now: the ARKit clock of the newest depth report (`DepthEngine.report.timestamp`).
     func refresh(now: Double) {

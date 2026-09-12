@@ -24,7 +24,7 @@
 //  can call it on `queue`; the `@unchecked Sendable` is justified by the locking model above,
 //  not added to silence the compiler (AGENTS.md hard rule 1).
 //
-//  Budget: at 15 Hz a published frame has ~66 ms. Frames between publishes return right after
+//  Budget: at 30 Hz a published frame has ~33 ms (60 Hz high-rate has ~16 ms). Frames between publishes return right after
 //  the rate check; the lane math reads the 256×192 depth map in place (no copy), and the mesh
 //  lookup is throttled to every 4th publish and capped by `MeshClassifier.faceBudget`.
 //
@@ -45,8 +45,9 @@ struct ProcessorSettings: Sendable {
     var lane = LaneConfig()
     /// |gyro| above this (rad/s) marks the frame untrusted (the cane is mid-sweep).
     var sweepThreshold: Float = 0.6
-    /// Publish rate cap in Hz. ARKit delivers 30–60 frames/s; CueDecider is timed in seconds, not
-    /// frames, so 30 Hz halves obstacle latency with no logic change. Watch `thermal` in the log.
+    /// Publish rate cap in Hz. The normal 30 Hz path keeps obstacle latency low without excess
+    /// heat; high-frame-rate mode raises this to 60 so every camera frame is visible to the
+    /// readiness interlock. CueDecider is timed in seconds, not frames.
     var maxRate: Double = 30
     /// Run the mesh-classification lookup at the image centre (step 4). Costs ~10–15 % CPU.
     /// Turned off by the thermal watchdog (`DepthEngine.setMeshClassification`).
@@ -149,7 +150,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         var a = [Float](); a.reserveCapacity(2048); return a
     }()
     /// Last mesh lookup result, re-attached to the frames between lookups (so `centerHit` does
-    /// not flicker to nil at 15 Hz); cleared when mesh lookup is disabled.
+    /// not flicker between published frames); cleared when mesh lookup is disabled.
     private var lastMeshHit: MeshHit?                  // queue-only, reused between lookups
     private var groundDetector = GroundHazardDetector() // queue-only, confirms over frames
     private var lastGroundHazard: GroundHazard?         // queue-only, reused between evaluations
@@ -319,7 +320,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
 
     // MARK: Depth → lanes
 
-    /// Prefers the temporally smoothed map (less flicker at 15 Hz) and falls back to raw depth.
+    /// Prefers the temporally smoothed map (less flicker at the normal 30 Hz cadence) and falls back to raw depth.
     ///
     /// Locks the depth (and confidence, if present) buffers read-only for the duration of the
     /// call and hands raw base addresses to the pure `LaneMath.computeLanes` (CaneKitLogic,
