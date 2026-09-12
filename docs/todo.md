@@ -493,6 +493,15 @@ for 60 s so a weak network can never stall a cue.
 - [x] Verified 348/348 Logic tests (`make test`), clean simulator build (`make sim`), 10/10 UITests (`make uitest`), and e2e replay
 - **test on device:** see CHANGELOG Step 21
 
+## Step 22 — Rename primary route action to "Start route to CIF" (Sat Sep 12)
+- [x] Renamed GuideCard button from "Start demo route" to "Start route to CIF"
+- [x] Added "Start route to CIF in OpenCane" to Siri App Shortcuts in AppIntents
+- [x] Synchronized test contracts across `AGENTS.md` (Rule 9), `docs/CODE_REFERENCE.md`, `docs/design.md`
+- [x] Updated `CaneKitUITests` and `CaneKitVisualTour` and verified all 10 tests pass
+- [x] Muse adversarial review passed confirming 1:1 label parity and zero contract regressions
+- [x] Built and deployed to physical iPhone 17 Pro Max (`00008150-001A698C1108401C`)
+- **test on device:** see CHANGELOG Step 22
+
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
