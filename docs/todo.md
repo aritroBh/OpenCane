@@ -136,14 +136,15 @@ inset re-check after reinstall.
   `SceneDescriber` ask path, `describe_result` question field (merged).
 - Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). **Rerun settled the test-count
   question** (2026-09-12, Step 27): the target held 366 `@Test` annotations and `make test` on
-  Xcode 27 reported **366 tests passed in 1 suite**. Step 28 adds six lifetime-guard tests, so the
-  current target holds **372 annotations**; the 359 figure was the last green run *before* the
+  Xcode 27 reported **366 tests passed in 1 suite**. Step 28 adds six lifetime-guard tests and
+  Step 29 adds six sensor-mode interlock tests, so the current target holds **378 annotations**;
+  the 359 figure was the last green run *before* the
   Step 25 interlock tests existed; reaching 366 first needed the
   `#expect` + `mutating` compile fix in `DepthReadinessTests` (CHANGELOG Step 27).
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
   stale 8/12 s timeouts and stale test-count references fixed; the Step 27 snapshot had 366 `@Test`
-  annotations, and the current target has 372).
+  annotations, and the current target has 378).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
@@ -193,9 +194,21 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [x] **Permission race can start the mic after the user turned it off.** The pure
       `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
       polls permission while it owns the session and cancels any pending continuation on Stop.
+<<<<<<< HEAD
 - [x] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
       The two-camera mode correctly refuses during a route; this path does not. **Step 34:** measured
       on the phone (t = 80.7 s); now refused while a route guides or starts (`FaceTrackingChange`).
+=======
+- [x] **Sensor-mode restart interlock (Step 29).** Face-tracking and 60-fps setting writes are
+      refused during route warm-up, active navigation and serialized camera teardown, snapped back to the applied value, and
+      spoken through the existing route-error channel. Thermal mesh changes stop processor mesh
+      lookup immediately but defer the ARSession restart until Stop, arrival or cancellation, so
+      no user-triggered or thermal configuration change creates a 1–2 s depth gap while guiding.
+      `SensorModeInterlock` is pure Logic and covers idle, queued, active, thermal deferral and
+      release; the existing two-camera refusal remains the same policy. Terminal AR failures and
+      active interruptions now clear stale obstacle cues and announce the degraded depth channel;
+      only a trusted frame says it is back.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 - [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
@@ -303,6 +316,8 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [x] False "Hole ahead" indoors: ground hazards judged only with a mount-like tilt (0-15 deg) and a
       plausible ground height (0.5-1.3 m below the camera); drop-off and hole frames agree as one hazard
 - [x] Screen-lock warning once per route (no spam); Muse + Antigravity final-review fixes
+- [x] Sensor-mode restart interlock: route-time face-tracking / 60-fps writes refuse safely; thermal
+      mesh restarts defer until route end (`SensorModeInterlock`, Step 29)
 - [!] **ElevenLabs natural voice — waiting on Aritro.** Code is done and merged (cache, prefetch,
       2.5 s timeout, circuit breaker, Apple-voice fallback). It is off only because
       `ELEVENLABS_API_KEY` in `ios/CaneKit/Resources/Secrets.plist` is empty. See "ElevenLabs

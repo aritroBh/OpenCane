@@ -231,6 +231,22 @@ final class AppModel {
     /// is no longer current exits without touching state (the `routeBuildGeneration` pattern).
     @ObservationIgnored private var routeStartGeneration = 0
 
+    /// Pure route-time policy for AR configuration changes. User changes are refused while a
+    /// route is warming or guiding; thermal mesh changes are deferred until the route ends.
+    @ObservationIgnored private var sensorModeInterlock = SensorModeInterlock()
+    /// Deferred-release task used when a route ends while the serialized MultiCam teardown still
+    /// owns the cameras. It is canceled if a newer route reserves the interlock first; the
+    /// deferred thermal mode then remains protected by the new route.
+    @ObservationIgnored private var sensorModeFinishTask: Task<Void, Never>?
+    @ObservationIgnored private var sensorModeFinishGeneration = 0
+    /// True after an active-route AR failure/interruption has invalidated obstacle sensing. It is
+    /// cleared only by a running engine plus a same-frame normal/trusted report, never merely by
+    /// an "AR resumed" status or a stale queued report.
+    @ObservationIgnored private var depthSafetyDegraded = false
+    /// Prevents a refused setting write from re-entering its own `didSet` while the UI switch is
+    /// snapped back to the value that was actually applied.
+    @ObservationIgnored private var revertingSensorModeSetting = false
+
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     /// ⚠ Its timing contract is the AR clock; see `handle(_:)`. A `let` of a (final) class:
     /// `applyCueRules` writes `decider.thresholds.head` (Indoors shortens it to 1.2 m), and every
@@ -607,6 +623,7 @@ final class AppModel {
     /// `faceHeadTrackingEnabled` an older build left on disk.
     var faceHeadTrackingEnabled: Bool = false {
         didSet {
+<<<<<<< HEAD
             guard !applyingFaceTracking, faceHeadTrackingEnabled != oldValue else { return }
             // Either direction re-runs the AR session (~1–2 s without obstacle frames), so a
             // route refuses it like the two-camera mode (`FaceTrackingChange`, LiveViewTests).
@@ -627,6 +644,15 @@ final class AppModel {
                                .nav, ttl: 10)
                     logger.event("face_tracking", ["action": "refused_route_start", "requested": !oldValue])
                 }
+=======
+            guard !revertingSensorModeSetting else { return }
+            let decision = sensorModeInterlock.request(.faceTracking, source: .user)
+            guard decision == .allowRestart else {
+                revertingSensorModeSetting = true
+                faceHeadTrackingEnabled = oldValue
+                revertingSensorModeSetting = false
+                rejectSensorModeChange(.faceTracking, decision: decision)
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
                 return
             }
             depth.setFaceTracking(faceHeadTrackingEnabled)
@@ -996,6 +1022,12 @@ final class AppModel {
         depth.onReadinessChanged = { [weak self] state in
             self?.depthReadinessChanged(state)
         }
+        depth.onSessionFailure = { [weak self] reason in
+            self?.depthSessionFailed(reason)
+        }
+        depth.onSessionInterruption = { [weak self] interrupted in
+            self?.depthSessionInterrupted(interrupted)
+        }
         // Front-camera head yaw (no AirPods needed). Only ever fires while
         // `depth.faceTrackingEnabled`; `FaceHeadPose` drops samples while it is stopped.
         depth.onFaceYaw = { [weak self] worldYawDeg, now in
@@ -1180,12 +1212,20 @@ final class AppModel {
     /// `selfTestControlsVisible`).
     func startFaceTrackingSelfTest() {
         guard !selfTestRunning else { return }
+<<<<<<< HEAD
         // It re-runs the AR session twice (on now, restore at 15 s); never start it on a route, and
         // a route begun during the 15 s defers the restore until it ends (below).
         switch FaceTrackingChange.decide(navigating: nav.isNavigating, routeStartWaiting: routeStartWaiting) {
         case .apply: break
         case .refusedRoute: selfTestStatus = "Not while a route is guiding you"; return
         case .refusedRouteStart: selfTestStatus = "Not while a route is starting"; return
+=======
+        guard !nav.isNavigating, !routeStartWaiting, sensorModeInterlock.phase == .idle else {
+            selfTestStatus = sensorModeInterlock.phase == .finishing
+                ? "Waiting for the camera transition to finish"
+                : "Not while a route is starting or guiding you"
+            return
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         }
         selfTestRunning = true
         selfTestStatus = "Front camera self test: 15 seconds, hold the phone facing you"
@@ -1281,6 +1321,7 @@ final class AppModel {
             // a pocket check spoke it at .safety every time and replayed the turn line after).
             if nav.isNavigating, !lockWarningGiven {
                 lockWarningGiven = true
+                depthSafetyDegraded = true
                 speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .nav, ttl: 10)
             }
             hazards.stop()                   // no scanning a frozen last frame in the background
@@ -1392,6 +1433,29 @@ final class AppModel {
     /// (`cueChangeNeeds400ms`, `hysteresisHoldsUntilPlusFifteenCentimetres`,
     /// `centerApproachFiresThenUpdatesDistance`).
     private func handle(_ report: LaneReport) {
+        // A session interruption/failure can leave GPS guidance alive while depth has stopped.
+        // Clear any latched obstacle cue immediately; recovery is announced only when this same
+        // frame proves normal tracking, valid depth and the sweep trust bit.
+        if depthSafetyDegraded,
+           depth.isRunning,
+           depth.status != "AR interrupted",
+           report.trackingNormal,
+           report.depthAvailable,
+           report.isTrusted {
+            depthSafetyDegraded = false
+            if routeError == "Obstacle detection unavailable" { routeError = nil }
+            speech.say("Obstacle detection is back.", .nav, ttl: 8)
+            watch.send(status: nav.instruction, distanceM: nav.distanceToNext ?? -1)
+            logger.event("depth_health", ["state": "recovered", "tracking": report.trackingNormal])
+        }
+        guard !depthSafetyDegraded else {
+            // Do not let a partial/interrupted frame feed the decider, mesh namer or ground
+            // hazard path while the safety channel is known degraded. Keep the trip log honest.
+            sceneContext.set("")
+            faceHead.refresh(now: report.timestamp)
+            logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)
+            return
+        }
         if let output = decider.update(report, now: report.timestamp) {
             switch output {
             case .fire(let cue):
@@ -1449,6 +1513,40 @@ final class AppModel {
         faceHead.refresh(now: report.timestamp)
         // Every report; the logger throttles `lanes` records to `laneRate` (2 Hz).
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)
+    }
+
+    /// Fail-safe route behavior for an AR session failure or an active-camera interruption. GPS
+    /// guidance is intentionally preserved, but stale obstacle haptics/names are cleared and the
+    /// existing safety speech/watch channels identify the missing capability. Caller: `DepthEngine`
+    /// session callbacks, always on the main actor.
+    private func depthSessionFailed(_ reason: String, announce: Bool = true) {
+        guard nav.isNavigating else { return }
+        depthSafetyDegraded = true
+        decider.reset()
+        cueSpeech.cleared()
+        namer.reset()
+        haptics.stopAll()
+        activeCue = .clear
+        routeError = "Obstacle detection unavailable"
+        if announce {
+            let line = "Obstacle detection unavailable. Guidance continues. \(reason)."
+            speech.say(line, .safety, ttl: 30)
+            watch.send(status: "Obstacle detection unavailable", distanceM: -1)
+        }
+        logger.event("depth_health", ["state": "failed", "reason": reason])
+    }
+
+    /// Treat an active AR interruption as degraded until a trusted frame returns. Background
+    /// transitions already speak their dedicated lock warning, so this callback stays quiet while
+    /// the application is not active; the first trusted foreground frame still announces recovery.
+    private func depthSessionInterrupted(_ interrupted: Bool) {
+        guard nav.isNavigating else { return }
+        if interrupted {
+            // The scene-phase handler already speaks "Screen locked…" while suspended; retain
+            // degraded state for recovery evidence but do not duplicate or clear that cue.
+            depthSessionFailed("camera session interrupted",
+                               announce: UIApplication.shared.applicationState == .active)
+        }
     }
 
     /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
@@ -1548,7 +1646,7 @@ final class AppModel {
     /// Caller: only `bothCamerasEnabled`'s `didSet` (under `applyingBothCameras`); `beginRoute`
     /// and the self-test reach it by writing the property.
     private func setBothCameras(_ on: Bool) {
-        if on, nav.isNavigating || routeStartWaiting {
+        if on, nav.isNavigating || routeStartWaiting || sensorModeInterlock.phase == .finishing {
             // `applyingBothCameras` is set by the `didSet` that called us, so this write only puts
             // the switch back on screen — it does not run the off path.
             bothCamerasEnabled = false
@@ -1556,6 +1654,10 @@ final class AppModel {
                 routeError = "Stop the route before using both cameras"
                 speech.say("Both cameras cannot run while a route is guiding you. Stop the route first.", .nav, ttl: 10)
                 logger.event("both_cameras", ["action": "refused_route"])
+            } else if sensorModeInterlock.phase == .finishing {
+                routeError = "Wait for the camera transition to finish"
+                speech.say("Wait for the camera transition to finish.", .nav, ttl: 10)
+                logger.event("both_cameras", ["action": "refused_sensor_finish"])
             } else {
                 routeError = "Wait for obstacle detection before using both cameras"
                 speech.say("Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready.", .nav, ttl: 10)
@@ -1724,12 +1826,14 @@ final class AppModel {
     /// Caller: the Hazards card's "Both cameras self test" button.
     func startBothCamerasSelfTest() {
         guard !selfTestRunning else { return }
-        guard !routeStartWaiting else {
-            selfTestStatus = "Not while obstacle detection is warming up"
-            return
-        }
         guard !nav.isNavigating else {
             selfTestStatus = "Not while a route is guiding you"
+            return
+        }
+        guard !routeStartWaiting, sensorModeInterlock.phase == .idle else {
+            selfTestStatus = sensorModeInterlock.phase == .finishing
+                ? "Waiting for the camera transition to finish"
+                : "Not while obstacle detection is warming up"
             return
         }
         selfTestRunning = true
@@ -1972,7 +2076,20 @@ final class AppModel {
     /// `start()` (only the flag); a change later re-runs the AR session inside `DepthEngine`.
     /// Also read by `HazardsCard` to render the live view at 60 fps.
     var highFrameRateCamera: Bool = Settings.bool("highFrameRateCamera", default: false) {
-        didSet { Settings.set(highFrameRateCamera, "highFrameRateCamera"); depth.setHighFrameRate(highFrameRateCamera) }
+        didSet {
+            guard !revertingSensorModeSetting else { return }
+            let decision = sensorModeInterlock.request(.highFrameRate, source: .user)
+            guard decision == .allowRestart else {
+                revertingSensorModeSetting = true
+                highFrameRateCamera = oldValue
+                revertingSensorModeSetting = false
+                Settings.set(oldValue, "highFrameRateCamera")
+                rejectSensorModeChange(.highFrameRate, decision: decision)
+                return
+            }
+            Settings.set(highFrameRateCamera, "highFrameRateCamera")
+            depth.setHighFrameRate(highFrameRateCamera)
+        }
     }
 
     /// When the camera-denied warning was last spoken (`announceCameraDenied`). Wall clock
@@ -1987,7 +2104,11 @@ final class AppModel {
     private func endRouteQuietly() {
         speech.routeLines = []               // no route: nothing standing to re-request
         nav.stop()
+<<<<<<< HEAD
         location.setNavigating(false)
+=======
+        finishSensorModeRoute()
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         beacon.stop()
         head.stop()
         stopTicker()
@@ -1997,8 +2118,108 @@ final class AppModel {
         logger.event("route", ["action": "restart"])
     }
 
+<<<<<<< HEAD
     /// Thermal: was the phone already hot (`.serious` or `.critical`) at the last `updateThermal`,
     /// so "Phone is hot…" is spoken on the cool → hot transition only (Muse L5).
+=======
+    /// Translate a refused sensor setting into the existing route error + speech channels. The
+    /// walker must hear why the switch snapped back; a settings-screen change must never be a
+    /// silent no-op. Caller: the face-tracking and high-frame-rate setting observers.
+    private func rejectSensorModeChange(_ mode: SensorMode, decision: SensorModeDecision) {
+        let line: String
+        switch decision {
+        case .refuseWhileStarting:
+            line = "Sensor settings cannot change while a route is starting. Wait for obstacle detection to be ready."
+        case .refuseWhileNavigating:
+            line = "Sensor settings cannot change while a route is guiding you. Stop the route first."
+        case .refuseWhileFinishing:
+            line = "Wait for the camera transition to finish."
+        case .deferUntilRouteEnds, .allowRestart:
+            // The caller only invokes this for a refusal. Keep a defensive line rather than
+            // accidentally announcing a misleading state if a new decision is added later.
+            line = "Sensor settings cannot change during this route."
+        }
+        routeError = line
+        speech.say(line, .nav, ttl: 10)
+        logger.event("sensor_mode", ["mode": mode.rawValue, "action": "refused",
+                                      "phase": sensorModeInterlock.phase.rawValue])
+    }
+
+    /// Reserve the sensor configuration for the route-start freshness window. This is separate
+    /// from `DepthReadiness`: the depth gate decides when ARKit is trustworthy, while this policy
+    /// prevents settings from restarting that same session underneath the gate.
+    private func reserveSensorModeRouteStart() {
+        sensorModeFinishGeneration &+= 1
+        sensorModeFinishTask?.cancel()
+        sensorModeFinishTask = nil
+        sensorModeInterlock.routeStartQueued()
+        logger.event("sensor_mode", ["action": "route_start_reserved",
+                                      "phase": sensorModeInterlock.phase.rawValue])
+    }
+
+    /// Mark the point at which navigation effects begin. Called immediately before `nav.start`.
+    private func markSensorModeRouteStarted() {
+        // A camera teardown may still be draining when a deliberate degraded route starts (for
+        // example, camera permission is denied, so the depth gate is skipped). The old route-end
+        // task must not release or apply a deferred mesh restart underneath this new route.
+        sensorModeFinishGeneration &+= 1
+        sensorModeFinishTask?.cancel()
+        sensorModeFinishTask = nil
+        sensorModeInterlock.routeStarted()
+        logger.event("sensor_mode", ["action": "route_started",
+                                      "phase": sensorModeInterlock.phase.rawValue])
+    }
+
+    /// Release the route reservation and apply any thermal mesh change that was deliberately held
+    /// back. User setting changes never reach this path: they were refused at their property
+    /// observer, so no AR restart can occur during guidance.
+    private func finishSensorModeRoute() {
+        guard sensorModeInterlock.phase != .idle else { return }
+        sensorModeInterlock.routeFinishing()
+
+        // `beginRoute` may have queued the two-camera teardown immediately before this route
+        // timed out or was canceled. Never run ARKit beside that session: wait for the serialized
+        // chain, and keep the policy non-idle until the wait completes. A newer route cancels this
+        // task in `reserveSensorModeRouteStart()`; its own readiness window then owns the same
+        // deferred mode instead of letting this old task restart ARKit mid-route.
+        if let work = bothCamerasWork {
+            sensorModeFinishGeneration &+= 1
+            let generation = sensorModeFinishGeneration
+            sensorModeFinishTask?.cancel()
+            sensorModeFinishTask = Task { @MainActor [weak self] in
+                await work.value
+                guard !Task.isCancelled, let self,
+                      self.sensorModeFinishGeneration == generation,
+                      !self.bothCameras.isRunning else { return }
+                self.sensorModeFinishTask = nil
+                self.releaseSensorModeRoute()
+            }
+            logger.event("sensor_mode", ["action": "deferred_restart_waiting_for_camera_teardown"])
+            return
+        }
+        // Defensive: `bothCamerasWork` should exist whenever MultiCam is running. If it does not,
+        // leave the interlock finishing rather than ever starting ARKit on occupied cameras.
+        guard !bothCameras.isRunning else {
+            logger.event("sensor_mode", ["action": "deferred_restart_blocked_cameras_running"])
+            return
+        }
+        releaseSensorModeRoute()
+    }
+
+    /// Complete a route-end release once no camera transition can contend with ARKit. Caller:
+    /// `finishSensorModeRoute`; all state remains on the main actor.
+    private func releaseSensorModeRoute() {
+        let deferred = sensorModeInterlock.routeEnded()
+        guard !deferred.isEmpty else { return }
+        if deferred.contains(.meshClassification) {
+            depth.applyPendingConfigurationIfNeeded()
+        }
+        logger.event("sensor_mode", ["action": "deferred_restart_applied",
+                                      "modes": deferred.map(\.rawValue)])
+    }
+
+    /// Thermal: was the phone already hot at the last update (announce transitions only).
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     @ObservationIgnored private var wasHot = false
 
     // MARK: Headphones / watch presence
@@ -2199,9 +2420,13 @@ final class AppModel {
         nav.onArrived = { [weak self] in
             guard let self else { return }
             self.logger.event("arrived")
+<<<<<<< HEAD
             self.family.tripEnded(destination: self.activeRouteName, arrived: true,
                                   lat: self.location.fix?.coordinate.latitude,
                                   lng: self.location.fix?.coordinate.longitude)
+=======
+            self.finishSensorModeRoute()
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
             if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
@@ -2502,7 +2727,11 @@ final class AppModel {
                              lng: location.fix?.coordinate.longitude)
         }
         nav.stop()
+<<<<<<< HEAD
         activeRouteName = nil
+=======
+        finishSensorModeRoute()
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
         // with no fix.
@@ -2632,6 +2861,7 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
+<<<<<<< HEAD
         "Obstacle detection warming up. Guiding with GPS.",
         // Refusals of the modes that re-run or pause ARKit (`setBothCameras`,
         // `faceHeadTrackingEnabled`): spoken at `.nav`, so a cache miss would hold route and
@@ -2640,6 +2870,13 @@ final class AppModel {
         "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready.",
         "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first.",
         "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
+=======
+        "Finish the sensor self-test before starting a route.",
+        "Obstacle detection is back.",
+        "Wait for the camera transition to finish.",
+        "Sensor settings cannot change while a route is starting. Wait for obstacle detection to be ready.",
+        "Sensor settings cannot change while a route is guiding you. Stop the route first.",
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
@@ -2665,6 +2902,16 @@ final class AppModel {
     ///     first and can say Stop if it is wrong; nil for the demo route.
     /// Callers: `startDemoRoute`, `buildRoute`.
     private func beginRoute(_ route: Route, announce: String? = nil) {
+        // Sensor self-tests deliberately re-run ARKit / MultiCam outside the route pipeline. Do
+        // not let a route begin while their delayed cleanup could restart a camera underneath it;
+        // the existing speech + route-error channels make the refusal explicit to a blind walker.
+        guard !selfTestRunning else {
+            let line = "Finish the sensor self-test before starting a route."
+            routeError = line
+            speech.say(line, .nav, ttl: 10)
+            logger.event("sensor_mode", ["action": "route_refused_self_test"])
+            return
+        }
         // A second start mid-route (Action button / Siri) restarts cleanly (Muse M5).
         if nav.isNavigating { endRouteQuietly() }
         // Location refused: say so instead of "Route started" followed by silence (Muse H2).
@@ -2713,6 +2960,7 @@ final class AppModel {
         routeStartGeneration &+= 1
         let generation = routeStartGeneration
         pendingRouteStart = PendingRouteStart(route: route, announce: announce)
+        reserveSensorModeRouteStart()
         routeStartWaiting = true
         routeStartStatus = "Obstacle detection warming up. Route will start when it is ready."
         routeError = nil
@@ -2803,12 +3051,22 @@ final class AppModel {
         routeReadinessTimeoutTask?.cancel()
         routeReadinessTimeoutTask = nil
         depth.cancelReadiness()
+<<<<<<< HEAD
         routeStartStatus = nil
         routeError = nil
         speech.say("Obstacle detection warming up. Guiding with GPS.", .safety, ttl: 15)
         watch.send(status: "Guiding with GPS", distanceM: -1)
         logger.event("route_readiness", ["state": "timed_out_fallback_gps"])
         startRouteNow(pending.route, announce: pending.announce)
+=======
+        finishSensorModeRoute()
+        routeStartStatus = "Obstacle detection is not ready. Route did not start."
+        routeError = "Obstacle detection is not ready"
+        speech.say("Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane.",
+                   .safety, ttl: 30)
+        watch.send(status: "Obstacle detection not ready", distanceM: -1)
+        logger.event("route_readiness", ["state": "timed_out"])
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     }
 
     /// Cancel a queued route-start request. Called by Stop and by a newer MapKit/destination
@@ -2817,7 +3075,12 @@ final class AppModel {
     /// `route_readiness {state: cancelled}`. Callers: `stopRoute`, `startDemoRoute`,
     /// `buildRoute`, `cancelRouteStart`.
     private func cancelPendingRouteStart() {
-        guard pendingRouteStart != nil || routeReadinessTask != nil else { return }
+        let hadPendingRoute = pendingRouteStart != nil
+        guard hadPendingRoute || routeReadinessTask != nil else { return }
+        // A superseding destination or demo-route tap must not leave the old warm-up sentence in
+        // SpeechQueue. The explicit phone Cancel action also stops the queue before calling here;
+        // this covers the internal replacement path as well.
+        if hadPendingRoute { speech.stopAll() }
         routeStartGeneration &+= 1
         pendingRouteStart = nil
         routeStartWaiting = false
@@ -2827,7 +3090,11 @@ final class AppModel {
         routeReadinessTimeoutTask = nil
         routeStartStatus = nil
         depth.cancelReadiness()
+<<<<<<< HEAD
         location.setNavigating(false)
+=======
+        finishSensorModeRoute()
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         logger.event("route_readiness", ["state": "cancelled"])
     }
 
@@ -2861,6 +3128,10 @@ final class AppModel {
     ///   - announce: optional "Walking to …" line (see `beginRoute`).
     /// Callers: `beginRoute` (degraded paths), `depthReadinessChanged(.ready)`.
     private func startRouteNow(_ route: Route, announce: String? = nil) {
+        markSensorModeRouteStarted()
+        // A previous route's AR failure must not make the first trusted frame of this new route
+        // speak a stale recovery line while the route intro is still being delivered.
+        depthSafetyDegraded = false
         routeStartWaiting = false
         routeStartStatus = nil
         routeError = nil
@@ -3112,7 +3383,26 @@ final class AppModel {
         }
         // Step 2 already honours the cheapest downgrade: no mesh at .serious or worse.
         let hot = ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
-        depth.setMeshClassification(!hot)
+        let desiredMesh = !hot
+        if desiredMesh != depth.meshEnabled {
+            let decision = sensorModeInterlock.request(.meshClassification, source: .thermal)
+            switch decision {
+            case .allowRestart:
+                depth.setMeshClassification(desiredMesh)
+            case .deferUntilRouteEnds:
+                // Mesh lookup is a non-safety enhancement. Turn it off in the processor now to
+                // reduce heat, but do not pause/re-run ARKit while the walker is guided.
+                depth.setMeshClassification(desiredMesh, restartSession: false)
+                logger.event("sensor_mode", ["mode": SensorMode.meshClassification.rawValue,
+                                              "action": "thermal_deferred",
+                                              "desired": desiredMesh,
+                                              "phase": sensorModeInterlock.phase.rawValue])
+            case .refuseWhileStarting, .refuseWhileNavigating, .refuseWhileFinishing:
+                // Thermal requests are never refused; this defensive branch preserves the
+                // cheapest downgrade if the policy gains another phase in the future.
+                depth.setMeshClassification(desiredMesh, restartSession: false)
+            }
+        }
         // Say it once per transition: names going silent without a word is confusing (Muse L5).
         hazards.paused = hot                 // camera extras off while hot; lanes + haptics stay
         if hot, !wasHot, started { speech.say("Phone is hot. Door and wall names and sign reading paused.", .nav, ttl: 10) }

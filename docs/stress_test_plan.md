@@ -76,6 +76,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
     press that can't reach the phone plays `.retry`. Every route cue (and veer) is also felt on the
     cane as soft continuous buzzes: left one 0.45 s buzz, right two 0.35 s, crossing three 0.3 s,
     arrived long-short-long. A ground hazard is 4 heavy taps.
+<<<<<<< HEAD
 12. **Voice cache.** At launch the app prefetches `AppModel.commonLines`: 35 lines (24 fixed lines,
     the 5 Cues card lines, the 6 flashlight lines). At route start it prefetches the 9 waypoint `say`
     lines, `commonLines` again and the intro, then `SpokenPhrases.warningLines` (74 generated warning
@@ -94,6 +95,13 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
     signs are spoken (Quiet / Indoors: no names, safety signs only). D6 and D22 turn names on first;
     every other test runs on the default Detailed + Outdoors. Check the `start` record's
     `cue_level`, `cue_place`, `obstacle_names` before comparing two walks.
+=======
+12. **Voice cache.** Prefetch covers exactly 34 lines: 24 `commonLines`, 9 waypoint `say` lines and
+    the intro. Any line built at runtime is a cache miss: Repeat (it includes a distance), "Passed X.
+    Y in N meters.", the arrival summary, "\<AirPods\> connected.", channel warnings, "Describing.".
+    A route or Repeat line that misses waits up to **2.5 s** for ElevenLabs, then falls back to the
+    system voice. Obstacle and safety lines never wait.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 ---
 
@@ -117,9 +125,15 @@ no blindfolded walk.
 
 | ID | Command (from `ios/`) | What it covers | Pass | Time |
 |---|---|---|---|---|
+<<<<<<< HEAD
 | A1 | `make test` | 457 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, depth-readiness interlock, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file, sound-recognition lifetime guard, and since Step 34: `TorchSwitchTests` (flashlight settle), `LiveViewTests` (both-cameras `.blockedByRoute`, `FaceTrackingChange`, `DualCameraRotation`), `CueProfileTests` (level × place rules, safety-sign filter), `SpeechResumeTests` (clause resume, 3-resume cap, 0.35 s pause) | 457/457 (CHANGELOG Step 37; 457 `@Test` annotations in `ios/Logic/Tests`) | < 1 min |
 | A2 | `make sim` | Swift 6 strict build for the simulator | 0 errors | ~3 min |
 | A3 | `make uitest` | 11 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggle, Cues pickers (Standard / Indoors selected, then Detailed / Outdoors restored), a11y labels and tabs, Navigate to CIF button, empty destination, campus suggestions, plus the tour; the Street View "Where am I" test is skipped unless run with `make uitest-streetview` | 10 passed + 1 skipped, 0 failures | ~4 min |
+=======
+| A1 | `make test` | 378 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, depth-readiness and sensor-mode interlocks, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file, sound-recognition lifetime guard | current count: 378 annotations | < 1 min |
+| A2 | `make sim` | Swift 6 strict build for the simulator | 0 errors | ~3 min |
+| A3 | `make uitest` | 9 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggles, a11y labels, empty destination and campus suggestions; the Street View "Where am I" case is skipped unless run with `make uitest-streetview` | 8/8 + 1 skipped | ~4 min |
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 | A4 | `make tour` | PNG per screen state → `build/shots` | Every PNG reviewed: no truncated pill ("SPEAKI…"), no hyphenated "Recen-ter", instruction not clipped | ~3 min |
 | A5 | `make e2e` (or `SCENARIO=clean`) | GPS replay through the real app on the iPhone 17 Pro Max / iOS 27 simulator; asserts on the JSONL log. Report: `build/e2e/report.json` | 4/4 PASS | ~20 min |
 | A6 | `python3 scripts/e2e.py --scenario clean --speed 1.0` | Same `clean` path at walking pace (the default 4 m/s makes the distance-based turn-settle release fire before the 25 s moving-time one) | PASS | ~19 min |

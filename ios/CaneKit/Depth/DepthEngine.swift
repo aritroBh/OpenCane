@@ -28,10 +28,17 @@
 //  to show; the anchor's yaw goes to `onFaceYaw` and drives the beacon when there are no AirPods.
 //
 //  Invariants: the delegate and consumer are wired exactly once (first `start()`); later starts
+<<<<<<< HEAD
 //  go through `resume()` and never reset tracking. Re-running the session (`setMeshClassification`,
 //  `setFaceTracking`, `setHighFrameRate`) costs ~1–2 s of depth, so each happens only on a thermal
 //  or settings *change*, never per frame. No audio: ARKit here never
 //  touches the audio session. The session is exposed read-only (`arSession`) so the Hazards card's
+=======
+//  go through `resume()` and never reset tracking. Re-running the session for a mode change costs
+//  ~1–2 s of depth, so AppModel permits user changes only while idle and defers thermal changes
+//  during a route. No audio: ARKit here never touches the audio session. The session is exposed
+//  read-only (`arSession`) so the Hazards card's
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 //  `LiveCameraView` can draw it; nothing outside this class runs, pauses or delegates it.
 //
 //  Route-start readiness: `beginReadiness` / `pollReadiness` / `cancelReadiness` wrap the pure
@@ -116,10 +123,24 @@ final class DepthEngine {
     /// it on `.timedOut`.
     @ObservationIgnored var onReadinessChanged: ((DepthReadinessState) -> Void)?
 
+<<<<<<< HEAD
     /// True once an `ARFaceAnchor` has been seen while face tracking is on (any age); cleared when
     /// `setFaceTracking(false)` turns it off. Read only by `AppModel.startFaceTrackingSelfTest`
     /// (`anchor_seen` in the `face_head_selftest` record); no view reads it.
     /// Freshness is `FaceHeadPose.isTracking`, not this flag.
+=======
+    /// Main-actor callback when ARKit reports a terminal session failure. `AppModel` keeps GPS
+    /// guidance alive but must stop stale obstacle cues and tell the walker that depth is gone.
+    @ObservationIgnored var onSessionFailure: ((String) -> Void)?
+
+    /// Main-actor callback for an AR interruption begin/end. The app already has an explicit
+    /// screen-lock cue; active interruptions use the same depth-health warning path and recover
+    /// only after a trusted frame arrives.
+    @ObservationIgnored var onSessionInterruption: ((Bool) -> Void)?
+
+    /// True while an `ARFaceAnchor` has been seen at all this session (any age). Only for the
+    /// Hazards card's "the front camera is live" line; freshness is `FaceHeadPose.isTracking`.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     private(set) var faceAnchorSeen = false
 
     // MARK: Capability
@@ -146,6 +167,13 @@ final class DepthEngine {
     @ObservationIgnored let processor = DepthFrameProcessor()
     /// Last configuration run; non-nil means the session was started at least once.
     @ObservationIgnored private var configuration: ARWorldTrackingConfiguration?
+    /// Mesh setting represented by the currently-running AR configuration. Thermal changes may
+    /// turn processor mesh lookups off immediately during a route, while this value stays behind
+    /// until the route ends and the AR session can be restarted safely.
+    @ObservationIgnored private var configuredMeshEnabled = true
+    /// True when a thermal mesh change was applied to the processor but its AR configuration still
+    /// needs one restart after navigation. This is never allowed to create a mid-route camera gap.
+    @ObservationIgnored private var configurationRestartDeferred = false
     /// Main-actor task draining `processor.reports` into `ingest`.
     @ObservationIgnored private var consumer: Task<Void, Never>?
     /// Report timestamps from the last 2 s, for `fps`.
@@ -257,6 +285,8 @@ final class DepthEngine {
         }
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
 
         // The processor is the frame delegate; a tiny main-actor observer gets the lifecycle calls.
         let observer = SessionObserver(engine: self, frames: processor)
@@ -324,12 +354,26 @@ final class DepthEngine {
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
         processor.startMotion()
         session.run(config)                      // no reset: keep the world map
         isRunning = true
         status = "Depth resuming…"
     }
 
+<<<<<<< HEAD
+=======
+    /// Thermal watchdog hook. Re-running the session costs ~1–2 s of depth, so callers only
+    /// toggle on a thermal *change*, never per frame. During navigation `restartSession` is false:
+    /// the processor's mesh lookup changes immediately, but the AR configuration restart is marked
+    /// pending until `applyPendingConfigurationIfNeeded()` runs after the route.
+    ///
+    /// Flips `meshEnabled`, tells the processor to stop/start its mesh lookup immediately (so no
+    /// stale `centerHit` is published while the new configuration spins up), and — if running —
+    /// re-runs the session with the new configuration (no tracking reset). Caller:
+    /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     /// Camera at 60 fps (Mount card "60 fps camera (warmer)", off by default). Cues use 30 depth
     /// reports/s in the normal path; high-rate mode publishes up to 60 reports/s so the readiness
     /// interlock sees every camera frame. 60 fps doubles the camera's cost and heat for a smoother
@@ -360,6 +404,8 @@ final class DepthEngine {
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
         session.run(config)
     }
 
@@ -394,9 +440,12 @@ final class DepthEngine {
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
         session.run(config)
     }
 
+<<<<<<< HEAD
     /// Thermal watchdog hook. Re-running the session costs ~1–2 s of depth, so callers only
     /// toggle on a thermal *change*, never per frame (the `on != meshEnabled` guard makes a
     /// repeated call free).
@@ -408,20 +457,37 @@ final class DepthEngine {
     /// silent while it is off; the lanes and haptics keep running. Caller:
     /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
     func setMeshClassification(_ on: Bool) {
+=======
+    /// Update mesh classification. The normal path restarts ARKit immediately; the thermal path
+    /// passes `restartSession: false` while a route is active so no sensor-mode restart can remove
+    /// depth from an actively guided walker. `applyPendingConfigurationIfNeeded()` performs the
+    /// deferred restart once navigation has stopped.
+    func setMeshClassification(_ on: Bool, restartSession: Bool = true) {
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         guard on != meshEnabled else { return }
         meshEnabled = on
         processor.settings.withLock { $0.meshLookupEnabled = on }
-        guard isRunning else { return }
+        guard isRunning else {
+            configurationRestartDeferred = false
+            return
+        }
+        guard restartSession else {
+            configurationRestartDeferred = configuredMeshEnabled != meshEnabled
+            return
+        }
         session.pause()
         processor.dropLatestImage()
         processor.synchronize()
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: on)
         configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
         session.run(config)
         status = on ? "Mesh classification on" : "Mesh classification off (thermal)"
     }
 
+<<<<<<< HEAD
     /// World-tracking configuration built from the *current* flags: scene depth (raw + smoothed),
     /// optional classified mesh (only where supported), gravity-aligned world (y up, so "head
     /// height" and `GroundSampler` heights are meaningful), no plane detection, autofocus on, the
@@ -430,6 +496,37 @@ final class DepthEngine {
     /// format at ≥ that rate, else the last at ≥ 30. Depth is 256×192 whatever the format; the
     /// colour image only feeds snapshots, the live view and the sign reader. Side effect: records
     /// the choice in `chosenFormat`.
+=======
+    /// Apply a mesh configuration change deferred by the thermal watchdog. Called by `AppModel`
+    /// only after a route/queued start has ended, so the ~1–2 s ARKit hand-off cannot blind an
+    /// active walker. If the session is paused, the next `resume()` rebuilds the desired config;
+    /// clearing the flag here avoids a duplicate restart.
+    func applyPendingConfigurationIfNeeded() {
+        guard configurationRestartDeferred else { return }
+        guard isRunning else {
+            configurationRestartDeferred = false
+            return
+        }
+        guard configuredMeshEnabled != meshEnabled else {
+            configurationRestartDeferred = false
+            return
+        }
+        session.pause()
+        processor.dropLatestImage()
+        processor.synchronize()
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
+        let config = makeConfiguration(mesh: meshEnabled)
+        configuration = config
+        configuredMeshEnabled = meshEnabled
+        configurationRestartDeferred = false
+        session.run(config)
+        status = meshEnabled ? "Mesh classification on" : "Mesh classification off (thermal)"
+    }
+
+    /// World-tracking configuration: scene depth (raw + smoothed), optional classified mesh
+    /// (only where supported), gravity-aligned world (y up, so "head height" is meaningful), no
+    /// plane detection, and the lowest-resolution ≥ 30 fps video format to save power.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     /// - Parameter mesh: request `.meshWithClassification` (ignored when unsupported).
     private func makeConfiguration(mesh: Bool) -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
@@ -568,6 +665,7 @@ final class DepthEngine {
         status = "AR error: \(hint)"
         isRunning = false
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
+        onSessionFailure?(hint)
     }
 
     /// One throttled face-yaw sample from the front camera, already reduced to a world yaw by
@@ -581,13 +679,20 @@ final class DepthEngine {
         onFaceYaw?(worldYawDeg, now)
     }
 
+<<<<<<< HEAD
     /// ARKit interruption begin/end (camera taken by another app, backgrounding). Status only:
     /// ARKit resumes the session by itself; `isRunning` is left unchanged. The *start* of an
     /// interruption also invalidates a warming route-start run (the end does not need to: fresh
     /// frames after it are what the gate waits for).
+=======
+    /// ARKit interruption begin/end (camera taken by another app, backgrounding). Status is
+    /// published and `onSessionInterruption` lets AppModel clear stale route cues; ARKit resumes
+    /// the session by itself and `isRunning` is left unchanged.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     fileprivate func sessionInterrupted(_ interrupted: Bool) {
         status = interrupted ? "AR interrupted" : "AR resumed"
         if interrupted { invalidateReadiness(at: ProcessInfo.processInfo.systemUptime) }
+        onSessionInterruption?(interrupted)
     }
 
     /// Map `ARCamera.TrackingState` (a Sendable enum, passed by value across the hop) to the short

@@ -82,7 +82,11 @@ day-0 list is in [`ios/README.md` §1](ios/README.md#1-day-0-checklist).
 
 ```sh
 cd ios
+<<<<<<< HEAD
 make test      # 457 logic tests; works with the Swift 6 toolchain / Command Line Tools alone
+=======
+make test      # 378 logic tests; works with the Swift 6 toolchain / Command Line Tools alone
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 make gen       # generate CaneKit.xcodeproj; creates the git-ignored Secrets.plist from the template
 make sim17     # once: create the iPhone 17 Pro Max / iOS 27 simulator
 make sim       # simulator build

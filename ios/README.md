@@ -28,6 +28,7 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
+<<<<<<< HEAD
 **Status (Step 37, `076fcaa`; HEAD `d775d4b` adds only comment/doc passes and the stand-alone
 `scripts/streetview_stim.py`).** Steps 0–37 have landed; the latest are Step 34 (flashlight switch,
 both-cameras refusal), Step 35 (cue design v2 research + `scripts/cue_audit.py`), Step 36 (cue
@@ -39,6 +40,13 @@ clause). The Logic package has **457 `@Test` annotations in 34 test files**. Ste
 cue design v2 in [`docs/todo.md`](../docs/todo.md); device testing of each step's "test on device"
 line is the open work. [`docs/todo.md`](../docs/todo.md) and [`CHANGELOG.md`](../CHANGELOG.md) are
 the source of truth.
+=======
+**Status.** Steps 0–29 have landed. The Logic target contains 378 tests (`@Test` annotations); the earlier simulator,
+XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while the current Step 29
+full run needs the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods,
+watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
+[`CHANGELOG.md`](../CHANGELOG.md) are the source of truth.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 ## Layout
 
@@ -127,7 +135,11 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
+<<<<<<< HEAD
 | `make test` | `scripts/test.sh`: the 457 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools; never touches the simulator or xcodebuild. Extra arguments pass through to `swift test` only when you call `scripts/test.sh` directly (e.g. `scripts/test.sh --filter SpeechResume`). |
+=======
+| `make test` | `scripts/test.sh`: the 378 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools. |
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -339,6 +351,7 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
 "How we engineer" 4 adds `make e2e` (and `SCENARIO=streetview` when the camera path changed). Then
 run the Muse review of the diff.
 
+<<<<<<< HEAD
 - **Unit tests (`Logic/`, no device):** 457 Swift Testing `@Test` annotations in 34 files under
   `Logic/Tests/CaneKitLogicTests/`. By layer, file names without the `Tests.swift` suffix (count per
   file in parentheses):
@@ -366,6 +379,19 @@ run the Muse review of the diff.
   idle Guide; the empty-destination error; and campus suggestions while typing. `CaneKitVisualTour`
   has 1 (`testTour`). The last recorded run (Step 37): 11 run, 10 passed, 1 skipped, 0 failures.
   Accessibility labels are a test contract (`AGENTS.md` rule 9).
+=======
+- **Unit tests (`Logic/`, no device):** 378 Swift Testing tests. They cover lane extraction on
+  synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
+  math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
+  VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy, the crown gesture,
+  and the bounded ARKit/LiDAR route-start freshness gate (cold start, interruption/recovery,
+  timeout, fast warm-up and stale report gaps), plus the route-time sensor-mode interlock
+  (idle permission, queued/active refusal, thermal deferral, cancellation and stable release).
+- **UI (`make uitest`):** 9 XCUITests (8 run; the Street View case is skipped unless `make uitest-streetview`) drive the real screens: start, Next, Repeat, Recenter and
+  Stop on the demo route; Where am I without a key; the haptic test buttons and the Silence toggle;
+  a mount toggle; VoiceOver labels; and the empty-destination error. Accessibility labels are a
+  test contract (`AGENTS.md` rule 9).
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 - **Visual (`make tour`):** one PNG per screen state in `build/shots/`, for review by eye.
 - **End-to-end (`make e2e`):** replays the ISR → CIF route in the simulator with
   `xcrun simctl location`. The app auto-starts the route under `CANEKIT_DEMO_ROUTE=1`. Assertions
@@ -410,6 +436,10 @@ run the Muse review of the diff.
   - Battery is > 40 % and thermal is nominal or fair.
   - A route start speaks the warm-up state and waits for trusted LiDAR depth; on a fast healthy
     session, the three-frame bar clears in well under a quarter second after the first good reports.
+  - While the route is warming, guiding or its camera teardown is draining, changing "Head tracking
+    without AirPods" or "60 fps camera (warmer)" is refused and the switch returns to its applied
+    value; thermal mesh changes must not interrupt lanes or haptics. Stop/arrive before applying a
+    deferred mesh restart.
   - A spotter is assigned and the kill-word ("stop") is rehearsed.
 
 ### Automation environment variables
@@ -450,10 +480,16 @@ xcodebuild's environment (the Makefile does this). None of them is set on a norm
   `isIdleTimerDisabled = true`. Use Guided Access for the demo (how to arm it:
   `docs/devices_setup.md`, untethered demo step 4). Keep
   a power bank on the strap, since ARKit + LiDAR run ≈ 3–4 h.
+<<<<<<< HEAD
 - **Thermal.** `.serious` or worse turns off mesh classification, and with it the obstacle names.
   Lanes and haptics never stop. (Obstacle names are also off by default since Step 36; when they
   are on, `CueRules.allowsName` decides: Quiet and the Indoors place name nothing, Standard names
   doors while a route guides, Detailed names everything except walls.)
+=======
+- **Thermal.** `.serious` or worse turns off mesh lookup, and with it the obstacle names. During a
+  route the processor change is immediate but the ARSession reconfiguration is deferred until the
+  route ends; lanes and haptics never stop for that hand-off.
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 - **xcodebuild hangs after "Test Suite … passed".** Seen with `make tour` / `make uitest-streetview`
   when old test-runner processes were left on the simulator (hours old). The tests themselves had
   passed. Fix: `xcrun simctl shutdown all`, then rerun. `make e2e` relaunches the app itself and is
