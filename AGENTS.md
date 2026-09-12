@@ -60,7 +60,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
 | `docs/` | `README.md` (index), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` |
 | `hardware/mount/` | Phone-to-cane mount, screwed: design brief + parametric OpenSCAD (Sagar) |
-| `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity, `scripts/build_stl.ps1` (Sagar) |
+| `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity. `PRINTING.md` is the operator runbook — read it before sending anything to a printer. `scripts/build_stl.ps1` renders, `scripts/slice_gcode.ps1` slices headlessly (Sagar) |
 | `graphify-out/` | Knowledge graph of the repo: `graphify query "<question>"`, `GRAPH_REPORT.md`, `graph.html` |
 
 ## Hard rules
