@@ -96,7 +96,17 @@ nonisolated enum OnDeviceVision {
                     .map { ($0.0, $0.1) }
                 let kept = labels.prefix(12).map { "\($0.0) \(Int($0.1 * 100))%" }
                 let rawCount = raw.count
-                lastClassify.withLock { $0 = (kept, kept.isEmpty ? "no labels (\(rawCount) raw)" : nil) }
+                // When nothing clears the threshold, record what the best guesses actually were.
+                // The phone's first real run logged "no labels (1303 raw)", which cannot
+                // distinguish "the lens was against a wall, so Vision correctly saw nothing" from
+                // "the classifier scores everything at zero on this device" — and those call for
+                // opposite fixes. The top three raw scores separate them in one line, and cost
+                // nothing on a path that already holds all 1,303.
+                let best = raw.sorted { $0.1 > $1.1 }.prefix(3)
+                    .map { "\($0.0) \(Int($0.1 * 100))%" }.joined(separator: ", ")
+                lastClassify.withLock {
+                    $0 = (kept, kept.isEmpty ? "no labels (\(rawCount) raw; best: \(best))" : nil)
+                }
             } catch {
                 lastClassify.withLock { $0 = ([], String(describing: error)) }
             }

@@ -214,14 +214,30 @@ enum IntentSupport {
         var localizedStringResource: LocalizedStringResource { "CaneKit is still starting. Try again." }
     }
 
+    /// The app model, once it is actually ready to act on.
+    ///
     /// On a cold launch from the lock screen the SwiftUI scene may not have created the model
-    /// yet; wait briefly instead of silently doing nothing.
-    /// Polls `AppModel.shared` 20 × 100 ms (2 s total), then throws `NotReady`.
+    /// yet, so this polls 20 × 100 ms (2 s total). It waits for `started`, not merely for the
+    /// object to exist: `AppModel.shared` is assigned at the end of `init()`, but every engine is
+    /// wired in `start()`, which the root view's `.task` calls. A Siri phrase that won the race
+    /// against that `.task` would act on a model with no `depth.onReport` (no obstacle warnings),
+    /// no `nav.onSpeak` (the route's first instruction spoken to nobody), no audio session, and
+    /// an `announceChannels()` that reports AirPods and haptics as missing because their monitors
+    /// have not run — a walker told the wrong things about which safety channels are live.
+    ///
+    /// If the wait runs out with a model that exists but never started, it is started here rather
+    /// than refused: `start()` is idempotent (`guard !started`), so the later `.task` is a no-op,
+    /// and failing open keeps every voice phrase working in the one case where failing closed
+    /// would make all seven of them answer "CaneKit is still starting."
     @MainActor
     static func model() async throws -> AppModel {
         for _ in 0..<20 {
-            if let m = AppModel.shared { return m }
+            if let m = AppModel.shared, m.started { return m }
             try await Task.sleep(for: .milliseconds(100))
+        }
+        if let m = AppModel.shared {
+            m.start()
+            return m
         }
         throw NotReady()
     }
