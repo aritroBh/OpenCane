@@ -2,79 +2,100 @@
 //  ContentView.swift
 //  CaneKit
 //
-//  Root screen. One scroll view of cards, top to bottom: Guide (instruction, buttons, route
-//  picker), the trip card while a route runs or after arrival, the depth status line, the 3×2
-//  obstacle grid, Hazards (drop-offs, signs, hazard watch, hazard map, live view), Haptics, Watch,
-//  Mount (camera tilt + fps line, then toggles) and "This phone" capabilities. No debug footer
-//  (removed in Step 11). Styled only with Theme.swift tokens (docs/design.md).
+//  Root screen. Three icon-only pages under a sliding tab bar (docs/design.md §6):
+//    Guide    — instruction, buttons, route picker, trip / arrival
+//    Sense    — depth status, 3×2 obstacle grid, Hazards
+//    Settings — Haptics, Watch, Mount (tilt + fps + toggles), This phone
+//  Styled only with Theme.swift tokens. No debug footer (removed in Step 11).
 //
-//  Implements docs/design.md §6 (screens) as a single scrolling page rather than the four-tab
-//  bar the spec describes: Guide = §6.1 / §6.3 (GuideCard), Depth = §6.2 (statusCard +
-//  LaneGridView), Arrival = §6.4 (ArrivalCardView, inline instead of a sheet), Settings = §6.5
-//  (Mount card here, cue toggles in HapticsCard / WatchCard / HazardsCard).
+//  Pages cross-fade; they never slide sideways (a horizontal slide read as "going forward" even
+//  when moving left, and direction carries no meaning here). See docs/design.md §4.
 //
-//  Accessibility contract: the card order *is* the VoiceOver focus order (no sort priorities,
-//  design.md §7). The Mount toggle labels are XCUITest `app.switches[...]` keys:
-//  "Mirror left / right" and "Write trip log" are ⚠ test contract (AGENTS.md rule 9).
+//  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
+//  Mount toggle labels are XCUITest `app.switches[...]` keys: "Mirror left / right" and
+//  "Write trip log" are ⚠ test contract (AGENTS.md rule 9). Tab buttons are ⚠ "Guide",
+//  "Sense", "Settings" (`RootTab.title`).
 //
 
 import CaneKitLogic
 import SwiftUI
 import UIKit
 
-/// The app's only screen: a `NavigationStack` titled "OpenCane" around a vertical stack of cards.
+/// The app's root: a `NavigationStack` titled "OpenCane" around the selected page and `CKTabBar`.
 ///
-/// Reads everything from the shared `AppModel` (injected by the app entry); owns no state of its
-/// own. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume press is
-/// treated as "Where am I" and logged (`describe {source: cameraControl}`).
+/// Reads everything from the shared `AppModel` (injected by the app entry). Owns the selected
+/// `RootTab`. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume
+/// press is treated as "Where am I" and logged (`describe {source: cameraControl}`).
 struct ContentView: View {
-    /// The app-wide owner of every engine; `@Bindable` inside `body` for the toggle bindings.
+    /// The app-wide owner of every engine; `@Bindable` inside settings for the toggle bindings.
     @Environment(AppModel.self) private var model
+    /// Which of the three pages is showing. Starts on Guide so the idle walk controls are first.
+    @State private var tab: RootTab = .guide
+    /// Instant page swap when the user asked for less motion.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        @Bindable var model = model
         NavigationStack {
-            // The proxy goes to the Guide card so focusing the destination field can scroll it
-            // above the keyboard (DestinationField.anchorID).
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: CKSpacing.xl) {
-                        GuideCard(scroller: proxy)
-                        if model.nav.isNavigating || model.nav.arrived {
-                            ArrivalCardView()
-                        }
-                        statusCard
-                        ObstaclesCard()
-                        HapticsCard()
-                        HazardsCard()
-                        WatchCard()
-                        mountSettings($model)
-                        capabilityCard
-                    }
-                    .padding(CKSpacing.gutter)
-                    // Tapping anywhere that is not a control gives the keyboard back. Buttons,
-                    // toggles and the field itself consume their own taps first.
-                    .contentShape(Rectangle())
-                    .onTapGesture { dismissKeyboard() }
-                }
-                // Dragging the page down also dismisses it, the way Maps and Mail do.
-                .scrollDismissesKeyboard(.interactively)
-                .background(CKColor.background)
-                .navigationTitle("OpenCane")
+            VStack(spacing: 0) {
+                page
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(tab)
+                    // Cross-fade only: pages never slide. A horizontal slide read as "going
+                    // forward" even when moving left, and direction is not information here.
+                    .transition(.opacity)
+                CKTabBar(selection: $tab)
             }
+            .background(CKColor.background)
+            .navigationTitle("OpenCane")
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: tab)
         }
         // Camera Control / volume-button spike: counts presses in the footer.
         .background(CameraControlInteraction { model.cameraControlPressed() })
     }
 
-    // MARK: Pieces
+    /// The selected page. Only the visible page is in the tree, so 30 Hz depth updates stay on Sense.
+    @ViewBuilder
+    private var page: some View {
+        switch tab {
+        case .guide: GuidePage()
+        case .sense: SensePage()
+        case .settings: SettingsPage()
+        }
+    }
 
-    /// Resigns the keyboard from wherever it is. The destination field's `@FocusState` follows
-    /// the first responder, so this keeps that view's state right without threading a focus
-    /// binding through two views.
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                        to: nil, from: nil, for: nil)
+}
+
+// MARK: - Pages
+
+/// Guide page: walk controls, destination field, trip / arrival.
+///
+/// The `ScrollViewReader` proxy goes to the Guide card so focusing the destination field
+/// can scroll it above the keyboard (`DestinationField.anchorID`).
+private struct GuidePage: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            pageScroll {
+                GuideCard(scroller: proxy)
+                if model.nav.isNavigating || model.nav.arrived {
+                    ArrivalCardView()
+                }
+            }
+        }
+    }
+}
+
+/// Sense page: depth status, obstacle grid, hazards. Isolated so 30 Hz frames stay here.
+private struct SensePage: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        pageScroll {
+            statusCard
+            ObstaclesCard()
+            HazardsCard()
+        }
     }
 
     /// Big, high-contrast status line — readable at arm's length on a cane.
@@ -99,8 +120,23 @@ struct ContentView: View {
         .accessibilityLabel("Status: \(model.status)")
         .accessibilityAddTraits(.updatesFrequently)
     }
+}
 
-    /// "Mount" card: four persisted system `Toggle`s (the settings rows of design.md §6.5).
+/// Settings page: haptics, watch, mount, this phone.
+private struct SettingsPage: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        pageScroll {
+            HapticsCard()
+            WatchCard()
+            mountSettings($model)
+            capabilityCard
+        }
+    }
+
+    /// "Mount" card: persisted system `Toggle`s (the settings rows of design.md §6.5).
     ///
     /// Each toggle's visible label is its VoiceOver label and its XCUITest `switches[...]` key;
     /// the hint says when to flip it. ⚠ test contract: "Mirror left / right" (testMountTogglesPersist)
@@ -124,42 +160,6 @@ struct ContentView: View {
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
-    }
-
-    /// Obstacles card wrapper, isolated into a leaf subview so 30 Hz depth frame updates
-    /// only re-evaluate this card rather than the entire ContentView root scroll view.
-    private struct ObstaclesCard: View {
-        @Environment(AppModel.self) private var model
-
-        var body: some View {
-            LaneGridView(report: model.depth.report)
-        }
-    }
-
-    /// Live camera aim + depth rate, isolated into a leaf subview so 30 Hz updates do not
-    /// re-evaluate the parent ContentView or the surrounding Mount card toggles.
-    private struct MountAimRow: View {
-        @Environment(AppModel.self) private var model
-
-        var body: some View {
-            if let tilt = model.depth.report.cameraTiltDownDeg {
-                let s = MountTilt.status(downDeg: tilt)
-                let fps = Int(model.depth.fps.rounded())
-                Label {
-                    Text("\(s.text) · \(fps) fps").foregroundStyle(CKColor.textPrimary)
-                } icon: {
-                    Image(systemName: s.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(s.ok ? CKColor.laneClear : CKColor.laneUrgent)
-                }
-                .font(CKFont.secondary)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(s.text). Depth \(fps) frames per second")
-            } else if model.lidarSupported {
-                // No trusted frame yet (warming up, or the cane is moving): say how to get a reading.
-                Text("Camera tilt: hold the cane still for a reading")
-                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
-            }
-        }
     }
 
     /// "This phone" card: which hardware / package features this device actually has, so a
@@ -193,6 +193,71 @@ struct ContentView: View {
     /// change it only together with those tests.
     private static var logicPackageOK: Bool {
         GeigerRate.hertz(distance: 1.0) == 4
+    }
+}
+
+// MARK: - Shared page chrome
+
+/// Shared scroll chrome for every root page: gutter, card spacing, tap-to-dismiss keyboard.
+///
+/// - Parameter content: the page's cards, top to bottom.
+@ViewBuilder
+private func pageScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    ScrollView {
+        VStack(alignment: .leading, spacing: CKSpacing.xl) {
+            content()
+        }
+        .padding(CKSpacing.gutter)
+        // Tapping anywhere that is not a control gives the keyboard back. Buttons,
+        // toggles and the field itself consume their own taps first.
+        .contentShape(Rectangle())
+        .onTapGesture { dismissKeyboard() }
+    }
+    // Dragging the page down also dismisses it, the way Maps and Mail do.
+    .scrollDismissesKeyboard(.interactively)
+}
+
+/// Resigns the keyboard from wherever it is. The destination field's `@FocusState` follows
+/// the first responder, so this keeps that view's state right without threading a focus
+/// binding through two views.
+private func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                    to: nil, from: nil, for: nil)
+}
+
+/// Obstacles card wrapper, isolated into a leaf subview so 30 Hz depth frame updates
+/// only re-evaluate this card rather than the Sense page scroll view.
+private struct ObstaclesCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        LaneGridView(report: model.depth.report)
+    }
+}
+
+/// Live camera aim + depth rate, isolated into a leaf subview so 30 Hz updates do not
+/// re-evaluate the surrounding Mount card toggles.
+private struct MountAimRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let tilt = model.depth.report.cameraTiltDownDeg {
+            let s = MountTilt.status(downDeg: tilt)
+            let fps = Int(model.depth.fps.rounded())
+            Label {
+                Text("\(s.text) · \(fps) fps").foregroundStyle(CKColor.textPrimary)
+            } icon: {
+                Image(systemName: s.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(s.ok ? CKColor.laneClear : CKColor.laneUrgent)
+            }
+            .font(CKFont.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(s.text). Depth \(fps) frames per second")
+        } else if model.lidarSupported {
+            // No trusted frame yet (warming up, or the cane is moving): say how to get a reading.
+            Text("Camera tilt: hold the cane still for a reading")
+                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+        }
     }
 }
 

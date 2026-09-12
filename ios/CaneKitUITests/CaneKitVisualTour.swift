@@ -11,8 +11,9 @@
 //
 //  Covers the screens of docs/design.md §6 for visual review (`make tour` → ios/build/shots).
 //  It reaches every control through the same VoiceOver labels as CaneKitUITests, so the ⚠ test
-//  contract strings there apply here too: "Start route to CIF", "Stop route", "Repeat", "Next",
-//  "Recenter", "Test left/center/right/head haptic", "Silence haptics", "Where am I", "Go".
+//  contract strings there apply here too: "Guide" / "Sense" / "Settings" tabs, "Start route to CIF",
+//  "Stop route", "Repeat", "Next", "Recenter", "Test left/center/right/head haptic",
+//  "Silence haptics", "Where am I", "Go".
 //
 
 import XCTest
@@ -35,9 +36,9 @@ final class CaneKitVisualTour: XCTestCase {
         app.launch()
     }
 
-    /// The whole tour, in order: idle (top / middle / bottom), navigating, after Repeat / Next /
-    /// Recenter, navigating (middle / bottom), haptic test buttons, silence toggled, "Where am I"
-    /// without a key, stopped, and Go with an empty destination.
+    /// The whole tour, in order: idle Guide, navigating, after Repeat / Next / Recenter,
+    /// "Where am I" without a key, Sense page, Settings (haptic tests + silence), stopped,
+    /// and Go with an empty destination.
     ///
     /// ⚠ test contract: every `app.buttons[...]` / `app.switches[...]` label used below.
     func testTour() {
@@ -59,7 +60,17 @@ final class CaneKitVisualTour: XCTestCase {
         scrollDown(); snap("navigating-bottom")
         scrollToTop()
 
-        // Haptics card: every test button, then the silence toggle on and off.
+        let whereAmI = app.buttons["Where am I"]
+        if whereAmI.exists { whereAmI.tap(); pause(1.5); snapElement(whereAmI, "where-am-i-no-key") }
+
+        // Sense page: depth status + obstacle grid + hazards.
+        openTab("Sense")
+        pause(0.4); snap("sense-top")
+        scrollDown(); snap("sense-bottom")
+
+        // Settings page: haptics, watch, mount. Haptic test buttons live here now.
+        openTab("Settings")
+        pause(0.4); snap("settings-top")
         for name in ["Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic"] {
             let b = app.buttons[name]
             if b.exists { b.tap(); pause(0.3) }
@@ -69,17 +80,24 @@ final class CaneKitVisualTour: XCTestCase {
             flip(silence); pause(0.5); snapElement(silence, "haptics-silenced")
             flip(silence); pause(0.3)
         }
+        scrollDown(); snap("settings-bottom")
 
-        let whereAmI = app.buttons["Where am I"]
-        if whereAmI.exists { whereAmI.tap(); pause(1.5); snapElement(whereAmI, "where-am-i-no-key") }
-
-        scrollToTop()
+        openTab("Guide")
+        XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
         app.buttons["Stop route"].tap()
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5))
         pause(0.5); snap("stopped")
 
         // Destination field: empty → error line; typed → route build attempt (no network in CI).
         app.buttons["Go"].tap(); pause(0.5); snap("go-empty")
+    }
+
+    /// Selects a root tab by its VoiceOver label (icon-only on screen).
+    ///
+    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
+    private func openTab(_ name: String) {
+        let tab = app.buttons[name]
+        if tab.waitForExistence(timeout: 5) { tab.tap() }
     }
 
     // MARK: Helpers

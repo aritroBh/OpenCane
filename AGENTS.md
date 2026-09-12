@@ -97,9 +97,10 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
-   Type a destination first, Destination, and a campus suggestion's label "Grainger Engineering
-   Library, campus place" — `DestinationSuggestion.voiceOverLabel`) must not change without updating
-   the tests in the same commit.
+   Type a destination first, Destination, the root tabs Guide / Sense / Settings, and a campus
+   suggestion's label "Grainger Engineering Library, campus place" —
+   `DestinationSuggestion.voiceOverLabel`) must not change without updating the tests in the same
+   commit.
 10. **Every commit**: `cd ios && make test` green (Logic), `make sim` green, and for UI changes
     `make uitest` + `make tour` on the **iPhone 17 Pro Max / iOS 27** simulator (`make sim17` creates
     it once). Run the Muse review (`muse exec`, read-only, from a scratch dir) on the diff. Commit message

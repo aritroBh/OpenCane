@@ -115,9 +115,10 @@ final class CaneKitUITests: XCTestCase {
     /// No haptic is asserted (the simulator has no Taptic Engine); this proves the controls exist
     /// and do not crash.
     ///
-    /// ⚠ test contract: buttons "Test left haptic", "Test center haptic", "Test right haptic",
-    /// "Test head haptic" and switch "Silence haptics" (HapticsCard).
+    /// ⚠ test contract: tab "Settings"; buttons "Test left haptic", "Test center haptic",
+    /// "Test right haptic", "Test head haptic" and switch "Silence haptics" (HapticsCard).
     func testHapticTestButtonsAndSilenceToggle() {
+        openTab("Settings")
         for name in ["Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic"] {
             let b = app.buttons[name]
             XCTAssertTrue(b.waitForExistence(timeout: 10), name)
@@ -132,8 +133,9 @@ final class CaneKitUITests: XCTestCase {
     /// Flipping "Mirror left / right" changes the switch value; flips it back afterwards so the
     /// persisted setting is left as found.
     ///
-    /// ⚠ test contract: switch "Mirror left / right" (ContentView Mount card).
+    /// ⚠ test contract: tab "Settings"; switch "Mirror left / right" (Settings Mount card).
     func testMountTogglesPersist() {
+        openTab("Settings")
         let mirror = app.switches["Mirror left / right"]
         XCTAssertTrue(mirror.waitForExistence(timeout: 10))
         let before = mirror.value as? String
@@ -166,17 +168,31 @@ final class CaneKitUITests: XCTestCase {
         return condition()
     }
 
-    /// Spot-checks the VoiceOver tree on the idle screen.
+    /// Spot-checks the VoiceOver tree across the three root tabs.
     ///
-    /// ⚠ test contract: button "Start route to CIF", element "Head row" (LaneGridView row label),
-    /// button "Where am I", switch "Write trip log" (ContentView Mount card).
+    /// ⚠ test contract: tabs "Guide", "Sense", "Settings"; button "Start route to CIF",
+    /// element "Head row" (LaneGridView row label), button "Where am I",
+    /// switch "Write trip log" (Settings Mount card).
     func testAccessibilityLabelsExist() {
+        XCTAssertTrue(app.buttons["Guide"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Sense"].exists)
+        XCTAssertTrue(app.buttons["Settings"].exists)
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 10))
-        // Rows expose a combined spoken value ("left clear, center clear, right clear" or "no depth data").
-        let headRow = app.otherElements["Head row"]
-        XCTAssertTrue(headRow.exists)
         XCTAssertTrue(app.buttons["Where am I"].exists)
-        XCTAssertTrue(app.switches["Write trip log"].exists)
+        openTab("Sense")
+        // Rows expose a combined spoken value ("left clear, center clear, right clear" or "no depth data").
+        XCTAssertTrue(app.otherElements["Head row"].waitForExistence(timeout: 5))
+        openTab("Settings")
+        XCTAssertTrue(app.switches["Write trip log"].waitForExistence(timeout: 5))
+    }
+
+    /// Selects a root tab by its VoiceOver label (icon-only on screen).
+    ///
+    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
+    private func openTab(_ name: String) {
+        let tab = app.buttons[name]
+        XCTAssertTrue(tab.waitForExistence(timeout: 5), "tab \(name)")
+        tab.tap()
     }
 
     /// "Navigate to CIF from here" is on the idle guide, enabled, and gives way to the route
