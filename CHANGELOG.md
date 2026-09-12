@@ -157,6 +157,17 @@ the full length freely and the dovetail that slides with thumb pressure and stay
 then put those three numbers in the parameter block. Do not print the collar, ring, arm or cradle —
 all four are blocked by the defects above.
 
+## Step 22 — Rename primary route action to "Start route to CIF" and synchronize test contracts (Sat Sep 12)
+
+Clarity and usability enhancement for the Townsend Hall to CIF walk:
+- **Button rename**: Renamed primary route action in `GuideCard.swift` from "Start demo route" to "Start route to CIF", clarifying that it is the live, pre-surveyed route from Townsend Hall (dorm) to CIF rather than a simulation.
+- **Siri App Shortcut**: Added "Start route to CIF in OpenCane" to `AppShortcutsProvider` in `AppIntents.swift` while retaining legacy phrases for backwards compatibility.
+- **Contract & documentation sync**: Updated test contracts across `AGENTS.md` (Rule 9), `docs/CODE_REFERENCE.md`, `docs/design.md`, `CaneKitUITests.swift`, and `CaneKitVisualTour.swift`.
+- **Adversarial review with Muse**: Muse confirmed 1:1 label pairing, accessibility contract preservation, strict concurrency invariance, and clean naming split.
+- **Verification**: 348/348 unit tests pass (`make test`), simulator build clean (`make sim`), 10/10 UITests pass (`make uitest`), and deployed to physical iPhone 17 Pro Max (`00008150-001A698C1108401C`).
+
+test on device: open app, verify button reads 'Start route to CIF', tap to start route from Townsend Hall.
+
 ## Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root to prevent full-screen SwiftUI re-renders (Sat Sep 12)
 
 Performance optimization addressing root-level SwiftUI Observation invalidation:

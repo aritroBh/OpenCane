@@ -7,14 +7,14 @@
 //  the recorded demo route or a typed MapKit destination.
 //
 //  Implements docs/design.md §6.1 (Guide: instruction, hero distance, bearing word, big
-//  buttons), §6.3 (route picker, reduced to "Start demo route", "Navigate to CIF from here" and
+//  buttons), §6.3 (route picker, reduced to "Start route to CIF", "Navigate to CIF from here" and
 //  a destination field — the field, its live suggestion list and "Go" live in
 //  `DestinationField.swift`) and the
 //  "Off-bearing > 25°" row of §5. Button titles differ from the §6.1 VoiceOver table on purpose
 //  (short words that fit two-up on a 17 Pro Max); the XCUITests pin the shipped words.
 //
 //  Accessibility contract — everything the XCUITests drive lives here (AGENTS.md rule 9):
-//    ⚠ test contract buttons: "Start demo route", "Navigate to CIF from here", "Stop route",
+//    ⚠ test contract buttons: "Start route to CIF", "Navigate to CIF from here", "Stop route",
 //      "Repeat", "Next", "Recenter", "Where am I" (queried as `app.buttons[label]`); "Go" is in
 //      `DestinationField`.
 //    ⚠ test contract texts: the instruction `Text` must stay a plain static text whose label is
