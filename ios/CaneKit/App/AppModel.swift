@@ -397,6 +397,15 @@ final class AppModel {
         watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
         watch.activate()
         wireNavigation()
+        // GPS runs from launch, not from route start. Three reasons, in order of how much they
+        // matter: the walker can SEE whether GPS is working before trusting it with a route (the
+        // card said "Off", which reads as broken); a first fix takes seconds, so starting a route
+        // used to begin with no fix at all and every GPS-health line lives behind a fix, which is
+        // why a route started indoors went silent; and the permission prompt now happens while
+        // someone is looking at the screen rather than in the first moments of a walk.
+        // It is stopped when the app is backgrounded with no route running (`scenePhaseChanged`),
+        // so an idle phone in a pocket is not holding the GPS on.
+        location.start()
         // Location prompt at launch (a sighted helper is usually present then); Motion and
         // HealthKit prompt at route start, so no three-alert pile-up on the first walk.
         // (Skipped under XCUITest: the three-choice alert races the first tap.)
@@ -574,6 +583,9 @@ final class AppModel {
             // (`probe_c_multicam`: ~30 fps per 4 s window collapsing to 8, with interruptions).
             // Lanes that look alive and are two seconds stale are the worst thing this app can do.
             resumeARKitAfterCameraWork()
+            // Put GPS back if the background branch stopped it, so the card never reads "Off" on a
+            // screen somebody is looking at. Idempotent when it is already running.
+            location.start()
         case .inactive:
             break
         case .background:
@@ -587,6 +599,11 @@ final class AppModel {
                 speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .nav, ttl: 10)
             }
             hazards.stop()                   // no scanning a frozen last frame in the background
+            // GPS runs for the life of the FOREGROUND session. Backgrounded with no route running
+            // there is nobody to guide, so holding the receiver on would just drain the battery in
+            // a pocket. A running route keeps it: the walk continues with the screen locked, which
+            // is the normal way this app is used.
+            if !nav.isNavigating { location.stop() }
             // The two-camera spotter view must never survive a backgrounding: it would hold both
             // cameras with nothing on screen, and the walker would come back to an app whose
             // obstacle channel is silently off.
@@ -1258,7 +1275,9 @@ final class AppModel {
             if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
-            self.location.stop()                 // GPS off after arrival (Muse M2)
+            // GPS deliberately stays on after arrival: it runs for the life of the foreground
+            // session now (see `start()`), so the card keeps telling the truth and the next route
+            // begins with a warm fix instead of a cold one.
             self.stopTicker()
             self.pushStatusToWatch()
             self.liveActivity.end(final: self.nav.instruction)
@@ -1496,7 +1515,9 @@ final class AppModel {
     func stopRoute() {
         cancelRouteBuild()
         nav.stop()
-        location.stop()
+        // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
+        // it here made the card read "Off" the moment a route ended and made the next Start begin
+        // with no fix.
         beacon.stop()
         head.stop()
         stopTicker()
