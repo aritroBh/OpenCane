@@ -104,7 +104,7 @@ public struct FaceYawTracker: Sendable, Equatable {
     /// The anchor updates at the camera's rate (30 or 60 Hz) but the beacon is rendered by a
     /// 10 Hz ticker, so the relay intentionally caps hops at 15 Hz. ⚠ `DepthEngine`'s anchor
     /// relay throttles to this; pinned by
-    /// `faceYawPublishIntervalMatchesTheDepthRate`.
+    /// `faceYawPublishIntervalKeepsRelayBounded`.
     public static let publishInterval: Double = 1.0 / 15
 
     /// Creates a tracker with the default 0.35 / 0.7 s / 45° / 3 tuning.
