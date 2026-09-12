@@ -59,7 +59,11 @@ thr_pitch    = 3.00;   // mm, trapezoidal thread pitch. Coarse prints better.
 thr_depth    = 1.20;   // mm, thread radial depth.
 thr_clear    = 0.35;   // mm, radial clearance, ring thread vs collar thread.
 ring_wall    = 4.00;   // mm, wall outside the ring's thread.
-ring_extra   = 4.0;    // mm, ring height beyond the cone contact.
+// How much of the collar's cone the ring's internal cone actually grips.
+// A collet closes most at the free end of its fingers, so a short ring
+// that only touches the finger ROOTS squeezes the bore far less than its
+// thread torque suggests. Keep this close to cone_len.
+cone_engage  = 17.0;   // mm, ring cone length (of cone_len available).
 ring_flutes  = 10;     // finger flutes so the ring turns by hand.
 flute_d      = 5.0;    // mm, flute cutter diameter.
 
@@ -122,7 +126,7 @@ thr_minor = core_r - thr_depth;
 cone_r0   = core_r;
 cone_r1   = core_r - cone_taper;
 collar_h  = base_len + thread_len + cone_len;
-ring_h    = cone_len + ring_extra;
+ring_h    = thread_len + cone_engage;
 ring_or   = core_r + thr_clear + ring_wall;
 arm_angle = 90 - cane_angle + cam_down;    // deg, arm relative to the cane axis
 plate_top = phone_h - plateau_h - plateau_clear;   // back plate stops here
