@@ -5,7 +5,7 @@ Code twins: `ios/CaneKit/UI/Theme.swift` (phone tokens + components), `ios/CaneK
 (watch), `ios/CaneKit/Speech/SpeechQueue.swift` + `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`
 (speech rules), `ios/CaneKit/Haptics/HapticPlayer.swift` + `CueDecider.swift` (haptic patterns).
 
-**Audited against the code on 2026-09-11 (after Step 10).** Every rule below describes what ships.
+**Audited against the code on 2026-09-12 (after Step 25).** Every rule below describes what ships.
 Where the original spec (Sep 10) and the Swift disagreed, the Swift won and this file changed; the parts
 of the original spec that were never built are kept, marked **Not built**, so nobody "fixes" the code back
 toward them by accident. From now on change a rule here and in the Swift in the same commit. Two things
