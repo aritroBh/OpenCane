@@ -28,9 +28,9 @@ AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../doc
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
 **Status.** Steps 0–25 have landed. The Logic target contains 366 tests (`@Test` annotations); the earlier simulator,
-XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while Step 22's full run needs
-the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the
-open work. [`docs/todo.md`](../docs/todo.md) and
+XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while the current Step 25
+full run needs the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods,
+watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
 [`CHANGELOG.md`](../CHANGELOG.md) are the source of truth.
 
 ## Layout
