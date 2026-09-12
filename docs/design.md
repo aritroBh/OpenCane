@@ -267,7 +267,7 @@ A reply about a frame older than about 4 m of walking (min(5 s, 4 m ÷ speed)) i
 | GPS worse than 20 m for 10 s | "GPS weak. Waypoint cues paused until it recovers." / later "GPS back." | — | — | GPS pill ±N M (warning) + GPS WEAK pill |
 | Standing near the destination 20 s without arrival (poor GPS at the door) | "You are close to <place>. Keep going toward it, or press Next to finish." once. Checked by the 10 Hz clock, so it fires while standing still with no new GPS fixes | — | — | — |
 | Arrived (two-hit rule, `docs/route_isr_cif.md`) | The last `say`, then the summary "<destination>. 1.0 kilometers, 14 minutes, 1300 steps." | `.success`, once | Stops; head tracking stops | Instruction "Arrived: <say>"; card title "Arrived"; Live Activity shows the arrival glyph and is dismissed 60 s later |
-| Stop route | "Route stopped." (queued lines are dropped first) | — | Stops | Back to Start demo route / destination field |
+| Stop route | "Route stopped." (queued lines are dropped first) | — | Stops | Back to Start route to CIF / destination field |
 
 Veer cues are muted while a turn is settling, inside the fence of the corner just reached, within 2 ×
 radius of an intermediate waypoint, on a curved leg, and on a poor (> 20 m), stale (> 5 s) or slow
@@ -357,7 +357,7 @@ While a route runs                                  Idle (before a route / after
 │ right to face north and stay on this   │          │ (⌖ OFF)   GPS runs only during a route │
 │ side. No crossing needed. Listen for … │          │ [ ◉ Where am I                       ] │
 │ 120 m                (↱ VEER RIGHT 40°)│          │ [ ⟲ Repeat                           ] │ ← only after arrival
-│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ [ ▶ Start demo route                 ] │
+│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ [ ▶ Start route to CIF               ] │
 │ [ ◉ Where am I                       ] │          │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
 │ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
 │ [ ⌖ Recenter                         ] │          │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
@@ -386,7 +386,7 @@ While a route runs                                  Idle (before a route / after
 | 11 | Beacon pill | "Beacon: Beacon N%" / "Beacon: Beacon paused" / "Beacon: Beacon off" / "Beacon: Beacon idle" | — | `.updatesFrequently` |
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
 | 13 | Stop route | "Stop route" | hint "Ends guidance" | button |
-| — | Start demo route (idle) | "Start demo route" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
+| — | Start route to CIF (idle) | "Start route to CIF" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
 | — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
 | — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
 | — | Suggestion row (0–6, campus places first) | "&lt;place>, campus place, 400 meters away, &lt;address>" | hint "Starts walking guidance to this place" | button |
@@ -432,7 +432,7 @@ Rows are one VoiceOver element each on purpose: reading three cells is slower th
 
 The route picker is three controls in the idle Guide card:
 
-- **Start demo route** — the bundled `route_isr_cif.json` (9 waypoints, 3 crossings, ≈ 989 m, see
+- **Start route to CIF** — the bundled `route_isr_cif.json` (9 waypoints, 3 crossings, ≈ 989 m, see
   `docs/route_isr_cif.md`). No GPS wait, no network.
 - **Navigate to CIF from here** — the same destination for a walker who is not at ISR: `MKDirections`
   walking from the live fix to the route file's *last waypoint as a bare coordinate*
@@ -645,7 +645,7 @@ Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
 
 | Query | Exact string | Where it comes from | Used by |
 |---|---|---|---|
-| `buttons[…]` | "Start demo route" | `GuideCard`, idle | every test waits for it first; tour |
+| `buttons[…]` | "Start route to CIF" | `GuideCard`, idle | every test waits for it first; tour |
 | `buttons[…]` | "Stop route" | `GuideCard`, navigating | route test, tour |
 | `buttons[…]` | "Next" | `GuideCard`, navigating | route test (advances to WP2), tour |
 | `buttons[…]` | "Repeat" | `GuideCard`, navigating / after arrival | route test (must not change the instruction; must be **absent** after a mid-route Stop), tour |

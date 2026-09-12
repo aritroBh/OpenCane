@@ -6,7 +6,7 @@
 //  Shortcuts) for everything the Guide card's buttons do. "Hey Siri, take me to Grainger in
 //  OpenCane", "Next waypoint in OpenCane", "Stop the route in OpenCane".
 //
-//  Purpose: seven App Intents — Where am I / Start demo route / Navigate to CIF from here /
+//  Purpose: seven App Intents — Where am I / Start route to CIF / Navigate to CIF from here /
 //  Take me to <place> / Repeat / Next waypoint / Stop route — plus their
 //  `AppShortcutsProvider`. Each intent only forwards to a public `AppModel` method, so Siri,
 //  the Action button, the watch and the on-screen buttons share one code path.
