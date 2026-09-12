@@ -14,9 +14,28 @@ compute, the battery and the speaker. If the retrofit that turns an ordinary whi
 cane into a smart cane is *one spool of filament and nothing else*, then anyone with
 a printer can make one, and the reason a smart cane costs $850 stops being obvious.
 
-**Status (2026-09-11):** designed and rendered clean; **never printed.** Every
+**Status (2026-09-12):** designed and rendered clean; **never printed.** Every
 clearance below is a guess until the coupons come off the bed. Nobody has put this
 on a real cane yet.
+
+> **Read [`PRINTING.md`](PRINTING.md) before you send anything to a machine.** It is the
+> operator runbook: which file, which filament slot, which temperatures, in what order,
+> and how to read each coupon.
+>
+> **The thread did not exist until 2026-09-12.** `linear_extrude(twist=)` maps *angle*
+> to height, so the tooth — drawn as a flat offset in y — came out 0.031 mm thick and
+> sliced away to a smooth cylinder. The collar's clamp was a plain tube. It is rewritten
+> as an angular sector and measures 0.62–0.75 mm, but **that has never been printed.**
+> The thread coupon is the first physical proof either way, and if the ring will not
+> thread onto the stub, do not print the collar.
+
+The assembly preview (`part = "assembly"`) is not decoration - it is the test. It
+draws the ghost cane, the ghost phone and a red ray along the rear camera's optical
+axis. Three separate faults were found by looking at it and at nothing else: the
+dovetail sockets were on the wrong axis, the collar's pad was shorter than the
+dovetail it was supposed to hold, and the phone's bottom corner cleared the shaft by
+1.1 mm. Render it after any change. If the red ray does not come out roughly
+horizontal, tipped slightly down, and miss the shaft, the arm is wrong.
 
 ## Print these in this order
 
@@ -27,12 +46,26 @@ and cane-specific, and every part depends on them.
 |---|---|---|---|
 | 1 | `coupons.scad`, `what="bore"` | ~20 cm³ | **the cane diameter itself** — see the conflict below |
 | 2 | `coupons.scad`, `what="thread"` then `"dovetail"` | 12 + 31 cm³ | `thr_clear`, `dt_clear` |
-| 3 | `collar` + `ring` | 16 + 14 cm³ | the clamp |
+| 3 | `collar` + `ring` | 30 + 14 cm³ | the clamp |
 | 4 | `arm` + `cradle` | 19 + 34 cm³ | the rest |
 
 Volumes are measured off the rendered STLs at 100% infill. At 25% gyroid the real
-mass is well under half. Print times are **unknown — slice them and read the number**;
-they depend on your machine and profile, and no two of your three printers will agree.
+mass is well under half.
+
+**Sliced, 2026-09-12.** All six mount parts on one SPARKX i7 plate, `0.20mm Standard
+@SPARKX i7 0.4 nozzle`, support on, build-plate-only: **4 h 31 min, 101.94 g, 34.18 m**
+of filament. Support is 6.8% of the time and support interface another 3.2% — almost
+all of it under the cradle. The saved project is `opencane_mount_plate.3mf` in this
+folder (gitignored, like every other build artifact). Slice positions, X/Y in mm:
+cradle (65, 150), collar (150, 200), ring (150, 140), lock (215, 140),
+socket (215, 200), arm (70, 42). Creality Print's auto-arrange packs them too tightly
+and reports gcode path conflicts; these positions do not.
+
+**Support: none, except the cradle.** The cradle stands on its dovetail block, so
+its back plate sits 7 mm off the bed. The block has a 45-degree flare that carries
+the plate for 7 mm all round, and the rest wants support - "on build plate only" is
+enough, and it lands on the outer face of the back plate, which nothing touches in
+use. Every other part is drawn so no downward face passes 45 degrees.
 
 Coupons carry **notches, not numbers**: count the notches, fewest = smallest. OpenSCAD's `text()` needs fontconfig, which the portable Windows snapshot
 does not ship, so text silently renders as nothing and you get four identical
@@ -124,7 +157,14 @@ not preferences, and this design inherits all of them:
 - the shaft out of the camera's view
 
 `arm_angle` is derived, not typed: `90 - cane_angle + cam_down`. Change `cane_angle`
-to match how the walker actually holds it and the camera angle follows.
+to match how the walker actually holds it and the camera angle follows. The identity
+is the one stated in `../mount/cane_mount.scad` line 33: camera pitch below the
+horizon = `arm_angle + cane_angle - 90`.
+
+`arm_reach` is load-bearing in the same way. The phone hangs below the dovetail by
+half the back plate, and `arm_angle` rakes that bottom corner back toward the shaft,
+so the reach is what buys knuckle clearance, not just standoff. There is an assert
+on it; the current gap is **13.1 mm** and the echo prints it on every render.
 
 ## Measure these before you trust anything
 
@@ -141,11 +181,23 @@ Every one of these is currently a number someone read off a drawing or a caliper
 
   This is a 1.1 mm spread. That is not a rounding difference — it is three times any
   sane bore clearance, and a collar bored for 28.75 will simply spin on a 27.65 shaft.
-  The bore coupons bracket all three (27.85 / 28.25 / 28.45 / 28.95 / 29.15 mm bores,
-  1–5 notches), so the cane settles it in one 20-minute print. Whatever wins,
-  **`hardware/mount/` is still modelled at 28.75 — one of the two folders is wrong**,
-  so say which in `CHANGELOG.md` once you know. Measure at the exact spot the collar
-  sits; canes taper.
+  The bore coupons bracket all three — **27.75 / 28.05 / 28.35 / 28.65 / 28.95 mm**
+  bores, 1–5 notches, even 0.30 steps — so the cane settles it in one **53-minute**
+  print (`-Plate bore -Material PLA -Walls 4`: 52m53s, 22.4 g).
+
+  The earlier set (27.85 / 28.25 / 28.45 / 28.95 / 29.15) was replaced because it
+  *started above* the caliper reading: if 27.65 was right, the smallest ring still
+  fitted and the test had no lower bracket, so it could only contradict itself. It
+  also buried 28.65 and 28.75 inside one 0.50 mm gap.
+
+  Read them with `pole_d = (smallest ring that goes on) − 0.10` — **not −0.35**, which
+  is what `coupons.scad` said until 2026-09-12 and was wrong by about 0.25 mm. For a
+  collet that is the difference between gripping the cane and never reaching it. Full
+  procedure in [`PRINTING.md`](PRINTING.md).
+
+  Whatever wins, **`hardware/mount/` is still modelled at 28.75 — one of the two
+  folders is wrong**, so say which in `CHANGELOG.md` once you know. Measure at the
+  exact spot the collar sits; canes taper.
 - **`phone_r`, `plateau_h`** — scaled off Apple's drawing, flagged MEASURE in
   `../mount/cane_mount.scad`. Same caveat here; the cradle inherits them.
 - **Real clamping force.** Unknown. The collet either holds a 233 g phone through a

@@ -22,11 +22,22 @@
 //    That is a 1.1 mm spread - three times any sane clearance - so the
 //    rings bracket ALL of it and the cane decides.
 //
-//    Slide each onto the real cane where the collar will sit. Keep the
-//    one that goes on with firm thumb pressure and does not rattle. Then:
-//      pole_d     = (that ring's bore) - 0.35
-//      bore_clear = 0.35
-//    and tell the rest of the team, because hardware/mount/ is still
+//    Slide each onto the real cane AT THE EXACT SPOT THE COLLAR SITS -
+//    not up from the tip, canes taper. Record the whole pattern ("1,2,3
+//    will not go; 4 goes firm; 5 rattles"), not just the winner. Then:
+//      pole_d = (the SMALLEST ring that goes on at all) - 0.10
+//    NOT minus 0.35. A rigid 10 mm ring that goes on with firm thumb
+//    pressure has about 0.05-0.15 mm of clearance on diameter, not 0.35,
+//    so the old formula came out ~0.25 mm small and a collet bored that
+//    tight will not reach the cane at all before the nut bottoms out.
+//    If you printed these in PLA and the collar will be PETG, subtract a
+//    further 0.06 mm - or just take the larger ring when you are borderline.
+//
+//    bore_clear is NOT an output of this test. These rings are rigid; the
+//    collar is a collet that closes. Set bore_clear as a design decision
+//    (0.40 today) and let collet_squeeze take it up.
+//
+//    Then tell the rest of the team, because hardware/mount/ is still
 //    modelled at 28.75 and one of the two folders is wrong.
 //
 // 2. THREAD PAIR (row 2)
@@ -63,13 +74,21 @@ rib_h        = 0.50;
 rib_w        = 1.60;
 thr_pitch    = 3.00;
 thr_depth    = 1.20;
+thr_duty     = 0.25;
+thr_crest    = 0.10;
+thr_axial    = 0.25;
 dt_wide      = 20.0;
 dt_narrow    = 14.0;
 dt_depth     = 7.0;
 
 /* [Coupon settings] */
 ring_h       = 10.0;   // mm, height of each bore ring.
-bore_tests   = [27.85, 28.25, 28.45, 28.95, 29.15];  // absolute BORE diameters
+// Even 0.30 steps from just above the smallest candidate. The old set
+// started at 27.85, ABOVE the 27.65 caliper reading, so if the caliper was
+// right the smallest ring still fitted and the test had no lower bracket -
+// it could only contradict itself. It also put 28.65 and 28.75 inside one
+// 0.50 mm gap. This set brackets 27.65 from below and halves that gap.
+bore_tests   = [27.75, 28.05, 28.35, 28.65, 28.95];  // absolute BORE diameters
 dt_tests     = [0.15, 0.25, 0.35];         // dt_clear values to try
 thr_test     = 0.35;   // thr_clear to try on the thread pair
 notch_d      = 1.20;   // mm, identity notch depth.
@@ -111,21 +130,34 @@ module bore_row() {
 // Short lengths of the real thread, so the fit you measure is the fit
 // you get. Geometry is duplicated from screwless_mount.scad rather than
 // imported, because that file's thread is wrapped inside the collar.
-module thread_profile2(minor, depth) {
+// Kept in sync with screwless_mount.scad's thread_profile BY HAND, and
+// the thing to keep in sync is the reason it looks like this: a twisted
+// linear_extrude turns ANGLE into height, so a tooth drawn as a linear
+// offset in y comes out ~0.03 mm thick and slices away to a plain
+// cylinder. Both copies had that bug until 2026-09-12. Draw the tooth as
+// an angular SECTOR or this coupon measures nothing at all.
+function thr_ang2(axial_mm) = axial_mm * 360 / thr_pitch;
+
+module thread_profile2(minor, depth, grow = 0) {
+    ar = thr_ang2(thr_pitch * thr_duty  + grow);
+    ac = thr_ang2(thr_pitch * thr_crest + grow);
+    n  = 16;
     union() {
         circle(r = minor);
-        polygon([[minor - eps, -thr_pitch * 0.42],
-                 [minor + depth, -thr_pitch * 0.20],
-                 [minor + depth,  thr_pitch * 0.20],
-                 [minor - eps,  thr_pitch * 0.42]]);
+        polygon(concat(
+            [ for (i = [0 : n]) let (a = -ac + 2 * ac * i / n)
+                [ (minor + depth) * cos(a), (minor + depth) * sin(a) ] ],
+            [ for (i = [0 : n]) let (a = ar - 2 * ar * i / n)
+                [ (minor - eps) * cos(a), (minor - eps) * sin(a) ] ]
+        ));
     }
 }
 
-module thread2(len, minor, depth) {
+module thread2(len, minor, depth, grow = 0) {
     turns = len / thr_pitch;
     linear_extrude(height = len, twist = -360 * turns,
                    slices = max(24, ceil(turns * 24)), convexity = 12)
-        thread_profile2(minor, depth, $fs = 0.9, $fa = 4);
+        thread_profile2(minor, depth, grow, $fs = 0.9, $fa = 4);
 }
 
 module thread_pair() {
@@ -145,7 +177,8 @@ module thread_pair() {
     translate([2 * core + gap + 10, 0, 0])
         difference() {
             cylinder(h = tl, r = core + 4);
-            translate([0, 0, -eps]) thread2(tl + 2, minor + thr_test, thr_depth);
+            translate([0, 0, -eps])
+                thread2(tl + 2, minor + thr_test, thr_depth, thr_axial / 2);
             for (i = [0 : 9])
                 rotate([0, 0, i * 36])
                     translate([core + 4, 0, -eps])

@@ -28,6 +28,12 @@
 //
 // Set `part`, export one STL. Every part is already in its print
 // orientation - do not rotate it in the slicer.
+//
+// SUPPORT: none, except the cradle. The cradle stands on its dovetail
+// block, so the back plate sits 7 mm off the bed and needs support under
+// it ("on build plate only" is enough). Every other part is drawn so that
+// no downward face goes past 45 degrees. Do not believe a blanket
+// "supports off" instruction on this folder - it was wrong once already.
 // =====================================================================
 
 /* [Part to export] */
@@ -69,12 +75,23 @@ world_view = true;  // ghost cane + phone in the assembly preview
 pole_d       = 27.65;  // mm, cane shaft diameter at the collar.
 bore_clear   = 0.40;   // mm, ADDED TO DIAMETER. Set this from the coupons.
 collar_wall  = 4.20;   // mm, radial wall around the bore.
-grip_ribs    = 8;      // axial ribs inside the bore that bite the shaft.
-rib_h        = 0.50;   // mm, how far a rib stands proud of the bore.
-rib_w        = 1.60;   // mm, rib width at the bore.
+// These are GROOVES, not ribs, whatever the name says. The cylinders are
+// subtracted, so each one scallops a ~0.3 mm dish out of the bore wall and
+// what is left between them are eight lands. That is the right behaviour -
+// eight narrow lands carry the collet's grip at higher contact pressure
+// than a full-circle bore does, and the grooves give the squeezed plastic
+// somewhere to go - but the name misled a reader once, so: grooves.
+grip_ribs    = 8;      // axial GROOVES in the bore; the lands between them grip.
+rib_h        = 0.50;   // mm, groove centre inset from the bore wall.
+rib_w        = 1.60;   // mm, groove cutter diameter.
 
 /* [Collet and ring] */
-base_len     = 9.0;    // mm, unslotted base below the thread.
+// The base is not just a stub below the thread: it is the land the
+// dovetail socket is cut into, so it has to be LONGER than the dovetail
+// slide plus a stop shoulder. There is an assert on this below. If you
+// shorten it, the socket cuts clean through the top of the pad and the
+// arm has nothing to land against.
+base_len     = 36.0;   // mm, unslotted base below the thread = dovetail land.
 thread_len   = 15.0;   // mm, threaded band.
 cone_len     = 20.0;   // mm, slotted cone above the thread.
 cone_taper   = 2.60;   // mm, radius lost from the bottom of the cone to the top.
@@ -84,6 +101,21 @@ slot_over    = 5.0;    // mm, how far each slot runs down past the cone.
 thr_pitch    = 3.00;   // mm, trapezoidal thread pitch. Coarse prints better.
 thr_depth    = 1.20;   // mm, thread radial depth.
 thr_clear    = 0.35;   // mm, radial clearance, ring thread vs collar thread.
+// Tooth shape, as AXIAL half-widths in fractions of the pitch. Read the
+// comment on thread_profile() before touching these: they are converted
+// to ANGLES, because that is what a twisted extrude turns into height.
+// root - crest sets the flank slope. At 0.25/0.10 the flank runs 0.45 mm
+// axially over thr_depth of radius, so a 0.20 mm layer oversteps by
+// 0.53 mm - about one line width, which prints without support. Make the
+// crest larger and the flank gets shallower and starts drooping.
+thr_duty     = 0.25;   // tooth half-width at the ROOT / thr_pitch.
+thr_crest    = 0.10;   // tooth half-width at the CREST / thr_pitch.
+thr_axial    = 0.25;   // mm, axial slack between the two threads' flanks.
+// Radial interference between the ring's internal cone and the collar's
+// cone when the ring is fully down. This IS the clamp: the collet has to
+// close by bore_clear/2 just to touch the cane, so anything less than
+// that does nothing at all. There is an assert on it below.
+collet_squeeze = 0.80; // mm, radial closure the ring forces on the collet.
 ring_wall    = 4.00;   // mm, wall outside the ring's thread.
 // How much of the collar's cone the ring's internal cone actually grips.
 // A collet closes most at the free end of its fingers, so a short ring
@@ -120,6 +152,7 @@ sock_thr_len = 10.0;   // mm, threaded band on the socket.
 sock_cone_len = 12.0;  // mm, slotted cone above it.
 sock_taper   = 1.80;   // mm, radius lost up the socket cone.
 sock_engage  = 10.0;   // mm, how much of that cone the lock ring grips.
+ball_squeeze = 0.60;   // mm, radial closure the lock ring forces on the socket.
 sock_slots   = 4;      // socket fingers.
 sock_slot_w  = 2.40;   // mm, socket slot width.
 
@@ -129,9 +162,27 @@ sock_slot_w  = 2.40;   // mm, socket slot width.
 // wants 5 deg; the app accepts 3-8 and shows it live on the Mount card.
 cane_angle   = 45;     // deg above horizontal, cane in the walking pose.
 cam_down     = 5;      // deg, rear camera below the horizon.
-arm_reach    = 46.0;   // mm, cane surface -> phone back plate.
-arm_t        = 10.0;   // mm, arm thickness.
-arm_w        = 30.0;   // mm, arm width.
+// Not a styling number. The phone hangs BELOW the dovetail by half the
+// back plate, and because the phone is raked over by arm_angle that bottom
+// corner swings back in toward the shaft. At 46 mm (the value inherited
+// from the screwed mount, where the geometry is different) the bottom
+// front lip cleared the cane by 1.1 mm, which is a rattle at best. The
+// assert below computes the real gap; keep it above 8 mm.
+arm_reach    = 58.0;   // mm, collar pad face -> the cradle's dovetail mouth.
+// The fin is DEEP along the cane axis and THIN across it. The phone hangs
+// off the end of it, so the bending plane is the one containing the cane
+// and the arm; depth in that plane is what stops the phone nodding. Get
+// these two the wrong way round and the arm is a diving board.
+// The arm prints on its side, so arm_t becomes the BUILD HEIGHT of the
+// fin. If it is thinner than dt_wide the two dovetail tenons stand proud
+// of the fin in the build direction and the part balances on two knife
+// edges: Creality Print measured the first layer at 42 mm2 for a 21 cm3
+// part, against 500-840 mm2 for everything else on the plate. It will not
+// stay on the bed. Matching dt_wide puts the whole fin face down instead,
+// and makes the arm stiffer on the axis that carries the phone. There is
+// an assert below.
+arm_t        = 20.0;   // mm, fin thickness ACROSS the cane (Y).  (was 10.0)
+arm_w        = 30.0;   // mm, fin depth ALONG the cane axis (Z), at the root.
 
 /* [Phone: iPhone 17 Pro Max - Apple drawings, do not edit] */
 phone_w      = 78.0;   // mm (drawing 77.98).
@@ -183,6 +234,33 @@ sock_h    = sock_base + sock_thr_len + sock_cone_len;
 sock_ctr  = sock_base + ball_r;            // height of the ball centre in the socket
 lock_h    = sock_thr_len + sock_engage;
 lock_or   = sock_or + thr_clear + ring_wall;
+// Dovetail placement on the collar. The socket is open at the BOTTOM so
+// the arm slides up into it, and closed at the top so it lands on a stop
+// instead of being held by the pawl alone.
+dt_top    = dt_len;                 // z of the socket's closed end
+arm_z     = dt_top - dt_len / 2;    // z of the arm's own origin, in collar coords
+
+assert(base_len >= dt_len + 4,
+       "base_len must exceed dt_len by at least 4 mm or the dovetail socket cuts through the pad top");
+assert(pad_w >= dt_wide + 6,
+       "pad_w must exceed dt_wide by at least 6 mm or the socket breaks out of the pad sides");
+assert(pad_t > dt_depth,
+       "pad_t must exceed dt_depth or the socket cuts into the collar bore");
+assert(arm_t >= dt_wide,
+       "arm_t is thinner than dt_wide - the arm will print balanced on its two dovetail edges");
+
+// How close the phone gets to the shaft. The bottom front corner of the
+// cradle is the worst point: it sits (wall_t + plate_top/2) below the
+// dovetail along the phone, and (phone_d + lip_t + back_t + dt_depth)
+// proud of the mating face, and arm_angle rakes both of those back toward
+// the cane. Pushed through the same two transforms assembly() uses, so if
+// you change those, change this.
+tip_x     = pad_x + arm_reach
+            - (phone_d + lip_t + back_t + dt_depth) * cos(arm_angle)
+            - (wall_t + plate_top / 2) * sin(arm_angle);
+tip_clear = tip_x - pole_d / 2;
+assert(tip_clear >= 8,
+       "the cradle's bottom corner fouls the cane - raise arm_reach");
 
 // =====================================================================
 // Thread generator
@@ -190,15 +268,46 @@ lock_or   = sock_or + thr_clear + ring_wall;
 // A 2D disc carrying one trapezoidal bump, linear-extruded with twist,
 // is a single-start thread. 2021.01 has no thread library and we are not
 // taking a dependency for one.
-module thread_profile(minor, depth) {
+//
+// THE ONE THING TO UNDERSTAND HERE. linear_extrude(twist=) turns ANGLE
+// into height, not distance. A tooth drawn as a linear offset of y in
+// the 2D profile comes out atan(y/r) / (360/thr_pitch) thick, which at
+// r = 17 and a 3 mm pitch is THIRTY MICRONS - a seventh of a layer. It
+// renders, it passes every assert, it looks like a thread in preview,
+// and it slices away to a smooth cylinder. That is exactly what this
+// file did until 2026-09-12, and the ring spun freely on the collar.
+//
+// So the bump is built as an ANGULAR SECTOR: an axial half-width of a mm
+// is thr_ang(a) = a * 360 / thr_pitch degrees of arc, at every radius.
+// The taper from root to crest is a taper in ANGLE, which is what makes
+// the flank a straight line in the finished helix.
+function thr_ang(axial_mm) = axial_mm * 360 / thr_pitch;
+
+thr_arc = 16;   // polygon segments per arc. 16 is under 0.02 mm of chord.
+
+module thread_profile(minor, depth, grow = 0) {
+    ar = thr_ang(thr_pitch * thr_duty  + grow);   // root half-angle, deg
+    ac = thr_ang(thr_pitch * thr_crest + grow);   // crest half-angle, deg
     union() {
         circle(r = minor);
-        polygon([[minor - eps, -thr_pitch * 0.42],
-                 [minor + depth, -thr_pitch * 0.20],
-                 [minor + depth,  thr_pitch * 0.20],
-                 [minor - eps,  thr_pitch * 0.42]]);
+        polygon(concat(
+            [ for (i = [0 : thr_arc]) let (a = -ac + 2 * ac * i / thr_arc)
+                [ (minor + depth) * cos(a), (minor + depth) * sin(a) ] ],
+            [ for (i = [0 : thr_arc]) let (a = ar - 2 * ar * i / thr_arc)
+                [ (minor - eps) * cos(a), (minor - eps) * sin(a) ] ]
+        ));
     }
 }
+
+// A sector wider than a half-turn cannot be drawn as one polygon arc pair
+// without wrapping onto itself, and the female thread is the male grown
+// by thr_axial, so the male has to leave room for it.
+assert(thr_ang(thr_pitch * thr_duty + thr_axial / 2) < 175,
+       "thread tooth is more than half a turn wide - lower thr_duty or thr_axial");
+assert(thr_duty > thr_crest,
+       "thr_duty must exceed thr_crest or the thread flank inverts");
+assert(thr_pitch * (1 - 2 * thr_duty) - thr_axial > 0.6,
+       "no room left between turns for the mating tooth - lower thr_duty");
 
 // thr_seg trades mesh size against thread smoothness. 24 segments per
 // turn on a 3 mm pitch is well under one layer of error and keeps the
@@ -206,11 +315,13 @@ module thread_profile(minor, depth) {
 thr_seg = 24;   // helix segments per turn
 thr_fs  = 0.9;  // mm, facet size around the thread circumference
 
-module thread(len, minor, depth) {
+// grow widens the tooth AXIALLY, in mm. The female thread is cut with
+// grow = thr_axial/2 so the two flanks do not wedge against each other.
+module thread(len, minor, depth, grow = 0) {
     turns = len / thr_pitch;
     linear_extrude(height = len, twist = -360 * turns,
                    slices = max(24, ceil(turns * thr_seg)), convexity = 12)
-        thread_profile(minor, depth, $fs = thr_fs, $fa = 4);
+        thread_profile(minor, depth, grow, $fs = thr_fs, $fa = 4);
 }
 
 // =====================================================================
@@ -240,18 +351,16 @@ module dt_socket(len = dt_len + 1) {
 
 // Cantilever pawl: a flat spring with a catch on its free end. Sits in a
 // pocket beside the tenon and clicks into the socket's catch hole.
+// Drawn in the ARM frame with x = 0 on the tenon's buried face: the leaf
+// lies just inside the tenon (+X) and the catch stands proud of it (-X),
+// so it drops into the collar's window. Rooted at the bottom, free at the
+// top, because the arm slides UP into the collar.
 module pawl_spring() {
     union() {
-        translate([-pawl_w / 2, 0, -pawl_len / 2])
-            cube([pawl_w, pawl_t, pawl_len]);
-        translate([-pawl_w / 2, 0, pawl_len / 2 - 3])
-            cube([pawl_w, pawl_t + pawl_catch, 3]);
+        translate([0, -pawl_w / 2, -pawl_len / 2]) cube([pawl_t, pawl_w, pawl_len]);
+        translate([-pawl_catch, -pawl_w / 2, pawl_len / 2 - 3])
+            cube([pawl_catch + eps, pawl_w, 3]);
     }
-}
-
-module pawl_catch_hole() {
-    translate([0, dt_depth / 2, pawl_len / 2 - 1.5])
-        cube([pawl_w + 2 * dt_clear, dt_depth + 2, 4 + 2 * dt_clear], center = true);
 }
 
 // =====================================================================
@@ -289,10 +398,17 @@ module collar() {
             rotate([0, 0, i * 360 / n_slots + 45])
                 translate([0, -slot_w / 2, base_len + thread_len - slot_over])
                     cube([core_r + 2, slot_w, cone_len + slot_over + 2]);
-        // dovetail socket, mouth on +X, sliding along Z
-        translate([pad_x, 0, base_len / 2]) rotate([0, -90, 0]) dt_socket();
-        // catch hole for the arm's pawl
-        translate([pad_x, 0, base_len / 2]) rotate([0, -90, 0]) pawl_catch_hole();
+        // Dovetail socket. rotate([0,0,90]) puts the profile's width on Y
+        // and its depth on -X, so the mouth is the flat +X pad face and the
+        // slide axis is Z = the cane axis. Open at the bottom (z < 0),
+        // stopped at z = dt_top.
+        translate([pad_x, 0, dt_top - (dt_len + 2) / 2 + 1])
+            rotate([0, 0, 90]) dt_socket(dt_len + 2);
+        // Window the arm's pawl catches in. Through the pad, so you can
+        // see it seat and push it back out with a fingernail.
+        translate([pad_x - dt_depth / 2, 0, arm_z + pawl_len / 2 - 1.5])
+            cube([dt_depth + pad_t, pawl_w + 2 * dt_clear, 3 + 2 * dt_clear],
+                 center = true);
     }
 }
 
@@ -302,13 +418,16 @@ module collar() {
 // One module, two uses: the big ring that clamps the cane, and the small
 // lock ring that clamps the ball. Same mechanism, same feel in the hand,
 // one place to fix if the thread fit is wrong.
+// cone_r_lo / cone_r_hi are the nut's internal cone radii AS DRAWN - no
+// clearance is added to them, because on this face clearance is the enemy.
+// The caller derives them from the cone it has to squeeze; see ring().
 module collet_nut(h, outer_r, thr_len, tminor, cone_r_lo, cone_r_hi, flutes) {
     difference() {
         cylinder(h = h, r = outer_r);
-        translate([0, 0, -eps]) thread(thr_len + 2, tminor + thr_clear, thr_depth);
+        translate([0, 0, -eps])
+            thread(thr_len + 2, tminor + thr_clear, thr_depth, thr_axial / 2);
         translate([0, 0, thr_len])
-            cylinder(h = h - thr_len + eps,
-                     r1 = cone_r_lo + thr_clear, r2 = cone_r_hi + thr_clear);
+            cylinder(h = h - thr_len + eps, r1 = cone_r_lo, r2 = cone_r_hi);
         for (i = [0 : flutes - 1])
             rotate([0, 0, i * 360 / flutes])
                 translate([outer_r, 0, -eps])
@@ -316,13 +435,32 @@ module collet_nut(h, outer_r, thr_len, tminor, cone_r_lo, cone_r_hi, flutes) {
     }
 }
 
+// The nut's cone must share the CONE's taper rate, not the cone's end
+// radii. cone_r0/cone_r1 are separated by cone_taper over cone_len; the
+// nut only spans cone_engage of that, so handing it cone_r1 makes it a
+// steeper cone than the thing it grips - contact degenerates to a line at
+// the small end and the collet closes by almost nothing. Take the rate,
+// then subtract collet_squeeze so the whole face interferes.
+ring_cone_lo = cone_r0 - collet_squeeze;
+ring_cone_hi = ring_cone_lo - cone_taper * cone_engage / cone_len;
+assert(collet_squeeze > bore_clear / 2 + 0.25,
+       "collet_squeeze is smaller than the bore clearance it has to take up first - the ring will bottom out before it touches the cane");
+assert(cone_engage <= cone_len,
+       "cone_engage exceeds cone_len - the ring's cone runs off the end of the collar's");
+
 module ring() {
-    collet_nut(ring_h, ring_or, thread_len, thr_minor, cone_r0, cone_r1, ring_flutes);
+    collet_nut(ring_h, ring_or, thread_len, thr_minor,
+               ring_cone_lo, ring_cone_hi, ring_flutes);
 }
+
+lock_cone_lo = sock_or - ball_squeeze;
+lock_cone_hi = lock_cone_lo - sock_taper * sock_engage / sock_cone_len;
+assert(ball_squeeze > ball_clear / 2 + 0.15,
+       "ball_squeeze is smaller than the ball clearance it has to take up first");
 
 module lock() {
     collet_nut(lock_h, lock_or, sock_thr_len, sock_or - thr_depth,
-               sock_or, sock_or - sock_taper, 8);
+               lock_cone_lo, lock_cone_hi, 8);
 }
 
 // =====================================================================
@@ -356,10 +494,21 @@ module socket() {
 }
 
 // The socket plus the tenon that plugs it into the cradle's dovetail.
+// The socket plus the tenon that plugs it into the cradle's dovetail. The
+// tenon hangs BELOW the cup (depth on -Z, sliding on Y, matching the
+// cradle's socket exactly), so the part prints tenon-down and cup-up and
+// the ball cavity is a self-supporting dome. The flare between the two is
+// there so the cup does not start as a ring of bridges over the tenon.
 module socket_part() {
     union() {
         socket();
-        translate([0, 0, dt_depth]) rotate([0, 180, 0]) rotate([0, 0, 90]) dt_tenon();
+        rotate([-90, 0, 0]) dt_tenon();
+        hull() {
+            translate([0, 0, -eps])
+                linear_extrude(height = eps)
+                    square([dt_wide, dt_len], center = true);
+            cylinder(h = sock_base * 0.6, r = sock_or);
+        }
     }
 }
 
@@ -379,33 +528,58 @@ module ball_stud() {
 // =====================================================================
 // Local frame: tenon into the collar points -X, the fin runs +X, the
 // cradle tenon sits at the far end rotated by arm_angle.
+// ARM frame = COLLAR frame, rotated nowhere: +Z is the cane axis, +X is
+// radially out from the cane, Y is across it. That is deliberate. The arm
+// is the part that has to agree with two different mating faces at once,
+// and every time this file has been wrong it has been because the arm was
+// drawn in a frame of its own and the dovetails ended up on the wrong
+// axis. Sharing the collar's frame makes assembly() a single translate,
+// which is checkable by eye.
+//
+// x = 0 is the mouth of the collar's dovetail, so the tenon runs from
+// x = 0 back to x = -dt_depth and the fin runs out to x = arm_reach.
+//
+// The export at the bottom of this file lays the arm on its side for
+// printing. Do not rotate it again in the slicer.
 module arm() {
+
     difference() {
         union() {
-            // tapered fin
+            // tenon into the collar: depth on -X, slide on Z
+            rotate([0, 0, 90]) dt_tenon();
+            // The fin is one hull from the collar face straight to the cradle
+            // face, so the load path is a single web with no step in it. The
+            // far face is dt_len deep for the same reason the collar pad is:
+            // a dovetail needs material behind its whole slide length, or the
+            // far half of the tenon hangs off the end of nothing.
             hull() {
-                translate([0, -arm_w / 2, -arm_t / 2]) cube([eps, arm_w, arm_t]);
-                rotate([0, 0, 0])
-                    translate([arm_reach, -arm_w / 2, -arm_t / 2])
-                        rotate([0, 0, 0]) cube([eps, arm_w, arm_t]);
+                translate([-eps, -arm_t / 2, -arm_w / 2]) cube([eps, arm_t, arm_w]);
+                translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0])
+                    translate([-eps, -arm_t / 2, -dt_len / 2])
+                        cube([4, arm_t, dt_len]);
             }
-            // tenon that enters the collar (points -X)
-            translate([0, 0, 0]) rotate([0, 90, 0]) dt_tenon();
-            // far end: either the cradle dovetail at a fixed angle, or a
-            // ball you aim by hand and lock.
-            translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0]) {
-                translate([-3, -arm_w / 2, -arm_t / 2]) cube([3 + eps, arm_w, arm_t]);
-                if (joint == "ball") rotate([0, -90, 0]) mirror([0, 0, 1]) ball_stud();
-                else                 rotate([0, -90, 0]) dt_tenon();
-            }
+            // Far end. Both the tenon and the ball face back INBOARD, along
+            // -X, because the phone hangs on the cane side of the cradle's
+            // back plate and the arm tip reaches past it. Get this backwards
+            // and the camera ends up staring at the shaft.
+            //
+            // With rotate([0, arm_angle, 0]) the phone's long axis comes out
+            // at (sin, 0, cos) of arm_angle - up the cane and away from it -
+            // and the back glass normal at (-cos, 0, sin). Tipped into the
+            // walking pose that is cam_down degrees below the horizon, which
+            // is the identity hardware/mount/cane_mount.scad states at its
+            // line 33: camera pitch = arm_angle + cane_angle - 90.
+            translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0])
+                if (joint == "ball") rotate([0, -90, 0]) ball_stud();
+                else                 rotate([0, 0, 90]) dt_tenon();
         }
-        // pocket that frees the collar pawl to flex
-        translate([0, 0, 0]) rotate([0, 90, 0])
-            translate([0, -dt_depth - 1, 0])
-                cube([pawl_w + 2, 3, pawl_len + 6], center = true);
+        // Pocket that frees the pawl leaf. Open upward, and stopping 4 mm
+        // above the tenon's bottom so the leaf keeps a rooted foot.
+        translate([-dt_depth - eps, -(pawl_w + 3) / 2, -pawl_len / 2 + 4])
+            cube([pawl_t + 2.0, pawl_w + 3, pawl_len + 8]);
     }
-    // the collar pawl itself
-    rotate([0, 90, 0]) translate([0, dt_depth - pawl_t - 0.6, 0]) pawl_spring();
+    // the pawl leaf, rooted in the material the pocket left below it
+    translate([-dt_depth, 0, 0]) pawl_spring();
 }
 
 // =====================================================================
@@ -460,15 +634,36 @@ module cradle() {
                 cube([latch_w, latch_rise, latch_t]);
             translate([-latch_w / 2, plate_top + latch_rise - latch_t, -back_t])
                 cube([latch_w, latch_t, back_t + phone_d + latch_grab]);
+            // The hook has to sit ON the front face, not back_t below it -
+            // at phone_d - back_t it is buried 3.2 mm inside the phone and
+            // grabs nothing.
             translate([-latch_w / 2, plate_top + latch_rise - latch_t - latch_grab,
-                       phone_d - back_t])
+                       phone_d])
                 cube([latch_w, latch_t + latch_grab, latch_t]);
-            // dovetail socket block on the back
+            // Dovetail socket block on the back, with a 45-degree flare up
+            // into the back plate. The flare is not decoration: this part
+            // stands on the block, so the plate around it is 7 mm off the
+            // bed. The flare carries the plate for dt_depth in every
+            // direction, which is as much as geometry can do here - the
+            // rest of the plate still wants support. See the README.
             translate([-(dt_len + 10) / 2, plate_top / 2 - 16, -back_t - dt_depth])
                 cube([dt_len + 10, 32, dt_depth + eps]);
+            hull() {
+                translate([-(dt_len + 10) / 2, plate_top / 2 - 16,
+                           -back_t - dt_depth])
+                    cube([dt_len + 10, 32, eps]);
+                translate([-(dt_len + 10) / 2 - dt_depth,
+                           plate_top / 2 - 16 - dt_depth, -back_t - eps])
+                    cube([dt_len + 10 + 2 * dt_depth, 32 + 2 * dt_depth, eps]);
+            }
         }
-        // the phone
-        translate([0, phone_h / 2, 0]) phone_block(clear);
+        // The phone. HEIGHT MATTERS: phone_block's default runs 10 mm past
+        // the phone's front face, and everything that retains the phone -
+        // the side lips, the corner cups' lips, the whole top latch - lives
+        // in exactly that 10 mm. Subtract the default and you delete every
+        // one of them and print a tray the phone falls straight out of.
+        // Stop the cut at the front face.
+        translate([0, phone_h / 2, 0]) phone_block(clear, phone_d);
         // button windows, measured from the TOP edge
         for (w = left_windows)
             translate([-outer_x - 1, phone_h - w[1], -eps])
@@ -476,32 +671,84 @@ module cradle() {
         for (w = right_windows)
             translate([inner_x - 1, phone_h - w[1], -eps])
                 cube([wall_t + 2, w[1] - w[0], phone_d + lip_t + 2]);
-        // dovetail socket, sliding along Y (= the cane axis in use)
+        // Dovetail socket, sliding along Y (= the cane axis in use).
+        // LENGTH MATTERS. The block it is cut into is 32 mm long and the
+        // 45-degree flare around that block reaches dt_depth further at
+        // each end, so a default dt_len+1 socket leaves 0.5 mm of wall at
+        // each end and then the flare seals it completely: a blind pocket
+        // with 987 mm3 of material where the arm has to enter. Run it past
+        // the flare at both ends so the joint is actually open.
         translate([0, plate_top / 2, -back_t - dt_depth])
-            rotate([-90, 0, 0]) rotate([0, 0, 180]) dt_socket();
+            rotate([-90, 0, 0]) rotate([0, 0, 180])
+                dt_socket(dt_len + 4 * dt_depth);
     }
 }
 
 // =====================================================================
 // Preview
 // =====================================================================
+// Everything is drawn in the COLLAR frame: +Z up the cane, +X out to the
+// phone. world_view tips the whole stack by (90 - cane_angle) about Y so
+// you are looking at the walking pose rather than at the print bed, and
+// adds the ghost cane and the ghost phone. If the phone ghost is not
+// clear of the collar and the shaft is not in front of the camera
+// plateau, the arm geometry is wrong - that is what this preview is for.
 module assembly() {
-    collar();
-    translate([0, 0, base_len]) color("orange", 0.85) ring();
-    color("steelblue", 0.9)
-        translate([pad_x - dt_depth, 0, base_len / 2]) arm();
-    if (world_view)
-        color("silver", 0.25) translate([0, 0, -60]) cylinder(h = 200, r = pole_d / 2);
+    rotate([0, world_view ? -(90 - cane_angle) : 0, 0]) {
+        color("khaki")            collar();
+        color("orange", 0.9)      translate([0, 0, base_len]) ring();
+        color("steelblue", 0.95)  translate([pad_x, 0, arm_z]) arm();
+
+        // Everything past the far end of the arm lives in the arm's
+        // far-end frame, so it inherits arm_angle for free.
+        translate([pad_x + arm_reach, 0, arm_z]) rotate([0, arm_angle, 0]) {
+            if (joint == "ball") {
+                // socket coaxial with the stud, i.e. zero deflection
+                translate([-(neck_len + ball_r * 0.72) - sock_ctr, 0, 0])
+                    rotate([0, 90, 0]) {
+                        color("seagreen", 0.9) socket_part();
+                        color("orange", 0.9)
+                            translate([0, 0, sock_base]) lock();
+                        translate([0, -plate_top / 2, -(back_t + dt_depth)])
+                            rotate([0, 180, 0]) cradle_and_phone();
+                    }
+            } else {
+                translate([-(back_t + dt_depth), 0, -plate_top / 2])
+                    rotate([90, 0, -90]) cradle_and_phone();
+            }
+        }
+
+        if (world_view)
+            color("silver", 0.22) translate([0, 0, -90])
+                cylinder(h = 260, r = pole_d / 2);
+    }
+}
+
+module cradle_and_phone() {
+    color("tomato", 0.95) cradle();
+    if (world_view) {
+        color("black", 0.30) translate([0, phone_h / 2, 0])
+            phone_block(0, phone_d);
+        // Where the rear camera looks. In the world_view render this ray must
+        // come out roughly horizontal and tipped slightly DOWN, and it must
+        // miss the shaft. If it points at the cane, the arm is mirrored.
+        color("red") translate([0, phone_h - plateau_h / 2, 0])
+            rotate([180, 0, 0]) cylinder(h = 150, r = 0.7);
+    }
 }
 
 // =====================================================================
 if (part == "assembly")     assembly();
 else if (part == "collar")  collar();
 else if (part == "ring")    ring();
-else if (part == "arm")     arm();
+// Laid on its side: the fin's thin axis becomes the build axis, so the
+// dovetails, the pawl leaf and the angled far end all print without
+// support and the pawl bends along its layers instead of across them.
+else if (part == "arm")     rotate([90, 0, 0]) arm();
 else if (part == "cradle")  cradle();
 else if (part == "socket")  socket_part();
 else if (part == "lock")    lock();
 
 echo(str("bore D", bore_d, "  collar OD D", core_r * 2, "  ring OD D", ring_or * 2,
-         "  arm ", arm_angle, "deg  cradle covers ", plate_top, "mm of ", phone_h));
+         "  arm ", arm_angle, "deg  cradle covers ", plate_top, "mm of ", phone_h,
+         "  phone-to-shaft gap ", tip_clear, "mm"));
