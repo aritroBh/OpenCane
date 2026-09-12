@@ -516,6 +516,7 @@ for 60 s so a weak network can never stall a cue.
 - [x] Simulator build + run on the iOS 27 simulator (now the iPhone 17 Pro Max, the demo phone) — UI verified by screenshot
 - [ ] Go/no-go checklist rehearsed before any blindfolded walk
 - [ ] Open (not fixed, from the review's unverified list): accidental taps on the clamped screen (Stop / Mirror have no
-      lock), obstacle sensing stopping silently on screen lock (use Guided Access + keep the screen on), compass
-      readings dropped while iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on
-      frequently-updating pills, MapKit route build waits only 15 s for a first fix
+      lock), the screen-lock safety trade-off (the app now speaks that obstacle warnings are paused, but the ARKit
+      path still requires Guided Access + keeping the screen on for a blindfolded walk), compass readings dropped while
+      iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on frequently-updating
+      pills, MapKit route build waits only 15 s for a first fix
