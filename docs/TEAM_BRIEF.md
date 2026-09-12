@@ -16,7 +16,7 @@ The short version for Sagar and Aarav. The full picture is in
   - a 10 Hz timing bug;
   - "Where am I" mixing two moments.
 - **In progress on branches (not merged yet; merged to main only after tests + reviews pass):**
-  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in CaneKit",
+  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in OpenCane",
     "where am I", "repeat", "next", "stop"), a "Navigate to CIF from here" button, better
     destination search (campus place list + nearest result), a trip-log fix;
   - `feat/live-view-gpu`: smooth live camera view;
@@ -37,16 +37,16 @@ The short version for Sagar and Aarav. The full picture is in
    own lines; a comment after a value broke the first build.
 4. **AirPods Pro:**
    - pair them;
-   - Settings → Bluetooth → ⓘ → **Spatial Audio Off**, **Head Tracking Off** (CaneKit does its own);
+   - Settings → Bluetooth → ⓘ → **Spatial Audio Off**, **Head Tracking Off** (OpenCane does its own);
    - allow Motion & Fitness when asked.
    - Full steps: `docs/devices_setup.md` → AirPods.
 5. **Apple Watch:**
    - it must be paired with the same iPhone;
    - turn on Developer Mode on the watch (Settings → Privacy & Security; if it is missing, open
      Xcode → Window → Devices and Simulators with the iPhone plugged in until the watch appears);
-   - in the iPhone's Watch app: General → **Automatic App Install**, or Available Apps → CaneKit →
+   - in the iPhone's Watch app: General → **Automatic App Install**, or Available Apps → OpenCane →
      Install;
-   - open CaneKit on the watch.
+   - open OpenCane on the watch.
    - Full steps: `docs/devices_setup.md` → Apple Watch.
 
 ## State of things

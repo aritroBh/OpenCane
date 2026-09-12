@@ -471,7 +471,11 @@ final class AppModel {
         speech.backgroundLines = SpokenPhrases.warningLines
         speech.prefetch(Self.commonLines)
         if !cameraDenied {
-            speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
+            // ⚠ "OpenCane ready." is also in `Self.commonLines` above; the two must stay
+            // byte-identical or this first line misses the ElevenLabs disk cache and the walker
+            // hears Apple's system voice instead. The product is called OpenCane to a human; the
+            // code, module and bundle id are still CaneKit (AGENTS.md → "The name split").
+            speech.say(lidarSupported ? "OpenCane ready." : "OpenCane. This phone has no LiDAR.", .nav)
         }
         // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
         // CANEKIT_DEMO_ROUTE=1 environment variable starts guidance at launch.
@@ -920,7 +924,7 @@ final class AppModel {
                     if back {
                         self.speech.say("Obstacle detection is back.", .nav, ttl: 8)
                     } else {
-                        self.speech.say("Obstacle detection did not restart. Close and reopen CaneKit.",
+                        self.speech.say("Obstacle detection did not restart. Close and reopen OpenCane.",
                                         .safety, ttl: 30)
                     }
                 }
@@ -1106,21 +1110,21 @@ final class AppModel {
         p.jpegSnapshot(maxDimension: maxDimension, quality: 0.6)
     }
 
-    /// Camera refused → the whole obstacle channel is dead; say so instead of "CaneKit ready."
+    /// Camera refused → the whole obstacle channel is dead; say so instead of "OpenCane ready."
     /// and silence (Muse H3). `.notDetermined` is fine: ARKit prompts on first run.
-    /// - Returns: true when the camera is refused (so `start()` skips "CaneKit ready.", which
+    /// - Returns: true when the camera is refused (so `start()` skips "OpenCane ready.", which
     ///   would contradict the warning; Antigravity docs review).
     @discardableResult
     private func announceCameraDenied() -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         guard status == .denied || status == .restricted else { return false }
-        routeError = "Camera is off for CaneKit"
+        routeError = "Camera is off for OpenCane"
         // Launch and route start both check: speak it once a minute, not twice in a row
         // (Antigravity, final review: the demo-route launch queued the 20 s warning twice).
         let now = Date()
         if now.timeIntervalSince(cameraDeniedSpokenAt) > 60 {
             cameraDeniedSpokenAt = now
-            speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings.", .nav, ttl: 20)
+            speech.say("Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings.", .nav, ttl: 20)
         }
         return true
     }
@@ -1190,7 +1194,7 @@ final class AppModel {
             lines.append("No headphones. Beacon paused until AirPods connect.")
         }
         if watch.isPaired, !watch.isReachable {
-            lines.append("Watch not reachable. Open CaneKit on the watch.")
+            lines.append("Watch not reachable. Open OpenCane on the watch.")
         }
         // Always say where obstacle cues went when the cane cannot buzz (Muse: with the watch
         // reachable this was silent, so cane silence read as "path clear").
@@ -1400,7 +1404,7 @@ final class AppModel {
     /// Walking route from the current fix to a spoken or typed place: the campus gazetteer
     /// first, then the nearest reasonable MKLocalSearch result (`RouteSource.mapKit(to:from:)`).
     /// Called by `startMapKitRoute()` and `TakeMeToIntent` (Siri "Take me somewhere in
-    /// CaneKit" → "Where do you want to go?"). Shows the text in the destination field.
+    /// OpenCane" → "Where do you want to go?"). Shows the text in the destination field.
     func navigate(to query: String) {
         let text = query.trimmingCharacters(in: .whitespaces)
         // Spoken as well as shown: this is the one failure on this path that said nothing, and the
@@ -1417,7 +1421,7 @@ final class AppModel {
     }
 
     /// Walking route from the current fix to a gazetteer entrance, no search (Siri "Take me to
-    /// Grainger in CaneKit" → `TakeMeToIntent` with a `CampusDestination`).
+    /// Grainger in OpenCane" → `TakeMeToIntent` with a `CampusDestination`).
     func navigate(to place: CampusPlace) {
         destinationQuery = place.name
         buildRoute(to: .place(name: place.name, coordinate: place.coordinate),
@@ -1538,8 +1542,12 @@ final class AppModel {
     /// only: the *generated* warning lines (obstacle names, approach cues, signs, ground hazards)
     /// are enumerated by `SpokenPhrases` in CaneKitLogic, which owns their templates so they
     /// cannot drift by a byte.
+    /// ⚠ The product name a human hears is **OpenCane**; the code/module/bundle id stay CaneKit
+    /// (AGENTS.md → "The name split"). If the spoken name ever changes again, change it here and
+    /// at the `speech.say` call in `start()` in the same edit — they are matched by bytes, not by
+    /// a constant, so a half-rename is silent and only shows up as a line in the wrong voice.
     static let commonLines = [
-        "CaneKit ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
+        "OpenCane ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
@@ -1614,8 +1622,8 @@ final class AppModel {
     /// stops). Shared by `beginRoute` and `startMapKitRoute` (Muse H2, review round 5).
     private func announceLocationDenied() -> Bool {
         guard location.authorizationDenied else { return false }
-        routeError = "Location is off for CaneKit"
-        speech.say("Location access is off. Turn on Location for CaneKit in Settings to navigate.", .nav, ttl: 20)
+        routeError = "Location is off for OpenCane"
+        speech.say("Location access is off. Turn on Location for OpenCane in Settings to navigate.", .nav, ttl: 20)
         return true
     }
 

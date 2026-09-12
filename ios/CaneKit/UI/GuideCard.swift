@@ -106,7 +106,7 @@ struct GuideCard: View {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
                                 hint: "Says the current instruction again") { model.repeatInstruction() }
                     // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
-                    // crown and Siri "Next waypoint in CaneKit".
+                    // crown and Siri "Next waypoint in OpenCane".
                     CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary,
                                 hint: "Skips to the next instruction") { model.nextWaypoint() }
                 }

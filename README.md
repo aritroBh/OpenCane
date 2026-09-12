@@ -7,8 +7,11 @@ play a spatial beacon that clicks from the direction to walk, and speak instruct
 taps turns and crossings onto the wrist and carries Repeat / Next / Describe / Recenter. Nothing
 needs to be bought (the phone mount is 3D-printed), and the kit runs **untethered on the phone**.
 
-**CaneKit** is the app: native iOS 26 SwiftUI, Swift 6 strict concurrency, Apple frameworks only.
-It lives in [`ios/`](ios/).
+**OpenCane** is the app: native iOS 26 SwiftUI, Swift 6 strict concurrency, Apple frameworks only.
+It lives in [`ios/`](ios/). Inside the repo the code is still called **CaneKit** — the Xcode
+project, targets, scheme, the `CaneKitLogic` module, the `ios/CaneKit/…` paths and the bundle id
+`com.aritro.canekit` all keep that name on purpose, so every command below still matches the files.
+Only what a person sees or hears says OpenCane. See [`AGENTS.md`](AGENTS.md) → "The name split".
 
 Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026. Team: **Aritro** (software),
 **Sagar** (hardware, 3D printing, CAD), **Aarav**.
@@ -62,7 +65,7 @@ and are stretch goals only.
 | [`docs/README.md`](docs/README.md) | Index of every doc, plus a "Where do I find…" table |
 | [`docs/CODE_REFERENCE.md`](docs/CODE_REFERENCE.md) | Map of every file, type and function, with the data-flow diagram |
 | [`CHANGELOG.md`](CHANGELOG.md) | Build log, one entry per step, each with its "test on device" list |
-| [`ios/`](ios/) | CaneKit: iPhone app, watch app, Live Activity widget, `Logic/` SwiftPM package with the unit tests, UI tests, XcodeGen spec, Makefile. See [`ios/README.md`](ios/README.md). |
+| [`ios/`](ios/) | The app (code name CaneKit, display name OpenCane): iPhone app, watch app, Live Activity widget, `Logic/` SwiftPM package with the unit tests, UI tests, XcodeGen spec, Makefile. See [`ios/README.md`](ios/README.md). |
 | [`docs/`](docs/) | Design system, device setup, route evidence, todo checklist, stress-test plan, ideas and pitch |
 | [`hardware/`](hardware/) | Physical kit: phone mount design and print notes |
 | `firmware/`, `cad/`, `ios/stretch/` | ESP32 grip firmware and OpenSCAD drafts. Stretch only. |

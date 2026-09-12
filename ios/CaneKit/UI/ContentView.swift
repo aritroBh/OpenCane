@@ -22,7 +22,7 @@ import CaneKitLogic
 import SwiftUI
 import UIKit
 
-/// The app's only screen: a `NavigationStack` titled "CaneKit" around a vertical stack of cards.
+/// The app's only screen: a `NavigationStack` titled "OpenCane" around a vertical stack of cards.
 ///
 /// Reads everything from the shared `AppModel` (injected by the app entry); owns no state of its
 /// own. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume press is
@@ -60,7 +60,7 @@ struct ContentView: View {
                 // Dragging the page down also dismisses it, the way Maps and Mail do.
                 .scrollDismissesKeyboard(.interactively)
                 .background(CKColor.background)
-                .navigationTitle("CaneKit")
+                .navigationTitle("OpenCane")
             }
         }
         // Camera Control / volume-button spike: counts presses in the footer.
