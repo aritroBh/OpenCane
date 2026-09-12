@@ -10,11 +10,15 @@ field: black grip, gold joint ring, white shaft with two red wraps, red tip lean
 lower-right, faint gold signal arcs. Generator committed as `ios/scripts/appicon.py`
 (`python3 ios/scripts/appicon.py` rewrites both 1024 PNGs).
 
-Review: `agy` could not run here (CLI needs localhost bind + log writes the sandbox denies,
-and approval prompts are off). Substituted a numeric self-review: bbox probe of the render
-caught the v2 tip sitting exactly on the squircle mask boundary (dist ~226 vs radius 225 —
-the masked preview showed it clipped), fixed by scaling the cane 0.88 about the centre;
-re-probe + masked 180 px + 60 px renders confirm the tip clear and the cane legible.
+Review: `agy` cannot run in this sandbox (needs localhost bind + log writes), so the user
+ran it in their own terminal against a `/tmp` copy. It found 3 real defects, all fixed and
+re-verified: (1) red wrap bands clipped flush — strip had no vertical padding so
+`alpha_composite` cut the proud 8 px + rounded corners; (2) drop shadow hard-edged — the
+blur clamped at the unpadded layer bounds; (3) stale "top-left" comment on the top-right
+arcs. Fixes: `PAD` strip padding, `SPAD`-padded shadow layer. My own numeric review before
+that caught the v2 tip on the mask boundary (fixed by the 0.88 scale). Final probe: zero
+content pixels in the mask cut zone; masked 180 px + 60 px renders confirm tip intact and
+cane legible. agy also confirmed asset wiring (both sets, RGB, no alpha) and squircle safety.
 
 test on device: OpenCane icon on the Home Screen after install; red tip intact inside the
 squircle at small sizes (check a folder view too).

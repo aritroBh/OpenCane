@@ -41,7 +41,7 @@ def seg(w, h, top, bottom, radius=0):
 # --- background: deep navy gradient ---
 base = vgrad(W, W, (13, 22, 48), (6, 10, 24))
 
-# --- faint gold signal arcs, top-left (brand echo, kept quiet) ---
+# --- faint gold signal arcs, top-right (brand echo, kept quiet) ---
 arcs = Image.new("RGBA", (W, W), (0, 0, 0, 0))
 ad = ImageDraw.Draw(arcs)
 for r in (125 * SS, 185 * SS):
@@ -56,7 +56,8 @@ GRIP_L, RING_W, SHAFT_L, TIP_L = 170 * SS, 18 * SS, 600 * SS, 140 * SS
 OV = 30 * SS                      # joint overlap
 H = 128 * SS                      # shaft height
 GH = 108 * SS                     # grip height (thinner than shaft, like the real thing)
-strip = Image.new("RGBA", (GRIP_L + RING_W + SHAFT_L + TIP_L, H), (0, 0, 0, 0))
+PAD = 8 * SS                      # vertical padding: bands stand proud, blur has room
+strip = Image.new("RGBA", (GRIP_L + RING_W + SHAFT_L + TIP_L, H + 2 * PAD), (0, 0, 0, 0))
 
 
 def cap(d, top, bottom):
@@ -75,27 +76,30 @@ tip_len = TIP_L
 tip_x = shaft_x + SHAFT_L - OV
 tip_cap_cx = tip_x + tip_len - H // 2  # cap circle centre: white ends here
 # white shaft runs under the tip only up to the cap centre (else white corners peek out)
-strip.alpha_composite(vgrad(tip_cap_cx - shaft_x, H, (253, 254, 255), (203, 208, 216)), (shaft_x, 0))
-strip.alpha_composite(vgrad(tip_cap_cx - tip_x, H, (233, 72, 72), (170, 36, 36)), (tip_x, 0))
-strip.alpha_composite(cap(H, (233, 72, 72), (170, 36, 36)), (tip_cap_cx - H // 2, 0))
+strip.alpha_composite(vgrad(tip_cap_cx - shaft_x, H, (253, 254, 255), (203, 208, 216)), (shaft_x, PAD))
+strip.alpha_composite(vgrad(tip_cap_cx - tip_x, H, (233, 72, 72), (170, 36, 36)), (tip_x, PAD))
+strip.alpha_composite(cap(H, (233, 72, 72), (170, 36, 36)), (tip_cap_cx - H // 2, PAD))
 for frac in (0.38, 0.63):  # red wraps, slightly proud of the shaft
     bw = 72 * SS
     bx = int(shaft_x + SHAFT_L * frac - bw / 2)
     band = seg(bw, H + 4 * SS, (233, 72, 72), (178, 40, 40), radius=8 * SS)
-    strip.alpha_composite(band, (bx, -2 * SS))
+    strip.alpha_composite(band, (bx, PAD - 2 * SS))
 # black grip: square end buried under the gold ring, round outer end
-grip_y = (H - GH) // 2
+grip_y = PAD + (H - GH) // 2
 strip.alpha_composite(vgrad(GRIP_L - GH // 2, GH, (40, 42, 48), (16, 17, 22)),
                       (ring_x - GRIP_L + GH // 2, grip_y))
 strip.alpha_composite(cap(GH, (40, 42, 48), (16, 17, 22)), (ring_x - GRIP_L, grip_y))
 # gold joint ring on top of the grip/shaft boundary
-strip.alpha_composite(vgrad(RING_W + OV, H, (216, 178, 106), (158, 122, 66)), (ring_x - OV // 2, 0))
-strip = strip.crop((0, 0, tip_x + tip_len, H))  # drop trailing transparent space
+strip.alpha_composite(vgrad(RING_W + OV, H, (216, 178, 106), (158, 122, 66)), (ring_x - OV // 2, PAD))
+strip = strip.crop((0, 0, tip_x + tip_len, strip.height))  # drop trailing transparent space
 
-# soft drop shadow
-sh = Image.new("RGBA", strip.size, (0, 0, 0, 0))
-ImageDraw.Draw(sh).rounded_rectangle([0, 0, sh.width, sh.height], radius=H // 2, fill=(0, 0, 0, 110))
-sh = sh.filter(ImageFilter.GaussianBlur(26 * SS))
+# soft drop shadow (padded: an edge-to-edge blur clamps and cuts hard)
+BLUR = 26 * SS
+SPAD = 3 * BLUR
+sh = Image.new("RGBA", (strip.width + 2 * SPAD, strip.height + 2 * SPAD), (0, 0, 0, 0))
+ImageDraw.Draw(sh).rounded_rectangle([SPAD, SPAD, SPAD + strip.width, SPAD + strip.height],
+                                     radius=H // 2, fill=(0, 0, 0, 110))
+sh = sh.filter(ImageFilter.GaussianBlur(BLUR))
 
 ANG = -60  # grip upper-left, red tip lower-right: the cane leans like it is held
 shadow = sh.rotate(ANG, resample=Image.BICUBIC, expand=True)

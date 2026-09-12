@@ -575,7 +575,7 @@ Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswera
 
 ### `ios/scripts/appicon.py` — renders the app icon (committed generator, Step 17)
 - `python3 ios/scripts/appicon.py` writes `Icon-1024.png` into both `AppIcon` sets (iPhone `CaneKit/Resources/Assets.xcassets`, Watch `CaneKitWatch/Assets.xcassets`); no `project.yml` change needed (asset files only).
-- Design ("White Cane" v2): navy gradient field, black straight grip + gold joint ring, white shaft with two red wraps, red tip leaning lower-right, faint gold signal arcs top-right. Pieces are square-ended and overlapped (round caps only on the two outer ends) so no hairline seams; the whole cane is scaled 0.88 about the centre so the tip survives the squircle mask (verified by bbox probe + masked render, not by eye alone).
+- Design ("White Cane" v2): navy gradient field, black straight grip + gold joint ring, white shaft with two red wraps, red tip leaning lower-right, faint gold signal arcs top-right. Pieces are square-ended and overlapped (round caps only on the two outer ends) so no hairline seams; the strip carries `PAD` vertical padding so the proud band ends keep their rounding, and the shadow layer carries `SPAD` padding so the blur feathers instead of clamping (both caught by the agy review round). The whole cane is scaled 0.88 about the centre so the tip survives the squircle mask (verified by bbox probe + masked render: zero content pixels in the cut zone, not by eye alone).
 
 ### Cross-module contracts (who uses what)
 - `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~30 Hz.
