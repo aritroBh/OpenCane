@@ -1780,7 +1780,7 @@ Contract type: `NavActivityAttributes` (`ios/Shared/LiveActivity/NavActivityAttr
 
 ### `ios/CaneKit/Trip/HazardLog.swift` (Step 11)
 
-Purpose: the hazard map — every hazard the app announces (LiDAR drop-offs / holes / curbs / low obstacles, signs, vision-model cautions) with the current GPS fix and, when there is one, the camera frame. "Every cane is a sidewalk sensor": the potholes and closures the maps have not caught up with. Visible in Files → On My iPhone → CaneKit (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and shareable from `HazardsCard`.
+Purpose: the hazard map — every hazard the app announces (LiDAR drop-offs / holes / curbs / low obstacles, signs, vision-model cautions) with the current GPS fix and, when there is one, the camera frame. "Every cane is a sidewalk sensor": the potholes and closures the maps have not caught up with. Visible in Files → On My iPhone → OpenCane (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and shareable from `HazardsCard`.
 
 **`final class HazardLog`** — `@MainActor @Observable`; owned by `AppModel.hazardLog`. File writes are small and infrequent (tens of hazards per walk), so they run on main.
 - Published: `records: [HazardRecord]` (`private(set)`, this session, newest last; `HazardsCard` shows the count), `lastError: String?` (`private(set)`), `fileWritten: Bool` (`private(set)`, true once the GeoJSON exists — the share button appears only then). `var maxPhotos = 200`.
@@ -1810,7 +1810,7 @@ AppModel (phone, MainActor)
   │                                                                   onArrived, stopRoute; the link's dedupe sends only on a new instruction or a ≥5 m distance change)
   │     • handleWatchCommand  ← nextWaypoint→nav.next() (else "No route running.") / describe→describeScene() / recenter→recenter() /
   │                             repeatLast→repeatInstruction()→nav.repeatInstruction()→nav.onRepeat→speech.sayAgain(_, .nav)
-  │     • announceChannels()  (beginRoute) speaks "Watch not reachable. Open CaneKit on the watch." if watch.isPaired && !watch.isReachable,
+  │     • announceChannels()  (beginRoute) speaks "Watch not reachable. Open OpenCane on the watch." if watch.isPaired && !watch.isReachable,
   │                             and "Haptics unavailable. Obstacle cues will be spoken." if !haptics.isHealthy && !watch.isReachable
   │     • watchTest(NavCue)   → watch.send(nav:)                    (debug buttons on UI/WatchCard.swift, disabled unless isReachable)
   └─ liveActivity: LiveActivityController ──Activity<NavActivityAttributes>──▶ CaneKitWidget.NavLiveActivity
@@ -1856,7 +1856,7 @@ Functions:
 - `activate()` — no-op if `!isSupported`. Installs the relay closures (each hops to `@MainActor` via `Task`), sets `WCSession.default.delegate = relay`, calls `activate()`. Must be called once; `AppModel.start()` guarantees it.
 - `send(nav cue: NavCue)` — fire-and-forget via private `send(_:)`. Dropped if unreachable (cues are ephemeral; no queueing). Called from `nav.onNavCue` and `watchTest`.
 - `send(obstacle kind: CueKind, now: TimeInterval)` — **throttle: one message per `CueKind` per 1.0 s** keyed by `now` (the AR/depth-report clock, *not* wall clock). Then `send(.obstacle(kind))`. `AppModel.handle(report)` calls this only when `!haptics.isHealthy || haptics.silenced || fallbackToWatch` (`fallbackToWatch` = WatchCard toggle "Mirror obstacle cues to the watch", persisted in `Settings`).
-- `send(status instruction: String, distanceM: Int)` — builds `.status`; **dedupe: skipped when the instruction equals the last one and `abs(Δdistance) < 5` m** (the dedupe state is updated before the activation guard, so a status dropped while not activated is not retried until it changes). Requires `activationState == .activated`. Writes `updateApplicationContext(dict)` (survives the watch sleeping; last-writer-wins) and, if `isReachable`, also `deliver`s it live. `AppModel.pushStatusToWatch()` passes `distanceM: nav.distanceToNext ?? -1` — **-1 is the "unknown" sentinel**; the watch maps any negative value to `nil` (after `stopRoute` the watch shows "No route" under the title "CaneKit").
+- `send(status instruction: String, distanceM: Int)` — builds `.status`; **dedupe: skipped when the instruction equals the last one and `abs(Δdistance) < 5` m** (the dedupe state is updated before the activation guard, so a status dropped while not activated is not retried until it changes). Requires `activationState == .activated`. Writes `updateApplicationContext(dict)` (survives the watch sleeping; last-writer-wins) and, if `isReachable`, also `deliver`s it live. `AppModel.pushStatusToWatch()` passes `distanceM: nav.distanceToNext ?? -1` — **-1 is the "unknown" sentinel**; the watch maps any negative value to `nil` (after `stopRoute` the watch shows "No route" under the title "OpenCane").
 - `private send(_ msg: PhoneToWatch)` — guards `isSupported`, `.activated`, `isReachable`, encodable; else silently drops.
 - `private deliver(_ dict:, session:)` — `sendMessage(dict, replyHandler: nil, errorHandler:)`; error text is hopped to the main actor into `lastError`; then `messagesSent += 1`, `lastError = nil`.
 
@@ -1953,7 +1953,7 @@ Functions:
 `struct WatchContentView: View` (MainActor by default). `@Environment(WatchModel.self) private var model`; `@State private var crown = 0.0`.
 
 Structure: `NavigationStack { content }` with, on `content`:
-- `.navigationTitle(model.distanceM.map { "\($0) m" } ?? "CaneKit")`, `.navigationBarTitleDisplayMode(.inline)` — the distance lives in the system clock strip instead of its own row.
+- `.navigationTitle(model.distanceM.map { "\($0) m" } ?? "OpenCane")`, `.navigationBarTitleDisplayMode(.inline)` — the distance lives in the system clock strip instead of its own row.
 - `.toolbar { ToolbarItem(placement: .topBarLeading) }` — `Image` `iphone.radiowaves.left.and.right` in `WKColor.trusted` when `phoneReachable`, else `iphone.slash` in `WKColor.danger`; accessibility label "Phone connected" / "Phone not connected".
 
 `content` — single `VStack(alignment: .leading, spacing: WKSpacing.sm)`, top-aligned, `WKColor.background` fill; **no `ScrollView` and no `TabView`** — a ScrollView would take the crown and Next would never fire; docs/design.md §6.6's two-page design is not what is built:
@@ -2350,16 +2350,16 @@ Regenerate with `scripts/gen.sh`; `CaneKit.xcodeproj` is git-ignored and never h
 
 | Key | Value | Why |
 |---|---|---|
-| `CFBundleDisplayName` | CaneKit | |
+| `CFBundleDisplayName` | OpenCane | |
 | `UILaunchScreen` | `{}` | system launch screen |
 | `UISupportedInterfaceOrientations` | `[Portrait]` | phone is clamped |
 | `UIRequiredDeviceCapabilities` | `[arkit, arm64]` | LiDAR/ARKit required |
 | `UIBackgroundModes` | `[audio, location]` | beacon + speech keep running; GPS in background |
 | `NSSupportsLiveActivities` | true | widget target |
-| `UIFileSharingEnabled` | true | Step 11: Documents (JSONL trip logs, `hazards/` GeoJSON + photos) show up in Files → On My iPhone → CaneKit — they were unreachable on the phone |
+| `UIFileSharingEnabled` | true | Step 11: Documents (JSONL trip logs, `hazards/` GeoJSON + photos) show up in Files → On My iPhone → OpenCane — they were unreachable on the phone |
 | `LSSupportsOpeningDocumentsInPlace` | true | Step 11: pairs with the above so Files can open them in place |
 | `ITSAppUsesNonExemptEncryption` | false | |
-| `NSCameraUsageDescription` | "CaneKit uses the camera and LiDAR to detect obstacles between your waist and head." | ARKit depth |
+| `NSCameraUsageDescription` | "OpenCane uses the camera and LiDAR to detect obstacles between your waist and head." | ARKit depth |
 | `NSLocationWhenInUseUsageDescription` | "…uses your location and heading to guide you along the route." | |
 | `NSMotionUsageDescription` | "…uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps." | gyro gate, CMHeadphoneMotion, pedometer |
 | `NSSpeechRecognitionUsageDescription` / `NSMicrophoneUsageDescription` | spoken commands | |
@@ -2442,7 +2442,7 @@ Purpose: end-to-end GPS replay of the demo route through the **real app** in the
 
 ### ios/scripts/vision_probe.swift (Step 11)
 
-Purpose: run the app's on-device camera logic over a folder of images **on the Mac** — the same Vision requests as `OnDeviceVision` (classification with threshold 0.25 and the `boring` label set, top 6 labels; text recognition at `.accurate` with `minimumTextHeightFraction = 1/128` as in `HazardScanner`, confidence ≥ 0.5), the same sign-phrase matching as `SignPolicy` (normalised, whole-word, plus stacked lines joined) and the same exact-identifier hazard map as `OnDeviceHazards` (confidence ≥ 0.35). Usage: `swift ios/scripts/vision_probe.swift ios/scripts/streetview` (reads `frames.json` there: `file`, `lat`, `lon`, optional `heading`). Prints per frame: labels ("sees"), text, and what CaneKit would say ("Sign: …." / "Caution: … ahead." / "(nothing)"). Differences from the phone: text recognition is `.accurate` (the phone uses `.fast`), and the hazard line is **not** gated on LiDAR (the phone's `lidarAhead`).
+Purpose: run the app's on-device camera logic over a folder of images **on the Mac** — the same Vision requests as `OnDeviceVision` (classification with threshold 0.25 and the `boring` label set, top 6 labels; text recognition at `.accurate` with `minimumTextHeightFraction = 1/128` as in `HazardScanner`, confidence ≥ 0.5), the same sign-phrase matching as `SignPolicy` (normalised, whole-word, plus stacked lines joined) and the same exact-identifier hazard map as `OnDeviceHazards` (confidence ≥ 0.35). Usage: `swift ios/scripts/vision_probe.swift ios/scripts/streetview` (reads `frames.json` there: `file`, `lat`, `lon`, optional `heading`). Prints per frame: labels ("sees"), text, and what OpenCane would say ("Sign: …." / "Caution: … ahead." / "(nothing)"). Differences from the phone: text recognition is `.accurate` (the phone uses `.fast`), and the hazard line is **not** gated on LiDAR (the phone's `lidarAhead`).
 - **`ios/scripts/sign_probe.swift`** (companion): pastes a white "SIDEWALK CLOSED" sign onto every route frame (960×1280 portrait, JPEG 0.8, as the app's sign scan) at letter heights 6–40 px, runs the app's exact text request (`.fast`, language correction, 1/128) and Vision's default, and prints the smallest letters read on every frame and the equivalent distance (≈ 931 px/m at 1 m for the 17 Pro Max main camera on a 1280 px frame). 2026-09-11: app settings read 10 px letters everywhere (1/80 was 16 px) → 7.5 cm letters from ≈ 7 m, 15 cm from ≈ 14 m; the default only 40 px → 1.7 m / 3.5 m. OCR time unchanged (~7 ms per frame on the Mac).
 - ⚠ Keeps its own copies `signPhrases` and `hazardMap` — keep them in sync with `SignPolicy.phrases` (`Hazards.swift`) and `OnDeviceHazards.map` (`OnDeviceVision.swift`).
 
