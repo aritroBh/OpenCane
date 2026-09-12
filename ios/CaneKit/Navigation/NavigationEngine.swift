@@ -112,6 +112,15 @@ final class NavigationEngine {
     var veerMaxAccuracy: Double = 20
     /// Seconds of bad accuracy before "GPS weak" is spoken.
     var gpsWeakAfter: TimeInterval = 10
+    /// Seconds after a route starts with NO fix at all before the walker is told.
+    ///
+    /// Every other GPS-health line lives inside `update(fix:)`, which only runs when a fix arrives —
+    /// so a route started indoors said "Route started…" and then went **permanently silent**: no
+    /// waypoints, no veer, no beacon, and nothing to say why. The demo run sheet starts the route
+    /// indoors, which reproduces it exactly. 20 s is long enough that a normal outdoor start never
+    /// hears it (a first fix takes a few seconds) and short enough that nobody walks half a block
+    /// believing they are being guided.
+    var noFixAfter: TimeInterval = 20
 
     // MARK: Private
 
@@ -284,7 +293,19 @@ final class NavigationEngine {
     /// still, which is exactly when the arrival hint is needed (review round 5).
     /// - Parameter now: wall clock, same clock as `GeoFix.timestamp`.
     func tick(now: TimeInterval) {
-        guard isNavigating, let f = lastFix else { return }
+        guard isNavigating else { return }
+        guard let f = lastFix else {
+            // No fix has EVER arrived for this route. Say so once, reusing the existing wording —
+            // it is already in `commonLines` and therefore already in the mp3 cache, so the first
+            // line of the failure case does not itself wait on the network. Recovery needs nothing
+            // new: the first good fix takes the existing "GPS back." path in `update(fix:)`.
+            if !gpsWeak, let started = startedAt,
+               Date().timeIntervalSince(started) >= noFixAfter {
+                gpsWeak = true
+                onSpeak?("GPS weak. Waypoint cues paused until it recovers.", .nav)
+            }
+            return
+        }
         checkArrivalHint(f, now: now)
     }
 
