@@ -537,7 +537,7 @@ final class SpeechQueue {
 
     /// Include UID and human-readable name, not only the port type: two AirPods or USB inputs can
     /// share a type while still being a real route change that must stop recognition.
-    private static func portDescription(_ port: AVAudioSession.PortDescription) -> String {
+    private static func portDescription(_ port: AVAudioSessionPortDescription) -> String {
         let type = port.portType.rawValue
         let uid = port.uid.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = port.portName.trimmingCharacters(in: .whitespacesAndNewlines)
