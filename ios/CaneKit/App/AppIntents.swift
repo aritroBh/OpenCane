@@ -318,8 +318,8 @@ struct CaneKitShortcuts: AppShortcutsProvider {
         AppShortcut(intent: SilenceHapticsIntent(),
                     phrases: ["Silence the cane in \(.applicationName)",
                               "Silence haptics in \(.applicationName)",
-                              "Turn cane haptics \(.$state) in \(.applicationName)",
-                              "\(.applicationName) turn cane haptics \(.$state)"],
+                              "Turn cane haptics \(\.$state) in \(.applicationName)",
+                              "\(.applicationName) turn cane haptics \(\.$state)"],
                     shortTitle: "Cane haptics",
                     systemImageName: "hand.raised")
     }
