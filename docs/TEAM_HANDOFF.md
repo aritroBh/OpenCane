@@ -73,11 +73,14 @@ The hour-by-hour plan is [`stress_test_plan.md` §1.0](stress_test_plan.md#10-th
 The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench tests are T0–T11 in
 [`hardware/mount/DESIGN.md`](../hardware/mount/DESIGN.md). Do the mount's T-tests before D1. In short:
 
+Teams: software is **Aritro**, **Aarav** and **Tejas**; hardware is **Sagar** and **Tommy**. The
+rows below are the individual assignments.
+
 | Person | Tonight | Saturday |
 |---|---|---|
-| **Aritro** (software) | Add Apple ID in Xcode, Developer Mode on phone + watch, `make run` (§4). Bench tests D18 first, then D1–D8, D10, D11, D13, D15–D17. | Logs, fixes, code freeze ≥ 3 h before the demo walk, filming. |
-| **Sagar** (hardware) | Render and print the mount (`hardware/README.md` quick start). Bench tests D1–D5 and D16 with the clamp. Set the tilt by reading the phone (§5). | Spotter on every walk. Power bank, sun shade, heat checks. |
-| **Aarav** (walker) | Feel the haptic patterns (D2), wear the watch (D11). | Survey walk W1, reference walk W2, blindfolded rehearsal W4. |
+| **Aritro**, **Tejas** (software) | Add Apple ID in Xcode, Developer Mode on phone + watch, `make run` (§4). Bench tests D18 first, then D1–D8, D10, D11, D13, D15–D17. | Logs, fixes, code freeze ≥ 3 h before the demo walk, filming. |
+| **Sagar**, **Tommy** (hardware) | Render and print the mount (`hardware/README.md` quick start). Bench tests D1–D5 and D16 with the clamp. Set the tilt by reading the phone (§5). | Spotter on every walk. Power bank, sun shade, heat checks. |
+| **Aarav** (software, walker) | Feel the haptic patterns (D2), wear the watch (D11). | Survey walk W1, reference walk W2, blindfolded rehearsal W4. |
 
 ## 4. Pull, build, install
 
