@@ -95,7 +95,10 @@ targets:
         NSLocationWhenInUseUsageDescription: "CaneKit uses your location and heading to guide you along the route."
         NSMotionUsageDescription: "CaneKit uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps."
         NSSpeechRecognitionUsageDescription: "CaneKit can take spoken commands."
-        NSMicrophoneUsageDescription: "CaneKit uses the microphone for spoken commands."
+        # Sound recognition (SoundAnalysis) is the real microphone user: sirens, horns and vehicle
+        # sounds a blind pedestrian cannot see coming. Off by default (Hazards card switch), and it
+        # is the one feature that moves the audio session to .playAndRecord — see SoundWatcher.
+        NSMicrophoneUsageDescription: "CaneKit can listen for sirens, car horns and vehicle sounds to warn you about traffic you cannot see, and for spoken commands."
         NSHealthShareUsageDescription: "CaneKit reads your step count for the arrival summary."
         NSHealthUpdateUsageDescription: "CaneKit records the guided walk as a workout so the watch can keep giving cues."
 
