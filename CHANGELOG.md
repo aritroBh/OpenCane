@@ -25,9 +25,17 @@ feel the haptic tick, speak “set a post here”, then press Action Button agai
 
 ## Step 23 — Conversational voice assistant with Action Button trigger, marker drops, and context memory (Sat Sep 12)
 
-Integrated the hands-free assistant, deterministic fast paths, walk markers, rolling context, and
-low-priority conversational speech. Added the follow-up fixes for cloud-primary routing, detached
-JPEG encoding, stale recognition callbacks, double-speak suppression, and query reentrancy.
+Hands-free voice assistant mode designed specifically for blind white-cane users:
+- **Architecture & strict audio isolation**: Built `VoiceInputEngine` using Apple's on-device `SFSpeechRecognizer` (< 300 ms response). Audio session strictly complies with AGENTS.md Hard Rule 7: transitions to `.playAndRecord` with `[.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker]` (never `.allowBluetoothHFP`), capturing voice from the iPhone's upward-facing beamforming microphone while keeping AirPods Pro in 44.1/48 kHz AAC/A2DP mode. Audio session returns immediately to `.playback` and spatial beacon un-mutes upon speech completion.
+- **Fast-path intent classifier (`FastPathIntentClassifier.swift`)**: Sub-millisecond, zero-token, zero-network deterministic parser handling settings (beacon, drop-offs, hazard watch, silence cane), status queries (battery, GPS accuracy, AirPods connection), route controls (stop, distance remaining), UIUC campus destinations (`CampusPlaces`), marker/post drops, and trip metrics (steps, distance walked).
+- **Post & breadcrumb marker dropping (`WalkMarker`)**: Users can speak "set a post here", "mark Townsend entrance", or "drop a pin". Markers capture GPS coordinate, custom name, altitude, and timestamp, accessible both during navigation and retrospectively.
+- **Rolling conversational context & anti-slop guard (`ConversationModels.swift`, `ConversationPrompt.swift`)**: 6-turn rolling memory (`ConversationHistory`) with tool execution tracking. Anti-slop prompt (< 25 words per response, zero pleasantries) and `ConversationResponseParser` with `CloudSceneGate` safety filters that strictly strip hallucinated "all clear" reassurance.
+- **Hardware triggers**: Wired into the physical iPhone Action Button via `TalkToOpenCaneIntent: AppIntent` (with `requestValueDialog: "How can OpenCane help?"`), plus accessible push-to-talk in `GuideCard.swift`.
+- **Speech priority hierarchy & double-speak elimination**: Spoken conversational replies are strictly `.scene` priority (lowest band, priority 3). Route instructions (`.nav`), obstacle alerts (`.obstacle`), and head-height warnings (`.head` / `.safety`) immediately interrupt any conversational reply. Actions that already announce themselves out loud (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) skip the coordinator's spoken repetition to prevent echoing.
+- **Muse adversarial audit (rounds 1 & 2)**: Addressed all findings: (1) `cloudPrimary` routing on `VLMClient` avoiding on-device prompt drops; (2) off-main thread JPEG encoding via detached task; (3) weak `appModel` across async gaps; (4) beacon state save and restoration across voice sessions; (5) eliminated fast-path and tool double-speaking; (6) fixed sticky `.error` state and guarded stale recognition callbacks against unlistening states; (7) reentrancy guards on `handleQuery`.
+- **Verification**: 359/359 unit tests green (`make test`), simulator build clean (`make sim`), 10/10 XCUITests + visual tour green (`make uitest`). Deployed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2308).
+- **Follow-up fixes**: cloud-primary routing, detached JPEG encoding, stale recognition callbacks,
+  double-speak suppression, and query reentrancy guard.
 
 test on device: trigger Action Button or tap the mic; say “set a post here named curb”, verify the
 confirmation, ask “how is my battery”, then say “take me to CIF”.

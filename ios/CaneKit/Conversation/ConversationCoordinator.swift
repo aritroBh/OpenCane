@@ -51,6 +51,7 @@ final class ConversationCoordinator {
 
     /// Main entry point for spoken or typed conversational queries.
     func handleQuery(_ rawQuery: String) async {
+        guard !isProcessing else { return }
         guard let model = appModel else { return }
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
@@ -67,13 +68,16 @@ final class ConversationCoordinator {
 
         // 1. Check Deterministic Fast-Path (<1 ms, 0 tokens)
         if let immediateAction = FastPathIntentClassifier.classify(query: query) {
-            let response = executeAction(immediateAction)
+            let (response, alreadySpoken) = executeAction(immediateAction)
             turn.agentResponse = response
             history.append(turn: turn)
             lastResponse = response
 
-            model.speech.say(response, .scene, ttl: 12)
-            model.logger.event("conv_turn", ["query": query, "fast_path": true, "response": response])
+            // Only speak if the underlying effect did not already announce itself (e.g. setHapticsSilenced, stopRoute)
+            if !alreadySpoken {
+                model.speech.say(response, .scene, ttl: 12)
+            }
+            model.logger.event("conv_turn", ["query": query, "fast_path": true, "response": response, "already_spoken": alreadySpoken])
             return
         }
 
@@ -85,7 +89,11 @@ final class ConversationCoordinator {
         let tStart = Date()
         do {
             let targetClient = client.cloudPrimary ?? client
-            let jpeg = model.depth.processor.jpegSnapshot() ?? Self.minimalJPEG
+            // Encode JPEG concurrently off main thread to prevent UI stalls
+            let jpeg = await Task.detached { [weak processor = model.depth.processor] in
+                processor?.jpegSnapshot()
+            }.value ?? Self.minimalJPEG
+
             let rawReply = try await targetClient.describe(jpeg: jpeg, prompt: prompt)
             let latency = Int(Date().timeIntervalSince(tStart) * 1000)
 
@@ -125,79 +133,81 @@ final class ConversationCoordinator {
 
     // MARK: - Action & Tool Execution
 
-    /// Executes an immediate fast-path action and returns the confirmation sentence.
-    private func executeAction(_ action: ConversationAction) -> String {
-        guard let model = appModel else { return "" }
+    /// Executes an immediate fast-path action and returns the confirmation sentence plus whether it already spoke.
+    private func executeAction(_ action: ConversationAction) -> (response: String, alreadySpoken: Bool) {
+        guard let model = appModel else { return ("", false) }
         switch action {
         case .silenceCane(let silenced):
             model.setHapticsSilenced(silenced)
-            return StatusSummary.hapticsLine(
+            let line = StatusSummary.hapticsLine(
                 healthy: model.haptics.isHealthy,
                 silenced: silenced,
                 watchReachable: model.watch.isReachable
             )
+            return (line, true) // setHapticsSilenced already speaks at .nav
 
         case .updateSetting(let opt, let enabled):
             if let option = HandsFreeOption(rawValue: opt) {
                 model.setOption(option, enabled: enabled)
-                return enabled ? "\(option.spokenName) on." : "\(option.spokenName) off."
+                let line = enabled ? "\(option.spokenName) on." : "\(option.spokenName) off."
+                return (line, true) // setOption already speaks at .nav
             }
-            return "Option not recognized."
+            return ("Option not recognized.", false)
 
         case .answerStatus(let aspect):
             let facts = currentStatusFacts()
             switch aspect {
             case .battery:
-                return StatusSummary.batteryLine(facts) ?? "Battery level unknown."
+                return (StatusSummary.batteryLine(facts) ?? "Battery level unknown.", false)
             case .headphones:
-                return StatusSummary.audioLine(facts)
+                return (StatusSummary.audioLine(facts), false)
             case .route:
-                return StatusSummary.routeLine(facts)
+                return (StatusSummary.routeLine(facts), false)
             case .gps:
-                return StatusSummary.gpsLine(facts)
+                return (StatusSummary.gpsLine(facts), false)
             case .haptics:
-                return StatusSummary.hapticsLine(healthy: facts.hapticsHealthy, silenced: facts.hapticsSilenced, watchReachable: facts.watchReachable)
+                return (StatusSummary.hapticsLine(healthy: facts.hapticsHealthy, silenced: facts.hapticsSilenced, watchReachable: facts.watchReachable), false)
             case .all:
-                return StatusSummary.sentence(facts)
+                return (StatusSummary.sentence(facts), false)
             }
 
         case .startRoute(let dest):
             model.navigate(to: dest)
-            return "Routing to \(dest)."
+            return ("Routing to \(dest).", true) // navigate(to:) already speaks "Walking to ..." at .nav
 
         case .stopRoute:
             model.stopRoute()
-            return "Route stopped."
+            return ("Route stopped.", true) // stopRoute() already speaks "Route stopped." at .nav
 
         case .recordMarker(let name):
             let coord = model.location.fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)
             let marker = WalkMarker(name: name, coordinate: coord, timestamp: Date().timeIntervalSince1970)
             markers.append(marker)
             model.logger.event("marker_dropped", ["name": name, "lat": coord.latitude, "lon": coord.longitude])
-            return "\(name) marked at current location."
+            return ("\(name) marked at current location.", false)
 
         case .answerHistory(let metric, _):
             switch metric {
             case .steps:
                 if let steps = model.trip.steps {
-                    return "\(steps) steps walked so far."
+                    return ("\(steps) steps walked so far.", false)
                 }
-                return "Step counter is not ready yet."
+                return ("Step counter is not ready yet.", false)
             case .distanceWalked:
                 let m = Int(model.trip.distanceM.rounded())
-                return "You have walked \(m) meters on this route."
+                return ("You have walked \(m) meters on this route.", false)
             case .hazardsEncountered:
-                return "No severe hazards reported on this route."
+                return ("No severe hazards reported on this route.", false)
             default:
-                return "No trip records available."
+                return ("No trip records available.", false)
             }
 
         case .inspectScene(let question):
             model.askAboutScene(question)
-            return "Checking the scene ahead."
+            return ("Checking the scene ahead.", false)
 
         case .speakImmediate(let msg):
-            return msg
+            return (msg, false)
         }
     }
 
@@ -214,7 +224,7 @@ final class ConversationCoordinator {
             return false
         case .stopNavigation:
             model.stopRoute()
-            return false
+            return true // model.stopRoute() announces "Route stopped." at .nav
         case .dropMarker:
             let name = invocation.arguments["name"] ?? "Marker \(markers.count + 1)"
             let coord = model.location.fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)

@@ -80,7 +80,7 @@ final class VoiceInputEngine {
 
     /// Starts speech recognition. Transitions audio session to .playAndRecord preserving A2DP.
     func startListening() {
-        guard state == .idle || state == .processing else { return }
+        guard !isListening else { return }
         guard let recognizer, recognizer.isAvailable else {
             fail(with: "Speech recognizer is unavailable.")
             return
@@ -126,7 +126,7 @@ final class VoiceInputEngine {
         // 5. Start recognition task
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.isListening else { return }
                 if let result {
                     let formatted = result.bestTranscription.formattedString
                     self.latestTranscript = formatted
