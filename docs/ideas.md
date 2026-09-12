@@ -1,6 +1,6 @@
 # Ideas: retrofit smart-cane kit
 
-> **Status banner (updated Fri 2026-09-11, after build Step 10, before any device test).** This file is
+> **Status banner (written Fri 2026-09-11 after build Step 10; markers refreshed Sat 2026-09-12 after Step 37).** This file is
 > the original pitch and plan, compiled Thu Sep 10. It is kept as history. Statements that no longer
 > describe the build are marked inline (**[Superseded]**, **[Changed]**, **[Status]**, **[Built]**,
 > **[Not built]**, **[Answered]**, **[Moot]**); nothing was deleted. For
@@ -11,21 +11,22 @@
 > | Area | Plan in this file | What shipped / changed | Details |
 > |---|---|---|---|
 > | Computer | iPhone + XIAO ESP32-S3 grip over BLE | **Phone-only.** The iPhone 17 Pro Max (iOS 27, app targets iOS 26) is the only computer. No ESP32, no grip motors, no ToF pod, no chest plate, nothing bought. `firmware/`, `cad/` and `ios/stretch/CaneBLE.swift` are kept as stretch/history only. | §9 below, [`AGENTS.md`](../AGENTS.md), `CHANGELOG.md` Step 0 |
-> | Cane | Ambutech 12.7 mm white cane | A 28.75 mm non-metal stick, phone on a 3D-printed mount (Lamicall bike mount as insurance) | §7, §9 |
+> | Cane | Ambutech 12.7 mm white cane | A non-metal stick (a broom handle), phone on a 3D-printed mount (Lamicall bike mount as insurance). **[Changed, Sep 12]** The shaft measured 27.65 mm on the printed bore rings, not the 28.75 mm used below; the live mount is the screwless one in `hardware/mount_screwless/` | §7, §9, [`hardware/README.md`](../hardware/README.md) |
 > | Obstacle haptics | Two ERM motors in the grip | The phone's Taptic Engine through the clamp: centre Geiger loop (2 → 8 Hz), left 2 taps, right 3 taps, head-height double hit + "Head height."; mirrored to the watch when the phone can't buzz | [`design.md` §5.2](design.md) |
 > | Wrist | Watch for turns + ESP32-failure fallback; crown / side button = Next (§7) | Apple Watch is a core channel: turn / crossing / arrival taps; Repeat, Next, Describe, Recenter buttons; crown 3 detents = Next (no side-button API) | [`design.md` §6.6](design.md), [`devices_setup.md`](devices_setup.md) |
 > | Audio | Bone-conduction / open-ear only | AirPods Pro: speech (ElevenLabs natural voice with a system-voice fallback) and an HRTF beacon; head yaw from `CMHeadphoneMotionManager` (the head-pose entitlement needs a paid team) | [`ios/README.md` §2](../ios/README.md) |
 > | Demo route | 8–12 waypoints recorded on foot Friday | [`route_isr_cif.json`](../ios/CaneKit/Resources/route_isr_cif.json): 9 OSM-derived waypoints, ISR **Townsend Hall** → CIF east entrance, 989 m, crossings at Green St, Goodwin (at Springfield) and Mathews; **not yet walked** | [`route_isr_cif.md`](route_isr_cif.md) |
 > | Scene read | Gemini Flash on a tap | "Where am I": custom OpenAI-compatible (Muse 1.3) / Anthropic / Gemini / OpenAI, chosen in `Secrets.plist`; Action button App Shortcut, watch, on-screen button; Camera Control unverified under ARKit | [`ios/README.md` §4](../ios/README.md) |
-> | Day-2 list | Live Activity, YOLO, OCR, MTD, events | Live Activity **shipped**. Not built: YOLO names, Vision OCR, Foundation Models, SpeechAnalyzer, UWB, MTD buses, calendar events, Aira handoff, hazard map, "find my cane" chirp | §5.2, §5.4 |
+> | Day-2 list | Live Activity, YOLO, OCR, MTD, events | Live Activity **shipped** (Step 10). **[Built, Step 11]** on-device sign reading (Vision text), Apple's on-device language model for "Where am I" (`FoundationModels`), hazard map (GeoJSON). **[Built, Steps 13 and 23]** voice commands and the conversational assistant, with `SFSpeechRecognizer` (not SpeechAnalyzer). Still not built: YOLO names, SpeechAnalyzer, UWB, MTD buses, calendar events, Aira handoff, "find my cane" chirp | §5.2, §5.4, `CHANGELOG.md` |
 > | Added, not in the plan | — | MapKit "any destination"; trip card (distance, minutes, steps via HealthKit / pedometer); JSONL trip log; AirPods / watch presence announcements; Repeat everywhere | `CHANGELOG.md` Steps 6–10 |
-> | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. The current checkout is tracked in [`ios/README.md`](../ios/README.md) and has 372 Logic-test annotations; device tests pending | [`docs/todo.md`](todo.md) |
+> | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. **[Status, Sep 12]** After Step 37 the Logic package has 457 `@Test` annotations and 11 XCUITests (Step 37 run: 457/457, uitest 10 passed + 1 skipped, e2e PASS), and the build has been installed on the phone; current state is tracked in [`ios/README.md`](../ios/README.md) | [`docs/todo.md`](todo.md) |
 >
-> "Shipped" above means the Step 10 build. Work in progress on Sep 11 and **not yet wired into the app**
-> when this banner was written: a hazards layer (LiDAR drop-off / pothole / curb detection, on-device sign
-> reading, a periodic vision "hazard watch", a shareable hazard map; `CaneKitLogic/Hazards.swift`,
-> `UI/HazardsCard.swift`) and a distance-based course smoother for veer cues. If it lands, the "curbs",
-> "OCR" and "hazard map" notes below change from not built to built.
+> "Shipped" above means the Step 10 build. Work in progress on Sep 11 when this banner was written: a
+> hazards layer (LiDAR drop-off / pothole / curb detection, on-device sign reading, a periodic vision
+> "hazard watch", a shareable hazard map; `CaneKitLogic/Hazards.swift`, `UI/HazardsCard.swift`) and a
+> distance-based course smoother for veer cues. **[Built, Step 11]** Both landed (`CHANGELOG.md` Step 11),
+> so the "curbs", "OCR" and "hazard map" notes below that say not built describe the Step 10 build only.
+> Ground-hazard warnings and the hazard watch ship off by default until tuned on the cane.
 
 Founders hackathon, Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026.
 Owners: Aritro = software (iPhone is the brain). Sagar = 3D printing + cane hardware. Aarav joins the team.
@@ -264,7 +265,7 @@ Campus data: MTD API (free key, `getdeparturesbystop`) https://developer.mtd.org
 - Arrival card. Distance, minutes, steps. The fitness hook without a fitness app. **[Built]** as the inline trip card.
 
 **Day 2 if ahead**
-- YOLO object names. Vision OCR for room numbers. Live Activity. **[Status]** Live Activity built; YOLO and OCR not in the Step 10 build (on-device sign reading is in progress, see the banner).
+- YOLO object names. Vision OCR for room numbers. Live Activity. **[Status]** Live Activity built; YOLO and OCR not in the Step 10 build. **[Built, Step 11]** On-device sign reading (Vision text) landed; YOLO names are still not built.
 - MTD: "Next 22 Illini in 4 min at Goodwin & Illinois." ~1.5 h, very Champaign. **[Not built]**
 - Events along route from the UIUC calendar feed: "Quad Day booth 40 m on your right." ~2 h. This is the social layer. **[Not built]**
 
@@ -379,7 +380,7 @@ Slides: 1 Keep your cane, add the smarts · 2 The $40 cane works, it just can't 
   - Digital Crown / side button = "next waypoint" / "describe" without touching the phone. **[Changed]** No API for the side button or a crown press: crown rotation (3 detents within 1 s) = Next; on-screen watch buttons Repeat, Next, Describe, Recenter.
   - Heart rate + steps for the arrival card via HealthKit. **[Status]** Steps only (HealthKit, merged with the watch; phone pedometer fallback). No heart rate.
   - Watch heading (`CMMotionManager` on watchOS) as a second compass source. **[Not built]** Heading comes from the phone (GPS course while walking, compass otherwise).
-- **Gemini key: not required.** Only the "what's here?" tap needs a VLM. Options: Gemini free tier ($0), or any Claude/OpenAI key already on hand (swap the URL in `SceneDescriber.swift`). Everything else (LiDAR lanes, mesh classification, OCR, speech, beacon) is on-device with no key. **[Changed]** No code edit needed: put a key (custom / Anthropic / Gemini / OpenAI) and optionally `VLM_PROVIDER` in `ios/CaneKit/Resources/Secrets.plist` (template `ios/Secrets.example.plist`). Without a key "Where am I" says so. OCR was not in the Step 10 build. The ElevenLabs voice also needs a key (system voice without one).
+- **Gemini key: not required.** Only the "what's here?" tap needs a VLM. Options: Gemini free tier ($0), or any Claude/OpenAI key already on hand (swap the URL in `SceneDescriber.swift`). Everything else (LiDAR lanes, mesh classification, OCR, speech, beacon) is on-device with no key. **[Changed]** No code edit needed: put a key (custom / Anthropic / Gemini / OpenAI) and optionally `VLM_PROVIDER` in `ios/CaneKit/Resources/Secrets.plist` (template `ios/Secrets.example.plist`). Without a key "Where am I" says so. OCR was not in the Step 10 build. **[Changed, Step 11]** Without a key "Where am I" now answers on the phone (Apple Vision + the on-device model; today `VLM_PROVIDER` = `ondevice` forces it), and on-device sign reading landed. The ElevenLabs voice also needs a key (system voice without one).
 - Rules: not a concern.
 
 ## 8. Still open

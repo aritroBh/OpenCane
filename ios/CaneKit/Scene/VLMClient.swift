@@ -2,10 +2,20 @@
 //  VLMClient.swift
 //  CaneKit
 //
-//  Pluggable vision-language providers for "Where am I". Request bodies and response parsing
-//  live in CaneKitLogic (VLMRequest / VLMResponse, unit-tested); this file is only transport
-//  and key plumbing. Provider order when `VLM_PROVIDER` is empty: custom (Muse) → Anthropic →
-//  Gemini → OpenAI, whichever has a key.
+//  Pluggable vision-language providers for "Where am I", the hazard watch, "Ask OpenCane" and the
+//  conversational assistant. Request bodies and response parsing live in CaneKitLogic
+//  (VLMRequest / VLMResponse, unit-tested); this file is only transport, key plumbing and the
+//  cloud → on-device fallback. Provider order when `VLM_PROVIDER` is empty: custom (Muse) →
+//  Anthropic → Gemini → OpenAI, whichever has a key.
+//
+//  Why a fallback chain: "Where am I" must never need a key or a network (AGENTS.md), so the
+//  app always holds a client that ends in `OnDeviceVLMClient`.
+//
+//  Owner: `AppModel.init` resolves ONE client (`VLMClientFactory.resolved(context:)`) and hands
+//  it to `SceneDescriber`, `HazardScanner` and `ConversationCoordinator`.
+//  Tests: `VLMCodecTests` (request / response shapes, `openAIRequestOmitsReasoningEffortUnlessAsked`);
+//  the transport and fallback here are not unit-tested — `testWhereAmIWithoutKeyReportsGracefully`
+//  and `testWhereAmIDescribesAStreetViewFrame` cover the no-key path end to end.
 //
 //  Threading / isolation: everything here is `nonisolated` and Sendable (immutable structs,
 //  a shared `URLSession`), so a client can be held by the main-actor `SceneDescriber` and
@@ -35,7 +45,9 @@ nonisolated enum VLMAnswerSource: Sendable {
 
 /// One scene sentence and who wrote it.
 nonisolated struct VLMAnswer: Sendable {
+    /// The sentence as the model (or template) produced it, before any gate.
     let text: String
+    /// Who produced it; decides whether `SceneDescriber` runs `CloudSceneGate`.
     let source: VLMAnswerSource
 }
 
@@ -51,7 +63,9 @@ nonisolated protocol VLMClient: Sendable {
     var onDeviceFallback: (any VLMClient)? { get }
     /// The cloud client inside this one, or nil when there is none.
     ///
-    /// Only "Ask OpenCane" uses it, and it exists because that path must NOT fall back silently.
+    /// Used by "Ask OpenCane" (`SceneDescriber.run`) and by `ConversationCoordinator` (a free-form
+    /// query with no cloud client gets one honest "I need a network model" line). It exists
+    /// because those paths must NOT fall back silently.
     /// `describe(jpeg:prompt:)` on a `FallbackVLMClient` answers a failed cloud call with the
     /// on-device client, which ignores the prompt entirely and returns a scene description — for
     /// "Where am I" that is exactly right, but as the answer to "is there a bench on my left?" it
@@ -68,9 +82,11 @@ nonisolated protocol VLMClient: Sendable {
     /// silently break the question path the moment a provider forgot to opt in, which is the worse
     /// direction to fail in).
     var cloudPrimary: (any VLMClient)? { get }
-    /// One image + a prompt → text. `prompt` is `ScenePrompt.text` for "Where am I" and
-    /// `HazardPrompt.text` for the hazard watch. Throws `VLMError` (HTTP status, malformed body)
-    /// or `URLError` (transport, 18 s request / 25 s total timeout).
+    /// One image + a prompt → text. `prompt` is `ScenePrompt.text` for "Where am I",
+    /// `HazardPrompt.text` for the hazard watch, `QuestionPrompt.text(for:)` for "Ask OpenCane" and
+    /// a `ConversationPrompt.buildUserPrompt` string for the assistant. Throws `VLMError` (HTTP
+    /// status, malformed body) or `URLError` (transport, 18 s request / 25 s total timeout; 2.5 s
+    /// `timedOut` for a hazard prompt inside `FallbackVLMClient`).
     func describe(jpeg: Data, prompt: String) async throws -> String
     /// "Where am I", with the provenance the gate needs. Caller: `SceneDescriber.describe()`.
     func describeScene(jpeg: Data) async throws -> VLMAnswer
@@ -84,7 +100,9 @@ nonisolated extension VLMClient {
     /// A bare client is its own cloud client, unless it is the on-device one (which has none).
     var cloudPrimary: (any VLMClient)? { isOnDevice ? nil : self }
 
-    /// "Where am I": the scene prompt. Caller: `HazardScanner`-free paths and tests.
+    /// "Where am I": the scene prompt. Callers: the default `describeScene(jpeg:)` below and
+    /// `SceneDescriber.grounded` / `groundedAnswer` (re-asking the on-device fallback after the
+    /// gate refused a cloud sentence).
     func describe(jpeg: Data) async throws -> String {
         try await describe(jpeg: jpeg, prompt: ScenePrompt.text)
     }
@@ -97,9 +115,14 @@ nonisolated extension VLMClient {
 
 /// Cloud first, on-device when the cloud fails (no network, bad key, quota, timeout) — so
 /// "Where am I" and the hazard watch always answer something.
+/// Built only by `VLMClientFactory.resolved` (cloud primary + `OnDeviceVLMClient` fallback).
 nonisolated struct FallbackVLMClient: VLMClient {
+    /// The cloud provider tried first.
     let primary: any VLMClient
+    /// The on-device client that answers when the cloud throws (anything but cancellation) or,
+    /// for the hazard watch, misses `hazardDeadline`.
     let fallback: any VLMClient
+    /// "Muse + On-device" etc.: shown on the Hazards card and logged as `provider`.
     var name: String { "\(primary.name) + \(fallback.name)" }
     /// What `SceneDescriber` speaks when `CloudSceneGate` refuses the cloud sentence.
     var onDeviceFallback: (any VLMClient)? { fallback }
@@ -112,6 +135,12 @@ nonisolated struct FallbackVLMClient: VLMClient {
     /// on-device client answers instead (review round 5).
     var hazardDeadline: Duration = .seconds(2.5)
 
+    /// Hazard prompt: the cloud races `hazardDeadline`; any failure or timeout falls back to
+    /// on-device unless this task itself was cancelled (then `CancellationError`). Any other
+    /// prompt: the cloud with its full timeouts; `CancellationError` is rethrown (a cancelled
+    /// request must not trigger the fallback), every other error falls back with the same prompt —
+    /// which the on-device client ignores, so callers that need *their* prompt answered use
+    /// `cloudPrimary` instead.
     func describe(jpeg: Data, prompt: String) async throws -> String {
         if prompt == HazardPrompt.text {
             let primary = self.primary
@@ -139,6 +168,12 @@ nonisolated struct FallbackVLMClient: VLMClient {
     }
 
     /// Runs `op`, but gives up after `limit` (throws `URLError(.timedOut)` and cancels `op`).
+    /// A task-group race: whichever child finishes first wins and `defer { cancelAll() }` cancels
+    /// the other; an error from `op` before the deadline is rethrown as is.
+    /// - Parameters:
+    ///   - limit: the deadline (`hazardDeadline`, 2.5 s).
+    ///   - op: the cloud call.
+    /// - Returns: `op`'s reply when it beat the deadline.
     static func first(within limit: Duration,
                       _ op: @escaping @Sendable () async throws -> String) async throws -> String {
         try await withThrowingTaskGroup(of: String?.self) { group in
@@ -194,7 +229,9 @@ nonisolated enum VLMClientFactory {
             // Muse Spark reasons before it answers, and `max_tokens` covers the thinking as well as
             // the sentence. Left at the model's own default the phone measured 11 s and an empty
             // reply. "low" is the documented floor ("none" is a 400) and the right depth for
-            // naming what a camera sees; `CUSTOM_REASONING_EFFORT: ""` opts a different endpoint out.
+            // naming what a camera sees. `CUSTOM_REASONING_EFFORT` can name a different level, but
+            // ⚠ it cannot opt out: `Secrets.string` treats "" as missing, so an empty value still
+            // sends "low". An endpoint that rejects the field has no switch today.
             return OpenAICompatibleClient(name: "Muse", baseURL: base, apiKey: key,
                                           model: Secrets.string("CUSTOM_MODEL") ?? "muse-1.3",
                                           reasoningEffort: Secrets.string("CUSTOM_REASONING_EFFORT")
@@ -272,11 +309,15 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
     /// nil for plain OpenAI — a non-reasoning chat model rejects the field outright. "low" for the
     /// `custom` provider, which is Muse Spark: a reasoning model that, left to choose for itself,
     /// thinks for longer than a walking pace allows and can spend the entire token budget doing it.
-    /// Overridable from `Secrets.plist` (`CUSTOM_REASONING_EFFORT`) so a different endpoint can opt
-    /// out without a rebuild.
+    /// Overridable from `Secrets.plist` (`CUSTOM_REASONING_EFFORT`) to another non-empty level
+    /// without a rebuild. ⚠ Not to nil: an empty plist value counts as missing and the factory
+    /// then passes "low" (see `VLMClientFactory.make`). Pinned by
+    /// `openAIRequestOmitsReasoningEffortUnlessAsked` (nil → field absent).
     var reasoningEffort: String? = nil
 
-    /// POST `<base>/chat/completions` with the image as a base64 data-URL message part.
+    /// POST `<base>/chat/completions` with the image as a base64 data-URL message part and
+    /// `prompt` as the text part. Throws `VLMError.malformed("bad base URL")` for a base with no
+    /// scheme.
     func describe(jpeg: Data, prompt: String) async throws -> String {
         // Accept "https://host/v1", "https://host/v1/", or a full ".../chat/completions".
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,13 +333,15 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
 
 /// Anthropic Messages API (`/v1/messages`, `anthropic-version: 2023-06-01`).
 nonisolated struct AnthropicClient: VLMClient {
+    /// Display / log name.
     let name = "Anthropic"
     /// Sent as `x-api-key`.
     let apiKey: String
     /// Claude model ID (default "claude-opus-5" from `VLMClientFactory.make`).
     let model: String
 
-    /// POST the image as a base64 `image` content block plus the scene prompt.
+    /// POST the image as a base64 `image` content block plus `prompt` as a text block. The URL is
+    /// a constant literal, the file's one force unwrap.
     func describe(jpeg: Data, prompt: String) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!      // constant: cannot fail
         let body = try VLMRequest.anthropic(model: model, jpegBase64: jpeg.base64EncodedString(), prompt: prompt)
@@ -309,13 +352,14 @@ nonisolated struct AnthropicClient: VLMClient {
 
 /// Google Gemini `generateContent` (v1beta).
 nonisolated struct GeminiClient: VLMClient {
+    /// Display / log name.
     let name = "Gemini"
     /// Sent as `x-goog-api-key` (header, not a URL query parameter, so it never lands in logs).
     let apiKey: String
     /// Gemini model ID; part of the URL path.
     let model: String
 
-    /// POST the image as inline base64 data plus the scene prompt. The model goes in the URL, so
+    /// POST the image as inline base64 data plus `prompt`. The model goes in the URL, so
     /// `VLMRequest.gemini` takes no model argument.
     func describe(jpeg: Data, prompt: String) async throws -> String {
         // The model name comes from Secrets.plist: encode it and never force-unwrap.

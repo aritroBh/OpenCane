@@ -9,6 +9,17 @@
         .\scripts\slice_gcode.ps1 -Plate bore -Material PLA
 
     G-code lands in hardware/mount_screwless/gcode/, which is gitignored.
+    Files people print from are hand-copied into hardware/3d_print_files/
+    gcode/ (committed); re-copy after re-slicing.
+
+    CALLERS / TESTS
+    Run by hand on the Windows machine after build_stl.ps1 (it reads the
+    STLs by name from mount_screwless/stl/). Operator runbook:
+    hardware/mount_screwless/PRINTING.md. No automated tests; the
+    verification block at the end (material, START_PRINT temperatures,
+    support on the cradle) is its self-check and throws rather than
+    writing a file it cannot read. There is no plate for the ball-tip
+    parts; slice those in the GUI.
 
     WHY THIS SCRIPT EXISTS, AND WHY IT PRINTS A VERIFICATION BLOCK
 
@@ -40,7 +51,7 @@
     machine cannot print a PETG file - do not force it onto a PLA slot.
 
 .PARAMETER Plate
-    What to slice.
+    What to slice (default: bore).
       bore     - the 5 bore-gauge rings. Settles the cane diameter.
       thread   - threaded stub + ring. Settles thr_clear.
       dovetail - 3 tenon/socket pairs. Settles dt_clear.
@@ -59,6 +70,9 @@
     profile; the temperatures come from that profile, not from this script.
 
 .PARAMETER Walls
+    (Default 0 = leave the profile's wall_loops alone. ValidateRange 1-10
+    applies only to a value you pass, so -Walls 0 on the command line is
+    rejected; just omit the switch.)
     Override wall_loops. Use 4 for the bore rings: at the profile default of
     2 a 10 mm ring flexes under thumb pressure, so a bore that is genuinely
     too tight still feels like it "goes on" and the gauge reads large.
@@ -117,6 +131,7 @@ if (-not (Test-Path $exe)) {
     throw "Creality Print not found at '$exe'. Set `$env:CREALITY_PRINT to the exe."
 }
 
+# Override with $env:CREALITY_PRINT when the app is installed elsewhere.
 # Vendor profiles ship with the app and live under Roaming. The version
 # folder is 7.0 even though the app is 7.2 - do not "correct" that.
 $vendor = Join-Path $env:APPDATA 'Creality\Creality Print\7.0\system\Creality'
@@ -131,9 +146,11 @@ foreach ($p in @($machineProfile, $processProfile, $filamentProfile)) {
 }
 
 # --------------------------------------- process overrides (walls, support)
-# Written next to the vendor profile rather than into it: `inherits` is
-# resolved by name against the loaded vendor presets, so a copy in a scratch
-# directory still inherits fdm_process_creality_common correctly.
+# Written to a copy in the temp directory rather than into the vendor
+# profile: `inherits` is resolved by name against the loaded vendor presets,
+# so a copy in a scratch directory still inherits
+# fdm_process_creality_common correctly. The copy is named by $ptag and is
+# overwritten on the next run with the same overrides; it is never cleaned up.
 #
 # SUPPORT. The vendor profile has it OFF and the CLI does not turn it on by
 # itself - the 2026-09-12 plate had it on because it was ticked in the GUI,
@@ -181,6 +198,9 @@ if ($Walls -gt 0 -or $wantSupport) {
 $poleTag = if ($PoleD -gt 0 -and $Plate -in @('collar', 'ring')) {
     '_pole' + $PoleD.ToString([Globalization.CultureInfo]::InvariantCulture)
 } else { '' }
+# STL file names inside mount_screwless/stl/, exactly as build_stl.ps1
+# writes them. 'coupons' loads the three row plates and lets --arrange lay
+# them out on one plate.
 $models = switch ($Plate) {
     'bore'     { @('coupons_bore.stl') }
     'thread'   { @('coupons_thread.stl') }
@@ -197,6 +217,8 @@ $paths = foreach ($m in $models) {
 
 # -------------------------------------------------------------------- slice
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+# A fresh temp output dir per run, so the one .gcode found afterwards is
+# certainly this run's; it is moved to $OutDir under a verified name.
 $work = Join-Path ([IO.Path]::GetTempPath()) ("opencane_slice_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
@@ -247,6 +269,7 @@ $gc = $made[0].FullName
 # lines before EOF (wall_loops). -Tail 400 clipped the first three and the
 # guard below then could not read them.
 $meta = @(Get-Content $gc -TotalCount 400) + @(Get-Content $gc -Tail 1200)
+# First line of $meta matching the regex, trimmed; $null when absent.
 function Field([string]$pattern) {
     $m = $meta | Select-String -Pattern $pattern | Select-Object -First 1
     if ($m) { $m.ToString().Trim() } else { $null }
@@ -289,6 +312,10 @@ if ($nozzleT -ne $expect) {
     Write-Warning "$Material normally runs $expect C but this file says $nozzleT C. Check the filament profile before printing."
 }
 
+# Output name: <Material>_<slot>__<plate><poleTag>_<print time>.gcode, e.g.
+# PETG_slot2__collar_1h43m27s.gcode. The slot is the room's 2026-09-12
+# loading (see .DESCRIPTION), baked into the name so the person at the
+# printer sees it; hardware/3d_print_files/README.md uses these names.
 $slot = if ($Material -eq 'PETG') { 'slot2' } else { 'slot3or4' }
 $tag  = ($time -replace '\s', '')
 $name = "{0}_{1}__{2}{3}_{4}.gcode" -f $Material, $slot, $Plate, $poleTag, $tag

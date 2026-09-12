@@ -2,15 +2,18 @@
 
 Read this before touching the repo. `docs/CODE_REFERENCE.md` is the map of every file, type and
 function; `CHANGELOG.md` is the build log; `docs/todo.md` is the strict checklist;
-`docs/devices_setup.md` is the AirPods + Apple Watch checklist. When you change code, update its
-module section in `docs/CODE_REFERENCE.md` in the same commit — agents rely on it being true.
+`docs/devices_setup.md` is the AirPods + Apple Watch checklist; `docs/TEAM_HANDOFF.md` §10 is where
+an agent resumes the open work. When you change code, update its module section in
+`docs/CODE_REFERENCE.md` in the same commit — agents rely on it being true. When this file and the
+shipped code disagree, the code is the truth: fix this file (and say so in `CHANGELOG.md`).
 
 ## What this is
 
 OpenCane is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
 user along GPS waypoints and warns about waist-to-head obstacles. The **phone is the only computer**:
-an iPhone 17 Pro Max (iOS 27) clamped to a non-metal 28.75 mm cane, plus AirPods Pro (beacon +
-speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
+an iPhone 17 Pro Max (iOS 27) clamped to a non-metal cane shaft — for the prototype a 27.65 mm broom
+handle, measured by the bore-ring coupons (CHANGELOG Step 21; the old 28.75 figure is retired) —
+plus AirPods Pro (beacon + speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
 external sensors. The demo route is ISR Townsend Hall → CIF on the UIUC campus
 (`ios/CaneKit/Resources/route_isr_cif.json`), but any destination works via MapKit walking directions.
 For the demo everything runs **untethered on the phone**; the Mac only signs and installs.
@@ -51,16 +54,22 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | Path | What lives there |
 |---|---|
 | `ios/Logic/` | `CaneKitLogic` SwiftPM package: pure, Foundation-only decisions (lane math, cue state machine, geofences, route schema, watch message codec, VLM request/response codec) + Swift Testing tests |
-| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Trip/`, `UI/`, `Resources/` |
+| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Conversation/` (voice assistant: `ConversationCoordinator`, `VoiceInputEngine`, `PostStore`), `Trip/`, `UI/`, `Resources/` |
 | `ios/CaneKitWatch/` | watchOS app |
 | `ios/CaneKitWidget/` | Live Activity widget (Dynamic Island / lock screen) |
 | `ios/Shared/` | Types compiled into more than one target (Live Activity attributes) |
 | `ios/CaneKitUITests/` | XCUITests + the screenshot tour |
 | `ios/project.yml`, `ios/scripts/gen.sh`, `ios/Makefile` | XcodeGen project + CLI build/test/install |
+| `ios/scripts/` | `test.sh` (`make test`), `e2e.py` (`make e2e`, asserts on the trip log), `cue_audit.py` (`make audit`, cue load of one walk), `sign_probe.swift` / `vision_probe.swift` (measure what Vision reads), `streetview/` (`frames.json` + git-ignored JPEGs for `SCENARIO=streetview`), `appicon.py` |
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
-| `docs/` | `README.md` (index), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` |
+| `docs/` | `README.md` (index of every doc), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `cue_design_v2.md` (cue research, Step 35), `auditory-load.md` (speech-load research, Step 30), `handsfree.md` (Siri / Action Button use), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` (history), `TEAM_BRIEF.md` / `TEAM_HANDOFF.md` (dated status snapshots), `superpowers/` (speech-load plan + spec) |
 | `hardware/mount/` | Phone-to-cane mount, screwed: design brief + parametric OpenSCAD (Sagar) |
-| `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity. `PRINTING.md` is the operator runbook — read it before sending anything to a printer. `scripts/build_stl.ps1` renders, `scripts/slice_gcode.ps1` slices headlessly (Sagar) |
+| `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity. `PRINTING.md` is the operator runbook — read it before sending anything to a printer (Sagar) |
+| `hardware/3d_print_files/` | What to print: sliced `gcode/` (Creality SPARKX i7) and `stl/` for the screwless mount |
+| `hardware/cane_tip/` | `ball_tip.scad`, a printed rolling ball tip (sized for the 27.65 mm prototype shaft) |
+| `scripts/` (repo root) | Windows mount pipeline: `verify_mount.ps1` (model checks), `build_stl.ps1` (renders), `slice_gcode.ps1` (slices headlessly), `stl_tools.js` (volume / shells / overhang measurements) |
+| `cad/`, `firmware/` | Legacy ESP32-era grip drafts and BLE grip firmware. Not part of the phone-only build; do not print or flash for the demo |
+| `.github/workflows/ci.yml` | CI, **manual trigger only** (Actions billing exhausted); the local `make` gate is authoritative |
 | `graphify-out/` | Knowledge graph of the repo: `graphify query "<question>"`, `GRAPH_REPORT.md`, `graph.html` |
 
 ## Hard rules
@@ -87,17 +96,25 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 7. **Audio session is one `.playback` session**, mode `.default`, `[.duckOthers]`, no Bluetooth options
    (HFP drops AirPods to phone-call quality). `CHHapticEngine(audioSession: nil)`. `.HRTF`, mono click.
    Do not "fix" the deviations listed in `ios/README.md §2` back to the original spec.
-   One opt-in exception exists: "Listen for sirens and horns" (off by default) needs an audio *input*,
-   so `SpeechQueue.setMicrophoneEnabled(_:)` moves the session to `.playAndRecord` with
+   One exception exists: an audio *input*, for "Listen for sirens and horns" (off by default, owner
+   `.soundRecognition`) or push-to-talk "Talk to OpenCane" (one utterance, owner `.voiceInput`).
+   `SpeechQueue.setMicrophoneEnabled(_:owner:)` moves the session to `.playAndRecord` with
    `[.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker]` — never `.allowBluetoothHFP` — and reverts to
    `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
-   code may call `setCategory`.
-8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
-   never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
+   shipping code may call `setCategory` (the only other call is the debug `SensorProbe`, which runs only
+   under `CANEKIT_SENSOR_PROBE=1` / `--sensor-probe` and restores `.playback`).
+8. **Cue priorities** (speech, `SpeechPriority`): `.scene` (Where am I, answers, flashlight lines) <
+   `.obstacle` (obstacle names, signs, hazard watch) < `.nav` (route lines, refusals) < `.safety`
+   ("Head height.", LiDAR ground hazards). The `.head` haptic is never suppressed; its spoken line is
+   once per episode (`CueSpeechPolicy`). A line cut by a higher band is re-queued and resumes from the
+   clause it was cut in (`SpeechResume`, Step 37 — never restarted from the first word after a warning);
+   lines of different bands are separated by a 0.35 s pause that a safety line never waits for. Keep
+   `docs/design.md §5.1` and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
-   Type a destination first, Destination, the root tabs Guide / Sense / Settings, and a campus
+   Type a destination first, Destination, the root tabs Guide / Sense / Settings, the Cues picker
+   segments Standard / Detailed / Indoors / Outdoors (`CueLevel.title` / `CuePlace.title`), and a campus
    suggestion's label "Grainger Engineering Library, campus place" —
    `DestinationSuggestion.voiceOverLabel`) must not change without updating the tests in the same
    commit.
@@ -121,9 +138,12 @@ walks on this code; "it compiled" is not done.
    proven by a harness that runs the real NavigationEngine over 72 simulated walks). A bug fix
    starts with a failing test that reproduces it.
 3. **Adversarial review, several independent reviewers, every round.** After each chunk of work:
-   a multi-agent review (finders + skeptics who try to refute each finding), **plus Muse**
-   (`muse exec … --workspace <scratch>`, read-only) **plus Antigravity** (`agy -p …`, pointed at a
-   *copy* of the repo — it has edited files despite a read-only prompt). Keep review prompts small
+   a multi-agent review (finders + skeptics who try to refute each finding; Steps 34 and 36 ran 31- and
+   35-agent workflows, Step 37 a 4-lens workflow with a verifier per finding), **plus Muse** (`muse exec --prompt-file <file> --provider meta
+   --reasoning-effort high --workspace <scratch>`, run from the scratch dir, "do not edit files") **plus
+   Antigravity** (`agy -p …`, pointed at a *copy* of the repo — it has edited files despite a read-only
+   prompt). Review the *plan* with Muse too before building a large or risky change (Step 37's first
+   plan was rejected there). Keep review prompts small
    and focused on the diff; broad prompts time out. Then **verify every finding yourself** before
    acting: fix what is real, and reject what is not *with evidence* in `CHANGELOG.md` (e.g. the
    "swap max/min" proposal that would have reverted the mid-bin curb fix).
@@ -153,7 +173,11 @@ make sim             # build the app for the iOS simulator (no LiDAR / haptics /
 make uitest          # XCUITests on the iPhone 17 Pro Max simulator
 make tour            # screenshot every screen state → ios/build/shots
 make sim17           # create the iPhone 17 Pro Max (iOS 27) simulator once
-make e2e             # GPS-replay end-to-end scenarios through the real app (SCENARIO=clean …)
+make e2e             # GPS-replay end-to-end scenarios through the real app (SCENARIO=all = clean, missed_fence,
+                     #   gps_jitter, wrong_turn; streetview is opt-in); report + logs in ios/build/e2e/
+make audit           # cue load of one walk: cue_audit.py --selftest, then LOG=path or --pull the newest
+                     #   trip log off the phone in local.mk (read-only, no simulator)
+make gen             # regenerate CaneKit.xcodeproj (only when project.yml or the file list changed)
 make devices         # find DEVICE for ios/local.mk
 make run             # gen + build + install + launch on the phone (needs TEAM/DEVICE in ios/local.mk)
 ```
@@ -161,7 +185,7 @@ Simulator GPS replay: launch with `SIMCTL_CHILD_CANEKIT_DEMO_ROUTE=1` and feed
 `xcrun simctl location <udid> start --speed=4 --interval=1 <lat,lon> …`; read the JSONL trip log in the
 app container's Documents folder.
 
-Two traps that have already produced a false green (Step 27):
+Traps that have already cost a run (the first two produced a false green in Step 27):
 
 - ⚠ **Never verify a command through `tail`.** `make test | tail -8` printed a passing test summary
   and reported exit 0 while the build was failing — the exit status was `tail`'s, and the errors were
@@ -254,8 +278,10 @@ bench has *disproved* must never sit in the file as though it were settled — m
 - The beacon only plays into headphones (`AudioRouteMonitor`); connect/disconnect is spoken.
 - Silencing haptics routes obstacle cues to the watch and to speech. "Head height." is spoken once per
   obstacle episode (≥ 4 s apart), never every second. Warnings never wait for the ElevenLabs network.
-- An interrupted speech line resumes once, then is dropped (Repeat recovers it). Lines said during a
-  call / Siri queue and drain on `.ended` (15 s fallback).
+- An interrupted speech line resumes at most 3 times (`SpeechResume.maxResumes`), never from an
+  earlier point than last time, then is dropped (Repeat recovers it). Its TTL is extended to ≥ 8 s
+  on the *first* cut only, so a line cut again and again still goes stale. Lines said during a
+  call / Siri queue and drain on `.ended` (15 s fallback). Steps 34–37 below have more speech rules.
 - Watch crown "Next" = 3 detents within 1 s of the first. `.failure` haptic is reserved for head-height;
   send failure and "phone app too old" use `.retry`.
 - The route file's WP3 (Goodwin) is a turn, not a crossing; turn waypoints use 12 m fences.
@@ -332,8 +358,121 @@ bench has *disproved* must never sit in the file as though it were settled — m
   appearing in a log is an app bug and `ios/scripts/e2e.py` fails the run on it.
 - Route cues are felt on the cane as long soft buzzes (turn left 1, right 2, crossing 3, arrived
   long-short-long) — deliberately unlike the crisp obstacle taps.
+- "Head tracking without AirPods" (`faceHeadTrackingEnabled`) is **not persisted**, and
+  `LaunchRecovery` removes any stored value: a persisted `true` crashed the app inside ARKit warm-up
+  on every launch (trip logs `canekit-2026-09-12T02-40-53Z` / `02-41-13Z`), with the off switch on a
+  screen the app never reached. The flashlight (`torchEnabled`) is not persisted either (a pocketed
+  torch is a dead battery and a burn risk).
+
+### Steps 34–37 and the rotation fix (Sat 2026-09-12) — do not "simplify" these
+
+- **The flashlight switch trusts KVO, never a read right after setting.** `AppModel.setTorch` sets
+  the torch and deliberately does **not** read `AVCaptureDevice.isTorchActive` on the next line: iOS
+  updates it asynchronously, that read was the old state, and every change took two presses (trip log
+  `canekit-2026-09-12T20-57-17Z`, t = 106–120 s). The switch shows the request at once
+  (`TorchSwitch`, CaneKitLogic), KVO on `isTorchActive` confirms it (each main-actor hop *re-reads*
+  the device, since hops are not FIFO), and a 2 s settle deadline decides failure; the deadline task
+  ticks with `now: .infinity` (comparing `systemUptime` with a `ContinuousClock` sleep could leave the
+  window open forever). Pinned by `TorchSwitchTests` (`quickReversalSpeaksOnce`,
+  `infiniteTickAlwaysResolves`). The torch is device-level, so it is never refused mid-route.
+- **Both cameras is refused for the whole route, and the reason stays visible.**
+  `BothCameras.state` (CaneKitLogic `LiveView.swift`) returns `.blockedByRoute` whenever
+  `navigating`, *whatever the switch shows*: `setBothCameras` snaps a refused switch back to off at
+  once, so keying on `enabled` hid the caption ("…Stop the route on the Guide tab first.",
+  `HazardsCard`). A spotter's picture must not pause obstacle detection mid-route. Pinned by
+  `bothCamerasExplainTheRefusalForTheWholeRoute`.
+- **Face tracking is refused mid-route and during route start.** Changing
+  `userFaceTrackingEnabled` either way makes `DepthEngine.setFaceTracking` re-run the AR session
+  (~1–2 s with no obstacle frames). `FaceTrackingChange.decide` refuses while a route guides
+  (`refused_route`) or waits for depth (`refused_route_start`): the `didSet` writes the old value
+  back, speaks why at `.nav`, logs `face_tracking {action: refused_*}` and does **not** set
+  `routeError` (nothing would clear it). The debug self test refuses too and its 15 s restore waits
+  for the route to end. Pinned by `LiveViewTests.faceTracking*`.
+- **`speech_dispatch` is a separate trip-log kind from `speech`.** `speech` records are written by
+  *callers* (what the app decided to say) and are what `ios/scripts/e2e.py` asserts on;
+  `speech_dispatch {text, priority, replays, resume_from}` is written from `SpeechQueue.onDispatch`
+  for every line handed to a voice backend, whoever called `say`, muted automation included, so a
+  resumed line appears twice. Dispatched is not heard. Folding them into one kind would double-count
+  e2e's spoken lines; `speech_end {priority}` (natural line ends) is separate for `cue_audit.py`'s
+  pause metric.
+- **Obstacle names default off** (`obstacleNamesEnabled`, `Settings.bool(…, default: false)`, Step 36,
+  research #2 in `docs/cue_design_v2.md`). A walker who never touched the switch hears no names until
+  turning it on; `docs/stress_test_plan.md` D6 says so.
+- **Cue level Detailed + place Outdoors is the default and equals today's behaviour**
+  (`CueRules.default`, owner decision 2026-09-12) until a trip log from the *mounted* cane tunes the
+  calmer levels. Its one delta from before: **Detailed never names walls**
+  (`CueRules.allowsName`: `cls != .wall`) — the cane trails walls. Quiet and Indoors name nothing and
+  read only `CueRules.safetySignPhrases`; Standard names doors only while a route guides; Indoors
+  shortens the head distance to 1.2 m [H]. Head-height and ground-hazard warnings are identical at
+  every level (the safety floor), and haptics do not change by level yet (Step 41). The raw values
+  persisted under `cueLevel` / `cuePlace` must never be renamed (`rawValuesAreStable`). Pinned by
+  `CueProfileTests`.
+- **Two-camera rotation is fixed per camera, for the portrait-only UI — never unify it.**
+  `DualCameraRotation.angle` (CaneKitLogic `LiveView.swift`, called from `DualCameraSession.connect`)
+  gives the back camera a fixed 90 and the front camera a fixed 0 (270 fallback), and uses no
+  `RotationCoordinator` angle for either. Every earlier attempt to use one coordinator angle for both
+  cameras fixed one feed and broke the other (preview-for-both left the back sideways, trip log
+  `2026-09-12T22-02-03Z` `back_rotation: 0`; capture-for-both, `103d548`, tilted the front). The
+  capture angle follows the phone's physical orientation and the preview angle is sampled once at
+  connect, so both are wrong when Both cameras starts with the phone sideways or flat. The UI is
+  portrait-only (`UISupportedInterfaceOrientations` in `ios/project.yml`), so a fixed angle is right;
+  "re-apply the angle on every orientation change" was rejected. The coordinator angles and
+  `front_size` / `back_size` / `*_portrait` are still logged as evidence. Pinned by `LiveViewTests`
+  (`backCameraIsPortraitUpWhateverThePhoneReads`, `frontCameraIsPortraitUpWhateverThePhoneReads`).
+- **A line cut by a warning resumes from its clause; a call, Siri or dictation restarts it.** A
+  pre-emption (`say` of a higher band) re-queues the playing line at the front of its band from the
+  start of the clause it was cut in (`SpeechResume.resumeOffset`; clause starts are `. ! ? , ; :` +
+  space, not after "St." / "Dr." / "U.S."). An interruption `.began` or `setVoiceHold(true)` calls
+  `requeueCurrent(fromClause: false)`: after seconds of a call or dictation a fragment has no context,
+  so the line restarts from its last resume point (0 for a line never cut). The text stays whole as
+  the coalescing, cache and Repeat key. mp3 progress is proportional and backed off
+  (`mp3MarginUTF16`); the seek starts `clipLead` (0.25 s) early. Pinned by `SpeechResumeTests`.
+- **The 0.35 s pause between bands bumps the generation.** `SpeechQueue.startNext` sets `inGap`
+  and increments `generation` before sleeping `SpeechResume.crossBandGap`, so a stray second end
+  callback from the line that just ended (still holding the old generation) cannot cut the pause
+  short (Antigravity, Step 37). `isSpeaking` stays true during the pause (the beacon stays ducked);
+  `.safety`, or a same-band line that ties or outranks the queue head, ends it; `gapSeconds` is 0
+  for `.safety`, and the safety band is passed in from `SpeechPriority.safety.rawValue`, never copied.
+- **"Head height." is never delayed behind a direction.** The first Step 37 plan held it behind a
+  playing direction (buzz and chirp now, words later); Muse rejected it because a walker reaches a
+  1.5 m overhang in about 1.5 s, before the words. The owner chose "Cut in, then resume": the warning
+  pre-empts at once and the direction resumes. Walls still get "Head height." (owner: "Leave as is").
+  Do not reintroduce a hold, a talk-floor wait or a gap in front of `.safety`.
 
 ## Where the plan and history live
 
-`~/.claude/plans/phone-is-king-glittery-bee.md` (approved plan, deviations, test strategy) — outside
-the repo. `CHANGELOG.md` has one entry per step with its device test list.
+- **Original plan:** `~/.claude/plans/phone-is-king-glittery-bee.md` (approved plan, deviations, test
+  strategy) — outside the repo, on the owner's Mac only.
+- **Build log:** `CHANGELOG.md`, one entry per step (newest first; Step 37 at `076fcaa`), each with
+  why, what changed, every review finding fixed or rejected with evidence, verification output, and a
+  `test on device:` list. Entries before Step 37 use the old cue-v2 step numbers (the talk floor was
+  inserted as 37 and later steps renumbered +1).
+- **Open work:** `docs/todo.md` — "Cue design v2 — Steps 35–45" is the current plan (38–45 open);
+  `docs/TEAM_HANDOFF.md` §10 is how an agent resumes it. Both status blocks are dated snapshots.
+- **Cue design research:** `docs/cue_design_v2.md` (Step 35: 4 researchers + 4 source fact-checkers,
+  74 kept findings, [H] marks hypotheses, not measurements; §3 is the design, §4 the ranked change
+  list). Speech-load research: `docs/auditory-load.md` (Step 30) and
+  `docs/superpowers/{plans,specs}/2026-09-12-speech-load*.md`.
+- **Measure first — `ios/scripts/cue_audit.py` via `cd ios && make audit`.** Before tuning any cue
+  number: it runs `--selftest`, then reads `LOG=path` or `--pull`s the newest `canekit-*.jsonl` off
+  the phone named by `DEVICE` in `ios/local.mk`. It says whether the walk was ON THE MOUNT (tilt
+  inside 3–8°), head band wall vs overhang, cues and lines per minute, suppressed lines,
+  `speech_dispatch` replays (mid-line vs from line start), cross-band pauses < 0.3 s, and any
+  `field_kind` / `field_t` app bug. A handheld log must not tune a distance. It mirrors app constants
+  by hand (`HEAD_ENTER_M = CueThresholds.head`, `MountTilt.aim`): move them together. Not part of
+  `make test`.
+- **Trip-log evidence:** trip logs are not in git. The app writes `canekit-<ISO time>.jsonl` to its
+  Documents folder ("Write trip log", on by default; Files → On My iPhone → OpenCane); `make audit`
+  pulls the newest, and `make e2e` keeps simulator logs in `ios/build/e2e/`. Cite a log by its
+  timestamp name and `t` in code comments and `CHANGELOG.md`. The logs behind Steps 34–37:
+  `2026-09-12T20-57-17Z` (torch, both-cameras, face tracking, first *handheld* cue baseline),
+  `22-02-03Z` (`back_rotation: 0`), `22-20-53Z` (per-camera rotation confirmed, cue profile taps,
+  5 of 58 lines restarted), `22-27-00Z` (37-minute handheld walk, 45 "Head height."). No log so far
+  was recorded on the mount; `docs/TEAM_HANDOFF.md` §2.3 has the table.
+- **Review and workflow expectations per step:** plan as a checklist in `docs/todo.md` (Muse on the
+  plan when large or risky) → test first in `ios/Logic` → build → adversarial multi-agent review +
+  Muse + Antigravity on the diff, every finding verified by hand and recorded in `CHANGELOG.md` as
+  fixed, rejected with evidence, or deferred to `docs/todo.md` → `make test`, `make sim`, `make uitest`
+  (+ `make tour` for UI), `make e2e` → `docs/CODE_REFERENCE.md`, `CHANGELOG.md`, `docs/todo.md`,
+  `graphify update .` in the same commit → commit message ending `test on device: …`. Say what is
+  not verified on the phone.

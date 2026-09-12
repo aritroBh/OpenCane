@@ -4,8 +4,22 @@
 # Targets
 #   CaneKit        iPhone app (iOS 26+)          bundle id com.aritro.canekit
 #   CaneKitWatch   watchOS companion (26+)       bundle id com.aritro.canekit.watchkitapp
-#   CaneKitWidget  Live Activity extension       bundle id com.aritro.canekit.widget   [added in step 9]
-# All three share the pure-logic SwiftPM package in ./Logic.
+#   CaneKitWidget  Live Activity extension       bundle id com.aritro.canekit.widget   [added in steps 8–9]
+#   CaneKitUITests XCUITests + screenshot tour   bundle id com.aritro.canekit.uitests  (simulator only)
+# CaneKit and CaneKitWatch link the pure-logic SwiftPM package in ./Logic; the widget does not.
+# `Shared/LiveActivity` (NavActivityAttributes) is compiled into CaneKit and CaneKitWidget.
+#
+# Callers: `scripts/gen.sh` (`make gen`, `make run`) and CI's sim-build job (`WATCH=0`). XcodeGen
+# writes `CaneKit.xcodeproj`; regenerate only when this file or the source file list changed
+# (AGENTS.md hard rule 5). Tests: none of its own — `make sim` (and `make uitest` for UI) proves a
+# change; for the watch / widget embed, check `CaneKit.app` on the phone contains
+# `Watch/CaneKitWatch.app` and `PlugIns/CaneKitWidget.appex` (gen.sh asserts the phases).
+#
+# ⚠ Formatting is load-bearing: `WATCH=0 scripts/gen.sh` strips the watch with awk patterns that
+#   match this file's exact indentation — `  CaneKitWatch:` (2 spaces) for the target and the
+#   scheme, `      - target: CaneKitWatch` (6) and the `        embed: true` (8) on the next line.
+#   Keep 2-space indentation, never put a comment or anything else on those lines or between
+#   that dependency's two lines, and re-run `WATCH=0 scripts/gen.sh` after reformatting.
 #
 # The name split (deliberate — see AGENTS.md → "The name split"):
 #   What a HUMAN sees/hears  = OpenCane. That is `CFBundleDisplayName` on all three targets (home
@@ -23,11 +37,21 @@
 # (see Makefile / local.mk) so this file never carries a team id.
 #
 # Concurrency: Swift 6 language mode with Xcode 26 "approachable concurrency" defaults
-# (everything is MainActor unless it opts out with `nonisolated`). Only the ARKit frame
-# processor and the network clients opt out.
+# (everything is MainActor unless it opts out with `nonisolated`). What opts out: the depth /
+# camera pipeline (`DepthFrameProcessor`, `GroundSampler`, `MeshClassifier`, `FrameReplay`,
+# `DualCameraSession`'s relays), every framework-delegate relay class (ARKit, WatchConnectivity,
+# AVSpeechSynthesizer, AVAudioPlayer, SoundAnalysis, CMHeadphoneMotion, HealthKit and
+# WKExtendedRuntimeSession on the watch, MKLocalSearchCompleter), the vision and network clients
+# (`VLMClient` implementations, `OnDeviceVision`, `ElevenLabsVoice`, `Secrets`) and the Live
+# Activity payload `NavActivityAttributes` (AGENTS.md hard rule 1). The UI test target overrides
+# the default to `nonisolated` (below). The CaneKitLogic package is not governed by these settings:
+# it sets only Swift 6 language mode, so its types are nonisolated.
 
 name: CaneKit
 
+# Project-wide XcodeGen options. Deployment targets are 26.0 even though the demo phone runs
+# iOS 27: no iOS 27-only API is allowed (AGENTS.md hard rule 2). `xcodeVersion` only stamps the
+# generated project's compatibility; the build Mac uses Xcode 27.
 options:
   bundleIdPrefix: com.aritro
   deploymentTarget:
@@ -37,22 +61,31 @@ options:
   generateEmptyDirectories: true
   xcodeVersion: "26.0"
 
+# The local SwiftPM package (ios/Logic/Package.swift). No remote packages, ever (hard rule 2).
 packages:
   CaneKitLogic:
     path: Logic
 
+# Build settings shared by every target (a target's own `settings.base` overrides a key).
 settings:
   base:
+    # Swift 6 language mode with complete, compile-time data-race checking.
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    # Main-actor by default; opt out per type with `nonisolated` (see the header). The UI test
+    # target overrides this to nonisolated.
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    # A nonisolated async function runs on its caller's actor instead of hopping to the global
+    # executor.
     SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT: "YES"
+    # Personal team; DEVELOPMENT_TEAM comes from `make` (ios/local.mk), never from this file.
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: "YES"
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "NO"
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     WATCHOS_DEPLOYMENT_TARGET: "26.0"
+    # Feed CFBundleVersion / CFBundleShortVersionString in every target's Info.plist below.
     CURRENT_PROJECT_VERSION: "1"
     MARKETING_VERSION: "0.1"
 
@@ -70,6 +103,8 @@ targets:
         optional: true
         buildPhase: resources
       - path: Shared/LiveActivity
+    # Embedding: the watch app lands in CaneKit.app/Watch/ (gen.sh patches XcodeGen #1613 for
+    # Xcode 26+) and the widget in CaneKit.app/PlugIns/ (a widget anywhere else never loads).
     dependencies:
       - package: CaneKitLogic
       - target: CaneKitWatch
@@ -79,57 +114,84 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit
+        # Names the build product CaneKit.app (Makefile, gen.sh, scripts/e2e.py use that path).
         PRODUCT_NAME: CaneKit
+        # iPhone only.
         TARGETED_DEVICE_FAMILY: "1"
+        # Follows the system appearance (design.md §2); the demo checklist sets Dark Mode.
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: "NO"
+        # HealthKit (read-only step count for the arrival summary, TripTracker).
         CODE_SIGN_ENTITLEMENTS: CaneKit/CaneKit.entitlements
+    # XcodeGen writes these keys into CaneKit/Info.plist on every generate; edit them here.
     info:
       path: CaneKit/Info.plist
       properties:
+        # The name a person sees and the word Siri matches ("… in OpenCane") — see the header.
         CFBundleDisplayName: OpenCane
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # The phone is clamped to the cane in portrait; the UI and the lane math assume it.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # ARKit is required to install. LiDAR is not: a phone without it installs and says so
+        # at launch ("This phone has no LiDAR.").
         UIRequiredDeviceCapabilities: [arkit, arm64]
+        # audio: beacon and speech keep playing with the screen locked; location: guidance keeps
+        # receiving GPS fixes in the background.
         UIBackgroundModes: [audio, location]
         # Trip logs (JSONL) and the hazard map (GeoJSON + photos) in Documents show up in the
         # Files app → On My iPhone → OpenCane (the display name, not the target name; review:
         # they were unreachable on the phone).
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        # Lets LiveActivityController request the navigation Live Activity (CaneKitWidget).
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
-        # Purpose strings — the system shows these on first use.
+        # Purpose strings — the system shows these on first use. They are spoken/visible text, so
+        # they say OpenCane. Location is asked at launch (sighted helper present; skipped under
+        # CANEKIT_UITEST=1); Motion and HealthKit at route start.
         NSCameraUsageDescription: "OpenCane uses the camera and LiDAR to detect obstacles between your waist and head."
         NSLocationWhenInUseUsageDescription: "OpenCane uses your location and heading to guide you along the route."
         NSMotionUsageDescription: "OpenCane uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps."
+        # Spoken commands: the push-to-talk / conversational assistant (VoiceInputEngine).
         NSSpeechRecognitionUsageDescription: "OpenCane can take spoken commands."
-        # Sound recognition (SoundAnalysis) is the real microphone user: sirens, horns and vehicle
-        # sounds a blind pedestrian cannot see coming. Off by default (Hazards card switch), and it
-        # is the one feature that moves the audio session to .playAndRecord — see SoundWatcher.
+        # Two microphone users, both opt-in, and each holds an explicit lease that moves the audio
+        # session to .playAndRecord through SpeechQueue.setMicrophoneEnabled (AGENTS.md hard rule
+        # 7): sound recognition (SoundWatcher — sirens, horns and vehicle sounds a blind pedestrian
+        # cannot see coming; "Listen for sirens and horns" on the Hazards card, off by default) and
+        # spoken commands (VoiceInputEngine).
         NSMicrophoneUsageDescription: "OpenCane can listen for sirens, car horns and vehicle sounds to warn you about traffic you cannot see, and for spoken commands."
         NSHealthShareUsageDescription: "OpenCane reads your step count for the arrival summary."
+        # The phone's own HealthKit request is read-only (TripTracker asks toShare: []); the
+        # workout is recorded by the watch (WatchModel). Kept so the string is present if the
+        # phone ever asks to share.
         NSHealthUpdateUsageDescription: "OpenCane records the guided walk as a workout so the watch can keep giving cues."
 
   # ───────────────────────────── Watch app ─────────────────────────────
   CaneKitWatch:
+    # Single-target watchOS app (no separate WatchKit extension); embedded in CaneKit.app and
+    # installed with it. WatchApp / WatchModel / WatchContentView / WatchTheme.
     type: application
     platform: watchOS
     sources:
       - path: CaneKitWatch
+    # CaneKitLogic for the wire contract (WatchEnvelope) and CrownAccumulator.
     dependencies:
       - package: CaneKitLogic
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.watchkitapp
+        # Same product name as the phone app; the bundle id is what tells them apart.
         PRODUCT_NAME: CaneKit
+        # Apple Watch.
         TARGETED_DEVICE_FAMILY: "4"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # HealthKit: needed for the HKWorkoutSession keep-alive. Without it every launch silently
+        # falls back to the extended runtime session.
         CODE_SIGN_ENTITLEMENTS: CaneKitWatch/CaneKitWatch.entitlements
     info:
       path: CaneKitWatch/Info.plist
@@ -138,6 +200,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
+        # Pairs with the phone app for WatchConnectivity; the watch app does nothing on its own.
         WKCompanionAppBundleIdentifier: com.aritro.canekit
         WKRunsIndependentlyOfCompanionApp: false
         WKBackgroundModes: [workout-processing, mindfulness]   # workout keep-alive + runtime-session fallback
@@ -147,6 +210,8 @@ targets:
 
   # ───────────────────────────── Live Activity widget ─────────────────────────────
   CaneKitWidget:
+    # WidgetKit extension that draws the navigation Live Activity (NavLiveActivity). No package
+    # dependency: it needs only NavActivityAttributes from Shared/LiveActivity.
     type: app-extension
     platform: iOS
     sources:
@@ -157,6 +222,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.widget
         PRODUCT_NAME: CaneKitWidget
         TARGETED_DEVICE_FAMILY: "1"
+        # Ships inside CaneKit.app (PlugIns/), never installed on its own.
         SKIP_INSTALL: "YES"
     info:
       path: CaneKitWidget/Info.plist
@@ -169,6 +235,8 @@ targets:
 
   # ───────────────────────────── UI tests (simulator) ─────────────────────────────
   CaneKitUITests:
+    # CaneKitUITests.swift (functional) + CaneKitVisualTour.swift (screenshots); `make uitest`,
+    # `make tour`, `make uitest-streetview`. Drives CaneKit out of process, so it links no app code.
     type: bundle.ui-testing
     platform: iOS
     sources:
@@ -178,9 +246,15 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.uitests
+        # The app the XCUIApplication() in the tests launches.
         TEST_TARGET_NAME: CaneKit
+        # XCTestCase's setUp / test methods are nonisolated; under the MainActor default the
+        # subclasses do not compile. ⚠ Do not remove without re-running `make uitest`.
         SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
 
+# Schemes. CaneKit builds the app (which embeds the watch app and widget) and tests the UI test
+# bundle; the Makefile passes SCHEME ?= CaneKit. CaneKitWatch builds / runs the watch app alone
+# (e.g. from Xcode to a paired watch); `WATCH=0 scripts/gen.sh` removes it with the watch target.
 schemes:
   CaneKit:
     build:

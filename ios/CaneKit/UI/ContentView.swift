@@ -5,7 +5,7 @@
 //  Root screen. Three icon-only pages under a sliding tab bar (docs/design.md §6):
 //    Guide    — instruction, buttons, route picker, trip / arrival
 //    Sense    — depth status, 3×2 obstacle grid, Hazards
-//    Settings — Haptics, Watch, Mount (tilt + fps + toggles), This phone
+//    Settings — Cues (Step 36), Haptics, Watch, Mount (tilt + fps + toggles), This phone
 //  Styled only with Theme.swift tokens. No debug footer (removed in Step 11).
 //
 //  Pages fade in; they never slide sideways (a horizontal slide read as "going forward" even
@@ -14,7 +14,12 @@
 //  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
 //  Mount toggle labels are XCUITest `app.switches[...]` keys: "Mirror left / right" and
 //  "Write trip log" are ⚠ test contract (AGENTS.md rule 9). Tab buttons are ⚠ "Guide",
-//  "Sense", "Settings" (`RootTab.title`).
+//  "Sense", "Settings" (`RootTab.title`). Cues picker segments are ⚠ "Standard", "Detailed",
+//  "Indoors", "Outdoors" (`CueLevel.title` / `CuePlace.title`).
+//
+//  Owner / caller: `CaneKitApp` (the app entry) shows it with `AppModel` in the environment.
+//  Tests: `CaneKitUITests` (`testAccessibilityLabelsExist`, `testMountTogglesPersist`,
+//  `testCuePickersChangeAndRestore`, and every test's `openTab`) and `CaneKitVisualTour`.
 //
 
 import CaneKitLogic
@@ -30,13 +35,16 @@ struct ContentView: View {
     /// Incoming-page fade length. Matches the tab pill's travel (TabBar `pillTravel`) so pill
     /// and page land together; longer than this the switch feels laggy, shorter it flashes.
     static let pageFade: TimeInterval = 0.16
-    /// The app-wide owner of every engine; `@Bindable` inside settings for the toggle bindings.
+    /// The app-wide owner of every engine. Used here only for the Camera Control press; each page
+    /// reads its own copy from the environment (Settings makes it `@Bindable` for the toggles).
     @Environment(AppModel.self) private var model
     /// Which of the three pages is showing. Starts on Guide so the idle walk controls are first.
     @State private var tab: RootTab = .guide
     /// Instant page swap when the user asked for less motion.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Page (re-identified per tab so the transition runs) above the tab bar, on the ivory ground,
+    /// titled "OpenCane", with the invisible Camera Control interaction behind everything.
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -55,7 +63,9 @@ struct ContentView: View {
             .navigationTitle("OpenCane")
             .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
         }
-        // Camera Control / volume-button spike: counts presses in the footer.
+        // Camera Control / volume-button spike: a press is logged (`describe {source:
+        // cameraControl}`) and runs "Where am I". The on-screen press counter went with the debug
+        // footer in Step 11; the trip log is the readout.
         .background(CameraControlInteraction { model.cameraControlPressed() })
     }
 
@@ -78,8 +88,10 @@ struct ContentView: View {
 /// The `ScrollViewReader` proxy goes to the Guide card so focusing the destination field
 /// can scroll it above the keyboard (`DestinationField.anchorID`).
 private struct GuidePage: View {
+    /// Read for `nav.isNavigating` / `nav.arrived`, which decide whether the trip card shows.
     @Environment(AppModel.self) private var model
 
+    /// `GuideCard`, then `ArrivalCardView` while a route runs or after arrival.
     var body: some View {
         ScrollViewReader { proxy in
             pageScroll {
@@ -94,8 +106,10 @@ private struct GuidePage: View {
 
 /// Sense page: depth status, obstacle grid, hazards. Isolated so 30 Hz frames stay here.
 private struct SensePage: View {
+    /// Read for `lidarSupported` and `status` (the depth engine's status sentence).
     @Environment(AppModel.self) private var model
 
+    /// Status card, obstacle grid, Hazards card, top to bottom.
     var body: some View {
         pageScroll {
             statusCard
@@ -128,13 +142,16 @@ private struct SensePage: View {
     }
 }
 
-/// Settings page: haptics, watch, mount, this phone.
+/// Settings page: cues, haptics, watch, mount, this phone.
 private struct SettingsPage: View {
+    /// Made `@Bindable` in `body` so the pickers and toggles get two-way bindings.
     @Environment(AppModel.self) private var model
 
+    /// Cues first (the settings a walker changes most), then Haptics, Watch, Mount, This phone.
     var body: some View {
         @Bindable var model = model
         pageScroll {
+            cueSettings($model)
             HapticsCard()
             WatchCard()
             mountSettings($model)
@@ -143,11 +160,75 @@ private struct SettingsPage: View {
         }
     }
 
+    /// "Cues" card (Step 36, cue design v2): how much OpenCane volunteers, and where the walker is.
+    ///
+    /// Two segmented pickers, first on the page because they are the settings a walker changes most:
+    /// "Cue detail" (Quiet / Standard / Detailed, default Detailed = today) and "Place" (Outdoors /
+    /// Indoors). Each change is spoken once by the model ("Quiet cues.", "Indoor mode."), so a
+    /// VoiceOver user hears the effect, not just the selection. The caption under the pickers says
+    /// what the current level means in one sentence (`cueLevelCaption`).
+    /// ⚠ test contract: `testCuePickersChangeAndRestore` taps the segment titles `CueLevel.title` /
+    /// `CuePlace.title` ("Standard", "Detailed", "Indoors", "Outdoors").
+    /// - Parameter model: the `@Bindable` model from `body`.
+    private func cueSettings(_ model: Bindable<AppModel>) -> some View {
+        CKCard(title: "Cues") {
+            // A segmented picker does not show or speak its own title on iOS, so each gets a visible
+            // label and a VoiceOver container named after it; otherwise a swipe hears "Quiet, button"
+            // with no context, next to the speech pill that also says "Quiet" (Step 36 review).
+            Text("Cue detail").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .accessibilityHidden(true)
+            Picker("Cue detail", selection: model.cueLevel) {
+                ForEach(CueLevel.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Cue detail")
+            .accessibilityHint("How much OpenCane says on its own. Quiet names nothing and reads only safety signs. Obstacle haptics are the same at every level for now.")
+            Text("Place").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .accessibilityHidden(true)
+            Picker("Place", selection: model.cuePlace) {
+                ForEach(CuePlace.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Place")
+            .accessibilityHint("Indoors warns about head height from 1.2 meters instead of 1.5, names nothing and reads only safety signs.")
+            Text(cueLevelCaption)
+                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(CKFont.body)
+        .foregroundStyle(CKColor.textPrimary)
+    }
+
+    /// What the selected level × place changes **today** (Step 36 changes speech only; haptics are
+    /// the same at every level until Step 41 — the Step 36 review caught a caption promising more),
+    /// plus a reminder when names are switched off, which Standard and Detailed depend on.
+    private var cueLevelCaption: String {
+        var parts: [String]
+        switch model.cueLevel {
+        case .quiet: parts = ["Quiet: no obstacle names; safety signs only."]
+        case .standard: parts = ["Standard: door names on a route; every sign."]
+        case .detailed: parts = ["Detailed: every obstacle name except walls; every sign."]
+        }
+        if model.cuePlace == .indoors {
+            parts.append("Indoors: head height from 1.2 meters, no names, safety signs only.")
+        }
+        if !model.obstacleNamesEnabled, model.cueLevel != .quiet, model.cuePlace == .outdoors {
+            parts.append("Names are off: turn on Speak obstacle names below to hear them.")
+        }
+        parts.append("Haptics are the same at every level for now.")
+        return parts.joined(separator: " ")
+    }
+
     /// "Mount" card: persisted system `Toggle`s (the settings rows of design.md §6.5).
     ///
     /// Each toggle's visible label is its VoiceOver label and its XCUITest `switches[...]` key;
     /// the hint says when to flip it. ⚠ test contract: "Mirror left / right" (testMountTogglesPersist)
     /// and "Write trip log" (testAccessibilityLabelsExist) must not be renamed without the tests.
+    /// Rows: live tilt / fps (`MountAimRow`), portrait (default on), mirror (off), "60 fps camera
+    /// (warmer)" (`highFrameRateCamera`, off; note the live-view preview is capped at 30 fps
+    /// whatever this says — `CameraRate.previewCap`), audio beacon (on), trip log (on).
     /// - Parameter model: the `@Bindable` model from `body`, so each toggle gets a binding.
     private func mountSettings(_ model: Bindable<AppModel>) -> some View {
         CKCard(title: "Mount") {
@@ -267,8 +348,10 @@ private func dismissKeyboard() {
 /// Obstacles card wrapper, isolated into a leaf subview so 30 Hz depth frame updates
 /// only re-evaluate this card rather than the Sense page scroll view.
 private struct ObstaclesCard: View {
+    /// Read only for `depth.report`.
     @Environment(AppModel.self) private var model
 
+    /// The grid for the latest `LaneReport`.
     var body: some View {
         LaneGridView(report: model.depth.report)
     }
@@ -277,8 +360,12 @@ private struct ObstaclesCard: View {
 /// Live camera aim + depth rate, isolated into a leaf subview so 30 Hz updates do not
 /// re-evaluate the surrounding Mount card toggles.
 private struct MountAimRow: View {
+    /// Read for `depth.report.cameraTiltDownDeg`, `depth.fps` and `lidarSupported`.
     @Environment(AppModel.self) private var model
 
+    /// With a tilt reading: "<MountTilt status> · N fps" with a check (in the 3–8° window) or a
+    /// warning glyph, one VoiceOver element. Without one on a LiDAR phone: how to get a reading.
+    /// On a phone without LiDAR: nothing. The window itself is `MountTilt` (`LaneMathTests.mountTiltWindow`).
     var body: some View {
         if let tilt = model.depth.report.cameraTiltDownDeg {
             let s = MountTilt.status(downDeg: tilt)

@@ -20,11 +20,15 @@
 //  (adding HFP would drop AirPods to phone-call quality and flip routes — ios/README.md §2).
 //  The single exception is `setMicrophoneEnabled(_:owner:)`: the danger-sound watch and the
 //  push-to-talk path need an audio *input*, which `.playback` does not have, so this one method may
-//  move the session to `.playAndRecord` while one feature has an explicit microphone lease. A
+//  move the session to `.playAndRecord` while one feature has an explicit microphone lease
+//  (`MicrophoneOwner`: `.soundRecognition` = SoundWatcher, `.voiceInput` = VoiceInputEngine). A
 //  second owner is rejected. It reverts on any output/input route change — not only the one it can
 //  see synchronously: iOS settles a route asynchronously, so for the whole time the microphone is
 //  on a `routeChangeNotification` observer holds the session to the route it started with and puts
-//  it back to `.playback` (and tells `SoundWatcher`, which stops) the moment that route moves. No
+//  it back to `.playback` (and tells `SoundWatcher` through `onMicrophoneRouteChanged`, which stops)
+//  the moment that route moves. The one tolerated move is the startup settle from "no input yet" to
+//  a usable input on the same output (the baseline is updated, the session kept). Only SoundWatcher
+//  installs that callback: a `.voiceInput` lease is reverted without being told. No
 //  shipping code path may call `setCategory` anywhere else; the
 //  one other call in the app is `SensorProbe.caseEAudioSession()`, the debug audio probe, which
 //  runs only under `SensorProbe.isEnabled` (a launch argument) and finishes before
@@ -49,8 +53,15 @@
 //      actually spoken, even if it is playing right now).
 //    · TTL: each queued line expires (`say` default 8 s, `sayAgain` 12 s); expired lines are
 //      purged whenever a line ends, so a stale instruction is never spoken late.
-//    · Replay: an interrupted line resumes at most once (`maxReplays`), at the front of its
-//      band, with its TTL extended to ≥ 8 s from the cut; a second cut drops it (Repeat recovers).
+//    · Resume (Step 37, owner decision 2026-09-12 "Cut in, then resume"): an interrupted line goes
+//      back to the front of its band and continues from the start of the clause it was cut in
+//      (CaneKitLogic `SpeechResume`) — a direction cut by "Head height." is never restarted from
+//      its first word. It resumes at most 3 times and never from an earlier point than last time;
+//      after that it is dropped (Repeat recovers). On the first cut its TTL is
+//      extended to ≥ 8 s from the cut. An mp3's cut point is backed off ~0.5 s of speech.
+//    · Pause between bands: when a line ends and the next queued line is a different band, 0.35 s
+//      of silence first (`SpeechResume.gapSeconds`; `.safety` never waits), so a warning and a
+//      direction are heard as two things.
 //    · Interruption (call / Siri): `.began` re-queues the current line and holds the queue;
 //      new lines queue (deduplicated) but nothing plays; `.ended` — or a 15 s fallback when
 //      `.ended` never arrives — re-activates the session (2 retries, 1 s apart) and drains.
@@ -58,6 +69,15 @@
 //      voice immediately and prefetch the natural voice for next time.
 //    · Watchdog: 6 s + characters / 6 after a line starts, a missing end callback is treated
 //      as the end so a stalled backend can never freeze the queue.
+//    · Load policy (Step 30 research, docs/auditory-load.md): a line tagged
+//      `load: .ambientObstacleName` (mesh names only) must pass CaneKitLogic `SpeechLoadPolicy`
+//      first — dropped while anything is speaking/interrupted or within 7 s of the last admitted
+//      name — and a dropped line goes to `onSuppressed`, never to the queue. Every other line is
+//      `.normal` and fails open.
+//    · Voice hold (Step 30, device report "instructions kept playing over the dictation"): while
+//      the walker talks to OpenCane, lines below `.safety` wait in the queue (`setVoiceHold`).
+//    · Conversational answers (Step 31): `say(immediate: true)` skips the ElevenLabs fetch, since
+//      novel text can never hit the cache and a batch fetch added 1–2 s to every answer.
 //
 //  Threading / isolation: `SpeechQueue` is `@MainActor` (the module default is MainActor; the
 //  attribute is spelled out). Every piece of state and every method below runs on main.
@@ -73,9 +93,22 @@
 //  watchdog, interruption fallback, resume retries) inherit the main actor.
 //
 //  Callers: `AppModel` (route lines, obstacle cue lines, channel announcements, Repeat via
-//  `sayAgain`, `prefetch` at launch/route start, `stopAll` on Stop), `NavigationEngine` via
-//  AppModel's `onSpeak`, `SceneDescriber` (`.scene`). The beacon reads `isSpeaking` through
-//  AppModel's 10 Hz ticker to duck itself.
+//  `sayAgain`, `prefetch` at launch/route start, `stopAll` on Stop, the trip-log hooks
+//  `onDispatch` / `onLineEnd` / `onSuppressed`, `routeLines` / `backgroundLines`),
+//  `NavigationEngine` via AppModel's `onSpeak`, `SceneDescriber` (`.scene`), `HandsFreeIntents`
+//  (status summary `.scene`, voice switches and haptics status `.nav`),
+//  `ConversationCoordinator` (`.scene`, `immediate: true`), `VoiceInputEngine` (`setVoiceHold`,
+//  the `.voiceInput` microphone lease, its own status lines) and `SoundWatcher` (the
+//  `.soundRecognition` lease, `onMicrophoneRouteChanged`, `microphoneRouteSnapshot`,
+//  `microphoneRestoreError`). The beacon reads `isSpeaking` through AppModel's 10 Hz ticker to duck
+//  itself; `BeaconEngine.render` also reads `muted`.
+//
+//  Tests: none in-process — AVFoundation, device-only (docs/CODE_REFERENCE.md lists the device
+//  walks). The numbers it applies are pinned in CaneKitLogic: `SpeechResumeTests` (resume point,
+//  pause between bands), `SpeechLoadPolicyTests` (name pacing), `VoicePrefetchTests` (prefetch
+//  order, fatal HTTP codes), `SoundAlertsTests` (the microphone route guard) and `NavSupportTests`
+//  (which cues reach the queue). `make uitest` / `make e2e` run it muted (`muted`) with real queue
+//  timing; `ios/scripts/cue_audit.py` measures it from `speech_dispatch` / `speech_end` records.
 //
 
 import AVFoundation
@@ -89,11 +122,16 @@ import UIKit
 /// AGENTS.md hard rule 8 and docs/design.md §5 — do not reorder without updating both.
 enum SpeechPriority: Int, Comparable, Sendable {
     /// Scene descriptions < obstacle names < route instructions < head-height / safety lines.
-    /// - `scene`: "Where am I" results and their progress lines (`SceneDescriber`).
+    /// - `scene`: "Where am I" results and their progress lines (`SceneDescriber`), conversational
+    ///   answers (`ConversationCoordinator`, `immediate: true`), the spoken status summary and the
+    ///   flashlight outcome lines (`TorchSwitch.Outcome.spokenLine`).
     /// - `obstacle`: mesh names ("One meter ahead, door") and left/right/ahead cue lines spoken
-    ///   when the phone cannot buzz.
-    /// - `nav`: route, crossing, arrival, channel and status lines.
-    /// - `safety`: "Head height." — never suppressed, pre-empts everything else.
+    ///   when the phone cannot buzz, sign and hazard-watch lines (`HazardScanner`), horn / vehicle
+    ///   sound alerts and the sound watch's own failure line.
+    /// - `nav`: route, crossing, arrival, channel and status lines, and the emergency-siren alert
+    ///   (a crossing fact — see the SoundWatcher.swift header for why it is not `.safety`).
+    /// - `safety`: "Head height." and LiDAR ground hazards ("Two meters ahead, drop-off.") — never
+    ///   suppressed, pre-empts everything else; nothing that is not imminent and physical belongs here.
     case scene = 0, obstacle = 1, nav = 2, safety = 3
     /// Orders by raw value so `priority > currentPriority` reads naturally at call sites.
     static func < (a: SpeechPriority, b: SpeechPriority) -> Bool { a.rawValue < b.rawValue }
@@ -113,13 +151,16 @@ final class SpeechQueue {
     /// Set in `speakNow`; cleared by `lineEnded` when the queue drains, by `stopAll`, and on an
     /// interruption `.began`. AppModel's 10 Hz ticker copies it into `BeaconEngine.setSpeaking`.
     private(set) var isSpeaking = false
-    /// Last line handed to a backend (debug footer / trip log).
-    /// Also the text re-spoken by the system voice when mp3 playback fails in `playFile`.
+    /// Last line handed to a backend — always the whole line, even for a resumed one. Nothing
+    /// outside this class reads it today (Repeat speaks `NavigationEngine.lastSpokenLine`, and the
+    /// trip log gets `onDispatch`); inside, `playFile` re-speaks its remainder from
+    /// `currentResumeFrom` in the system voice when mp3 playback fails.
     private(set) var lastSpoken = ""
     /// Human-readable failure from activating the audio session (initial configure or resume
     /// after an interruption); nil when the last activation succeeded. Shown on the Haptics card.
     private(set) var audioSessionError: String?
-    /// "ElevenLabs" or "System" — what the last line used.
+    /// "ElevenLabs" or "System" — what the last line used. Shown by the Haptics card's voice pill
+    /// (which says "System" whenever `naturalVoice` is nil).
     private(set) var backendName = "System"
     /// Last natural-voice problem (fetch failure, playback failure, watchdog reset). Diagnostic
     /// only, never spoken. Cleared when a new prefetch starts and when the natural voice actually
@@ -132,6 +173,7 @@ final class SpeechQueue {
     let naturalVoice: ElevenLabsVoice? = ElevenLabsVoice.fromSecrets()
     /// When false every line uses `AVSpeechSynthesizer`, even with a key and a warm cache.
     /// Also gates `prefetch` (no point spending API quota on a voice we will not use).
+    /// No shipping code writes it today; it is the switch a debug path would flip.
     var useNaturalVoice = true
 
     /// Lines that belong in the cache but are never urgent, appended to the end of *every*
@@ -156,7 +198,8 @@ final class SpeechQueue {
 
     // MARK: Private
 
-    /// A line waiting in `queue`.
+    /// A line waiting in `queue`. Value type: a re-queued line is a fresh `Pending` built by
+    /// `requeueCurrent` from the `current…` fields, never the original mutated in place.
     private struct Pending {
         /// Trimmed, non-empty text; also the coalescing key (identical text = same line).
         let text: String
@@ -168,11 +211,18 @@ final class SpeechQueue {
         /// FIFO key within a band: lower = older = spoken first. A re-queued interrupted line
         /// gets `min - 1` so it jumps to the front of its band.
         let sequence: Int
-        /// How many times this line was already cut and resumed (capped at `maxReplays`).
+        /// How many times this line was already cut and resumed (capped at `SpeechResume.maxResumes`
+        /// by `SpeechResume.nextResume`).
         var replays: Int = 0
         /// Speak in the system voice at once, prefetching the natural voice for next time
         /// (carried from `say(immediate:)` through the queue to `speakNow`).
         var immediate: Bool = false
+        /// UTF-16 offset to start speaking from: 0 for a fresh line, the start of the clause it was
+        /// cut in for a resumed one (Step 37). The text itself stays whole — it is the coalescing
+        /// key, the cache key and what Repeat speaks.
+        var resumeFrom: Int = 0
+        /// The offset it last resumed from, nil if it was never cut (`SpeechResume.nextResume`).
+        var lastResumeOffset: Int? = nil
     }
 
     /// System voice backend. `usesApplicationAudioSession = true` (set in `init`) so it shares the
@@ -183,8 +233,10 @@ final class SpeechQueue {
     /// Lines waiting to play, kept sorted by `sortQueue` (priority desc, then sequence asc).
     /// `queue.first` is always the next line to speak.
     @ObservationIgnored private var queue: [Pending] = []
-    /// Pure optional-narration admission state. Only callers that explicitly pass an ambient load
-    /// class reach it; normal, route and safety speech remain fail-open.
+    /// Pure optional-narration admission state (CaneKitLogic `SpeechLoadPolicy`, 7 s calm window
+    /// between admitted names; `SpeechLoadPolicyTests`). Only callers that explicitly pass an ambient
+    /// load class reach it — today only `AppModel.handle`'s obstacle names; normal, route and safety
+    /// speech remain fail-open. Consulted in `say` before any queueing; reset by `stopAll`.
     @ObservationIgnored private var loadPolicy = SpeechLoadPolicy()
     /// Monotonic counter feeding `Pending.sequence`.
     @ObservationIgnored private var sequence = 0
@@ -194,18 +246,39 @@ final class SpeechQueue {
     @ObservationIgnored private var generation = 0
     /// Priority of the line playing, or nil when idle; compared against incoming lines in `say`.
     @ObservationIgnored private var currentPriority: SpeechPriority?
-    /// The line now playing and when it stops being worth resuming (for re-queue on interrupt).
+    /// The whole text of the line now playing (never the resumed remainder); "" when idle. Compared
+    /// by `say` for coalescing and re-queued by `requeueCurrent` on interrupt.
     @ObservationIgnored private var currentText = ""
-    /// Deadline carried over from the line's `Pending.expires` (`.infinity` for direct lines).
+    /// When the line now playing stops being worth resuming (reference-date seconds): the deadline
+    /// `say` / `sayAgain` computed from its TTL — also for a line that started at once, which is what
+    /// bounds a resume after a cut — or `.infinity` for `say(ttl: 0)` and `speakNow`'s default.
     @ObservationIgnored private var currentExpires: TimeInterval = .infinity
     /// How many times the line playing has already been resumed after a cut.
     @ObservationIgnored private var currentReplays = 0
     /// Whether the line playing skips the TTS fetch (`say(immediate:)`), carried into the
     /// re-queue so a cut answer still answers at once instead of stalling on the network.
     @ObservationIgnored private var currentImmediate = false
-    /// An interrupted line resumes once; cut again, it is dropped (a head-height branch every few
-    /// seconds must not loop the first words of a crossing line forever — Repeat recovers it).
-    private let maxReplays = 1
+    /// Offset the line playing started from (`Pending.resumeFrom`), 0 for a fresh line.
+    @ObservationIgnored private var currentResumeFrom = 0
+    /// The line playing's `Pending.lastResumeOffset`, carried into its next re-queue.
+    @ObservationIgnored private var currentLastResumeOffset: Int?
+    /// UTF-16 offset in `currentText` of the word the system voice is saying now (from
+    /// `willSpeakRangeOfSpeechString`); 0 before the first word. Unused for an mp3 clip, whose
+    /// progress is read from the player at the cut.
+    @ObservationIgnored private var currentSpokenUTF16 = 0
+    /// True once the system voice has reported a word of the line playing — only then has the word at
+    /// `currentSpokenUTF16` actually started (and a word-boundary stop will finish it).
+    @ObservationIgnored private var currentWordHeard = false
+    /// True during the short pause `lineEnded` leaves before a line of a different band
+    /// (`SpeechResume.gapSeconds`, 0.35 s). `isSpeaking` stays true (the beacon stays ducked) and
+    /// nothing is current; `say` queues everything except `.safety`, or a line that needs no pause
+    /// after `gapAfter` and ties or outranks the queue head — those end the pause and speak.
+    /// `sayAgain` (explicit Repeat) also speaks through it. Cleared by `speakNow`, `stopCurrent`,
+    /// `stopAll` and the pause task itself.
+    @ObservationIgnored private var inGap = false
+    /// Band of the line the current pause follows (valid while `inGap`); a new line of that band, or
+    /// `.safety`, needs no pause and ends it (`SpeechResume.gapSeconds` = 0).
+    @ObservationIgnored private var gapAfter: SpeechPriority?
     /// True between an audio-session interruption's `.began` and `.ended` (call, Siri).
     /// While true `say` / `sayAgain` only enqueue and `lineEnded` does not start the next line.
     @ObservationIgnored private var interrupted = false
@@ -220,7 +293,9 @@ final class SpeechQueue {
     /// 15 s timer armed on `.began` that drains the queue if `.ended` never arrives (the
     /// interrupting app is not obliged to deactivate its session). Cancelled on `.ended`.
     @ObservationIgnored private var interruptionFallback: Task<Void, Never>?
-    /// Last time an ElevenLabs fetch failed (circuit breaker for weak networks).
+    /// Last time an ElevenLabs fetch failed or missed its 2.5 s deadline (reference-date seconds;
+    /// −∞ = never). Circuit breaker for weak networks: for 60 s after it, `speakNow` uses the system
+    /// voice at once and only retries the natural voice in the background (Muse M1).
     @ObservationIgnored private var naturalVoiceFailedAt: TimeInterval = -.infinity
     /// The system-voice utterance that is current; `utteranceEnded` matches callbacks against it
     /// by `ObjectIdentifier`, so a cancelled utterance's late `didCancel` is ignored.
@@ -231,7 +306,9 @@ final class SpeechQueue {
     @ObservationIgnored private var player: AVAudioPlayer?
     /// Strong reference to `player`'s delegate (AVAudioPlayer holds its delegate weakly).
     @ObservationIgnored private var playerRelay: PlayerRelay?
-    /// The one running batch prefetch, so a new route can cancel the previous route's.
+    /// The one running batch prefetch, so a new batch (a new route, or a warning's cache-miss
+    /// `prefetch([text])`) cancels the previous one — see `routeLines` / `backgroundLines` for why
+    /// that cancellation loses nothing.
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// In-flight ElevenLabs fetch for a cache miss; cancelled by `stopCurrent`.
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
@@ -251,7 +328,9 @@ final class SpeechQueue {
 
     /// Wires the synthesizer delegate through the `nonisolated` relay. The relay's callback is
     /// `@Sendable` and may run on any AVFoundation thread, so it captures only the utterance's
-    /// `ObjectIdentifier` and hops to the main actor before touching queue state.
+    /// `ObjectIdentifier` (plus, for `onWord`, the word's UTF-16 location) and hops to the main
+    /// actor before touching queue state. Also picks the system voice once (`bestEnglishVoice`).
+    /// Built by `AppModel`'s property initialiser (`speech`), before anything can speak.
     /// Does not touch the audio session — `configureAudioSession()` does that.
     init() {
         let box = CallbackBox()
@@ -261,6 +340,9 @@ final class SpeechQueue {
         voice = Self.bestEnglishVoice()
         box.onEnd = { [weak self] id in
             Task { @MainActor [weak self] in self?.utteranceEnded(id) }
+        }
+        box.onWord = { [weak self] id, location in
+            Task { @MainActor [weak self] in self?.utteranceWillSpeak(id, location: location) }
         }
     }
 
@@ -282,8 +364,10 @@ final class SpeechQueue {
     /// Also installs the interruption observer. It is registered with `queue: .main`, so the
     /// closure provably runs on the main thread and `MainActor.assumeIsolated` is legal; only
     /// the decoded `InterruptionType` (Sendable) crosses into the isolated call.
-    /// Called by `AppModel.start()` before `haptics.start()` and `depth.start()`. Calling it
-    /// twice would add a second observer (the token is overwritten, not removed).
+    /// Called by `AppModel.start()` right after the trip-log hooks (`onSuppressed`, `onDispatch`,
+    /// `onLineEnd`) are installed and before `wireAudioRoute()`, `haptics.start()` and
+    /// `depth.start()`. Calling it twice would add a second observer (the token is overwritten, not
+    /// removed). A success also clears `microphoneRestoreError`.
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
@@ -310,7 +394,11 @@ final class SpeechQueue {
     /// input graph; rejecting a second owner prevents push-to-talk from replacing the sound
     /// watcher's route observer (or vice versa) while either feature is live.
     enum MicrophoneOwner: String, Equatable, Sendable {
+        /// `SoundWatcher` ("Listen for sirens and horns", off by default); may hold the lease for
+        /// a whole walk, and is the only owner that installs `onMicrophoneRouteChanged`.
         case soundRecognition
+        /// `VoiceInputEngine` push-to-talk ("Talk to OpenCane"); holds it for one utterance (≤ 10 s,
+        /// `UtteranceEndDetector.maxListen`) and is refused while sound recognition owns the input.
         case voiceInput
     }
 
@@ -318,13 +406,19 @@ final class SpeechQueue {
     /// Returned by `setMicrophoneEnabled(_:owner:)` so the caller can tell the walker the truth.
     enum MicrophoneSessionResult: Equatable, Sendable {
         /// The output route is unchanged. The input may still be settling; callers must inspect
-        /// `microphoneRouteSnapshot` before declaring a classifier live.
+        /// `microphoneRouteSnapshot` before declaring a classifier live. `route` is the output-route
+        /// string (`outputRoute`). Also returned by a successful `setMicrophoneEnabled(false, …)`
+        /// (the route now) and by a repeated grant to the owner already holding the lease (the held
+        /// route's output).
         case granted(route: String)
         /// Input was available but the output route changed (e.g. AirPods dropped from A2DP to
         /// HFP call quality, which would kill the HRTF beacon). The session has already been put
         /// back to `.playback`; the caller must not enable its recording feature.
         case revertedRouteChanged(before: String, after: String)
-        /// `setCategory` / `setActive` threw. The session has been put back to `.playback`.
+        /// `setCategory` / `setActive` threw (the restore to `.playback` was attempted; if that
+        /// also threw, `microphoneRestoreError` says so), or the lease belongs to the other owner
+        /// (nothing was changed). The payload is a technical message for the card / trip log, never
+        /// for speech.
         case failed(String)
     }
 
@@ -339,8 +433,9 @@ final class SpeechQueue {
     /// already moved by the time `setActive` returns, and on AirPods it typically has not — iOS
     /// publishes the new route roughly 0.1–0.5 s later, long after the switch has reported
     /// success. Without this hook the walker keeps walking with the beacon's HRTF gone and the
-    /// voice at call quality, and nothing ever tells them. Set by `SoundWatcher.start()` and
-    /// cleared by `SoundWatcher.stop()`.
+    /// voice at call quality, and nothing ever tells them. Set by `SoundWatcher` once its session is
+    /// granted (`startGrantedSession`) and cleared by `SoundWatcher.stop()` / `fail`.
+    /// `VoiceInputEngine` installs no hook, so a revert during push-to-talk is silent to it.
     @ObservationIgnored var onMicrophoneRouteChanged: ((SoundRecognitionRoute, SoundRecognitionRoute) -> Void)?
 
     /// The complete route as it was when the microphone was granted; nil whenever the session is
@@ -348,16 +443,21 @@ final class SpeechQueue {
     /// the previous notification, so a route that wanders away and is still wrong is still caught.
     @ObservationIgnored private var microphoneRoute: SoundRecognitionRoute?
 
-    /// The complete route snapshot held while sound recognition owns `.playAndRecord`. Read by
-    /// `SoundWatcher` immediately after `setMicrophoneEnabled(true, owner:)` so its pure guard starts with
-    /// the same input/output identity the notification observer is watching.
+    /// The complete route snapshot held while any owner has `.playAndRecord`; nil on `.playback`.
+    /// Read by `SoundWatcher` immediately after `setMicrophoneEnabled(true, owner:)` (and again
+    /// once its engine runs) so its pure guard starts with the same input/output identity the
+    /// notification observer is watching.
     var microphoneRouteSnapshot: SoundRecognitionRoute? { microphoneRoute }
 
     /// Last failure while returning the microphone to `.playback`, if any. SoundWatcher includes
     /// this in its existing failure card/speech path instead of claiming a restore succeeded.
+    /// Set by `restorePlaybackSession`; cleared by any successful `configureAudioSession`, grant or
+    /// restore, and by `SoundWatcher.start()` before a new attempt.
     @ObservationIgnored var microphoneRestoreError: String?
 
     /// The owner of the temporary `.playAndRecord` lease, or nil in the normal `.playback` state.
+    /// Cleared only when a restore to `.playback` succeeds: after a failed restore the lease stays
+    /// with its owner, so the other feature cannot grab a session in an unknown state.
     @ObservationIgnored private var microphoneOwner: MicrophoneOwner?
 
     /// Token for the `AVAudioSession.routeChangeNotification` observer. Non-nil **only** while the
@@ -366,15 +466,40 @@ final class SpeechQueue {
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
 
     /// Receives an optional line that the load policy dropped, so `TripLogger` can show what the
-    /// sensors produced and why the walker did not hear it. Main actor; set by `AppModel.start()`.
+    /// sensors produced and why the walker did not hear it. Arguments: trimmed text, the caller's
+    /// load class, the policy's reason (`busy` / `calmWindow` / `invalidTime`). Main actor; set by
+    /// `AppModel.start()`, logged as `speech_suppressed {text, load, reason}`.
     @ObservationIgnored var onSuppressed: ((String, SpeechLoadClass, SpeechSuppressionReason) -> Void)?
+
+    /// Receives every line at the moment the queue hands it to a voice backend (`speakNow`),
+    /// whoever queued it and whether it started at once or drained from the queue.
+    /// ⚠ Why: `speech` trip-log records are written by *callers* (cues, route lines), so lines said
+    /// straight through `say` — the both-cameras refusal, flashlight confirmations — left no trace,
+    /// and a device log could not tell "dropped by the queue" from "dispatched" (trip log
+    /// 2026-09-12T20-57-17Z, t = 84 s). ⚠ Dispatched is not heard: the line may still be cut by a
+    /// higher priority, fail to fetch, or be muted automation — it proves the queue did not drop
+    /// it, nothing more (Step 34 review). Arguments: whole text, priority, replay count (> 0 when a
+    /// cut line resumes, so a resumed line appears twice), and the UTF-16 offset it starts from
+    /// (`resumeFrom`, 0 for a fresh line; Step 37). Main actor; set by `AppModel.start()`,
+    /// logged as `speech_dispatch {text, priority, replays, resume_from}` (a separate kind, so
+    /// `e2e.py`'s `speech` assertions keep their meaning). Fires under `muted` too.
+    @ObservationIgnored var onDispatch: ((String, SpeechPriority, Int, Int) -> Void)?
+    /// Receives the priority of each line that ENDED naturally (finished, or its watchdog fired), at
+    /// the moment `lineEnded` starts the next one or the pause before it. Logged as `speech_end` so
+    /// `cue_audit.py` can measure the pause between one line's end and the next start — start times
+    /// alone cannot see a missing 0.35 s pause (review agents, Step 37). Main actor. Not fired for a
+    /// line that was cut (pre-emption, `stopAll`, interruption, voice hold): those never reach
+    /// `lineEnded` with their own generation. Set by `AppModel.start()`.
+    @ObservationIgnored var onLineEnd: ((SpeechPriority) -> Void)?
 
     /// Switch the app's one audio session between `.playback` (the normal state) and
     /// `.playAndRecord`, which is the only way to get an `AVAudioEngine` input node for the
     /// danger-sound watch (`.playback` has no input at all — Apple's category table).
     ///
-    /// This is the **only** other `setCategory` call in the app besides
-    /// `configureAudioSession()`, and it exists because AGENTS.md hard rule 7 / ios/README.md §2
+    /// This is the **only** other shipping `setCategory` path in the app besides
+    /// `configureAudioSession()` (its revert, `restorePlaybackSession`, re-applies that same
+    /// `.playback` configuration; the debug `SensorProbe` has its own behind a launch argument),
+    /// and it exists because AGENTS.md hard rule 7 / ios/README.md §2
     /// pin the app to one `.playback` session: the rule is not silently broken, it is broken
     /// *visibly, temporarily, and only while the walker has asked for it*, and undone the moment
     /// the route degrades.
@@ -392,15 +517,28 @@ final class SpeechQueue {
     ///   · The route is then watched for as long as the microphone stays on (see
     ///     `beginWatchingOutputRoute`), because the immediate comparison is not enough: iOS
     ///     settles a route change asynchronously, so an AirPods flip lands *after* the check
-    ///     passed. Any later output change reverts the session and calls
-    ///     `onMicrophoneRouteChanged`. Speech, warnings and the beacon are the safety path and a
-    ///     microphone feature never outranks them.
+    ///     passed. Any later output change, or input port / quality change (HFP, input gone),
+    ///     reverts the session and calls `onMicrophoneRouteChanged` — except the startup settle from
+    ///     no input to a usable one (`outputRouteMayHaveChanged`). Speech, warnings and the beacon
+    ///     are the safety path and a microphone feature never outranks them.
+    ///   · One owner at a time (`MicrophoneOwner`, Step 28): a second feature gets `.failed` and the
+    ///     session is left untouched, so push-to-talk can never replace the sound watcher's route
+    ///     observer or restore `.playback` under it.
     ///
     /// Measured on the iPhone 17 Pro Max (2026-09-11, trip-log `probe_e_audio_session`): with no
     /// headphones, `.playAndRecord` + these options left the output at `Speaker` and added
     /// `MicrophoneBuiltIn` as an input, and restoring `.playback` worked. The AirPods case is
     /// **not** measured yet, which is why the continuous watch above exists rather than a promise.
     /// Caller: `SoundWatcher.start()` / `stop()` and `VoiceInputEngine`'s push-to-talk path.
+    /// - Parameters:
+    ///   - on: true to take the lease and switch to `.playAndRecord`; false to give it back. `false`
+    ///     from the owner, or when nobody holds the lease, always attempts the `.playback` restore
+    ///     (idempotent); from the other owner it is refused with `.failed`.
+    ///   - owner: which feature is asking. A repeat `true` from the current owner returns
+    ///     `.granted` with the held route and changes nothing.
+    /// - Returns: what happened to the route; callers must not start recording on anything but
+    ///   `.granted`. Main actor; `setCategory` / `setActive` are synchronous calls on main (duration
+    ///   not measured).
     func setMicrophoneEnabled(_ on: Bool, owner: MicrophoneOwner) -> MicrophoneSessionResult {
         let session = AVAudioSession.sharedInstance()
         guard on else {
@@ -445,8 +583,11 @@ final class SpeechQueue {
     ///
     /// The notification is registered with `queue: .main`, so the closure provably runs on the
     /// main thread and `MainActor.assumeIsolated` is legal (the same pattern as the interruption
-    /// observer above); only a decoded `Bool` route edge crosses into the isolated call.
+    /// observer above); only a decoded `Bool` route edge crosses into the isolated call — true when
+    /// the notification's reason is `.oldDeviceUnavailable` (a device went away), which
+    /// `outputRouteMayHaveChanged` treats as an input drop even if the route already looks healthy.
     /// Idempotent: a second call replaces the observer rather than stacking one.
+    /// Caller: `setMicrophoneEnabled(true, owner:)` after a successful grant.
     /// - Parameter route: the complete route snapshot to hold the session to.
     private func beginWatchingOutputRoute(_ route: SoundRecognitionRoute) {
         stopWatchingOutputRoute()
@@ -479,6 +620,12 @@ final class SpeechQueue {
     /// posts several of those around a category change. Input-only degradation must not be ignored:
     /// a Bluetooth HFP or missing input can leave the output name unchanged while the classifier
     /// has already gone deaf.
+    ///
+    /// Clears `microphoneOwner` only when the restore succeeded, then calls
+    /// `onMicrophoneRouteChanged(held, now)` either way (SoundWatcher retries a failed restore).
+    /// - Parameter forceInputDrop: the notification said `.oldDeviceUnavailable`; if the sampled
+    ///   route equals the held one anyway, it is recorded as `inputQuality: .unavailable` so the
+    ///   dropout still stops recognition (Step 28).
     private func outputRouteMayHaveChanged(forceInputDrop: Bool = false) {
         guard let held = microphoneRoute else { return }
         var now = Self.microphoneRoute(AVAudioSession.sharedInstance())
@@ -509,7 +656,9 @@ final class SpeechQueue {
         onMicrophoneRouteChanged?(held, now)
     }
 
-    /// Put the session back to the one configuration the rest of the app relies on.
+    /// Put the session back to the one configuration the rest of the app relies on — byte-for-byte
+    /// the `configureAudioSession` category, mode and options. Does not touch the lease or the
+    /// observer; callers do (`stopWatchingOutputRoute` must run first whenever an observer is live).
     /// - Returns: `.failed` when the restore threw (the app is then in an unknown audio state and
     ///   the error is left in `audioSessionError` / `microphoneRestoreError`), nil on success.
     private func restorePlaybackSession() -> MicrophoneSessionResult? {
@@ -529,7 +678,8 @@ final class SpeechQueue {
 
     /// The current **output** route as a stable string (for example
     /// `BluetoothA2DP[uid|AirPods]` or `Speaker[...]`), including each port's UID/name for the
-    /// before/after comparison, continuous watch and trip log.
+    /// before/after comparison, continuous watch and trip log. Ports are sorted and joined with
+    /// "+", so ordering noise in `currentRoute.outputs` is never a "change"; "none" with no output.
     private static func outputRoute(_ session: AVAudioSession) -> String {
         let ports = session.currentRoute.outputs.map(portDescription).sorted()
         return ports.isEmpty ? "none" : ports.joined(separator: "+")
@@ -537,6 +687,9 @@ final class SpeechQueue {
 
     /// Include UID and human-readable name, not only the port type: two AirPods or USB inputs can
     /// share a type while still being a real route change that must stop recognition.
+    /// Format: `portType[uid|name]` (either part omitted when blank), or the bare port type.
+    /// ⚠ The result reaches the trip log and the Hazards card only — never speech (a port name read
+    /// aloud means nothing to a walker; `SoundWatcher.fail`).
     private static func portDescription(_ port: AVAudioSessionPortDescription) -> String {
         let type = port.portType.rawValue
         let uid = port.uid.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -547,7 +700,9 @@ final class SpeechQueue {
 
     /// Build the Sendable route snapshot used by `SoundRecognitionGuard`. Input quality is derived
     /// from the actual port list, never from the requested category: HFP and a missing input are
-    /// unsafe even if the output port still looks unchanged.
+    /// unsafe even if the output port still looks unchanged. Quality: `.hfp` if any input or output
+    /// port is Bluetooth HFP, else `.unavailable` with no input port, else `.usable`;
+    /// `outputIsHFP` lets `SoundRecognitionGuard` refuse a route that was degraded before startup.
     private static func microphoneRoute(_ session: AVAudioSession) -> SoundRecognitionRoute {
         let outputPorts = session.currentRoute.outputs
         let inputPorts = session.currentRoute.inputs
@@ -574,16 +729,21 @@ final class SpeechQueue {
     /// current line back in the queue and mark ourselves quiet; when the interruption ends,
     /// re-activate the session and carry on with whatever is still valid.
     ///
-    /// `.began`: re-queue the current line (subject to `maxReplays` and its TTL), cancel the
+    /// `.began`: re-queue the current line — from its last resume point, not the clause it was cut in
+    /// (`requeueCurrent(fromClause: false)`: after a call a clause fragment has no context; subject
+    /// to `SpeechResume.nextResume` and its TTL), cancel the
     /// backends (bumping `generation` so their late callbacks are ignored), set `interrupted`,
     /// and arm the 15 s `interruptionFallback`. `.ended`: cancel the fallback and resume.
     /// `.ended`'s `shouldResume` option is not consulted: guidance resumes regardless.
-    /// `BeaconEngine` observes the same notification independently and restarts its own graph.
+    /// `BeaconEngine` observes the same notification independently and restarts its own graph;
+    /// `SoundWatcher` observes it too and stops on `.began`.
     /// Main actor (called from the main-queue observer via `assumeIsolated`).
+    /// ⚠ Known gap (Step 37 review, deferred to docs/todo.md): a retry task already scheduled by
+    /// `resumeAfterInterruption` is not cancelled by a new `.began`.
     private func interruption(_ type: AVAudioSession.InterruptionType) {
         switch type {
         case .began:
-            if isSpeaking { requeueCurrent() }
+            if isSpeaking { requeueCurrent(fromClause: false) }
             stopCurrent()
             isSpeaking = false
             currentPriority = nil
@@ -611,7 +771,8 @@ final class SpeechQueue {
     ///   queue is drained anyway (better to try than to hold guidance forever), with the error
     ///   left in `audioSessionError`.
     /// Draining goes through `lineEnded(gen: generation)` — the current generation, so the guard
-    /// passes — which purges expired lines and starts the head of the queue.
+    /// passes — which purges expired lines and starts the head of the queue (no cross-band pause:
+    /// nothing current means no previous band).
     /// Retry tasks inherit the main actor (unstructured `Task` in a main-actor method).
     /// - Parameter fromEnded: true when the system posted `.ended`; false for our own 15 s
     ///   fallback. Without `.ended`, a failed re-activation means the call is probably still on:
@@ -644,21 +805,36 @@ final class SpeechQueue {
     // MARK: Speaking
 
     /// Speak `text`. Higher priority than the current line interrupts it; otherwise it queues.
-    /// - Parameter ttl: seconds the line stays valid while waiting (0 = never expires).
+    /// - Parameters:
+    ///   - text: trimmed before use; the trimmed text is the coalescing and cache key, so callers
+    ///     that want the natural voice must pass bytes identical to the prefetched line.
+    ///   - priority: the band (see `SpeechPriority`).
+    ///   - ttl: seconds the line stays valid while waiting (≤ 0 = never expires). Also bounds a
+    ///     resume after the line is cut (`requeueCurrent`).
+    ///   - load: `.normal` (fail-open) or `.ambientObstacleName`, which `SpeechLoadPolicy` may drop.
+    ///   - immediate: conversational answers only — system voice at once, natural voice prefetched.
+    /// - Returns: true when the line started or was queued; false when it was empty, suppressed by
+    ///   the load policy, or coalesced with an identical line. `AppModel` writes its `speech`
+    ///   trip-log record only on true.
     ///
     /// Decision order:
-    /// 1. Whitespace-only text is ignored.
+    /// 1. Whitespace-only text is ignored. Then the load policy (`loadPolicy.admit`, busy =
+    ///    speaking, in a pause, or interrupted): a suppressed line goes to `onSuppressed`, returns false.
     /// 2. During a call/Siri interruption the line is queued (unless identical text is already
     ///    queued) and nothing plays until `.ended` / the 15 s fallback. While the voice hold is
     ///    on (the walker is dictating) the same queueing applies to everything below `.safety`;
     ///    `.safety` skips the hold — only a taken-away audio session outranks a curb.
-    /// 3. While speaking: a strictly higher priority re-queues the current line (one replay,
-    ///    front of its band), stops it and speaks now; equal/lower priority is coalesced away if
+    /// 3. In the pause between bands (`inGap`): `.safety`, or a line needing no pause after the band
+    ///    that ended and tying or outranking the queue head, ends the pause and speaks now; anything
+    ///    else is coalesced against the queue or appended.
+    /// 4. While speaking: a strictly higher priority re-queues the current line (front of its
+    ///    band, to resume from its clause — `requeueCurrent`), stops it and speaks now; equal/lower priority is coalesced away if
     ///    identical to the playing or a queued line, else appended FIFO within its band.
-    /// 4. Idle: speaks immediately. The TTL only matters while waiting in the queue; a line
+    /// 5. Idle: speaks immediately. The TTL only matters while waiting in the queue; a line
     ///    that starts at once plays in full.
-    /// Callers pick TTLs per line type (AppModel: obstacle names 4 s, cue lines 6 s, route
-    /// lines 12–20 s; SceneDescriber results 20 s). `immediate` is conversational answers only
+    /// Callers pick TTLs per line type (AppModel: obstacle names 4 s, cue lines 6 s, ground hazards
+    /// 3 s, route lines 12 s, channel / permission lines 20 s, arrival summary 30 s; SceneDescriber
+    /// results 20 s; conversation answers 8–15 s). `immediate` is conversational answers only
     /// (see `speakNow`); it rides the `Pending` through the queue so a drained answer still
     /// skips the fetch. Main actor.
     @discardableResult
@@ -687,6 +863,26 @@ final class SpeechQueue {
             sortQueue()
             return true
         }
+        // The pause between two bands: nothing is playing. A line that needs no pause after the
+        // band that just ended (`.safety`, or the same band — Antigravity, Step 37: a second route
+        // line should not wait out a pause meant for a scene line) and outranks-or-ties the queue
+        // head ends the pause and speaks now. Anything else queues; the pause then starts the
+        // highest band first.
+        if inGap {
+            let needsNoPause = SpeechResume.gapSeconds(previousBand: gapAfter?.rawValue, nextBand: priority.rawValue,
+                                                       safetyBand: SpeechPriority.safety.rawValue) == 0
+            if priority == .safety || (needsNoPause && priority >= (queue.first?.priority ?? .scene)) {
+                stopCurrent()
+                speakNow(line, priority, expires: expires, immediate: immediate)
+                return true
+            }
+            guard !queue.contains(where: { $0.text == line }) else { return false }
+            sequence += 1
+            queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence,
+                                 immediate: immediate))
+            sortQueue()
+            return true
+        }
         if isSpeaking, let cp = currentPriority {
             if priority > cp {
                 requeueCurrent()             // resume the cut line after this one
@@ -705,35 +901,76 @@ final class SpeechQueue {
         return true
     }
 
-    /// Put the line now playing back at the *front* of its priority band (if still valid and not
-    /// already replayed). Its validity is extended so the original TTL does not expire while the
-    /// interrupter speaks.
+    /// Put the line now playing back at the *front* of its priority band, to resume from the clause it
+    /// was cut in (Step 37, owner decision 2026-09-12 "Cut in, then resume"): a direction cut by
+    /// "Head height." continues "…then the path west" instead of restarting from "Route started".
     ///
-    /// No-op when idle, when the line already used its one replay (`maxReplays`), when it has
-    /// expired, or when identical text is already queued. The resumed line restarts from its
-    /// first word (neither backend can resume mid-utterance). Its new deadline is
-    /// `max(original, now + 8 s)`. Must be called *before* `stopCurrent`, which clears nothing
-    /// here but bumps the generation. Callers: `say` (pre-emption), `interruption(.began)`
-    /// and `setVoiceHold(true)`.
-    private func requeueCurrent() {
+    /// Progress: the system voice's last `willSpeakRange` word (heard in full — it stops at a word
+    /// boundary, `finishesWord`); an mp3 clip's `currentTime / duration` mapped proportionally and
+    /// backed off ~0.5 s (`SpeechResume.mp3HeardUTF16`). The resume point is the start of the clause
+    /// containing it (`SpeechResume.resumeOffset`); nothing is re-queued when nothing but punctuation
+    /// is left, or when an mp3 has already stopped playing (it finished; its end callback is still
+    /// hopping to main, and `currentTime` has reset to 0 — review agents, Step 37). A line resumes
+    /// at most `SpeechResume.maxResumes` times and its resume point never moves backwards
+    /// (`nextResume`), so a head-height branch every few seconds cannot loop it forever. On its
+    /// first cut its deadline becomes `max(original, now + 8 s)`; later cuts keep that deadline, so a
+    /// line cut again and again still goes stale.
+    ///
+    /// - Parameter fromClause: true for a pre-emption (a warning is ~1 s; the direction's context is
+    ///   still in the walker's ear). False for a call / Siri or dictation: after a pause of seconds a
+    ///   clause fragment has no context, so the line restarts from its last resume point (0 for a
+    ///   line never cut) — review agents, Step 37.
+    ///
+    /// No-op when idle, expired, or identical text is already queued. Must be called *before*
+    /// `stopCurrent` (which drops the player the progress is read from). Callers: `say`
+    /// (pre-emption), `interruption(.began)` and `setVoiceHold(true)`.
+    private func requeueCurrent(fromClause: Bool = true) {
         let now = Date().timeIntervalSinceReferenceDate
-        guard let cp = currentPriority, !currentText.isEmpty, currentReplays < maxReplays,
-              currentExpires > now,
+        guard let cp = currentPriority, !currentText.isEmpty, currentExpires > now,
               !queue.contains(where: { $0.text == currentText }) else { return }
+        var progress = 0
+        if fromClause {
+            let found: Int?
+            if let player {
+                guard player.isPlaying else { return }      // finished; the end callback is on its way
+                // Backed off ~0.5 s of speech: a natural voice's timing is uneven, and resuming a clause
+                // early repeats a few words where resuming late would lose an instruction (Muse, Step 37).
+                let estimate = player.duration > 0
+                    ? SpeechResume.spokenUTF16(text: currentText, playedFraction: player.currentTime / player.duration)
+                    : 0
+                found = SpeechResume.resumeOffset(text: currentText,
+                                                  spokenUTF16: SpeechResume.mp3HeardUTF16(estimate: estimate))
+            } else {
+                found = SpeechResume.resumeOffset(text: currentText, spokenUTF16: currentSpokenUTF16,
+                                                  finishesWord: currentWordHeard)
+            }
+            guard let found else { return }
+            progress = found
+        }
+        guard let offset = SpeechResume.nextResume(previousOffset: currentLastResumeOffset, newOffset: progress,
+                                                   resumes: currentReplays) else { return }
         let front = (queue.map(\.sequence).min() ?? sequence) - 1
-        queue.append(Pending(text: currentText, priority: cp, expires: max(currentExpires, now + 8),
+        // The deadline is extended on the FIRST cut only: three resumes each adding 8 s could let a
+        // ~25 s-old turn instruction play (Muse, Step 37). Later cuts keep the extended deadline.
+        let expires = currentReplays == 0 ? max(currentExpires, now + 8) : currentExpires
+        queue.append(Pending(text: currentText, priority: cp, expires: expires,
                              sequence: front, replays: currentReplays + 1,
-                             immediate: currentImmediate))
+                             immediate: currentImmediate, resumeFrom: offset, lastResumeOffset: offset))
         sortQueue()
     }
 
     /// "Say that again": always speaks, even when `text` is the line playing right now (plain
     /// `say` would coalesce it away). Interrupts an equal-or-lower line, queues behind a higher one.
     ///
+    /// Explicit Repeat wins the pause between bands too: during `inGap` it speaks at once unless the
+    /// line the pause is waiting to start outranks it (the pause
+    /// exists to separate unasked lines; the walker asked for this one — Muse, Step 37, accepted).
     /// Any queued copy of `text` is removed first so it cannot play twice. The line it cuts is
     /// *not* re-queued (the user explicitly asked for this line instead). During an interruption
     /// it only queues. `ttl` is always finite here (default 12 s) — unlike `say`, `ttl: 0` does
     /// not mean "never expires"; a queued line with `ttl: 0` would be purged at the next drain.
+    /// Bypasses the load policy and the voice hold (an explicit request wins), and does not carry
+    /// `immediate`.
     /// Caller: the Repeat path (watch / on-screen button) through `NavigationEngine.onRepeat`,
     /// wired in `AppModel`, always with `.nav` and the last line actually spoken (AGENTS.md).
     /// Main actor.
@@ -742,7 +979,10 @@ final class SpeechQueue {
         guard !line.isEmpty else { return }
         let expires = Date().timeIntervalSinceReferenceDate + ttl
         queue.removeAll { $0.text == line }
-        if interrupted || (isSpeaking && (currentPriority ?? .scene) > priority) {
+        // During a pause nothing is current: rank against the line the pause is waiting to start, so
+        // Repeat never jumps a higher queued line (Antigravity, Step 37; today's callers pass `.nav`).
+        let ahead = currentPriority ?? (inGap ? queue.first?.priority : nil) ?? .scene
+        if interrupted || (isSpeaking && ahead > priority) {
             sequence += 1
             queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence))
             sortQueue()
@@ -759,7 +999,8 @@ final class SpeechQueue {
         queue.sort { ($0.priority, -$0.sequence) > ($1.priority, -$1.sequence) }
     }
 
-    /// Pre-synthesize lines the route will need (no-op without the natural voice).
+    /// Pre-synthesize lines the route will need (no-op without the natural voice, or when
+    /// `useNaturalVoice` is false; `muted` does not gate it).
     /// Fire-and-forget on a detached `.utility` task so the network work never runs on (or
     /// blocks) the main actor; `ElevenLabsVoice` is a Sendable value, so capturing it is safe.
     /// A line that is still uncached later simply takes the fetch or system-voice path in
@@ -767,11 +1008,14 @@ final class SpeechQueue {
     /// + intro); `speakNow` for a warning spoken by the system voice.
     ///
     /// Only one prefetch runs at a time: starting a second route cancels the first. Two overlapping
-    /// batches would put twice `maxConcurrentPrefetches` requests in flight and rate-limit the live
+    /// batches would put twice `VoicePrefetch.maxConcurrent` (2) requests in flight and rate-limit the live
     /// cue the walker is waiting for, and the older batch is for a route nobody is walking any more.
     /// `backgroundLines` is appended to whatever the caller passed, so a cancelled batch's
     /// never-urgent tail is carried into the replacement instead of being dropped.
-    /// - Parameter lines: the urgent lines, in speaking order; requested before `backgroundLines`.
+    /// - Parameter lines: the urgent lines, in speaking order; requested before `routeLines`, then
+    ///   `backgroundLines` (`VoicePrefetch.queue` drops repeats and already-cached lines).
+    /// A failure is written to `voiceError` (never while the app is backgrounded, where suspension
+    /// shows up as a timeout); a cancelled batch reports nothing.
     func prefetch(_ lines: [String]) {
         guard let naturalVoice, useNaturalVoice else { return }
         prefetchTask?.cancel()
@@ -804,8 +1048,11 @@ final class SpeechQueue {
     /// Hold (`true`) or release (`false`) the speech channel while the walker dictates.
     ///
     /// On hold: the playing line is cut unless it is `.safety`, and re-queued subject to the
-    /// usual one-replay rule (AGENTS.md: interrupted lines are re-queued; Repeat recovers the
-    /// rest). New lines below `.safety` queue with their TTLs instead of playing; `.safety`
+    /// usual resume rule (AGENTS.md: interrupted lines are re-queued; Repeat recovers the
+    /// rest) — but from its last resume point, not the cut clause (`fromClause: false`: after a
+    /// conversation a fragment has no context). A pending pause between bands is ended too
+    /// (`isSpeaking` is true and nothing is current, so `stopCurrent` clears `inGap` and bumps the
+    /// generation its task holds); the line it was waiting for stays queued for the release. New lines below `.safety` queue with their TTLs instead of playing; `.safety`
     /// speaks straight through. On release: expired lines are purged and the head of the queue
     /// plays — a short conversation lets still-valid guidance through, a long one finds the
     /// queue already expired, so there is no burst either way. Idempotent; safe to call when
@@ -816,7 +1063,7 @@ final class SpeechQueue {
         voiceHeld = active
         if active {
             if isSpeaking, currentPriority != .safety {
-                requeueCurrent()
+                requeueCurrent(fromClause: false)
                 stopCurrent()
                 isSpeaking = false
                 currentPriority = nil
@@ -831,9 +1078,17 @@ final class SpeechQueue {
     /// Drop everything waiting and stop the current line (used when a route ends).
     /// Nothing is re-queued. Does not clear `interrupted`; a later `say` still obeys an active
     /// call. `AppModel.stopRoute` calls this before speaking "Route stopped." so queued
-    /// waypoint lines cannot play after Stop.
+    /// waypoint lines cannot play after Stop; `endRouteQuietly` (a route replaced mid-walk) and the
+    /// Guide card's cancel-route-start button (`cancelRouteStart`) call it too. Also ends a pending pause, clears the resume state (Muse,
+    /// Step 37: it used to leave that behind) and resets the load policy's calm window. Does not
+    /// touch the voice hold, `routeLines` or a running prefetch.
     func stopAll() {
         queue.removeAll()
+        inGap = false
+        currentResumeFrom = 0
+        currentLastResumeOffset = nil
+        currentSpokenUTF16 = 0
+        currentReplays = 0
         loadPolicy.reset()
         stopCurrent()
         isSpeaking = false
@@ -842,7 +1097,9 @@ final class SpeechQueue {
     }
 
     /// True when launched with `CANEKIT_MUTE=1` or under XCUITest (`CANEKIT_UITEST=1`): tests
-    /// and the e2e harness run silently.
+    /// and the e2e harness run silently. Read once (a lazy static) from the process environment,
+    /// never from settings, so a normal launch can never be silent. Readers: `speakNow` (simulated
+    /// line length instead of audio) and `BeaconEngine.render` (beacon stays silent).
     static let muted: Bool = {
         let env = ProcessInfo.processInfo.environment
         return env["CANEKIT_MUTE"] == "1" || env["CANEKIT_UITEST"] == "1"
@@ -853,41 +1110,59 @@ final class SpeechQueue {
     /// Make `text` the current line and hand it to a backend. The caller must already have
     /// stopped (or never started) any previous line.
     ///
-    /// Bumps `generation`, records the current line's priority / text / deadline / replay
-    /// count (used by `requeueCurrent`), sets `isSpeaking` and `lastSpoken`, arms the watchdog,
-    /// then picks a backend:
+    /// Bumps `generation`, ends any pause, records the current line's priority / text / deadline /
+    /// replay count / resume state (used by `requeueCurrent`), sets `isSpeaking` and `lastSpoken`,
+    /// arms the watchdog on the remainder it will say, fires `onDispatch`, then — unless `muted`,
+    /// which only simulates the line's length — picks a backend:
     /// - no key, or `useNaturalVoice == false` → system voice;
     /// - ElevenLabs cache hit → mp3 plays at once;
-    /// - cache miss on `.obstacle` / `.safety` → system voice now + background prefetch
-    ///   (warnings never wait for the network — AGENTS.md);
-    /// - cache miss otherwise → fetch (≤ `ElevenLabsVoice.timeout`, 2.5 s), then play; on
-    ///   failure speak with the system voice. The fetch task inherits the main actor and the
+    /// - cache miss on `.obstacle` / `.safety`, or an `immediate` line → system voice now +
+    ///   background prefetch (warnings never wait for the network — AGENTS.md);
+    /// - cache miss within 60 s of a natural-voice failure (`naturalVoiceFailedAt`) → the same;
+    /// - cache miss otherwise → fetch with a 2.5 s *total* deadline task racing it (`voicePending`
+    ///   decides the one winner; `ElevenLabsVoice.timeout` is only an idle timeout), then play; on
+    ///   failure or deadline speak with the system voice. The fetch task inherits the main actor and the
     ///   URLSession await inside `ElevenLabsVoice.audio(for:)` suspends rather than blocks it.
     /// A result that arrives after the line was superseded (generation changed) is dropped.
     ///
     /// - Parameters:
-    ///   - expires: absolute deadline carried from the queue; `.infinity` for direct lines.
+    ///   - expires: absolute deadline (reference-date seconds) from `say` / `sayAgain` or carried
+    ///     from the queue; `.infinity` only for `say(ttl: 0)`.
     ///   - replays: how many times this line has already been resumed after a cut.
+    ///   - resumeFrom: UTF-16 offset of the clause to start from (0 = the whole line). The system
+    ///     voice speaks `SpeechResume.remainder`; an mp3 seeks with `SpeechResume.clipTime`.
+    ///   - lastResumeOffset: the queued line's `Pending.lastResumeOffset`, carried so a later cut
+    ///     can never resume from an earlier point (`SpeechResume.nextResume`).
     ///   - immediate: speak in the system voice at once (prefetching the natural voice for next
     ///     time) instead of waiting on a cache-miss fetch. Conversational answers only: their
     ///     text is novel every time, so a fetch would stall *every* answer on the network.
     private func speakNow(_ text: String, _ priority: SpeechPriority, expires: TimeInterval = .infinity,
-                          replays: Int = 0, immediate: Bool = false) {
+                          replays: Int = 0, immediate: Bool = false,
+                          resumeFrom: Int = 0, lastResumeOffset: Int? = nil) {
         generation += 1
         let gen = generation
+        inGap = false
         currentPriority = priority
         currentText = text
         currentExpires = expires
         currentReplays = replays
         currentImmediate = immediate
+        currentResumeFrom = resumeFrom
+        currentLastResumeOffset = lastResumeOffset
+        currentSpokenUTF16 = resumeFrom
+        currentWordHeard = false
         isSpeaking = true
         lastSpoken = text
-        armWatchdog(gen: gen, text: text)
+        // What the system voice says: the remainder from the resume clause. An mp3 clip plays the
+        // whole cached file from `clipStart` instead (one cache entry per line, never per fragment).
+        let spokenText = SpeechResume.remainder(of: text, from: resumeFrom)
+        armWatchdog(gen: gen, text: spokenText)
+        onDispatch?(text, priority, replays, resumeFrom)
 
         // Automation mute (simulator tests, never on a normal launch): keep the queue's timing
         // and logging but make no sound — the line "ends" after its estimated spoken length.
         if Self.muted {
-            let seconds = 0.4 + Double(text.count) / 15.0
+            let seconds = 0.4 + Double(spokenText.count) / 15.0
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds))
                 self?.lineEnded(gen: gen)
@@ -896,7 +1171,7 @@ final class SpeechQueue {
         }
 
         guard let naturalVoice, useNaturalVoice else {
-            speakSystem(text, gen: gen)
+            speakSystem(spokenText, gen: gen)
             return
         }
         if let url = naturalVoice.cached(text) {
@@ -908,7 +1183,7 @@ final class SpeechQueue {
         // `immediate` conversational answer: its text is novel, so the cache can never hit and
         // the walker would otherwise wait on a fetch after every question.
         if immediate || priority == .obstacle || priority == .safety {
-            speakSystem(text, gen: gen)
+            speakSystem(spokenText, gen: gen)
             prefetch([text])
             return
         }
@@ -916,7 +1191,7 @@ final class SpeechQueue {
         // up to 2.5 s for another failure — system voice now, retry the network in the background
         // (Muse M1). After 60 s quiet, the natural voice gets another chance.
         if Date().timeIntervalSinceReferenceDate - naturalVoiceFailedAt < 60 {
-            speakSystem(text, gen: gen)
+            speakSystem(spokenText, gen: gen)
             prefetch([text])
             return
         }
@@ -931,7 +1206,7 @@ final class SpeechQueue {
             self.voicePending = false
             self.fetchTask?.cancel()
             self.naturalVoiceFailedAt = Date().timeIntervalSinceReferenceDate
-            self.speakSystem(text, gen: gen)
+            self.speakSystem(spokenText, gen: gen)
         }
         fetchTask = Task { [weak self] in
             let result = await Result { try await naturalVoice.audio(for: text) }
@@ -944,7 +1219,7 @@ final class SpeechQueue {
             case .failure(let error):
                 self.voiceError = error.localizedDescription
                 self.naturalVoiceFailedAt = Date().timeIntervalSinceReferenceDate
-                self.speakSystem(text, gen: gen)
+                self.speakSystem(spokenText, gen: gen)
             }
         }
     }
@@ -954,6 +1229,8 @@ final class SpeechQueue {
     /// `utteranceEnded`, matched by utterance identity rather than `gen` (the parameter is kept
     /// for symmetry with `playFile`; staleness is enforced by `currentUtterance`, which
     /// `stopCurrent` clears). 0.05 s post-utterance gap keeps back-to-back lines distinct.
+    /// - Parameter text: what to say — the whole line, or its remainder from `currentResumeFrom`
+    ///   (word ranges reported for it are shifted by that offset in `utteranceWillSpeak`).
     private func speakSystem(_ text: String, gen: Int) {
         backendName = "System"
         let u = AVSpeechUtterance(string: text)
@@ -971,8 +1248,10 @@ final class SpeechQueue {
     /// on an AVFoundation thread and hops to the main actor, where `lineEnded(gen:)` ignores it
     /// unless `gen` is still current. The relay is retained in `playerRelay` because the
     /// player's delegate is weak. If the file cannot be opened or `play()` returns false (no
-    /// delegate callback will ever come) the line is re-spoken by the system voice under the same
-    /// generation, so the queue never sticks. Main actor.
+    /// delegate callback will ever come) the line — its remainder from `currentResumeFrom` — is
+    /// re-spoken by the system voice under the same generation, so the queue never sticks. A resumed
+    /// line seeks the whole cached clip to its clause (`SpeechResume.clipTime`, 0.25 s early): one
+    /// cache entry per line, never per fragment. Main actor.
     private func playFile(_ url: URL, gen: Int) {
         backendName = "ElevenLabs"
         // The natural voice just worked, so any earlier complaint is history. Without this a
@@ -987,24 +1266,29 @@ final class SpeechQueue {
             p.delegate = relay
             playerRelay = relay
             player = p
+            // A resumed line starts at its clause, a quarter second early (`SpeechResume.clipTime`).
+            p.currentTime = SpeechResume.clipTime(text: currentText, resumeUTF16: currentResumeFrom,
+                                                  duration: p.duration)
             // A false return means no delegate callback will ever come: fall back immediately
             // instead of leaving `isSpeaking` stuck and every later line queued forever.
             if !p.play() {
                 player = nil
                 voiceError = "Playback did not start"
-                speakSystem(lastSpoken, gen: gen)
+                speakSystem(SpeechResume.remainder(of: lastSpoken, from: currentResumeFrom), gen: gen)
             }
         } catch {
             voiceError = "Playback: \(error.localizedDescription)"
-            speakSystem(lastSpoken, gen: gen)
+            speakSystem(SpeechResume.remainder(of: lastSpoken, from: currentResumeFrom), gen: gen)
         }
     }
 
     /// Last-resort unstick: if no end callback arrives well after the line should be over
     /// (interruption edge cases, a stalled player), treat it as ended so the queue keeps moving.
     ///
-    /// Limit = 6 s + characters / 6 s (≈ a slow speaking rate plus fetch headroom). The timer
+    /// Limit = 6 s + (characters / 6) s, counting the characters actually to be spoken (the resumed
+    /// remainder for a cut line) — ≈ a slow speaking rate plus fetch headroom. The timer
     /// also covers a slow ElevenLabs fetch, since it is armed before the backend is chosen.
+    /// A watchdog end is a natural end for `onLineEnd` (the priority is still current).
     /// Fires only if the same generation is still speaking; it then records
     /// "Speech watchdog reset" in `voiceError`, stops the backends (bumping `generation`) and
     /// ends the line with the *new* generation so the next queued line starts. The dropped line
@@ -1025,8 +1309,10 @@ final class SpeechQueue {
     /// watchdog and any ElevenLabs fetch, stops the player and the synthesizer (at a word
     /// boundary), forgets `currentUtterance`, and bumps `generation`. The stop calls return
     /// before their delegate callbacks fire; those late callbacks are ignored by the generation /
-    /// utterance-identity checks. Does *not* touch `isSpeaking`, `currentPriority` or the
-    /// queue — callers either start a new line right after or reset those themselves.
+    /// utterance-identity checks. Also ends a pending pause (`inGap = false`). Does *not* touch
+    /// `isSpeaking`, `currentPriority` or the queue — callers either start a new line right after or
+    /// reset those themselves. ⚠ Read mp3 progress (`requeueCurrent`) *before* calling this: it drops
+    /// the player. A `.word` stop finishes the word being said, which `requeueCurrent` relies on.
     private func stopCurrent() {
         watchdog?.cancel()
         watchdog = nil
@@ -1037,14 +1323,29 @@ final class SpeechQueue {
         player = nil
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .word) }
         currentUtterance = nil
+        inGap = false                        // a pending pause belongs to the old generation
         generation += 1                      // anything in flight is now stale
     }
 
     // MARK: Completion
 
+    /// The system voice is about to say the word at `location` (UTF-16, within the utterance's own
+    /// string — the remainder for a resumed line, hence `currentResumeFrom +`). Recorded as progress
+    /// through the whole line for `requeueCurrent`; ignored for any utterance that is no longer
+    /// current (a late callback from a cut line). Delivered by the `DelegateRelay` → `CallbackBox.onWord`
+    /// hop, so a cut can land before the latest word's hop: the resume then starts a clause early,
+    /// never late (Step 37).
+    private func utteranceWillSpeak(_ id: ObjectIdentifier, location: Int) {
+        guard let currentUtterance, ObjectIdentifier(currentUtterance) == id else { return }
+        currentSpokenUTF16 = currentResumeFrom + location
+        currentWordHeard = true
+    }
+
     /// System-voice completion (finish *or* cancel), delivered on main by the relay hop.
     /// Ignored unless `id` is the utterance we still consider current — a `didCancel` from a
     /// line that `stopCurrent` already replaced arrives late and must not end its successor.
+    /// Then ends the line with the *current* generation (the utterance identity already proved it
+    /// is ours).
     private func utteranceEnded(_ id: ObjectIdentifier) {
         guard let currentUtterance, ObjectIdentifier(currentUtterance) == id else { return }
         self.currentUtterance = nil
@@ -1053,10 +1354,12 @@ final class SpeechQueue {
 
     /// The current line finished (or was declared finished): advance the queue.
     ///
-    /// Stale calls (`gen != generation`) are ignored. Otherwise clears the current-line state,
-    /// purges expired queued lines (TTL), and either starts the head of the queue — carrying its
-    /// deadline and replay count — or, if the queue is empty, a call/Siri interruption is
-    /// active, or the voice hold is on, sets `isSpeaking = false`. Callers: `utteranceEnded`,
+    /// Stale calls (`gen != generation`) are ignored. Otherwise fires `onLineEnd` with the ended
+    /// line's priority (when one was current), clears the current-line and resume state, and hands
+    /// over to `startNext(after:)`, which purges expired queued lines (TTL) and either starts the head
+    /// of the queue — after the 0.35 s cross-band pause when it is a different band — or, if the
+    /// queue is empty, a call/Siri interruption is active, or the voice hold is on, sets
+    /// `isSpeaking = false`. Callers: `utteranceEnded`, the muted-line timer,
     /// the `PlayerRelay` hop, the watchdog, `resumeAfterInterruption` (to drain after `.ended`)
     /// and `setVoiceHold(false)` (to drain after dictation).
     private func lineEnded(gen: Int) {
@@ -1064,23 +1367,64 @@ final class SpeechQueue {
         watchdog?.cancel()
         watchdog = nil
         player = nil
+        let endedPriority = currentPriority
+        if let endedPriority { onLineEnd?(endedPriority) }
         currentPriority = nil
         currentText = ""
         currentImmediate = false
+        currentResumeFrom = 0
+        currentLastResumeOffset = nil
+        currentSpokenUTF16 = 0
+        startNext(after: endedPriority)
+    }
+
+    /// Start the head of the queue, after a short pause when it is a different band from the line
+    /// that just ended (`SpeechResume.gapSeconds`, Step 37: "Head height." and the direction it cut
+    /// are heard as two things, not one run-on sentence). Purges expired lines first, and again
+    /// after the pause. During the pause `inGap` is true and `isSpeaking` stays true; a new line
+    /// starting (`speakNow`), `stopCurrent`, `stopAll` or an interruption ends it, and the pause
+    /// task — tied to this `generation` — then does nothing.
+    /// - Parameter endedPriority: band of the line that just ended; nil to start without a pause
+    ///   (draining after a call or a voice hold, and the pause task's own second call).
+    /// The head is started with its deadline, replay count and resume state
+    /// (`resumeFrom` / `lastResumeOffset`), so a resumed line keeps its loop guard.
+    private func startNext(after endedPriority: SpeechPriority?) {
         let now = Date().timeIntervalSinceReferenceDate
         queue.removeAll { $0.expires < now }
-        guard !queue.isEmpty, !interrupted, !voiceHeld else {
+        guard let head = queue.first, !interrupted, !voiceHeld else {
+            inGap = false
             isSpeaking = false
             return
         }
+        let gap = SpeechResume.gapSeconds(previousBand: endedPriority?.rawValue, nextBand: head.priority.rawValue,
+                                          safetyBand: SpeechPriority.safety.rawValue)
+        if gap > 0 {
+            inGap = true
+            gapAfter = endedPriority
+            // A fresh generation for the pause: a stray second end callback from the line that just
+            // ended (still holding the old generation) is then ignored instead of cutting the pause
+            // short (Antigravity, Step 37).
+            generation += 1
+            let gen = generation
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(gap))
+                guard let self, self.inGap, self.generation == gen else { return }
+                self.inGap = false
+                self.startNext(after: nil)
+            }
+            return
+        }
+        inGap = false
         let next = queue.removeFirst()
         speakNow(next.text, next.priority, expires: next.expires, replays: next.replays,
-                 immediate: next.immediate)
+                 immediate: next.immediate, resumeFrom: next.resumeFrom,
+                 lastResumeOffset: next.lastResumeOffset)
     }
 
     /// Prefer an enhanced/premium en-US voice when one is installed; fall back to the default.
     /// Evaluated once in `init`; premium/enhanced voices exist only if the user downloaded them
-    /// in Settings › Accessibility › Spoken Content.
+    /// in Settings › Accessibility › Spoken Content. A voice downloaded while the app runs is used
+    /// from the next launch.
     private static func bestEnglishVoice() -> AVSpeechSynthesisVoice? {
         let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en-US") }
         if let v = voices.first(where: { $0.quality == .premium }) { return v }
@@ -1099,21 +1443,34 @@ final class SpeechQueue {
 // `@unchecked Sendable` is acceptable on these relays (not on `SpeechQueue`) because their only
 // state is immutable after init or written once before the delegate is installed.
 
-/// Holds the end-of-utterance callback. Written once during `SpeechQueue.init`, then only read.
+/// Holds the end-of-utterance and word-progress callbacks. Written once during
+/// `SpeechQueue.init` (after `synthesizer.delegate` is set, before any utterance is spoken), then
+/// only read.
 /// Exists because `init` must build `DelegateRelay` before `self` is fully initialised, so the
 /// `[weak self]` closure is attached afterwards through this box.
 nonisolated private final class CallbackBox: @unchecked Sendable {
     /// Receives the finished/cancelled utterance's identity on the synthesizer's thread; the
     /// closure installed by `SpeechQueue.init` hops to the main actor.
     var onEnd: (@Sendable (ObjectIdentifier) -> Void)?
+    /// Receives each word's start (UTF-16 location in the utterance string) before it is spoken, on
+    /// the synthesizer's thread; the closure installed by `SpeechQueue.init` hops to the main actor.
+    var onWord: (@Sendable (ObjectIdentifier, Int) -> Void)?
 }
 
 /// `AVSpeechSynthesizerDelegate` relay. Runs on whatever thread AVSpeech uses; forwards only the
 /// utterance's `ObjectIdentifier` (the utterance object itself is not Sendable). Finish and
 /// cancel are reported identically — `SpeechQueue.utteranceEnded` decides whether it matters.
 nonisolated private final class DelegateRelay: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
+    /// Where the callbacks are forwarded; immutable reference, its closures set once in `init`.
     private let box: CallbackBox
+    /// - Parameter box: the shared box `SpeechQueue.init` fills in right after building this relay.
     init(box: CallbackBox) { self.box = box }
+
+    /// A word is about to be spoken → `onWord` with its UTF-16 location (progress for resume).
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange,
+                           utterance: AVSpeechUtterance) {
+        box.onWord?(ObjectIdentifier(utterance), characterRange.location)
+    }
 
     /// Normal end of an utterance → `onEnd`.
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
@@ -1131,7 +1488,10 @@ nonisolated private final class DelegateRelay: NSObject, AVSpeechSynthesizerDele
 /// does not call `audioPlayerDidFinishPlaying`, so a stopped line relies on `stopCurrent`'s
 /// generation bump rather than on this callback.
 nonisolated private final class PlayerRelay: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+    /// Ends this relay's line: `SpeechQueue.playFile`'s closure, which captured that line's
+    /// generation and hops to the main actor. Immutable, so sharing it across threads is safe.
     private let onEnd: @Sendable () -> Void
+    /// - Parameter onEnd: called on an AVFoundation thread when the clip finishes or fails to decode.
     init(onEnd: @escaping @Sendable () -> Void) { self.onEnd = onEnd }
 
     /// Playback reached the end (successfully or not) → the line is over.

@@ -5,9 +5,39 @@
 //  Manages conversational assistant state, history, marker persistence, and tool dispatching.
 //  Bridges CaneKitLogic decision models with AppModel effects.
 //
+//  Why it exists (Step 23, "Talk to OpenCane"): a blind walker with one hand on the cane needs to
+//  ask for things by voice — status, a destination, a post, a setting — without a screen. Every
+//  query takes exactly one of four paths, in this order:
+//    1. Fast path (`FastPathIntentClassifier.classify`): deterministic, offline, 0 tokens —
+//       settings, status, route start/stop, posts, trip metrics.
+//    2. Scene question (`FastPathIntentClassifier.isSceneQuestion`): always the grounded camera
+//       path (`AppModel.askAboutScene` → `SceneDescriber.ask`, `CloudSceneGate`), never the chat
+//       model, even with a cloud key.
+//    3. No cloud model (`client.cloudPrimary == nil`): one honest "I need a network model" line.
+//    4. Cloud model: `ConversationPrompt` + a camera frame → `ConversationResponseParser` → at most
+//       one tool call (`executeTool`) + one spoken sentence.
+//  Every answer is spoken at `.scene` (the lowest band: route, obstacle and safety lines always
+//  pre-empt it) with `immediate: true` (Step 31: novel text never hits the natural-voice cache, so
+//  it is spoken in the system voice at once instead of waiting on a TTS fetch). Effects that
+//  announce themselves (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) are not
+//  echoed (Step 23 Muse rounds: double-speak). Every turn is logged: `conv_turn` / `conv_error` /
+//  `marker_dropped`.
+//
+//  Owner: `AppModel.conversation`, built in `AppModel.init` with the same `VLMClient` as the
+//  describer. Callers: `AppModel`'s `voiceInput.onTranscriptionFinalized` (push-to-talk, head nod)
+//  and `AppModel.handleSpokenQuery` (`TalkToOpenCaneIntent` with a filled query). GuideCard shows
+//  `isProcessing` ("Thinking…") and `lastResponse`.
+//
 //  Threading / isolation:
 //    · Main actor isolated throughout (`@MainActor @Observable`).
-//    · Background network LLM calls run concurrently on URLSession.
+//    · Background network LLM calls run concurrently on URLSession; the JPEG is encoded in a
+//      detached task so the main actor is not stalled.
+//    · `appModel` is weak and re-read per call: `AppModel` owns this object (no retain cycle) and a
+//      query may outlive a torn-down model across the network await (Step 23 Muse finding 3).
+//
+//  Tests: the pure halves are in CaneKitLogic (`ConversationLogicTests`: classifier, parser,
+//  history ring, `sceneQuestionDetection`, `walkMarkerJSONRoundTrip`; `NodToTalkFastPathTests`).
+//  This class has no unit test (app target) — device test in CHANGELOG Step 23.
 //
 
 import CaneKitLogic

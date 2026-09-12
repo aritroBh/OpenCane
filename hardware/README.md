@@ -22,16 +22,20 @@ and the shaft out of the camera's view. The full team context is in
 
 **Status (2026-09-12, late):** two designs. `mount/` (screwed, this page's quick start) is a
 draft nobody has rendered. `mount_screwless/` is the live one: simulated end to end
-(`scripts/verify_mount.ps1`, 30 checks green), sliced, bore rings printed and read; the rest is
-not yet printed. See `CHANGELOG.md` Steps 21 and 25.
+(`scripts/verify_mount.ps1`: 32 PASS/FAIL lines in a full run, 17 with `-Quick`; all green at Step 25),
+sliced, bore rings printed and read; the rest is not yet printed. See `CHANGELOG.md` Steps 21 and 25.
 
 ## Files
 
 | File | What it is |
 |---|---|
+| [`3d_print_files/`](3d_print_files/README.md) | The one place build output is committed (un-ignored in `.gitignore`): sliced G-code for the Creality SPARKX i7 and the STLs of the screwless mount, hand-copied from `mount_screwless/stl/` and `gcode/` after `scripts/build_stl.ps1` and `scripts/slice_gcode.ps1`. Re-copy after every rebuild |
+| [`mount_screwless/`](mount_screwless/README.md) | The live design: collet clamp + dovetail, zero bought hardware. `screwless_mount.scad` (parts), `coupons.scad` (bore / thread / dovetail fit coupons), `verify.scad` (intersection harness driven by `scripts/verify_mount.ps1`), `PRINTING.md` (operator runbook — read before printing) |
+| [`cane_tip/ball_tip.scad`](cane_tip/ball_tip.scad) | Printed rolling ball tip (swivel test, lower, upper, stem), sized to the 27.65 mm prototype stick, not a real cane; rendered by `scripts/build_stl.ps1 -Part swivel_test` etc. |
+| `../scripts/` | Windows CAD toolchain for `mount_screwless/` and `cane_tip/`: `build_stl.ps1` (OpenSCAD → binary STL), `verify_mount.ps1` (clearance / mechanism / shell checks), `slice_gcode.ps1` (headless Creality Print slice + material guard), `stl_tools.js` (volume, shells, overhang, support-in-box measurements, node only) |
 | [`mount/DESIGN.md`](mount/DESIGN.md) | The design brief: Apple dimensions and sources, what the app needs, requirements, the tilt derivation (**camera 5° down, not 10–20°**), concepts A/B/C, 24 h plan, tooling, print settings, assembly, test protocol |
 | [`mount/cane_mount.scad`](mount/cane_mount.scad) | Parametric OpenSCAD model: split collar, rosette hinge with 5° detents and an angle scale, arm, cradle, cap, knob, and an assembly preview. Set `part` to export each STL, already in print orientation. |
-| [`mount/test_coupons.scad`](mount/test_coupons.scad) | Bore-fit rings (28.75 −0.2 / +0 / +0.2 / +0.4), phone-corner fit coupons (gap 0.2 / 0.3 / 0.4), rosette mesh plates |
+| [`mount/test_coupons.scad`](mount/test_coupons.scad) | Bore-fit rings (`pole_d` 27.65 −0.2 / +0 / +0.2 / +0.4), phone-corner fit coupons (gap 0.2 / 0.3 / 0.4), rosette mesh plates |
 | [`mount/pitch_model.py`](mount/pitch_model.py) | `python3 mount/pitch_model.py` reproduces the pitch table and the cradle-to-cane clearance check. Edit camera height and FOV after measuring. |
 
 ## Quick start (Sagar)

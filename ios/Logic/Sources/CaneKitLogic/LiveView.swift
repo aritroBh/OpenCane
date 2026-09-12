@@ -93,8 +93,9 @@ public enum LiveView: Equatable, Sendable {
 public enum BothCameras: Equatable, Sendable {
     /// Nothing built, no cameras held, ARKit owns the camera as usual.
     case off
-    /// Refused because guidance is running: the walker is *walking*, and the obstacle channel is
-    /// not something a spotter's picture may switch off mid-route.
+    /// Guidance is running, so the mode is refused and its reason is on screen for the whole
+    /// route (switch on or off): the walker is *walking*, and the obstacle channel is not
+    /// something a spotter's picture may switch off mid-route.
     case blockedByRoute
     /// This phone cannot run two cameras at once (`AVCaptureMultiCamSession.isMultiCamSupported`
     /// is false), so the two-camera view is not available: **no picture at all**, just a line of
@@ -116,9 +117,82 @@ public enum BothCameras: Equatable, Sendable {
     public static func state(enabled: Bool, supported: Bool, navigating: Bool,
                              foreground: Bool = true) -> BothCameras {
         guard foreground else { return .off }
-        if navigating { return enabled ? .blockedByRoute : .off }
+        // The whole route, whatever the switch shows: `AppModel.setBothCameras` snaps a refused
+        // switch back to off at once, so keying this on `enabled` hid the reason (measured,
+        // trip log 2026-09-12T20-57-17Z; `bothCamerasExplainTheRefusalForTheWholeRoute`).
+        if navigating { return .blockedByRoute }
         guard enabled else { return .off }
         return supported ? .live : .unsupported
+    }
+}
+
+/// Whether "Head tracking without AirPods" may change right now.
+///
+/// Turning `ARWorldTrackingConfiguration.userFaceTrackingEnabled` on **or** off makes
+/// `DepthEngine.setFaceTracking` pause and re-run the AR session: ~1–2 s with no obstacle frames.
+/// Measured on the phone (trip log 2026-09-12T20-57-17Z, t = 80.7 s) it was switched on mid-route
+/// with no warning. So, like the two-camera mode, it is refused while a route guides or starts.
+/// Caller: `AppModel.faceHeadTrackingEnabled`'s `didSet` and `startFaceTrackingSelfTest`.
+/// Pinned by `LiveViewTests.faceTracking*`.
+public enum FaceTrackingChange: Equatable, Sendable {
+    /// No route: re-run the session with the new setting.
+    case apply
+    /// A route is guiding the walker: keep the old setting and say why.
+    case refusedRoute
+    /// A route is waiting for obstacle detection (`DepthReadiness`): a re-run would reset it.
+    case refusedRouteStart
+
+    /// - Parameters:
+    ///   - navigating: `NavigationEngine.isNavigating`.
+    ///   - routeStartWaiting: `AppModel.routeStartWaiting`.
+    public static func decide(navigating: Bool, routeStartWaiting: Bool) -> FaceTrackingChange {
+        if navigating { return .refusedRoute }
+        return routeStartWaiting ? .refusedRouteStart : .apply
+    }
+}
+
+/// Which `videoRotationAngle` each camera's connection gets in the two-camera view.
+///
+/// ⚠ Per camera, on measured evidence (the owner's iPhone 17 Pro Max, clamped portrait): every
+/// attempt to use one `AVCaptureDevice.RotationCoordinator` angle for BOTH cameras fixed one feed
+/// and broke the other — preview-for-both left the back feed sideways (trip log
+/// 2026-09-12T22-02-03Z: `back_rotation: 0`), capture-for-both tilted the front inset. With the
+/// per-camera rule the back feed logged `back_rotation: 90` (trip log 2026-09-12T22-20-53Z).
+///
+/// The interface is portrait-only (Info.plist `UISupportedInterfaceOrientations`), so what the
+/// walker sees never rotates and the right angle does not follow the phone:
+///   · back: 90, the portrait-up angle — NOT the coordinator's capture angle, which follows the
+///     phone's physical orientation and reads 0 / 180 when Both cameras starts with the phone held
+///     sideways or flat (Muse review, Step 36: that would be the sideways feed again);
+///   · front: 0, measured upright (trip log 2026-09-12T22-20-53Z `front_rotation: 0`), then 270 —
+///     not the coordinator's preview angle, which is sampled once at connect and reads wrong if Both
+///     cameras starts with the phone flat or sideways (Muse, Step 37 review), and never the capture
+///     angle, which tilted the inset (103d548).
+/// The coordinator's angles are still logged beside the applied ones, so a different phone shows up
+/// in the trip log as evidence. Caller: `DualCameraSession.connect`. Pinned by `LiveViewTests`
+/// (`backCameraIsPortraitUpWhateverThePhoneReads`, `frontCameraIsPortraitUpWhateverThePhoneReads`,
+/// `unsupportedAnglesFallBackWithoutTheTiltingAngle`).
+public enum DualCameraRotation {
+    /// Portrait-up rotation for a back camera's landscape sensor.
+    public static let backPortraitUp: Double = 90
+    /// Portrait-up rotation measured for the front camera's connection on the owner's phone.
+    public static let frontPortraitUp: Double = 0
+    /// Front sensor fallback when 0 is unsupported.
+    public static let frontFallback: Double = 270
+
+    /// - Parameters:
+    ///   - front: true for the front (TrueDepth / wide) camera.
+    ///   - preview: `videoRotationAngleForHorizonLevelPreview` — logged by the caller, deliberately not
+    ///     used (kept in the signature so the tests pin that no reading changes the answer).
+    ///   - supports: `AVCaptureConnection.isVideoRotationAngleSupported`.
+    /// - Returns: the angle to set, or nil to leave the connection's own angle.
+    public static func angle(front: Bool, preview: Double, supports: (Double) -> Bool) -> Double? {
+        let candidates = front ? [frontPortraitUp, frontFallback] : [backPortraitUp]
+        return candidates.first(where: supports)
+    }
+
+    public static func isPortrait(width: Int, height: Int) -> Bool {
+        width > 0 && height > width
     }
 }
 

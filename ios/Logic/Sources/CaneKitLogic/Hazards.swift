@@ -319,6 +319,11 @@ public struct SignPolicy: Sendable, Equatable {
     /// are read down to whatever the scan allows (1/128). Small far text is where storefront
     /// "EXIT" / "PUSH" chatter comes from (Muse + Antigravity, Step 12 review).
     public var shortPhraseMinHeight: Float = 1.0 / 80
+    /// Phrases that may be spoken; nil = all (today). A matched phrase outside the set is skipped
+    /// **without** being stamped, so allowing it later reads it at once. Set by the app from
+    /// `CueRules.allowedSignPhrases` (Quiet / Indoors: safety signs only). Pinned by
+    /// `SignPhraseFilterTests`.
+    public var allowedPhrases: Set<String>?
     private var lastSaid: [String: TimeInterval] = [:]
 
     public init() {}
@@ -411,6 +416,9 @@ public struct SignPolicy: Sendable, Equatable {
             guard haystacks.contains(where: { $0.contains(" \(phrase) ") }) else { continue }
             // "CLOSED" inside an already-matched "SIDEWALK CLOSED" is the same sign.
             if matched.contains(where: { $0.contains(phrase) }) { continue }
+            // Not allowed by the cue level / place: skip, unstamped, and NOT counted as matched, so it
+            // can never swallow an allowed phrase inside it (`sameFrameAllowedPhraseSurvives`).
+            if let allowed = allowedPhrases, !allowed.contains(phrase) { continue }
             matched.append(phrase)
             // Said recently: skip it but keep looking — a DETOUR next to a ROAD CLOSED still counts.
             if let t = lastSaid[phrase], now - t < repeatInterval { continue }

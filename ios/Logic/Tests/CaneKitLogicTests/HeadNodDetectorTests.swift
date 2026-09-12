@@ -14,12 +14,21 @@
 //      starts and ends at `rest`. Negative amplitude = chin down (assumed sign; unmeasured — the
 //      detector is direction-agnostic, see the ponytail note in HeadNodDetector.swift).
 //    · `fires(_:_:)` feeds a sample list in order and returns the times `update` returned true.
+//    · `still` / `ramp` build the rest of a timeline; timelines are concatenated in time order.
+//
+//  Numbers under test (HeadNodDetector.swift): `minAmplitudeDeg` 15, `maxNodSeconds` 0.8,
+//  `pairWindowSeconds` 2.5, `refractorySeconds` 3. Caller: `HeadPoseTracker` (app) →
+//  `AppModel.startVoiceInput()`, behind the off-by-default "Nod to talk" hands-free option.
+//  Breaks these catch: a single glance down starting the microphone, a double nod firing twice (or
+//  not at all), walking sway or a slow look at a curb counting as a nod, and a `reset()` that leaves
+//  a half-finished gesture armed.
 //
 
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// Sample rate of every synthetic timeline (Hz): the top of CMHeadphoneMotionManager's ~25–50 Hz.
 private let hz = 50.0
 
 /// Half-sine nod: leaves `rest`, reaches `rest + amplitude` at mid-duration, back at `rest` at the end.

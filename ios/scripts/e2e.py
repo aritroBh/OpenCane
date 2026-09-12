@@ -35,6 +35,24 @@ Run it **alone**: the scenarios are real-time GPS replays, so another xcodebuild
 on the same device starves the app and the assertions then describe a walk that never happened
 (`gps_median_dt` in the report, and the "GPS replay starved" warning, say when that happened).
 """
+# Owner / callers: `make e2e` (ios/Makefile; builds `make sim` and runs `sim-grant` first), or by hand
+# from ios/. Part of the per-change gate in AGENTS.md "How we engineer" §4; CI does not run it.
+# Python 3 stdlib only; needs Xcode's `xcrun simctl` and a booted-or-bootable iOS simulator.
+# Why it exists (Step 11): unit tests cannot see what the whole app says on a walk; this replays the
+# demo route through the real NavigationEngine / SpeechQueue / TripLogger and asserts on the log.
+# Tests: none of its own — its assertions ARE the test; a scenario's failures and non-failing
+# warnings land in build/e2e/report.json.
+# App contracts it depends on (renaming any of these breaks it, usually as a false FAIL):
+#   env hooks  CANEKIT_DEMO_ROUTE (AppModel.start → startDemoRoute), CANEKIT_MUTE (SpeechQueue.muted),
+#              CANEKIT_FRAME_DIR (FrameReplay), CANEKIT_DESCRIBE_EVERY_WAYPOINT
+#              (AppModel.describeEveryWaypoint), CANEKIT_HAZARD_WATCH (AppModel.wireHazards)
+#   log kinds  route{action}, waypoint{index}, navcue{cue}, arrived, speech{text}, gps, cue{cue},
+#              hazard{type,text,source}, describe_result{frame,text,error,ms,labels,vision_error},
+#              scan{frame,texts}, hazard_watch{frame,reply,said,dropped,error}; and TripLogRecord's
+#              `field_t` / `field_kind` collision columns (any one fails the run)
+#   route file route_isr_cif.json with 9 waypoints whose ids 2, 3 and 8 the scenarios move
+# ⚠ The `clean` wrist-cue list and the 1..9 waypoint list in `check` are pinned to the route file;
+# edit them with it (and RouteTests.shippedRouteFileIsConsistent).
 
 from __future__ import annotations
 
@@ -49,17 +67,24 @@ import sys
 import time
 from pathlib import Path
 
+# ios/ — every path below is absolute from here, so the script runs from any working directory.
 IOS = Path(__file__).resolve().parent.parent
 ROUTE = IOS / "CaneKit/Resources/route_isr_cif.json"
+# The product of `make sim` (DERIVED = build, CONFIG Debug). A device build (`make build`) lands in
+# Debug-iphoneos instead and does not satisfy this.
 APP = IOS / "build/Build/Products/Debug-iphonesimulator/CaneKit.app"
+# Report (report.json) and one copied trip log per scenario (<name>.jsonl); git-ignored with build/.
 OUT = IOS / "build/e2e"
 BUNDLE = "com.aritro.canekit"
+# frames.json (committed) + the git-ignored Street View JPEGs; handed to the app as CANEKIT_FRAME_DIR.
 STREETVIEW = IOS / "scripts/streetview"
+# Mean Earth radius in metres (same spherical model as CaneKitLogic's GeoMath haversine).
 EARTH = 6_371_000.0
 
 
 # MARK: - geometry (metres ↔ degrees near the campus; plenty accurate over 1 km)
 
+# Flat-earth displacement: fine for the tens of metres the scenarios move a point. Degrees in and out.
 def offset(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float, float]:
     """Move a coordinate by metres north / east."""
     dlat = north_m / EARTH * 180 / math.pi
@@ -67,6 +92,7 @@ def offset(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float
     return lat + dlat, lon + dlon
 
 
+# (lat, lon) degrees → metres. Used for path length, densify spacing and the arrival time budget.
 def dist(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Haversine distance in metres."""
     p1, p2 = math.radians(a[0]), math.radians(b[0])
@@ -75,6 +101,8 @@ def dist(a: tuple[float, float], b: tuple[float, float]) -> float:
     return 2 * EARTH * math.asin(min(1, math.sqrt(h)))
 
 
+# Linear interpolation in degrees (not great-circle), each segment split into floor(len / step_m)
+# equal parts (at least 1), so spacing is ≥ step_m. Keeps every original vertex. Caller: gps_jitter.
 def densify(points: list[tuple[float, float]], step_m: float) -> list[tuple[float, float]]:
     """Insert points every `step_m` along each segment (so jitter can be applied per fix)."""
     out = [points[0]]
@@ -86,16 +114,23 @@ def densify(points: list[tuple[float, float]], step_m: float) -> list[tuple[floa
     return out
 
 
+# Total polyline length in metres; printed per scenario and stored as `path_m` in the report.
 def path_length(points: list[tuple[float, float]]) -> float:
     return sum(dist(a, b) for a, b in zip(points, points[1:]))
 
 
 # MARK: - scenarios
 
+# The bundled route's waypoint dicts (`id`, `lat`, `lon`, …) in file order — the same file the app
+# loads for CANEKIT_DEMO_ROUTE, so a moved waypoint moves the replay with it.
 def load_waypoints() -> list[dict]:
     return json.loads(ROUTE.read_text())["waypoints"]
 
 
+# Builds every scenario's path (ordered (lat, lon) vertices fed to `simctl location start`). `seed`
+# makes gps_jitter reproducible (`--seed`, default 7). ⚠ Indexes P[0..8] and ids 2 / 3 / 8 assume
+# the 9-waypoint route file; a route with a different count raises IndexError / KeyError here.
+# Dict order matters: `main` runs "all" in this insertion order (streetview excluded).
 def scenario_paths(wps: list[dict], seed: int) -> dict[str, list[tuple[float, float]]]:
     """Each scenario = a list of GPS points from the Townsend door to CIF."""
     P = [(w["lat"], w["lon"]) for w in wps]
@@ -124,6 +159,9 @@ def scenario_paths(wps: list[dict], seed: int) -> dict[str, list[tuple[float, fl
 
 # MARK: - simulator plumbing
 
+# Run a command, return stripped stdout. `check=True` raises RuntimeError with stderr (or stdout) on a
+# non-zero exit — inside `main`'s try that becomes the scenario's "harness error". `check=False` is
+# used for idempotent cleanup (boot, terminate, clear) whose failure means "already in that state".
 def sh(*args: str, check: bool = True, capture: bool = True) -> str:
     r = subprocess.run(list(args), capture_output=capture, text=True)
     if check and r.returncode != 0:
@@ -131,6 +169,8 @@ def sh(*args: str, check: bool = True, capture: bool = True) -> str:
     return (r.stdout or "").strip()
 
 
+# First AVAILABLE simulator with this exact name under any iOS runtime (so with two iOS runtimes
+# installed the pick follows simctl's JSON order). Exits with "Create it: make sim17" when absent.
 def udid_for(name: str) -> str:
     devices = json.loads(sh("xcrun", "simctl", "list", "devices", "available", "-j"))["devices"]
     for runtime, devs in devices.items():
@@ -142,6 +182,8 @@ def udid_for(name: str) -> str:
     raise SystemExit(f"No available iOS simulator named '{name}'. Create it: make sim17")
 
 
+# Boot (ignored if already booted), block until the device is ready, pre-grant location and motion
+# so no permission alert covers the app — the same grants as the Makefile's `sim-grant`.
 def prepare(udid: str) -> None:
     sh("xcrun", "simctl", "boot", udid, check=False)
     sh("xcrun", "simctl", "bootstatus", udid, "-b")
@@ -149,16 +191,20 @@ def prepare(udid: str) -> None:
         sh("xcrun", "simctl", "privacy", udid, "grant", service, BUNDLE, check=False)
 
 
+# The installed app's data container on the Mac's disk (its Documents/ holds the trip logs).
 def container(udid: str) -> Path:
     return Path(sh("xcrun", "simctl", "get_app_container", udid, BUNDLE, "data"))
 
 
+# This run's trip log: the newest Documents/canekit-*.jsonl modified at or after `after` − 2 s
+# (`after` = wall-clock launch time; 2 s of slack for file-system timestamp granularity), or None.
 def newest_log(udid: str, after: float) -> Path | None:
     docs = container(udid) / "Documents"
     logs = [p for p in docs.glob("canekit-*.jsonl") if p.stat().st_mtime >= after - 2]
     return max(logs, key=lambda p: p.stat().st_mtime) if logs else None
 
 
+# Parse the JSONL log (TripLogger flushes every 2 s while the app runs, so this is re-read in polls).
 def read_events(log: Path) -> list[dict]:
     events = []
     for line in log.read_text().splitlines():
@@ -193,6 +239,12 @@ def launch_and_wait_for_route(udid: str, attempts: int = 3, extra_env: dict[str,
     raise RuntimeError("app never started the demo route (CANEKIT_DEMO_ROUTE hook)")
 
 
+# One scenario end to end: terminate + clear GPS, reinstall the build, park GPS on the first vertex,
+# launch (streetview adds the frame-dir, describe-every-waypoint and hazard-watch env), replay the path
+# at `speed` m/s, poll every 5 s for `arrived` (+6 s for the trip summary) or the time budget, clean up
+# and copy the log into OUT. Returns `events` (possibly empty), `seconds` (wall clock from launch,
+# including the post-arrival wait), `log` (container path or None) and `path_m`. It never asserts;
+# `check` does. Raises (via `sh` / launch) on install or launch failure.
 def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed: float) -> dict:
     sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
     sh("xcrun", "simctl", "location", udid, "clear", check=False)
@@ -234,20 +286,25 @@ def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed:
 
 # MARK: - assertions
 
+# Text of every caller-written `speech` record, in log order (not `speech_dispatch`: e2e asserts on
+# what the app decided to say, which is what AppModel logs as `speech`).
 def speech(events: list[dict]) -> list[str]:
     return [e.get("text", "") for e in events if e.get("kind") == "speech"]
 
 
+# Wrist cues sent to the watch, in order (`NavCue.rawValue`: turnLeft / turnRight / crossing / arrived).
 def navcues(events: list[dict]) -> list[str]:
     return [e.get("cue", "") for e in events if e.get("kind") == "navcue"]
 
 
+# Report-only, never asserted: the simulator has no LiDAR, so obstacle cues are not expected there.
 def obstacle_cues(events: list[dict]) -> list[str]:
     """Obstacle cue records (`kind: cue`); the cue itself is in the `cue` field (it used to be a
     `kind` field that overwrote the record kind, so these records were invisible)."""
     return [e.get("cue", "") for e in events if e.get("kind") == "cue"]
 
 
+# Report-only list of announced hazards; no scenario asserts on it.
 def hazards(events: list[dict]) -> list[dict]:
     """Announced hazards (`kind: hazard`): `type` (dropOff / sign / vision …), `text`, `source`.
     Before the 2026-09-11 fix the app wrote the type as `kind`, replacing "hazard", so this list
@@ -256,6 +313,7 @@ def hazards(events: list[dict]) -> list[dict]:
             for e in events if e.get("kind") == "hazard"]
 
 
+# Asserted in every scenario by `check` (a non-empty list is a failure).
 def reserved_collisions(events: list[dict]) -> list[dict]:
     """Records where a caller passed a field named `t` or `kind`: TripLogger keeps the record's
     own and writes the caller's as `field_t` / `field_kind`. Any hit is an app bug."""
@@ -286,9 +344,19 @@ def fix_cadence(events: list[dict]) -> tuple[int, float, float, float]:
     return len(ts), round(gaps[len(gaps) // 2], 2), round(gaps[-1], 2), round(ts[-1] - ts[0], 1)
 
 
+# Module-level so `check` can append without a return value. ⚠ `main` clears it only after
+# `run_scenario` returns, so when a scenario raises (harness error) the previous scenario's warnings
+# are copied into this scenario's report entry and printed again.
 warnings: list[str] = []   # non-failing notes for the report (reset per scenario in main)
 
 
+# The pass criteria. Every scenario: route started, arrived, waypoint indices ascending, trip summary
+# spoken ("kilometers" or "meters,"), no field_t / field_kind collision; plus the starved-replay warning.
+# clean / streetview: waypoints exactly 1..9, wrist cues exactly `want`, no "Veer…", no "Passed…".
+# missed_fence: ≥ 1 "Passed …" and none built from a sentence. gps_jitter: ≤ 3 "Veer…".
+# wrong_turn: ≥ 1 "Veer right.". streetview also: ≥ 8 answered describes, ≥ 6 distinct described
+# frames, ≥ 5 distinct scanned frames, ≥ 1 clean hazard-watch reply. `seconds` = run_scenario's wall
+# clock (0 disables the span test).
 def check(name: str, events: list[dict], seconds: float = 0.0) -> list[str]:
     """Return a list of failures (empty = pass). Non-failing notes go to `warnings`."""
     fails: list[str] = []
@@ -380,6 +448,10 @@ def check(name: str, events: list[dict], seconds: float = 0.0) -> list[str]:
 
 # MARK: - main
 
+# CLI entry; returns the process exit status (0 only if every requested scenario passed). Refuses to
+# start without the simulator build or, for streetview, frames.json. Scenarios run sequentially on one
+# simulator, each isolated by try / except / finally; report.json is deleted up front and rewritten
+# after every scenario so a crash never leaves a stale PASS.
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sim", default="iPhone 17 Pro Max")

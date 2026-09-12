@@ -24,6 +24,17 @@
 //  installed by `activate()` hop with `Task { @MainActor in … }` (AGENTS.md hard rule 1).
 //  `sendMessage`'s error handler also runs off main and hops the same way.
 //
+//  Owner: `AppModel.watch` (created eagerly; `onCommand` set and `activate()` called in
+//  `AppModel.start()`). Senders: `nav.onNavCue` → `send(nav:)`; `AppModel.handle(report)` and
+//  `groundHazardFound` → `send(obstacle:now:)`; `pushStatusToWatch()` plus the route-readiness
+//  lines ("Obstacle detection warming up" / "not ready" / "Route start canceled", distance -1) →
+//  `send(status:distanceM:)`; the Watch card's test buttons → `AppModel.watchTest` → `send(nav:)`.
+//  Readers: `WatchCard` (pill, last command, error), `AppModel.announceChannels` (paired but not
+//  reachable), status and conversation facts (`isReachable`).
+//  Tests: the wire format only (`WatchMessageTests`: `phoneToWatchRoundTrips`,
+//  `watchToPhoneRoundTrips`, `unknownPayloadsDecodeToNil`). Reachability, throttles and the reply
+//  are device-tested (CHANGELOG "Step 5 — Watch").
+//
 
 import CaneKitLogic
 import Foundation
@@ -38,21 +49,26 @@ final class PhoneWatchLink {
 
     // MARK: Published
 
-    /// Device supports WatchConnectivity (false on iPad). Evaluated once at init.
+    /// Device supports WatchConnectivity (false on iPad). Evaluated once at init; WatchCard shows
+    /// "Unsupported" when false.
     private(set) var isSupported = WCSession.isSupported()
-    /// A watch is paired with this phone (from the last activation / state callback).
+    /// A watch is paired with this phone (from the last activation / state callback). False until
+    /// activation completes.
     private(set) var isPaired = false
-    /// The CaneKit watch app is installed on the paired watch.
+    /// The OpenCane watch app (target CaneKitWatch) is installed on the paired watch.
     private(set) var isWatchAppInstalled = false
     /// True while the watch app can receive `sendMessage` right now.
     /// Mirrors `WCSession.isReachable` as of the last relay callback; AppModel uses it to warn
     /// "Watch not reachable" at route start and to decide whether haptics can fall back to the wrist.
     private(set) var isReachable = false
-    /// Last activation or send error (debug); cleared by the next send attempt.
+    /// Last activation or send error, shown on the Watch card; cleared synchronously by the next
+    /// `deliver` (so a failure that arrives after a later send can reappear). Not cleared by a
+    /// successful activation.
     private(set) var lastError: String?
-    /// Count of `sendMessage` calls attempted (debug; counts attempts, not deliveries).
+    /// Count of `sendMessage` calls attempted (debug; counts attempts, not deliveries). No view
+    /// reads it today.
     private(set) var messagesSent = 0
-    /// Most recent decoded command from the watch (debug).
+    /// Most recent decoded command from the watch; shown on the Watch card as the last command.
     private(set) var lastReceived: WatchToPhone?
 
     /// Called on the main actor for every command from the watch.
@@ -67,9 +83,11 @@ final class PhoneWatchLink {
     /// Last status pushed, for de-duplication in `send(status:distanceM:)`.
     @ObservationIgnored private var lastStatus: PhoneToWatch?
     /// Per-kind throttle so a chatty obstacle mirror never floods the Bluetooth link.
-    /// Values are the caller's clock (depth report timestamps, seconds).
+    /// Values are the caller's clock (depth report timestamps, seconds — the ARKit clock, the same
+    /// one `CueDecider` uses, so the 1 s throttle lines up with its repeat rate).
     @ObservationIgnored private var lastObstacleSent: [CueKind: TimeInterval] = [:]
 
+    /// Inert until `activate()`: no session delegate, no activation.
     init() {}
 
     // MARK: Lifecycle
@@ -102,15 +120,18 @@ final class PhoneWatchLink {
 
     // MARK: Sending
 
-    /// Turn / crossing / arrived: sent once, dropped if the watch is unreachable.
+    /// Turn / crossing / arrived (and turnLeft / turnRight for a veer): sent once, dropped if the
+    /// watch is unreachable — a late turn tap would be wrong, so nothing is queued.
     /// Callers: `NavigationEngine.onNavCue` (wired in AppModel) and the watch test buttons.
     func send(nav cue: NavCue) {
         send(.nav(cue))
     }
 
     /// Mirrored obstacle cue (fallback). Throttled to one per kind per second.
-    /// Caller: `AppModel.handle` when the phone cannot buzz (engine down or silenced) or the
-    /// user enabled "fallback to watch". `now` is the depth report timestamp (s).
+    /// Callers: `AppModel.handle` and `AppModel.groundHazardFound` (as `.center`), when the phone
+    /// cannot buzz (engine down or silenced) or the user enabled "Mirror obstacle cues to the watch"
+    /// (`fallbackToWatch`). `now` is the depth report timestamp (s). The throttle stamp is taken
+    /// before the reachability check, so a cue dropped as unreachable still uses up that second.
     func send(obstacle kind: CueKind, now: TimeInterval) {
         if now - (lastObstacleSent[kind] ?? -.infinity) < 1.0 { return }
         lastObstacleSent[kind] = now
@@ -120,9 +141,11 @@ final class PhoneWatchLink {
     /// Current instruction + distance for the watch face. Uses application context so the
     /// latest value survives the watch being asleep; also pushed live when reachable.
     /// De-duplicated: same instruction and < 5 m distance change is skipped (≈ one message per
-    /// 5 s of walking). `distanceM` is metres, -1 when unknown. Caller:
-    /// `AppModel.pushStatusToWatch()` (GPS fixes while navigating, waypoint advance, route
-    /// start/stop).
+    /// 5 s of walking). `distanceM` is metres, -1 when unknown (the watch maps any negative to nil).
+    /// Callers: `AppModel.pushStatusToWatch()` (GPS fixes while navigating, waypoint advance,
+    /// arrival, route start/stop) and the route-readiness paths (`queueRouteStart`,
+    /// `failQueuedRouteStart`, `cancelRouteStart`) with fixed lines and -1.
+    /// Unlike `send(_:)` it does not check `isSupported` (phone-only target, so always true).
     /// Note: `lastStatus` is updated even if the session is not yet activated, so that value is
     /// not retried until the instruction or distance changes.
     func send(status instruction: String, distanceM: Int) {

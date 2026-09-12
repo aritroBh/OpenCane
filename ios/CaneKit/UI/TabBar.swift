@@ -13,10 +13,15 @@
 //  Accessibility contract: ⚠ test contract labels "Guide", "Sense", "Settings"
 //  (CaneKitUITests + CaneKitVisualTour). Hit target ≥ `CKMetrics.touchTarget` (60 pt).
 //
+//  Owner / caller: `ContentView.body` (`CKTabBar(selection: $tab)` under the page).
+//  Tests: `CaneKitUITests.testAccessibilityLabelsExist` and the `openTab(_:)` helper the other
+//  tests use; `CaneKitVisualTour` photographs each page. Motion timing is hand-tuned, not tested.
+//
 
 import SwiftUI
 
-/// The three pages of the phone app. Raw value is left-to-right order (used to slide the pill).
+/// The three pages of the phone app. Raw value is the left-to-right order and the `ForEach`
+/// identity; the pill's travel comes from `matchedGeometryEffect`, not from the raw value.
 enum RootTab: Int, CaseIterable, Identifiable, Hashable {
     /// Walk a route: Guide card + the trip / arrival card.
     case guide
@@ -82,6 +87,9 @@ struct CKTabBar: View {
     /// Increase Contrast thickens the bar's top hairline.
     @Environment(\.colorSchemeContrast) private var contrast
 
+    /// One row of equal-width tab buttons on the card surface with a top hairline; one VoiceOver
+    /// container "OpenCane tabs"; a `.selection` haptic on every change of `selection` (the only
+    /// app-owned haptic besides the big-button press).
     var body: some View {
         HStack(spacing: 0) {
             ForEach(RootTab.allCases) { tab in

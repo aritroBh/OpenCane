@@ -124,8 +124,10 @@ Still to do on the phone: siren ~1.5 s behavior, "How is OpenCane doing" order, 
 inset re-check after reinstall.
 
 **Committed in the main checkout:**
-- `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
-  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15).
+- `ios/CaneKit/Depth/DualCameraSession.swift` — per-camera rotation (`DualCameraRotation`: back 90,
+  front 0, both fixed for the portrait-only UI; superseded capture-first after the back feed came out sideways, 2026-09-12),
+  unmirrored front inset, `front_rotation` / `back_rotation` / `front_mirrored` / `*_capture_angle` /
+  `*_size` / `*_portrait` in diagnostics (Step 15).
   Device build green, 316 Logic tests green, front inset verified on the phone.
 - Emergency sirens — `SoundAlerts.swift` + tests (verbatim), `SoundWatcher` + `AppModel`
   wireSounds/commonLines (merged, renames kept).
@@ -191,13 +193,15 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [x] **Permission race can start the mic after the user turned it off.** The pure
       `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
       polls permission while it owns the session and cancels any pending continuation on Stop.
-- [ ] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
-      The two-camera mode correctly refuses during a route; this path does not.
+- [x] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
+      The two-camera mode correctly refuses during a route; this path does not. **Step 34:** measured
+      on the phone (t = 80.7 s); now refused while a route guides or starts (`FaceTrackingChange`).
 - [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
       transition. If the input is still absent, sound alerts fail loudly and navigation continues.
-- [ ] **"Degrades to the back camera alone" is documented but not implemented** — on a phone without
+- [x] **"Degrades to the back camera alone" is documented but not implemented** (copy corrected
+      earlier — `BothCameras.unsupported`; confirmed by the Step 34 audit) — on a phone without
       multi-cam the mode shows no picture. Implement the single-session fallback or correct the
       header and the card copy.
 - [ ] **Backgrounding enqueues the camera teardown**, so if the system suspends first the app can
@@ -466,15 +470,15 @@ instead of the fixed 1,303-label Apple classifier that returned *nothing* on the
 cloud-primary / on-device fallback and unit-tested codecs. It needs a key, not code.
 
 - [!] **Gemini key — waiting on Aritro** (optional; the app works without it). See below.
-- [ ] Gate the cloud reply — `SceneVocabulary.isFaithful` runs on the on-device path **only**, so a
+- [x] Gate the cloud reply (done: `CloudSceneGate`, wired in `VLMClient`; Step 34 audit) — `SceneVocabulary.isFaithful` runs on the on-device path **only**, so a
       cloud sentence is currently spoken ungated. Measured hallucinations of exactly this class on our
       own route frames: "S 5th St", "S Grand Blvd". In progress on `fix/cloud-scene-gate`.
-- [ ] Fix the prompt: it asks for clock-face directions and distances in metres. VLMs read clock
+- [x] Fix the prompt (describe + Ask paths done: `ScenePrompt`; ⚠ the **hazard watch** prompt still asks for metres — open, Step 34 audit): it asks for clock-face directions and distances in metres. VLMs read clock
       directions from the *image's* frame rather than the walker's, and distance is the one thing they
       are measurably worst at (below chance — GuideDog, ACL 2026). LiDAR supplies every number.
 - [ ] Measure the real round trip from the phone on campus cellular and write down p50 and max. Do not
       quote anyone's benchmark at the demo; quote ours.
-- [ ] Leave the hazard watch **off** for the demo (it is the only thing that would call a model in a
+- [x] Leave the hazard watch **off** for the demo (default off; don't say "turn on hazard watch" to the assistant in rehearsal) (it is the only thing that would call a model in a
       loop).
 
 **The line to say out loud at the demo:** *the model names things; LiDAR measures them. No number the
@@ -637,3 +641,29 @@ for 60 s so a weak network can never stall a cue.
       path still requires Guided Access + keeping the screen on for a blindfolded walk), compass readings dropped while
       iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on frequently-updating
       pills, MapKit route build waits only 15 s for a first fix
+
+## Cue design v2 — Steps 35–45 (approved 2026-09-12 evening; talk floor inserted as 37 the same night, later steps renumbered +1 — CHANGELOG entries before Step 37 use the old numbers)
+
+Research: `docs/cue_design_v2.md` (74 source-checked findings + the field-log addendum). Owner chose
+"Full v2", default level **Detailed = today** until a *mounted* trip log tunes the numbers; speech
+calming ships on; every new haptic behaviour ships behind a level or a setting that defaults to today.
+Plan reviewed by Muse (17 findings, folded in: cell validity before the overhang signature, still =
+net displacement not path length, dropped lines stay available to Repeat, ground hazards pinned to
+`.safety`, indoor overrides, door names only on a route, steps split, AirPods-stem hush deferred).
+Safety floor for every step: head haptic at every onset; "Head height." spoken at a moving onset;
+ground hazards (when on) speak their first confirmation; hush never touches any of them.
+
+- [x] **35** `scripts/cue_audit.py` + `make audit` — mounted?, head band wall vs overhang, cues and lines per minute, replays
+- [x] **36** `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
+- [x] **37** Talk floor (owner: "directions and obstacle alerts interrupt each other"): a line cut by a warning resumes from its clause (`SpeechResume`), 0.35 s pause between bands, `speech_end` + `resume_from` logged, `cue_audit` resume / pause metrics. Rejected before building (Muse): holding "Head height." behind a direction (a walker reaches a 1.5 m overhang before the words)
+  - [ ] Device: route intro cut by a head cue resumes mid-line in both voices; tune `mp3MarginUTF16` / `clipLead` from `resume_from`
+  - [ ] Later (review, not fixed): a system-voice line resumed from a cached mp3 maps an exact word offset to a proportional clip time; the interruption resume retry Task is not cancelled by a new `.began` (pre-existing)
+- [ ] **38** Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
+- [ ] **39** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
+- [ ] **40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
+- [ ] **41** Torso haptics by level: Standard onset taps (1.5 m closing, 0.6 m strong triple), Detailed = today + shoreline suppression, Quiet none; no torso taps during a crossing settle
+- [ ] **42** "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
+- [ ] **43** Hush: Watch double tap + app button + Siri, 60 s, non-safety speech and non-head haptics only, soft buzz on, "Cues back." off
+- [ ] **44** "What's ahead?": LiDAR lanes + ARKit mesh class + ground hazard, no vision model; ≤ 3 items (≤ 5 Detailed), nearest first, doors / drop-offs before furniture
+- [ ] **45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
+- Deferred (not scheduled): gravity-corrected metric head band; speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).

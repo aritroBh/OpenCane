@@ -17,11 +17,21 @@
 //  `DepthFrameProcessor.session(_:didUpdate:)` on the depth queue; the ARFrame never escapes.
 //  Cost: 256×192 map at stride 4 → ≤ 3,072 samples, one 4×4 multiply each (< 1 ms).
 //
+//  Evaluated at most every 0.1 s, only while "Detect drop-offs" is on (off by default), only on
+//  frames under the ground path's 1.5 rad/s gyro gate and with a mount-like camera tilt
+//  (`MountTilt.groundUsable`, 0–15° down) — all decided by the caller.
+//
+//  Tests: `HazardTests` pins the detector with synthetic `GroundSample`s; nothing tests this
+//  projection (it needs a real `ARFrame`). ⚠ Changing the back-projection signs, the intrinsics
+//  scaling or `minDepth` / `maxDepth` needs a device check on flat pavement (no hazard) and at a
+//  real curb.
+//
 
 import ARKit
 import CaneKitLogic
 import simd
 
+/// Pure LiDAR → ground-profile projection for `GroundHazardDetector`. Namespace only; no state.
 nonisolated enum GroundSampler {
 
     /// Pixels further than this (m) are ignored: LiDAR is weak past ~5 m and the detector only
@@ -30,17 +40,23 @@ nonisolated enum GroundSampler {
     /// Pixels closer than this (m) are ignored (the cane shaft, a hand in front of the lens).
     static let minDepth: Float = 0.3
 
+    /// Back-project one frame's depth into ground samples relative to the camera: `forward` and
+    /// `lateral` (m, along / right of the walking direction, horizontal) and `height` (m, world
+    /// y minus camera y, + = up). Reads **raw** `sceneDepth` first (the reverse of the lanes) and
+    /// honours both buffers' `bytesPerRow`; Float32 depth only.
+    /// Caller: `DepthFrameProcessor.session(_:didUpdate:)`, on the depth queue.
     /// - Parameters:
     ///   - frame: the current ARFrame (depth + camera).
-    ///   - stride: sample every Nth pixel in both directions.
-    ///   - minConfidence: ARConfidenceLevel raw value (0 low, 1 medium, 2 high). Medium drops the
-    ///     grazing-angle returns that make ground far away noisy.
-    /// - Returns: samples in the walker's frame, or `[]` when there is no depth or the phone is
-    ///   pointing (almost) straight up or down so "forward" is undefined.
     ///   - walkDirection: smoothed horizontal walking direction (world, unit). The corridor must
     ///     follow the *walk*, not the cane: trusted frames happen at the sweep turnarounds where
     ///     the camera points ±20° off the path, which put curbs, planters and walls beside the
     ///     sidewalk inside the corridor (review simulation). nil = the camera's own forward.
+    ///   - stride: sample every Nth pixel in both directions.
+    ///   - minConfidence: ARConfidenceLevel raw value (0 low, 1 medium, 2 high). Medium drops the
+    ///     grazing-angle returns that make ground far away noisy. A frame without a confidence
+    ///     map keeps every pixel.
+    /// - Returns: samples in the walker's frame, or `[]` when there is no depth, the depth format
+    ///   is not Float32, or the forward direction is (almost) vertical so "forward" is undefined.
     static func samples(frame: ARFrame, walkDirection: SIMD3<Float>? = nil,
                         stride: Int = 4, minConfidence: UInt8 = 1) -> [GroundSample] {
         // Raw depth first: the smoothed map blends several frames, which smears the ground

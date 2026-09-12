@@ -2,18 +2,26 @@
 //  WatchContentView.swift
 //  CaneKit Watch
 //
-//  Glanceable wrist screen: current instruction, distance, three big buttons, crown = Next.
-//  Always dark (docs/design.md §6.6). VoiceOver: instruction is a header, buttons carry hints.
+//  Glanceable wrist screen: current instruction, distance, four buttons in three rows (Repeat,
+//  Next, Describe | Recenter), crown = Next. Always dark (docs/design.md §6.6). VoiceOver:
+//  instruction is a header, buttons carry hints.
 //
-//  Implements docs/design.md §6.6 (Watch face) and the watch column of §5. Deviations from the
-//  §6.6 wireframe: one page instead of a two-page `TabView` (a paged / scrolling container would
-//  take the crown), four buttons (Repeat, Next, Describe, Recenter), the distance lives in the
-//  inline navigation title, and button labels are the short visible words rather than the §6.6
-//  "Next waypoint" / "Describe surroundings" / "Recentre beacon" copy.
+//  Implements docs/design.md §6.6 (Watch face) and the watch columns of §5. §6.6 now documents
+//  what is built: one page, no paging and no `ScrollView` (either container would take the
+//  Digital Crown and "Next" would never fire), the distance in the inline navigation title, and
+//  the phone-link glyph in the leading toolbar slot. Its "Not built" list — the two-page
+//  `TabView`, a TRUSTED pill and a "crown: next" hint line — is the remaining gap. The layout
+//  came out of the Step 10 review ("Repeat / Next / Describe / Recenter fit a 42–46 mm screen").
+//
+//  Owner / callers: created by `WatchApp`; all behaviour is `WatchModel`'s. Isolation: MainActor
+//  (target default). Tests: none automated (no watch test bundle); `CrownAccumulator` is pinned
+//  by the `crown…` tests in CaneKitLogic `NavSupportTests`; layout is checked by eye on 42 mm and
+//  46 mm (CHANGELOG Step 5 / Step 10 device tests).
 //
 //  Accessibility contract: instruction = header with value "N meters to go"; phone-link glyph =
 //  "Phone connected" / "Phone not connected"; buttons "Repeat", "Next", "Describe", "Recenter"
-//  with hints. No XCUITest runs on the watch, so none of these is a test contract today.
+//  with hints. No XCUITest runs on the watch, so none of these is a test contract today; keep
+//  them in step with the §6.6 label table instead.
 //
 
 import SwiftUI
@@ -25,6 +33,9 @@ struct WatchContentView: View {
     /// Raw crown position; only the change between callbacks matters (see `onChange`).
     @State private var crown = 0.0
 
+    /// `content` inside a `NavigationStack` whose inline title is the distance ("120 m", or
+    /// "OpenCane" while unknown — the phone's -1 sentinel arrives as `nil`) and whose leading
+    /// toolbar item is the phone-link glyph (green radiowaves when reachable, red `iphone.slash`).
     var body: some View {
         // NavigationStack reserves the clock strip at the top; we spend that strip on the distance
         // ("120 m") and the phone-link glyph instead of adding rows, so everything fits a 42–46 mm
@@ -49,6 +60,14 @@ struct WatchContentView: View {
     /// Accessibility: the instruction is a header whose value is the distance ("N meters to go");
     /// each `WKBigButton` is labelled by its title with a one-sentence hint. The error line is a
     /// plain text so VoiceOver reads it in place.
+    ///
+    /// The instruction is capped at 2 lines scaled to 70 % so the three button rows stay on a
+    /// 42 mm screen; Repeat is the recovery for a cut line (design.md §10). Modifier order
+    /// matters: `.focusable()` must come before `.digitalCrownRotation`, or the crown never
+    /// reaches this view. `by: 1` defines the "detent" unit `CrownAccumulator` counts. The
+    /// ±1,000,000 range is far beyond any real rotation, so the raw value never reaches an end
+    /// (where `isContinuous` would wrap it and hand `crownMoved` one enormous delta).
+    /// `.task { model.start() }` may run more than once; `WatchModel.start()` is idempotent.
     private var content: some View {
         VStack(alignment: .leading, spacing: WKSpacing.sm) {
                 Text(model.instruction)

@@ -16,11 +16,21 @@
 //  sentence per element (`AppModel.speakStatus` speaks them separately so a warning can interrupt
 //  one clause instead of the whole report).
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/StatusSummary.swift` (`StatusFacts`,
+//  `StatusSummary.lines` / `sentence` and the per-clause `obstacleLine`, `gpsLine`, `audioLine`,
+//  `hapticsLine`, `routeLine`, `batteryLine`; `weakGPSAccuracyM` 20). Callers: `AppModel.speakStatus`
+//  (HandsFreeIntents.swift; `StatusIntent`, one `.scene` line per clause, logs `status_spoken`) and
+//  `ConversationCoordinator` (answers a status question with `sentence`). `hapticsLine` is also
+//  spoken on its own by `AppModel.setHapticsSilenced` and `ConversationCoordinator` ("silence the
+//  cane"), so one fact has one sentence.
+//
 
 import Testing
 @testable import CaneKitLogic
 
 /// Everything healthy, mid-route: the baseline the other tests mutate one field at a time.
+/// Every parameter is a `StatusFacts` field; −1 for `gpsAccuracyM` / `batteryPercent` means
+/// unknown (CoreLocation / the simulator), `metresToNext: nil` means no distance yet.
 private func healthy(
     lidarSupported: Bool = true, obstacleDetectionRunning: Bool = true, depthFps: Double = 9,
     gpsFix: Bool = true, gpsAccuracyM: Double = 8, locationDenied: Bool = false,

@@ -28,10 +28,28 @@
 //  to show; the anchor's yaw goes to `onFaceYaw` and drives the beacon when there are no AirPods.
 //
 //  Invariants: the delegate and consumer are wired exactly once (first `start()`); later starts
-//  go through `resume()` and never reset tracking. Re-running the session (`setMeshClassification`)
-//  costs ~1–2 s of depth, so it happens only on a thermal *change*. No audio: ARKit here never
+//  go through `resume()` and never reset tracking. Re-running the session (`setMeshClassification`,
+//  `setFaceTracking`, `setHighFrameRate`) costs ~1–2 s of depth, so each happens only on a thermal
+//  or settings *change*, never per frame. No audio: ARKit here never
 //  touches the audio session. The session is exposed read-only (`arSession`) so the Hazards card's
 //  `LiveCameraView` can draw it; nothing outside this class runs, pauses or delegates it.
+//
+//  Route-start readiness: `beginReadiness` / `pollReadiness` / `cancelReadiness` wrap the pure
+//  `DepthReadiness` gate (CaneKitLogic) for `AppModel.queueRouteStart`: a route waits for 3
+//  consecutive fresh, trusted, tracking-normal depth reports (5 s bound). Every pause, resume,
+//  interruption, failure and reconfiguration first drains the delegate queue
+//  (`processor.synchronize()`) and then invalidates the run, so a report from before the
+//  transition can never count as evidence after it.
+//
+//  Callers: `AppModel` only (init: `apply`, `setHighFrameRate`, `setFaceTracking`; `start()`:
+//  callbacks + `start`; `scenePhaseChanged` / `setBothCameras`: `pause` / `resume`;
+//  `updateThermal`: `setMeshClassification`). Readers: `ContentView` (`report`, `fps`),
+//  `HazardsCard` (`isRunning`, `arSession`), `SceneDescriber` / `HazardScanner` /
+//  `ConversationCoordinator` (`processor`).
+//  Tests (the pure parts this class adapts): `DepthReadinessTests`, `LiveViewTests`
+//  (`cameraFrameRateFollowsTheSwitch`), `HeadYawSourcesTests`
+//  (`faceYawPublishIntervalKeepsRelayBounded`). The ARKit wiring itself has no unit test: it is
+//  verified on the phone (trip-log `start` → `video_format`, `fps`, `face_head_selftest`).
 //
 
 import ARKit
@@ -52,8 +70,11 @@ final class DepthEngine {
     /// (`report.isTrusted`) and the Mount card's camera-tilt row.
     private(set) var report = LaneReport()
     /// Human-readable session state for the header.
-    /// Values include "Depth idle", "Waiting for depth…", "Depth OK", "Depth paused",
-    /// "Depth resuming…", "Mesh classification off (thermal)", "AR error: …".
+    /// Values: "Depth idle", "No LiDAR / sceneDepth on this device", "Waiting for depth…",
+    /// "Depth OK", "Depth paused", "Depth resuming…", "AR interrupted", "AR resumed",
+    /// "Mesh classification on", "Mesh classification off (thermal)", "AR error: …".
+    /// ⚠ `ingest` promotes to "Depth OK" only from the exact strings "Waiting for depth…" /
+    /// "Depth resuming…" — rename them together.
     private(set) var status = "Depth idle"
     /// Rolling frames-per-second of published reports.
     /// Computed over a 2 s window of report timestamps (should sit near `ProcessorSettings.maxRate`).
@@ -66,9 +87,11 @@ final class DepthEngine {
     private(set) var isRunning = false
     /// Whether mesh classification is currently requested (thermal watchdog toggles it).
     private(set) var meshEnabled = true
-    /// ARKit tracking state, e.g. "normal", "limited (excessive motion)".
-    /// Short forms actually used: "normal", "not available", "limited (motion)",
+    /// ARKit tracking state as a short debug string, set by `trackingChanged` ("—" before the
+    /// first callback). Values: "normal", "not available", "limited (motion)",
     /// "limited (features)", "initializing", "relocalizing", "limited".
+    /// Display only: the route-start gate reads `LaneReport.trackingNormal` from the frame itself,
+    /// because this callback-driven string can lag the depth map by a frame or two.
     private(set) var tracking = "—"
 
     /// The pure route-start freshness gate. `AppModel` observes this while a route request is
@@ -87,11 +110,16 @@ final class DepthEngine {
     /// `AppModel.faceHead.ingest(worldYawDeg:now:)`.
     @ObservationIgnored var onFaceYaw: ((Double, TimeInterval) -> Void)?
 
-    /// Main-actor callback for route-start interlock transitions.
+    /// Main-actor callback for route-start interlock transitions, fired only when
+    /// `readinessState` actually changes (`publishReadiness`). Set once by `AppModel.start()` to
+    /// `AppModel.depthReadinessChanged(_:)`, which starts the queued route on `.ready` and fails
+    /// it on `.timedOut`.
     @ObservationIgnored var onReadinessChanged: ((DepthReadinessState) -> Void)?
 
-    /// True while an `ARFaceAnchor` has been seen at all this session (any age). Only for the
-    /// Hazards card's "the front camera is live" line; freshness is `FaceHeadPose.isTracking`.
+    /// True once an `ARFaceAnchor` has been seen while face tracking is on (any age); cleared when
+    /// `setFaceTracking(false)` turns it off. Read only by `AppModel.startFaceTrackingSelfTest`
+    /// (`anchor_seen` in the `face_head_selftest` record); no view reads it.
+    /// Freshness is `FaceHeadPose.isTracking`, not this flag.
     private(set) var faceAnchorSeen = false
 
     // MARK: Capability
@@ -136,6 +164,9 @@ final class DepthEngine {
     /// Pure state machine; all mutations happen on the main actor.
     @ObservationIgnored private var readiness = DepthReadiness()
 
+    /// Creates an idle engine. Builds nothing that touches the camera: the `ARSession` and the
+    /// processor exist, but no delegate, gyro or session run happens until `start()`. Created by
+    /// `AppModel`'s property initialiser (one instance for the process).
     init() {}
 
     // MARK: Configuration
@@ -143,8 +174,11 @@ final class DepthEngine {
     /// Push the lane / gate settings into the processor (called by AppModel when settings change).
     /// Writes through the processor's `Mutex`, so it is safe while frames are being processed;
     /// the next frame picks it up. `portrait` rotates the depth grid for a portrait-mounted
-    /// phone (and the snapshot JPEG); `mirror` swaps left/right lanes. Caller:
-    /// `AppModel.pushDepthSettings()`.
+    /// phone (and the snapshot JPEG); `mirror` swaps left/right lanes; `groundHazards` turns the
+    /// LiDAR drop-off / curb path on. ⚠ The `groundHazards` default `true` is not the app's
+    /// default: `AppModel` always passes its "Detect drop-offs" setting, which defaults false
+    /// (untuned features ship off, AGENTS.md "How we engineer" rule 6). Caller:
+    /// `AppModel.pushDepthSettings()` (init, and whenever those settings change).
     func apply(portrait: Bool, mirror: Bool, groundHazards: Bool = true) {
         processor.settings.withLock {
             $0.lane.rotateForPortrait = portrait
@@ -159,6 +193,8 @@ final class DepthEngine {
     /// supplies wall-clock uptime for the timeout; frame timestamps remain ARKit's own clock.
     /// Baseline timestamp and processor sequence are retained so a buffered pre-transition report
     /// cannot satisfy the gate after two-camera teardown or another AR session reconfiguration.
+    /// Caller: `AppModel.queueRouteStart`, after any queued two-camera work has drained.
+    /// - Parameter now: `ProcessInfo.systemUptime` (seconds) — the timeout clock, not ARKit's.
     func beginReadiness(at now: TimeInterval) {
         readinessBaselineFrameTime = report.depthAvailable ? report.timestamp : nil
         readinessBaselineFrameSequence = processor.latestPublishedSequence()
@@ -166,12 +202,17 @@ final class DepthEngine {
         publishReadiness(readiness.begin(at: now))
     }
 
-    /// Poll the readiness timeout when no frame has arrived.
+    /// Poll the readiness timeout when no frame has arrived (a paused or starved session delivers
+    /// no reports, so `ingest` alone could never time the gate out). Caller: `AppModel`'s
+    /// route-start task every 100 ms, and its request deadline task once.
+    /// - Parameter now: `ProcessInfo.systemUptime` (seconds).
     func pollReadiness(at now: TimeInterval) {
         publishReadiness(readiness.poll(at: now))
     }
 
-    /// Cancel a queued route request and return the gate to idle.
+    /// Cancel a queued route request and return the gate to idle, forgetting the baselines.
+    /// Callers: `AppModel.depthReadinessChanged` (after `.ready`), `failQueuedRouteStart`,
+    /// `cancelPendingRouteStart` (Stop, or a newer destination request).
     func cancelReadiness() {
         readinessBaselineFrameTime = nil
         readinessBaselineFrameSequence = nil
@@ -203,7 +244,9 @@ final class DepthEngine {
     /// processor's queue, start the gyro, run with `.resetTracking` + `.removeExistingAnchors`,
     /// and start the report consumer. Later calls after `pause()` delegate to `resume()`.
     /// Without LiDAR it only sets `status` (the rest of the app runs without obstacle cues).
-    /// Triggers the camera permission prompt on first run. Caller: `AppModel.start()`.
+    /// Triggers the camera permission prompt on first run. Caller: `AppModel.start()` — inline on a
+    /// normal launch, or after `SensorProbe.run()` finishes under `CANEKIT_SENSOR_PROBE=1` (the
+    /// probe needs the cameras before this session exists).
     func start() {
         guard !isRunning else { return }
         // A second `start()` after `pause()` must not re-wire the delegate or add a consumer.
@@ -229,8 +272,11 @@ final class DepthEngine {
     }
 
     /// Pause ARKit and the gyro (battery + heat) while keeping the world map, delegate and
-    /// consumer in place. Caller: `AppModel.scenePhaseChanged(.background)` — ARKit would pause
-    /// itself, but the gyro would not.
+    /// consumer in place. Also drains the delegate queue, drops the retained camera frame, zeroes
+    /// `fps` and invalidates any route-start run. Callers: `AppModel.scenePhaseChanged(.background)`
+    /// — ARKit would pause itself, but the gyro would not — and `AppModel.setBothCameras(true)`,
+    /// which must free the cameras for `DualCameraSession` (a starved ARKit is worse than a paused
+    /// one: `probe_c_multicam` measured ~30 → 8 frames per 4 s).
     func pause() {
         guard isRunning else { return }
         session.pause()
@@ -251,8 +297,10 @@ final class DepthEngine {
     }
 
     /// Re-run the configuration *without* resetting tracking (keeps anchors / mesh), restart the
-    /// gyro. Falls through to `start()` if the session was never started. Caller:
-    /// `AppModel.scenePhaseChanged(.active)` and `start()` itself.
+    /// gyro. Falls through to `start()` if the session was never started. Callers:
+    /// `AppModel.resumeARKitPipelines()` (on `.active`, only once no two-camera session holds the
+    /// cameras — this method itself only guards `!isRunning`), `AppModel.setBothCameras` (off, or
+    /// a failed start being rolled back) and `start()` itself.
     ///
     /// ⚠ The configuration is rebuilt from the *current* settings, not replayed from the stored
     /// one. `setFaceTracking`, `setMeshClassification` and `setHighFrameRate` all end in
@@ -282,20 +330,21 @@ final class DepthEngine {
         status = "Depth resuming…"
     }
 
-    /// Thermal watchdog hook. Re-running the session costs ~1–2 s of depth, so callers only
-    /// toggle on a thermal *change*, never per frame.
-    ///
-    /// Flips `meshEnabled`, tells the processor to stop/start its mesh lookup immediately (so no
-    /// stale `centerHit` is published while the new configuration spins up), and — if running —
-    /// re-runs the session with the new configuration (no tracking reset). Caller:
-    /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
     /// Camera at 60 fps (Mount card "60 fps camera (warmer)", off by default). Cues use 30 depth
     /// reports/s in the normal path; high-rate mode publishes up to 60 reports/s so the readiness
     /// interlock sees every camera frame. 60 fps doubles the camera's cost and heat for a smoother
     /// live view and slightly fresher frames. Muse + Antigravity: untested over a 20-minute walk, so it
     /// ships off until stress-plan D14 passes with it on. Re-runs the session (~1-2 s of depth).
+    /// Read by `makeConfiguration` (video format) — mirrors `AppModel.highFrameRateCamera`.
     private(set) var highFrameRate = false
 
+    /// Switch the camera between 30 and 60 fps (`CameraRate.framesPerSecond`, pinned by
+    /// `LiveViewTests.cameraFrameRateFollowsTheSwitch`) and set the processor's publish cap to the
+    /// same rate. While paused (and in `AppModel.init`, before `start()`) it only records the flag;
+    /// the next `start()` / `resume()` builds the configuration from it. While running it pauses
+    /// the session, drops the retained frame, drains the delegate queue, invalidates any
+    /// route-start run and re-runs without a tracking reset (~1–2 s of depth).
+    /// Caller: `AppModel.init` and `AppModel.highFrameRateCamera`'s `didSet`.
     func setHighFrameRate(_ on: Bool) {
         guard on != highFrameRate else { return }
         highFrameRate = on
@@ -328,7 +377,11 @@ final class DepthEngine {
     /// callers flip it on a *setting change*, never per frame — exactly like
     /// `setMeshClassification`. A no-op where the phone cannot do it
     /// (`supportsFrontCameraWithLiDAR`), so the setting can be on harmlessly in the simulator.
-    /// Caller: `AppModel.faceHeadTrackingEnabled`'s `didSet`.
+    /// Turning it off also clears `faceAnchorSeen`. While running: pause, drop the retained frame,
+    /// drain the delegate queue, invalidate readiness, re-run without a tracking reset.
+    /// Callers: `AppModel.init` (flag only), `AppModel.faceHeadTrackingEnabled`'s `didSet` (refused
+    /// during a route or a route start by `FaceTrackingChange`, because the re-run costs obstacle
+    /// frames) and `AppModel.startFaceTrackingSelfTest` (on, then restore after 15 s).
     func setFaceTracking(_ on: Bool) {
         let wanted = on && Self.supportsFrontCameraWithLiDAR
         guard wanted != faceTrackingEnabled else { return }
@@ -344,6 +397,16 @@ final class DepthEngine {
         session.run(config)
     }
 
+    /// Thermal watchdog hook. Re-running the session costs ~1–2 s of depth, so callers only
+    /// toggle on a thermal *change*, never per frame (the `on != meshEnabled` guard makes a
+    /// repeated call free).
+    ///
+    /// Flips `meshEnabled`, tells the processor to stop/start its mesh lookup immediately (so no
+    /// stale `centerHit` is published while the new configuration spins up), and — if running —
+    /// pauses, drops the retained frame, drains the delegate queue, invalidates readiness and
+    /// re-runs the session with the new configuration (no tracking reset). Obstacle names go
+    /// silent while it is off; the lanes and haptics keep running. Caller:
+    /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
     func setMeshClassification(_ on: Bool) {
         guard on != meshEnabled else { return }
         meshEnabled = on
@@ -359,9 +422,14 @@ final class DepthEngine {
         status = on ? "Mesh classification on" : "Mesh classification off (thermal)"
     }
 
-    /// World-tracking configuration: scene depth (raw + smoothed), optional classified mesh
-    /// (only where supported), gravity-aligned world (y up, so "head height" is meaningful), no
-    /// plane detection, and the lowest-resolution ≥ 30 fps video format to save power.
+    /// World-tracking configuration built from the *current* flags: scene depth (raw + smoothed),
+    /// optional classified mesh (only where supported), gravity-aligned world (y up, so "head
+    /// height" and `GroundSampler` heights are meaningful), no plane detection, autofocus on, the
+    /// front-camera face anchor when `faceTrackingEnabled`, and the video format: the smallest-width
+    /// 4:3 format at exactly `CameraRate.framesPerSecond(highFrameRate:)` (30 or 60), else the first
+    /// format at ≥ that rate, else the last at ≥ 30. Depth is 256×192 whatever the format; the
+    /// colour image only feeds snapshots, the live view and the sign reader. Side effect: records
+    /// the choice in `chosenFormat`.
     /// - Parameter mesh: request `.meshWithClassification` (ignored when unsupported).
     private func makeConfiguration(mesh: Bool) -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
@@ -398,19 +466,25 @@ final class DepthEngine {
         return config
     }
 
-    /// The video format the session runs ("wide 1920x1440 @60"), for the trip log's `start` event.
+    /// The video format the session runs ("wide 1920x1440 @30"), for the trip log's `start` event
+    /// (`video_format`). Written by every `makeConfiguration`; "" until the first one.
     private(set) var chosenFormat = ""
 
-    /// Every video format ARKit world tracking offers on this device, e.g. "wide 1920x1440 @60",
-    /// "ultrawide 1920x1440 @60" — so which cameras / frame rates can run *with* LiDAR is measured
-    /// on the phone, not assumed. Logged once at start.
+    /// Every video format ARKit world tracking offers on this device, in `describe`'s form
+    /// ("wide 1920x1440 @60") — so which cameras / frame rates can run *with* LiDAR is measured
+    /// on the phone, not assumed. Logged once at start (`start` event, `video_formats`). Measured on
+    /// the iPhone 17 Pro Max: only the 1x wide camera, up to 60 fps.
     static var supportedFormats: [String] {
         ARWorldTrackingConfiguration.supportedVideoFormats.map(describe)
     }
 
     /// True when world tracking can also run the front (TrueDepth) camera for face tracking.
+    /// False in the simulator. Gates `setFaceTracking`, disables the Hazards card's switch, and is
+    /// logged as `front_camera_with_lidar` / `supported`.
     static var supportsFrontCameraWithLiDAR: Bool { ARWorldTrackingConfiguration.supportsUserFaceTracking }
 
+    /// "<camera> <width>x<height> @<fps>" for one video format; camera is "ultrawide" / "wide" /
+    /// "tele", or the raw `AVCaptureDevice.DeviceType` string for anything else. Trip-log text only.
     private static func describe(_ f: ARConfiguration.VideoFormat) -> String {
         let type: String
         switch f.captureDeviceType {
@@ -440,6 +514,10 @@ final class DepthEngine {
 
     /// Publish one report (main actor): store it, update the 2 s fps window, promote the status
     /// to "Depth OK" on the first real depth after a start/resume, then call `onReport`.
+    /// While the route-start gate is `.warming`, a report counts only if it is newer than the
+    /// baseline (timestamp *and* `frameSequence`) and contiguous with the last one delivered
+    /// (`DepthFrameContinuity`); a gap invalidates the run instead, because the newest-only stream
+    /// may have dropped an untrusted frame (`DepthReadinessTests.publishedFrameContinuity…`).
     private func ingest(_ r: LaneReport) {
         report = r
         framesProcessed &+= 1
@@ -477,7 +555,8 @@ final class DepthEngine {
     /// `code` is the `ARError.Code` raw value (e.g. 103 = camera unauthorized) so the UI can tell
     /// a permissions problem from a sensor failure.
     /// Sets `isRunning = false` so a later `start()`/`resume()` can re-run the session; does not
-    /// stop the gyro. Reached from `SessionObserver` via a main-actor hop.
+    /// stop the gyro, and invalidates any route-start run. Reached from `SessionObserver` via a
+    /// main-actor hop.
     fileprivate func sessionFailed(code: Int, message: String) {
         let hint: String
         switch ARError.Code(rawValue: code) {
@@ -503,7 +582,9 @@ final class DepthEngine {
     }
 
     /// ARKit interruption begin/end (camera taken by another app, backgrounding). Status only:
-    /// ARKit resumes the session by itself; `isRunning` is left unchanged.
+    /// ARKit resumes the session by itself; `isRunning` is left unchanged. The *start* of an
+    /// interruption also invalidates a warming route-start run (the end does not need to: fresh
+    /// frames after it are what the gate waits for).
     fileprivate func sessionInterrupted(_ interrupted: Bool) {
         status = interrupted ? "AR interrupted" : "AR resumed"
         if interrupted { invalidateReadiness(at: ProcessInfo.processInfo.systemUptime) }
@@ -546,6 +627,11 @@ nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @u
     /// The processor that receives frames synchronously on the delegate queue.
     private let frames: DepthFrameProcessor
 
+    /// Created on the main actor by `DepthEngine.start()` (first start only) and retained there in
+    /// `sessionObserver`, because `ARSession.delegate` is weak.
+    /// - Parameters:
+    ///   - engine: the owning engine; held weakly.
+    ///   - frames: the processor every frame is forwarded to.
     init(engine: DepthEngine, frames: DepthFrameProcessor) {
         self.engine = engine
         self.frames = frames
@@ -574,8 +660,9 @@ nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @u
     func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { faceYaw(anchors) }
 
     /// Turn a face anchor into a world yaw and hop it to the main actor, at most every
-    /// `FaceYawTracker.publishInterval` (the beacon is rendered by a 10 Hz ticker; hopping at the
-    /// camera's rate would be main-thread work nobody reads).
+    /// `FaceYawTracker.publishInterval` (1/15 s: the beacon is rendered by a 10 Hz ticker; hopping
+    /// at the camera's 30–60 Hz rate would be main-thread work nobody reads). The stamp is the
+    /// newest frame's ARKit time (`lastFrameTime`), because anchors carry no time of their own.
     ///
     /// The trigonometry happens here, on the delegate queue, so only a `Double` crosses to main
     /// and the `ARFaceAnchor` never leaves the queue (AGENTS.md hard rule 1). `columns.2` is the

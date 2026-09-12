@@ -8,10 +8,20 @@
 //
 //  Threading / isolation: `@MainActor`, synchronous, no timers or callbacks. `AppModel.handle`
 //  calls `update` for every depth report (~30 Hz normal / up to 60 Hz high-rate) on main and forwards a non-nil line to
-//  `SpeechQueue.say(_, .obstacle, ttl: 4)` — obstacle band, below route lines and "Head height.",
-//  so a name never cuts guidance and a 4 s TTL keeps a queued name from being spoken stale.
+//  `SpeechQueue.say(_, .obstacle, ttl: 4, load: .ambientObstacleName)` — obstacle band, below route
+//  lines and "Head height.", so a name never cuts guidance, a 4 s TTL keeps a queued name from being
+//  spoken stale, and the load tag lets `SpeechLoadPolicy` drop it while anything else is speaking or
+//  within 7 s of the last name (a dropped name is logged `speech_suppressed`, not re-offered).
 //  Times are the caller's clock (`LaneReport.timestamp`, ARKit seconds), never wall time.
-//  Only called while obstacle names are enabled in settings.
+//  Only called while obstacle names are enabled in settings — **off by default since Step 36**
+//  (owner report "overstimulating", cue design v2) — and `CueRules.allowsName` (the Cues card's
+//  level × place) then decides which classes may be named: Indoors / Quiet name nothing, Standard
+//  names doors only while a route guides, Detailed names everything but walls.
+//
+//  Owner: `AppModel.namer` (one instance). `reset()` on backgrounding and when both-cameras mode
+//  pauses ARKit. Tests: none for this class (its numbers are plain properties); the wording and the
+//  prefetch enumeration are pinned by `SpokenPhrasesTests`, the distance phrases by
+//  `VLMCodecTests.spokenDistances`, the class gate by `CueProfileTests`.
 //
 
 import CaneKitLogic
@@ -22,7 +32,8 @@ import Foundation
 @MainActor
 final class ObstacleNamer {
 
-    /// Minimum gap between spoken names (spec: one utterance per 2.5 s).
+    /// Minimum gap between spoken names, seconds of report time (spec: one utterance per 2.5 s).
+    /// `SpeechLoadPolicy`'s 7 s calm window downstream is now the stricter of the two.
     var minInterval: TimeInterval = 2.5
     /// Name anything classified closer than this…
     /// Metres, measured along the camera axis (`MeshHit.distance` = centre-window depth).
@@ -45,11 +56,13 @@ final class ObstacleNamer {
     /// Report time of the last nameable, in-range hit (drives `forgetAfter`).
     private var lastHit: TimeInterval = -.infinity
 
+    /// Starts with no history, so the first nameable hit is announced at once.
     init() {}
 
     /// Forget all history so the next nameable hit is announced at once. Called by
     /// `AppModel.scenePhaseChanged(.background)` alongside `CueDecider.reset()`, so whatever is
-    /// in front of the user after returning to the app is named afresh.
+    /// in front of the user after returning to the app is named afresh, and by the both-cameras
+    /// path when ARKit is paused.
     func reset() {
         lastClass = nil
         lastBucket = -1
@@ -64,12 +77,17 @@ final class ObstacleNamer {
     /// range, the class or distance changed (≥ 1 m, i.e. two half-metre buckets), and
     /// `minInterval` has passed. Format: "One meter ahead, door" (`SpokenPhrases.obstacleLine`).
     /// - Parameters:
-    ///   - r: the latest depth report (its `centerHit` is refreshed at ~4 Hz by the processor).
+    ///   - r: the latest depth report (its `centerHit` is refreshed at ~4 Hz by the processor — a
+    ///     mesh lookup every 8th published frame — and re-attached to the frames in between).
     ///   - now: report time in seconds (`r.timestamp`).
-    func update(_ r: LaneReport, now: TimeInterval) -> String? {
+    ///   - allows: whether the cue profile lets this class be named (`CueRules.allowsName`); a
+    ///     disallowed class is treated exactly like no hit, so allowing it later names it at once.
+    func update(_ r: LaneReport, now: TimeInterval,
+                allows: (ObstacleClass) -> Bool = { _ in true }) -> String? {
         // Nothing nameable straight ahead (or out of range): forget after a while so that
         // re-approaching the same door announces it again.
         guard r.isTrusted, let hit = r.centerHit, let name = hit.classification.spokenName,
+              allows(hit.classification),
               hit.distance.isFinite,
               hit.distance < (hit.classification == .wall ? wallMaxDistance : maxDistance) else {
             if now - lastHit > forgetAfter { lastClass = nil; lastBucket = -1 }

@@ -2,15 +2,21 @@
 //  HapticPlayer.swift
 //  CaneKit
 //
-//  Plays obstacle cues on the phone's Taptic Engine. The phone is clamped to the cane shaft, so
-//  these transients are what the user feels in the hand. `CueDecider` (CaneKitLogic) decides
-//  what/when; this file only renders.
+//  Plays obstacle cues (and the ground-hazard and route patterns) on the phone's Taptic Engine.
+//  The phone is clamped to the cane shaft, so these transients are what the user feels in the
+//  hand. `CueDecider` (CaneKitLogic) decides what/when; this file only renders.
 //
-//  Patterns (docs/design.md §5):
+//  Patterns (docs/design.md §5.2 obstacle cues, §5.3 navigation cues):
 //    centre approach   Geiger loop: one sharp tap repeated at 2 Hz (2 m) … 8 Hz (0.5 m)
 //    left              2 taps, 120 ms apart
 //    right             3 taps, 100 ms apart
 //    head              2 hard, sharp hits 80 ms apart
+//    ground hazard     4 heavy, dull taps 70 ms apart (`playGroundHazard`)
+//    route (NavCue)    long soft continuous buzzes: turn left 1, turn right 2, crossing 3,
+//                      arrived long-short-long (`playNav`) — texture, not count, tells route from
+//                      obstacle (AGENTS.md "Route cues are felt on the cane as long soft buzzes")
+//  The walker tells left from right by tap count, so counts and gaps change only with a device
+//  test on the cane and a design.md update.
 //
 //  Engine care: Core Haptics stops the engine on backgrounding and on media-server resets. We
 //  restart on foreground, rebuild players on reset, and publish `isHealthy` so the cue router
@@ -32,6 +38,15 @@
 //  suppress rendering but `rendering` still reflects the decided cue (so the UI and the watch
 //  mirror stay truthful). Patterns and their numbers mirror docs/design.md §5; the decision
 //  numbers (distances, thresholds) live in CaneKitLogic (`CueDecider`, `GeigerRate`).
+//
+//  Owner: `AppModel` (`haptics`). Readers: `HapticsCard` (`isHealthy`, `lastError`, `test`),
+//  `AppModel.speakStatus` (`StatusSummary`) / `ConversationCoordinator` (`isHealthy`), the cue
+//  router's `phoneCannotBuzz` (`isHealthy`, `silenced`), the `start` trip-log record
+//  (`haptics`, `haptics_error`).
+//  Tests: `CueDeciderTests.geigerRateScalesWithInverseDistance` (the rate curve),
+//  `NavSupportTests` (what "the phone cannot buzz" triggers), and
+//  `CaneKitUITests.testHapticTestButtonsAndSilenceToggle` (buttons + silence; the simulator has no
+//  Taptic Engine, so the feel itself is a device test).
 //
 
 import AVFoundation
@@ -82,8 +97,10 @@ final class HapticPlayer {
     @ObservationIgnored private var tapPlayer: CHHapticPatternPlayer?
     /// Route cues felt on the cane (long, soft *continuous* buzzes — never confusable with the
     /// crisp obstacle taps): turn left = 1 long, turn right = 2 long, crossing = 3 long,
-    /// arrived = long-short-long. Ground hazard (drop-off / hole / curb) = 4 fast heavy taps.
+    /// arrived = long-short-long. No entry for `NavCue.obstacle` (AppModel never passes it).
     @ObservationIgnored private var navPlayers: [NavCue: CHHapticPatternPlayer] = [:]
+    /// Ground hazard (drop-off / hole / curb / low obstacle): 4 taps, 70 ms apart, intensity 1.0,
+    /// sharpness 0.3 — heavy and dull, unlike the crisp side taps.
     @ObservationIgnored private var groundPlayer: CHHapticPatternPlayer?
     /// The running Geiger loop, or nil. Non-nil ⇔ loop active.
     @ObservationIgnored private var approachTask: Task<Void, Never>?
@@ -97,6 +114,10 @@ final class HapticPlayer {
     /// Restarts the engine when a call / Siri interruption ends (it was stopped for the call).
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
 
+    /// Installs the audio-session interruption observer (shared session, `queue: .main`, so
+    /// `MainActor.assumeIsolated` is sound): on `.ended` it calls `resume()`, because a call or
+    /// Siri stops the haptic engine too. Only *observes* the session — never sets its category
+    /// (hard rule 7). Creates no engine; that is `start()`. One instance, owned by `AppModel`.
     init() {
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main
@@ -109,11 +130,14 @@ final class HapticPlayer {
 
     // MARK: Lifecycle
 
-    /// Create (or re-create) the engine and the four players. Safe to call repeatedly.
+    /// Start the engine and (re)build every player. Safe to call repeatedly.
     /// Creates the engine once (haptics-only, no audio session, auto-shutdown off so it does not
     /// idle-stop between sparse cues), installs the reset/stopped handlers, starts it and builds
-    /// the players. Success → `isHealthy = true`; any failure → `isHealthy = false` + `lastError`.
-    /// Callers: `AppModel.start()` (after `configureAudioSession`) and `resume()`.
+    /// the players (`buildPlayers`: left, right, head, Geiger tap, ground, four route buzzes).
+    /// Success → `isHealthy = true`; any failure → `isHealthy = false` + `lastError`. Sets
+    /// `wantsRunning` even on a phone without haptics.
+    /// Callers: `AppModel.start()` (after `configureAudioSession`), `resume()`, and the bounded
+    /// retry in `engineStopped`.
     func start() {
         wantsRunning = true
         guard Self.supported else {
@@ -153,8 +177,9 @@ final class HapticPlayer {
     }
 
     /// Foreground hook: Core Haptics stops the engine when the app leaves the foreground.
-    /// Restarts only if the app wanted haptics and the engine is currently down. Caller:
-    /// `AppModel.scenePhaseChanged(.active)`.
+    /// Restarts only if the app wanted haptics and the engine is currently down. Callers:
+    /// `AppModel.scenePhaseChanged(.active)`, this class's interruption observer (`.ended`), and
+    /// `AppModel.setBothCameras` when the two-camera mode ends or its start is rolled back.
     func resume() {
         guard wantsRunning, !isHealthy else { return }
         start()
@@ -162,6 +187,8 @@ final class HapticPlayer {
 
     /// Intentional shutdown: clear `wantsRunning` (so resets / foregrounding do not revive it),
     /// stop the Geiger loop and the engine. The engine object is kept for a later `start()`.
+    /// No caller in the app today (backgrounding and the two-camera mode use `stopAll()` and let
+    /// Core Haptics suspend the engine); kept as the explicit off switch.
     func stop() {
         wantsRunning = false
         stopAll()
@@ -170,7 +197,8 @@ final class HapticPlayer {
     }
 
     /// Media-server reset recovery (main actor, via the `resetHandler` hop): existing players are
-    /// invalid after a reset, so restart the engine and rebuild all four. Skipped after `stop()`.
+    /// invalid after a reset, so restart the engine and rebuild every player. Skipped after
+    /// `stop()`. Does not clear `lastError` on success (only `start()` does).
     private func rebuildAfterReset() {
         guard wantsRunning else { return }
         do {
@@ -212,8 +240,10 @@ final class HapticPlayer {
 
     // MARK: Patterns
 
-    /// (Re)build the four pattern players on the current engine. Throws on pattern/player
-    /// creation failure; callers turn that into `isHealthy = false`. Patterns: docs/design.md §5.
+    /// (Re)build every pattern player on the current engine: the four obstacle players (left,
+    /// right, head, Geiger tap), `groundPlayer` and the four `navPlayers`. Throws on the first
+    /// pattern/player creation failure; callers turn that into `isHealthy = false`. A nil engine is
+    /// a silent no-op. Patterns: docs/design.md §5.2 / §5.3.
     private func buildPlayers() throws {
         guard let engine else { return }
         leftPlayer = try engine.makePlayer(with: Self.pattern(taps: 2, gap: 0.12, intensity: 0.9, sharpness: 0.5))
@@ -229,8 +259,9 @@ final class HapticPlayer {
         ]
     }
 
-    /// Continuous buzzes of the given durations (s), 0.18 s apart, soft and dull (sharpness 0.15)
-    /// so they read as "route", not "obstacle".
+    /// Continuous buzzes of the given durations (s), 0.18 s apart, intensity 0.75, soft and dull
+    /// (sharpness 0.15) so they read as "route", not "obstacle".
+    /// - Parameter durations: one entry per buzz, seconds (e.g. `[0.4, 0.12, 0.4]` for arrived).
     private static func buzzes(_ durations: [TimeInterval]) throws -> CHHapticPattern {
         var t: TimeInterval = 0
         var events: [CHHapticEvent] = []
@@ -246,13 +277,18 @@ final class HapticPlayer {
         return try CHHapticPattern(events: events, parameters: [])
     }
 
-    /// Route cue on the cane (in addition to the watch). No-op while silenced / unhealthy.
+    /// Route cue on the cane (in addition to the watch). No-op while silenced / unhealthy, or for a
+    /// cue with no player (`.obstacle`). Does not touch `rendering` or the Geiger loop.
+    /// Caller: `AppModel`'s `nav.onNavCue` for every cue except `.obstacle` (waypoint turns,
+    /// crossings, arrival, and the turn buzz sent with "Veer left/right.").
     func playNav(_ cue: NavCue) {
         guard !silenced, isHealthy, let p = navPlayers[cue] else { return }
         fire(p)
     }
 
-    /// Ground hazard (drop-off, hole, curb, low obstacle) on the cane.
+    /// Ground hazard (drop-off, hole, curb, low obstacle) on the cane: `groundPlayer`. No-op while
+    /// silenced or unhealthy — `AppModel.groundHazardFound` then mirrors to the watch, and the
+    /// hazard is always spoken at `.safety` anyway. Does not touch `rendering` or the Geiger loop.
     func playGroundHazard() {
         guard !silenced, isHealthy else { return }
         fire(groundPlayer)
@@ -306,8 +342,9 @@ final class HapticPlayer {
 
     /// Active cue ended.
     /// Stops the Geiger loop and clears `rendering`; discrete patterns already in flight finish
-    /// on their own (they are < 250 ms). Callers: AppModel on `.stop` and on backgrounding,
-    /// `silenced = true`, and the debug "center" test after 2 s.
+    /// on their own (they are < 250 ms). Callers: AppModel on `.stop`, on backgrounding and when
+    /// the two-camera mode pauses depth, `silenced = true`, and the debug "center" test after 2 s
+    /// (and `test(.clear)`).
     func stopAll() {
         rendering = .clear
         stopApproachLoop()
