@@ -37,9 +37,43 @@
 //  `outputRouteChanged(from:to:)` here and stops the watcher. Speech, obstacle warnings and the
 //  beacon are the safety path; a microphone feature never outranks them.
 //
-//  Owner: `AppModel.sounds` (one instance). Alerts are spoken at `.obstacle` priority — below
-//  route lines and below "Head height." (docs/design.md §5): a sound the walker can also hear
-//  themselves is worth less than a warning they cannot.
+//  Owner: `AppModel.sounds` (one instance).
+//
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  WHAT PRIORITY AN EMERGENCY SIREN GETS, AND WHY IT IS NOT `.safety`
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  An emergency siren has the strongest claim of anything in this app to being interrupt-worthy:
+//  it is the single hazard neither the cane tip, nor the 5 m LiDAR, nor the camera, nor the GPS
+//  route can ever detect. It arrives from behind, around corners, and from hundreds of metres.
+//  It is still **not** `.safety`, for three reasons, in order of weight:
+//
+//   1. `.safety` is a queue, not a volume knob. `SpeechQueue` pre-empts only on a *strictly*
+//      higher priority; equal priorities queue FIFO. A siren line sitting at `.safety` would
+//      therefore **delay "Head height."** — or a LiDAR drop-off — by its own length, every time
+//      the two coincided. The rule that `.safety` is never suppressed is not weakened here; it is
+//      protected, by keeping out of that band anything that is not imminent, physical, and
+//      invisible to the walker.
+//   2. The walker already has this signal. A siren is an auditory warning device, engineered to be
+//      heard by pedestrians; a blind traveller's hearing is their primary instrument and hears it
+//      far further than a phone microphone strapped to a swinging cane. "Head height." warns about
+//      something nobody can perceive. This tells the walker what a sound they can hear *means*.
+//   3. Apple, about this exact classifier, shipped as Sound Recognition: "Don't rely on your
+//      iPhone to recognize sounds in circumstances where you may be harmed or injured, in
+//      high-risk or emergency situations, or for navigation." A model with that disclaimer does
+//      not get the band reserved for the cues that are always right.
+//
+//  So the emergency siren sits at `.nav` — the band route lines and crossing instructions use —
+//  and horns and vehicle sounds stay at `.obstacle`, unchanged. `.nav` is not a compromise, it is
+//  the semantically correct band: what a siren tells a blind pedestrian is a *crossing* fact (see
+//  SoundAlerts.swift R1 — the siren masks the traffic sound the crossing decision is made from),
+//  and crossing facts are `.nav` in this app. Mechanically `.nav` also buys the two things
+//  `.obstacle` could not: the alert no longer waits behind a 20-word scene description, and it can
+//  no longer cut a crossing instruction, because equal priorities queue.
+//  Nothing new can delay a warning: `.safety` still pre-empts `.nav` instantly, the haptic cue
+//  channel is untouched, and the only line a siren can now interrupt is an obstacle *name* — which
+//  is what every route line in the app has always done, and which resumes afterwards.
+//  There is still no haptic and no wrist tap for a sound alert: the cane's taps mean "something is
+//  in your path", and borrowing them for something heard would make the safety channel ambiguous.
 //
 //  Threading / isolation: `@MainActor @Observable`. `SNResultsObserving` is called by
 //  SoundAnalysis on its own queue, and the microphone tap is called on an AVAudioEngine render
@@ -82,7 +116,7 @@ final class SoundWatcher {
 
     /// True while the microphone tap and the analyser are live.
     private(set) var isRunning = false
-    /// Last line spoken because of a sound ("Siren nearby."), for the Hazards card.
+    /// Last line spoken because of a sound ("Siren. Do not start crossing."), for the Hazards card.
     private(set) var lastAlert: String?
     /// Why the watcher is not running: a refused microphone, a degraded audio route, or an engine
     /// failure. Shown on the Hazards card in the warning colour; never cleared silently.
@@ -591,20 +625,23 @@ private nonisolated final class SoundResultsRelay: NSObject, SNResultsObserving,
         self.onFailure = onFailure
     }
 
-    /// One classification window. Only the best label with a `DangerSound` mapping is forwarded;
-    /// the mapping itself is checked again on the main actor against the *measured* label table.
+    /// One classification window. Exactly one label with a `DangerSound` mapping is forwarded; the
+    /// mapping itself is checked again on the main actor against the *measured* label table.
+    ///
+    /// Which one is `SoundAlerts.best(of:)`'s decision, not this class's, and it is deliberately
+    /// **not** "the highest confidence". Next to a road `traffic_noise` and `engine` are high in
+    /// every window, so an approaching siren would come second window after window, and
+    /// `SoundAlertPolicy` — which needs *consecutive agreeing* windows — would have the siren's run
+    /// broken by the ambient class every time and would never announce it at all. `best(of:)`
+    /// prefers the more urgent kind whenever it clears its own gate; see its doc comment and
+    /// `SoundAlertsTests.anEmergencySirenIsNotShadowedByTheAmbientTrafficClass`.
     func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let classification = result as? SNClassificationResult else { return }
-        var bestLabel = ""
-        var bestConfidence = 0.0
-        for c in classification.classifications {
-            guard SoundAlerts.kind(for: c.identifier) != nil else { continue }
-            if c.confidence > bestConfidence {
-                bestLabel = c.identifier
-                bestConfidence = c.confidence
-            }
+        let candidates = classification.classifications.map {
+            (label: $0.identifier, confidence: $0.confidence)
         }
-        onResult(bestLabel, bestConfidence)
+        let best = SoundAlerts.best(of: candidates)
+        onResult(best?.label ?? "", best?.confidence ?? 0)
     }
 
     /// Analysis failed; the message reaches `SoundWatcher.analysisFailed`, which stops the

@@ -19,20 +19,98 @@
 //  misses (`sound_watch_labels`), and only ever matches identifiers this phone actually has. The
 //  `probe_f_sound_labels` record written by `SensorProbe` is the same measurement taken by hand.
 //
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  WHY AN EMERGENCY SIREN IS NOT "ONE MORE TRAFFIC SOUND" (the research behind every number here)
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  R1. What a blind pedestrian actually does with a siren. A blind traveller crosses by listening
+//      to the traffic: O&M teaches judging the crossable gap from the parallel traffic surge, and
+//      the whole method rests on being able to *hear approaching vehicles with enough warning
+//      time* (ACB, "Crossing Where There Is No Traffic Control"; NADTC, "Can I Cross the Street?").
+//      The same two sources name the failure mode: **masking**. "Sounds from airplanes or receding
+//      vehicles can mask the sounds of approaching vehicles, so when there is too much traffic or
+//      environmental noise … blind people will be unable to know when there is a crossable gap"
+//      (NADTC). A siren is the loudest masker a street produces. So the fact worth speaking is not
+//      "there is a siren" — the walker's ears already have that — it is **"the cue you cross by is
+//      unreliable right now."** The action that follows is a crossing decision, which is why the
+//      line is an instruction and why it is spoken in the band route and crossing lines use.
+//  R2. Why the sentence says "do not START crossing" and never "stop". Pedestrian guidance for an
+//      approaching emergency vehicle is asymmetric: do not step into the crosswalk, but if you are
+//      already in the intersection, clear it — "step to a safe spot on the curb or island and do
+//      not stop in the middle of the intersection" (Roanoke VA, "What to Do When an Emergency
+//      Vehicle Approaches"; the California and NY driver handbooks say the same for vehicles).
+//      The app cannot tell which of the two the walker is doing — the microphone knows nothing
+//      about the curb — so the line must be **correct in both cases**. "Do not start crossing" is
+//      a no-op for someone already in the road and the right instruction for someone at the curb.
+//      A bare "Stop." or "Do not cross." would be actively dangerous for the first walker, and a
+//      false one of those is exactly the freeze-in-a-crossing this feature must never cause.
+//  R3. Why direction is not spoken. Estimating direction of arrival needs an array: "estimating
+//      the DOA of acoustic sources conventionally requires a microphone array consisting of at
+//      least two microphones", and single-microphone methods need a known scattering body or a
+//      moving microphone with a known trajectory (Frontiers in Signal Processing, 2024). The
+//      published siren-localisation work is stereo — the 7.5° median error in "Listening for
+//      Sirens" (arXiv:1810.04989) comes from two boom microphones on a car roof. This app gets one
+//      mono stream through `SNAudioStreamAnalyzer`, from a phone strapped to a cane that is being
+//      swung. There is no honest direction here, so none is claimed.
+//  R4. Why the classifier is not trusted the way the old gates trusted it. Apple ships this same
+//      model as the Sound Recognition accessibility feature and says of it: "Don't rely on your
+//      iPhone to recognize sounds in circumstances where you may be harmed or injured, in
+//      high-risk or emergency situations, or for navigation" (Apple Support, "Recognize sounds
+//      using iPhone"). Apple's own documented failure mode for this class is a false positive —
+//      early versions "confused whistling for police sirens". Published siren detectors report
+//      94 % classification on curated stereo city audio (arXiv:1810.04989) and ~86 % AuPRC on
+//      unfiltered real audio, and the recurring note in that literature is that false positives
+//      under real-world noise stay a problem. On a university campus the confusable set is large
+//      and constant: bicycle bells, fire-alarm tests, amplified music, brass practice, scooters.
+//  R5. The trade that reverses the old comment. The previous version of this file said "a siren is
+//      cheaper to get wrong than to miss", and gated it lowest. That was right while the line was
+//      the passive "Siren nearby." It is wrong now. Missing a siren leaves the walker exactly
+//      where they were — using the hearing that is their primary instrument and that hears a
+//      pedestrian-audible siren far further than this phone's bottom microphone will. Getting one
+//      wrong now stops a blind person at a kerb for no reason, in the band route instructions use,
+//      and spends the trust the whole app runs on. False positives are treated here as a safety
+//      defect, not an annoyance. Hence: the siren gate went UP (0.50 → 0.60) and the siren alone
+//      needs THREE agreeing windows instead of two.
+//
 //  Key invariants:
-//    · A siren is cheaper to get wrong than to miss, so it has the lowest confidence gate; a
-//      "vehicle" is the noisiest class on a street and has the highest.
-//    · Nothing is announced on a single window. Two consecutive windows must agree, which at the
-//      app's ~0.5 s window hop costs ≤ 1 s of latency and removes most single-frame flickers.
+//    · Emergency sirens are `.emergency` urgency and everything else is `.ambient`. The app maps
+//      `.emergency` to the `.nav` speech band — the same band as crossing instructions, because it
+//      *is* a crossing instruction — and `.ambient` to `.obstacle`, unchanged.
+//    · Nothing reaches `.safety`. `.safety` is reserved for imminent physical danger the walker
+//      cannot perceive ("Head height.", LiDAR drop-offs), and equal priorities queue FIFO in
+//      `SpeechQueue`, so a siren line at `.safety` would *delay* a head-height warning by its own
+//      length. That is forbidden outright. See the file header of SoundWatcher for the full
+//      argument (AGENTS.md hard rule 8, docs/design.md §5.1).
+//    · Nothing is announced on a single window, and an emergency needs three (R4, R5): at the
+//      app's ~0.5 s window hop that is 1.5 s of continuous siren before anyone is told. 1.5 s is
+//      nothing against an emergency vehicle audible for tens of seconds, and it is the cheapest
+//      defence there is against a one-off confusable.
+//    · An emergency candidate is never shadowed by an ambient one (`best(of:)`). On a street
+//      `traffic_noise` and `engine` sit high in every window, so picking the window's
+//      highest-confidence danger label would let the ambient class win window after window and
+//      break the siren's agreement run before it ever completed.
 //    · The same kind is not repeated inside `repeatInterval`, so standing at a busy corner does
 //      not turn into a stream of speech over the route instructions.
-//    · These are *advisory* cues at `.obstacle` priority. They must never outrank a route line or
-//      "Head height." — a sound the walker can already hear is worth less than a warning they
-//      cannot (docs/design.md §5, AGENTS.md hard rule 8).
 //  Tests: SoundAlertsTests.swift.
 //
 
 import Foundation
+
+/// How urgent a danger sound is, which is what decides the speech band it is spoken in.
+///
+/// Two levels, not three, because the app's speech ladder already has the two bands that mean the
+/// right things: `.nav` ("what you must do at this corner") and `.obstacle` ("something is near
+/// you"). This enum is the logic-side name for that choice, so the number-free mapping lives in
+/// `AppModel.wireSounds()` and the *decision* lives here with its tests (AGENTS.md hard rule 3).
+/// ⚠ Nothing here maps to `.safety`, ever. See the file header, invariant 2.
+public enum SoundUrgency: Int, Sendable, Comparable, CaseIterable {
+    /// Something is audible near the walker that the cane will not find. Spoken at `.obstacle`.
+    case ambient = 0
+    /// An emergency vehicle is working nearby: the walker's own crossing cue is masked and the
+    /// vehicle may cross against the signal. Spoken at `.nav`, the crossing-instruction band.
+    case emergency = 1
+    /// Orders by raw value so `urgency > .ambient` reads naturally.
+    public static func < (a: SoundUrgency, b: SoundUrgency) -> Bool { a.rawValue < b.rawValue }
+}
 
 /// A danger sound worth speaking, and the line spoken for it.
 /// Deliberately only three kinds: a blind walker acting on a sound needs to know *what* to do
@@ -45,37 +123,115 @@ public enum DangerSound: String, Sendable, CaseIterable {
     /// Engines, tyres, a vehicle passing: something is moving nearby that the cane will not find.
     case vehicle
 
-    /// What the walker hears. Short, because it plays over route guidance, and neutral, because
-    /// the classifier is not certain enough to tell anyone to jump.
+    /// What the walker hears.
+    ///
+    /// The siren line is the only one that tells the walker to do something, and the wording is
+    /// load-bearing (file header R1, R2):
+    ///   · It names an **action**, because "Siren nearby." is not actionable — a blind traveller
+    ///     already hears the siren, and what the app adds is that their crossing cue is now masked.
+    ///   · It governs **starting**, not stopping. Someone already in the crosswalk must clear it,
+    ///     not freeze; "Do not start crossing." is a no-op for them and the right instruction for
+    ///     someone at the kerb. Never reword this to "Stop." or "Do not cross."
+    ///   · It stays short. `.nav` and `.obstacle` queue FIFO, so every syllable here delays the
+    ///     next obstacle name: 29 characters ≈ 1.5 s, shorter than any route line in the app.
+    /// The other two lines are unchanged and deliberately passive: a horn or an engine is a fact,
+    /// not an instruction, and the classifier is nowhere near sure enough to direct anyone on them.
     /// ⚠ These strings are prefetched by the natural voice (`AppModel.commonLines`); changing one
     /// without changing that list costs a synthesis round-trip on the first play.
     public var spokenLine: String {
         switch self {
-        case .siren: return "Siren nearby."
+        case .siren: return "Siren. Do not start crossing."
         case .horn: return "Horn nearby."
         case .vehicle: return "Vehicle sound nearby."
         }
     }
 
+    /// Which speech band the app speaks this kind in (`AppModel.wireSounds()` does the mapping).
+    ///
+    /// Only an emergency siren is `.emergency`, and it is `.emergency` because of what the walker
+    /// must decide, not because of how loud it is: an emergency vehicle masks the traffic sound a
+    /// blind traveller crosses by, and it may enter the intersection against the signal. That is a
+    /// crossing fact, and crossing facts are `.nav` in this app.
+    public var urgency: SoundUrgency {
+        switch self {
+        case .siren: return .emergency
+        case .horn, .vehicle: return .ambient
+        }
+    }
+
     /// Confidence (0…1) this kind needs before it is even a candidate.
-    /// A siren is loud, distinctive and the most consequential to miss, so it is gated lowest; a
-    /// generic vehicle sound is the most common false positive on a sidewalk, so it is gated
-    /// highest and is off unless the walker asked for it.
+    ///
+    /// The siren gate was **raised** from 0.50 to 0.60 when its line became an instruction spoken
+    /// in the route band (file header R5). Missing a siren costs the walker nothing they did not
+    /// already have — their own ears hear a pedestrian-audible siren much further than a phone
+    /// microphone strapped to a swinging cane — while a false one stops a blind person at a kerb.
+    /// Apple says outright not to rely on this classifier "in high-risk or emergency situations,
+    /// or for navigation" (R4), so the app buys margin where it is cheap.
+    /// A generic vehicle sound is still the commonest false positive on a sidewalk and is gated
+    /// highest. ⚠ Do not lower the siren gate without a street test that counts false alarms.
     public var minimumConfidence: Double {
         switch self {
-        case .siren: return 0.50
+        case .siren: return 0.60
         case .horn: return 0.60
         case .vehicle: return 0.75
         }
     }
 
+    /// Consecutive analysis windows that must name this kind above its gate before it is spoken.
+    ///
+    /// Three for a siren, two for everything else, at the app's ~0.5 s window hop:
+    ///   · A siren is continuous for tens of seconds, so 1.5 s of confirmation costs the walker
+    ///     nothing real and is the cheapest defence against a one-off confusable (a bell, an alarm
+    ///     test, a note held on a brass instrument — R4). It also means the *momentary* things
+    ///     that get classified as sirens cannot reach speech at all.
+    ///   · A horn is the opposite shape: a honk is often under a second, so a third window would
+    ///     not make it more certain, it would simply mean horns are never announced.
+    /// ⚠ Raising the siren count further pushes the alert past the point where it can still change
+    /// a crossing decision; lowering it re-admits the single-burst false positives.
+    public var requiredWindows: Int {
+        switch self {
+        case .siren: return 3
+        case .horn, .vehicle: return 2
+        }
+    }
+
     /// Seconds before this kind may be spoken again. A siren approaches, so it is worth a
     /// reminder sooner; standing next to traffic must not produce a running commentary.
+    /// 15 s of an emergency vehicle's approach is ≈ 200 m at 50 km/h, so a siren that is still
+    /// audible one interval later is meaningfully closer than it was — the repeat carries
+    /// information, it is not nagging.
     public var repeatInterval: Double {
         switch self {
         case .siren: return 15
         case .horn: return 12
         case .vehicle: return 30
+        }
+    }
+
+    /// Seconds the line may sit in the speech queue before it is dropped as stale
+    /// (`SpeechQueue.say(_:_:ttl:)`).
+    ///
+    /// Shorter than the 6 s every sound alert used to get, and shortest for the siren, because a
+    /// siren line is only worth speaking while it can still change a decision: at `.nav` it queues
+    /// behind at most the route line already playing, and 5 s covers that with margin while
+    /// guaranteeing the walker is never told to hold at a kerb about a vehicle that went past ten
+    /// seconds ago. A stale instruction is a false positive with a delay on it.
+    public var speechTTL: Double {
+        switch self {
+        case .siren: return 5
+        case .horn: return 4
+        case .vehicle: return 6
+        }
+    }
+
+    /// Rank used when one analysis window offers more than one danger label (`SoundAlerts.best`).
+    /// Higher wins regardless of confidence, as long as it clears its own gate: siren > horn >
+    /// vehicle. This is the anti-shadowing rule — see `best(of:)`.
+    public var selectionRank: Int {
+        switch self {
+        case .siren: return 2
+        case .horn: return 1
+        case .vehicle: return 0
         }
     }
 }
@@ -90,12 +246,27 @@ public enum SoundAlerts {
     /// in the trip log rather than silently never firing.
     /// ⚠ Never match a label that is not in `knownClassifications`: that is how a feature ends up
     /// looking enabled while being dead.
+    ///
+    /// Two identifiers were **removed** when the siren line became an instruction, and both
+    /// removals are load-bearing rather than tidying:
+    ///   · `car_alarm` was in the siren set. A parked car's alarm is not an emergency vehicle and
+    ///     is not a reason to hold at a kerb; it is also a common campus and car-park sound. It
+    ///     happens not to exist in `knownClassifications` on the demo phone, so removing it costs
+    ///     nothing today — and stops a future iOS that adds the label from silently wiring a car
+    ///     alarm to "Siren. Do not start crossing." (pinned by `carAlarmIsNotASiren`).
+    ///   · `bicycle_bell` was in the horn set, and it *does* exist on the demo phone. On a
+    ///     university campus a bicycle bell is one of the most frequent sounds there is, and it
+    ///     would have been announced as "Horn nearby.", which is both wrong and constant. A
+    ///     campus bell deserves its own cue one day; it does not deserve the horn's words.
+    /// `civil_defense_siren` deliberately stays: an outdoor warning siren is not an emergency
+    /// vehicle, but "do not start crossing" is not wrong advice under one either, and in Champaign
+    /// it sounds on a published monthly test rather than at random. Do not treat a first-Tuesday
+    /// alert as a bug — see the risk list in CHANGELOG.
     public static let labels: [DangerSound: [String]] = [
         .siren: ["siren", "emergency_vehicle", "police_siren", "ambulance_siren",
-                 "fire_engine_siren", "civil_defense_siren", "emergency_vehicle_siren",
-                 "car_alarm"],
+                 "fire_engine_siren", "civil_defense_siren", "emergency_vehicle_siren"],
         .horn: ["car_horn", "vehicle_horn", "vehicle_horn_car_horn_honking", "air_horn",
-                "train_horn", "honk", "truck_horn", "bicycle_bell"],
+                "train_horn", "honk", "truck_horn"],
         .vehicle: ["vehicle", "motor_vehicle_road", "car_passing_by", "traffic_noise",
                    "engine", "engine_accelerating", "engine_idling", "engine_revving",
                    "bus", "truck", "motorcycle", "tire_squeal", "skidding", "car"],
@@ -113,6 +284,53 @@ public enum SoundAlerts {
         for (kind, names) in labels where names.contains(label) { return kind }
         return nil
     }
+
+    /// Pick the one candidate from a single classification window that the policy should judge.
+    ///
+    /// **The bug this exists to stop.** `SNClassificationResult` carries every label with a
+    /// confidence, and the old code forwarded whichever *danger* label had the highest confidence.
+    /// On a real street that is almost always the ambient class: `traffic_noise`, `engine` and
+    /// `car_passing_by` sit high in every single window next to a road. An approaching siren rises
+    /// through that, so window after window would report `vehicle` while `siren` was second — and
+    /// because `SoundAlertPolicy` requires *consecutive agreeing* windows, the siren's run would be
+    /// broken by the ambient class every time and the alert would simply never fire. The one
+    /// hazard the cane and the LiDAR can never detect must not be shadowed by the one class that is
+    /// always present.
+    ///
+    /// So: among the candidates that clear their own `minimumConfidence`, the highest
+    /// `selectionRank` wins (siren > horn > vehicle), ties broken by confidence. If nothing clears
+    /// a gate, the highest-confidence danger label is returned unchanged — the policy still needs
+    /// to see a sub-gate window so it can break the run, which is exactly what it did before.
+    /// - Parameter candidates: `(identifier, confidence)` for this window. Identifiers that are not
+    ///   danger sounds are ignored, so callers may pass the whole window.
+    /// - Returns: the label and confidence to hand to `SoundAlertPolicy`, or nil when the window
+    ///   held no danger sound at all.
+    public static func best(of candidates: [(label: String, confidence: Double)])
+        -> (label: String, confidence: Double)? {
+        var qualified: (label: String, confidence: Double, rank: Int)?
+        var fallback: (label: String, confidence: Double)?
+        for c in candidates {
+            // A non-finite confidence is dropped outright. NaN compares false against everything,
+            // so a NaN that arrived first would sit in `fallback` and never be displaced by a real
+            // candidate — it would win by being unrankable.
+            guard let kind = kind(for: c.label), c.confidence.isFinite else { continue }
+            if let f = fallback {
+                if c.confidence > f.confidence { fallback = (c.label, c.confidence) }
+            } else {
+                fallback = (c.label, c.confidence)
+            }
+            guard c.confidence >= kind.minimumConfidence else { continue }
+            let rank = kind.selectionRank
+            // Rank first, confidence only as the tie-break. Spelled out rather than compared as a
+            // tuple so the ordering is impossible to misread at a glance.
+            if let q = qualified, q.rank > rank || (q.rank == rank && q.confidence >= c.confidence) {
+                continue
+            }
+            qualified = (c.label, c.confidence, rank)
+        }
+        if let q = qualified { return (q.label, q.confidence) }
+        return fallback
+    }
 }
 
 /// Turns a stream of classifier results into at most one spoken line per danger kind per
@@ -122,10 +340,14 @@ public enum SoundAlerts {
 /// the owner passes `now` in seconds and writes the mutated copy back.
 public struct SoundAlertPolicy: Sendable, Equatable {
 
-    /// Consecutive windows that must name the same kind above its gate before anything is spoken.
-    /// Two windows at the app's 0.5 s hop = ≤ 1 s of latency for a large drop in false positives;
-    /// three cost 1.5 s, which is a car-length at 10 m/s and was judged too slow.
-    public var requiredWindows: Int = 2
+    /// How many consecutive agreeing windows each kind needs — the number is `DangerSound`'s own
+    /// (`requiredWindows`), not the policy's, because the right answer differs by the *shape* of
+    /// the sound: a siren is continuous and can afford a third window, a honk is not and cannot.
+    ///
+    /// This used to be one policy-wide `var requiredWindows = 2`. It was made per kind when the
+    /// siren line became an instruction spoken in the route band: the extra 0.5 s of confirmation
+    /// is the cheapest false-positive defence available, and it may not be charged to horns.
+    /// ⚠ Pinned by `sirenNeedsThreeWindowsAndHornStillNeedsTwo`.
 
     /// The kind the current run of windows agrees on, and how many windows long it is.
     private var pending: DangerSound?
@@ -133,20 +355,21 @@ public struct SoundAlertPolicy: Sendable, Equatable {
     /// When each kind was last announced (seconds), so `repeatInterval` is per kind.
     private var lastSpoken: [DangerSound: Double] = [:]
 
-    /// Creates a policy with the default 2-window agreement.
+    /// Creates an empty policy: no run in progress and no kind inside its repeat interval.
     public init() {}
 
     /// Feed one classification window's best danger-sound candidate.
     ///
-    /// The caller passes the highest-confidence classification that maps to a `DangerSound`; a
-    /// window with no danger sound passes `nil`, which breaks the run. Confidence below the
-    /// kind's own gate also breaks it — a half-heard siren is not a siren.
+    /// The caller passes the window's chosen candidate — `SoundAlerts.best(of:)` makes that choice
+    /// so an ambient label cannot shadow a siren. A window with no danger sound passes `nil`,
+    /// which breaks the run. Confidence below the kind's own gate also breaks it: a half-heard
+    /// siren is not a siren.
     /// - Parameters:
     ///   - kind: the danger sound this window suggests, or nil.
     ///   - confidence: 0…1 from `SNClassification.confidence`.
     ///   - now: monotonic seconds.
     /// - Returns: the kind to announce, or nil. Returns non-nil at most once per
-    ///   `kind.repeatInterval`.
+    ///   `kind.repeatInterval`, and only after `kind.requiredWindows` agreeing windows.
     public mutating func update(kind: DangerSound?, confidence: Double, now: Double) -> DangerSound? {
         guard let kind, confidence >= kind.minimumConfidence else {
             pending = nil
@@ -159,7 +382,7 @@ public struct SoundAlertPolicy: Sendable, Equatable {
             pending = kind
             pendingCount = 1
         }
-        guard pendingCount >= requiredWindows else { return nil }
+        guard pendingCount >= kind.requiredWindows else { return nil }
         if let last = lastSpoken[kind], now - last < kind.repeatInterval { return nil }
         lastSpoken[kind] = now
         // Keep the run going: a siren that stays audible must not re-announce until the interval

@@ -249,11 +249,18 @@ enum IntentSupport {
     }
 }
 
-/// Registered at install; phrases must include the app name. 7 of the 10 App Shortcuts an app
-/// may have. `shortTitle` / `systemImageName` are what the Action button and Spotlight show.
-/// Phrases are short and start with the verb a walker would say; no two shortcuts share one.
+/// Registered at install; phrases must include the app name. **All ten** App Shortcuts an app may
+/// have: the seven route shortcuts defined above, plus three hands-free ones whose intents live in
+/// `HandsFreeIntents.swift`. `shortTitle` / `systemImageName` are what the Action button and
+/// Spotlight show. Phrases are short and start with the verb a walker would say; no two shortcuts
+/// share one.
+///
+/// ⚠ This list is **full**. Anything new must either be a plain `AppIntent` — still listed as an
+/// action in the Shortcuts app, and assignable to the Action button by building a one-step shortcut
+/// around it — or replace one of these ten. `RecenterIntent` and `SetOptionIntent` in
+/// `HandsFreeIntents.swift` are the worked examples of the first choice.
 struct CaneKitShortcuts: AppShortcutsProvider {
-    /// The seven shortcuts, in display order.
+    /// The ten shortcuts, in display order.
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: WhereAmIIntent(),
                     phrases: ["Where am I in \(.applicationName)", "\(.applicationName) describe the scene"],
@@ -292,5 +299,28 @@ struct CaneKitShortcuts: AppShortcutsProvider {
                               "Stop navigating in \(.applicationName)"],
                     shortTitle: "Stop route",
                     systemImageName: "stop.fill")
+        // The three hands-free shortcuts (HandsFreeIntents.swift), which take this list to the
+        // limit of ten. Why these three and not Recenter or the hazard switches: see that file's
+        // header.
+        AppShortcut(intent: StatusIntent(),
+                    phrases: ["How is \(.applicationName) doing",
+                              "\(.applicationName) status",
+                              "Is \(.applicationName) working",
+                              "Check \(.applicationName)"],
+                    shortTitle: "Status check",
+                    systemImageName: "checkmark.seal")
+        AppShortcut(intent: AskSceneIntent(),
+                    phrases: ["Ask \(.applicationName) about the scene",
+                              "Ask \(.applicationName) a question",
+                              "\(.applicationName) answer a question"],
+                    shortTitle: "Ask a question",
+                    systemImageName: "questionmark.bubble")
+        AppShortcut(intent: SilenceHapticsIntent(),
+                    phrases: ["Silence the cane in \(.applicationName)",
+                              "Silence haptics in \(.applicationName)",
+                              "Turn cane haptics \(.$state) in \(.applicationName)",
+                              "\(.applicationName) turn cane haptics \(.$state)"],
+                    shortTitle: "Cane haptics",
+                    systemImageName: "hand.raised")
     }
 }

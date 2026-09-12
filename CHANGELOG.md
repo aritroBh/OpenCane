@@ -2,6 +2,34 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
+
+Both worktrees are now in the main checkout, hand-merged so nothing the renames and fixes
+built since is lost:
+- Emergency (`cane-wt-emergency`): siren gate 0.50 → 0.60 with three agreeing windows,
+  `.emergency` urgency → `.nav` band (never `.safety`), `best(of:)` so traffic noise cannot
+  shadow a siren, `speechTTL` per kind. `SoundAlerts.swift` + `SoundAlertsTests.swift` copied
+  verbatim (main never touched them); `SoundWatcher` + `AppModel` merged keeping every OpenCane
+  rename. Verified: API fully additive (`labels`, `candidateLabels`, `kind(for:)` retained;
+  `SensorProbe` only uses `candidateLabels`), `best(of:)` fallback preserves the policy's
+  below-gate reset, no force-unwraps, `.nav` exists on `SpeechPriority`.
+- Hands-free (`cane-wt-handsfree`): Status / Ask / Silence-haptics shortcuts (list now 10/10),
+  `HandsFreeIntents.swift` + `QuestionPrompt` / `StatusSummary` + tests + `docs/handsfree.md`
+  copied; `AppIntents` shortcuts block, `VLMClient.cloudPrimary` contract, `SceneDescriber`
+  question path and the `describe_result` question field merged. Two corrections while merging:
+  spoken strings say OpenCane (the branch predates the rename), and main's newer 18/25 s cloud
+  timeouts kept over the branch's 8/12 s. Verified: all four `AppModel` methods the intents call
+  exist (as an extension in the intents file), every member they touch exists, sources are globs
+  so no `project.yml` change needed. A 4-agent verification wave over the integrated tree
+  confirmed all contracts with file:line evidence.
+- Deliberately NOT merged as branches (the work is uncommitted in the worktrees); this is the
+  merge, done by hand with the rename applied. Commit after the gate, then merge the branches
+  only to retire them.
+
+test on device: siren needs ~1.5 s of continuous siren before "Siren. Do not start crossing.";
+horns stay passive; "How is OpenCane doing" answers in the fixed six-clause order; "Ask OpenCane
+about the scene" answers the question asked, never a generic description.
+
 ## Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
 
 The front inset of the both-cameras view still came out tilted with the back feed fine, after the

@@ -50,6 +50,10 @@ final class SceneDescriber {
     private(set) var lastDescription = ""
     /// Last failure (missing key, no camera frame, provider/network error); nil on success.
     private(set) var lastError: String?
+    /// The question the last run was answering, or "" when it was a plain "Where am I".
+    /// `AppModel` reads it inside `onResult`, so the trip log records which question an answer
+    /// belonged to — an answer logged without its question cannot be read back afterwards.
+    private(set) var lastQuestion = ""
     /// Wall-clock milliseconds of the last successful `client.describe` call (request build +
     /// network round trip + parse; excludes the frame wait and JPEG encode).
     private(set) var lastLatencyMs = 0
@@ -100,11 +104,62 @@ final class SceneDescriber {
                                         _ gate: String, _ cloudText: String) -> Void)?
 
     func describe() {
+        run(question: nil)
+    }
+
+    /// "Ask OpenCane …": one question about the frame in front of the cane, one sentence back.
+    ///
+    /// Deliberately **not** a conversation. The research this shape comes from is written up in
+    /// `QuestionPrompt` (CaneKitLogic): blind users want to ask rather than only listen, but the
+    /// measured complaint about AI answers is their length, and open-ended conversational video
+    /// assistants are weakest exactly on the moving scenes a walker is in. So: one question, one
+    /// sentence, no follow-up and no state carried between asks.
+    ///
+    /// Safety is unchanged from "Where am I": the answer is spoken at `.scene`, the lowest
+    /// priority, so any obstacle name, route line or "Head height." interrupts it; and it goes
+    /// through the same `CloudSceneGate`, so a question cannot be used to get a number, a count or
+    /// "the way is clear" past the gate.
+    /// - Parameter question: what the walker said. Empty or wordless input is refused out loud
+    ///   rather than sent to the model as a blank question.
+    /// Caller: `AppModel.askAboutScene(_:)` (Siri / Shortcuts / the Action button).
+    func ask(_ question: String) {
+        guard let cleaned = QuestionPrompt.clean(question) else {
+            speech.say("I did not catch a question.", .scene, ttl: 6)
+            return
+        }
+        run(question: cleaned)
+    }
+
+    /// The shared body of "Where am I" (`question == nil`) and "Ask OpenCane" (a question).
+    ///
+    /// One run at a time for both, because they share the one camera frame and the one voice: a
+    /// question fired while a description is in flight is dropped, exactly as a double press on the
+    /// watch already was.
+    /// - Parameter question: the cleaned question, or nil for a plain scene description.
+    private func run(question: String?) {
         guard !isDescribing else { return }
         let client = self.client
+        // A question needs a model that can read it. The on-device describer ignores the prompt
+        // entirely and answers with a scene description, so answering "is there a bench?" with it
+        // would be a different question's answer spoken as if it were this one's. Say so, then do
+        // the thing that is actually possible.
+        let cloud = client.cloudPrimary
+        let requested = question            // what the walker asked, before any downgrade
+        var asked = question
+        if asked != nil, cloud == nil {
+            speech.say("Asking a question needs the cloud model, which is not set up. Describing instead.",
+                       .scene, ttl: 8)
+            asked = nil
+        }
+        let question = asked
         isDescribing = true
         lastError = nil
-        speech.say("Describing.", .scene, ttl: 3)
+        // ⚠ The question the WALKER asked, not the one that survived the downgrade above (review
+        // round 1). A trip log that records a description with no question beside it cannot be read
+        // back afterwards — and the no-cloud downgrade is precisely the run somebody will be trying
+        // to explain.
+        lastQuestion = requested ?? ""
+        speech.say(question == nil ? "Describing." : "Asking.", .scene, ttl: 3)
 
         Task { [weak self] in
             guard let self else { return }
@@ -131,6 +186,18 @@ final class SceneDescriber {
             self.context.setPeopleHandled(false)
             let started = Date()
             do {
+                // The question path asks the cloud client DIRECTLY (see `VLMClient.cloudPrimary`):
+                // no silent on-device fallback, because that would answer a different question.
+                if let question, let cloud {
+                    let raw = try await cloud.describe(jpeg: jpeg,
+                                                       prompt: QuestionPrompt.text(for: question))
+                    self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
+                    let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg)
+                    self.lastDescription = text
+                    self.speech.say(text, .scene, ttl: 20)
+                    self.onResult?(text, nil, self.lastLatencyMs, frameName, gate, raw)
+                    return
+                }
                 let answer = try await client.describeScene(jpeg: jpeg)
                 self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                 // Only a cloud sentence needs the gate; an on-device one is already faithful.
@@ -153,7 +220,10 @@ final class SceneDescriber {
                                answer.source == .cloud ? answer.text : "")
             } catch {
                 self.lastError = error.localizedDescription
-                self.speech.say("Scene description failed.", .scene)
+                // A failed question says so as a question. "Scene description failed" after
+                // "is there a bench?" reads as an answer about the bench.
+                self.speech.say(question == nil ? "Scene description failed."
+                                                : "I could not answer that.", .scene)
                 self.onResult?(nil, error.localizedDescription, nil, frameName, "error", "")
             }
         }
@@ -185,6 +255,45 @@ final class SceneDescriber {
                 return (text, verdict.note)
             }
             return (OnDeviceVLMClient.template(seen, lidar: lidar), verdict.note)
+        }
+        guard !lidar.isEmpty, !SceneVocabulary.mentionsDistance(safe, from: lidar) else {
+            return (safe, verdict.note)
+        }
+        return (lidar + " " + safe, verdict.note)
+    }
+
+    /// `grounded`, but for an *answer to a question* — the same gate, a different failure line.
+    ///
+    /// The one behaviour that must differ: when the gate refuses the model's answer, "Where am I"
+    /// can quietly swap in the on-device description because a description is what was asked for.
+    /// A question cannot. Substituting a description for a refused answer is how a walker who
+    /// asked "is there a bench on my left?" hears "Sidewalk with trees ahead." and concludes there
+    /// is no bench — an absence-of-evidence inference, which is the exact failure `CloudSceneGate`
+    /// exists to prevent. So the refusal is said out loud first, and the description follows as
+    /// what the app *can* offer, clearly separated from the question.
+    /// - Parameters:
+    ///   - cloud: the model's raw answer.
+    ///   - jpeg: the frame it answered about, re-used for the gate's Vision evidence.
+    /// - Returns: what to speak, and the gate note for the trip log.
+    private func groundedAnswer(_ cloud: String, jpeg: Data) async -> (String, String) {
+        let lidar = context.get()
+        let seen = await OnDeviceVision.detect(jpeg: jpeg)
+        let nouns = SceneVocabulary.nouns(seen.labels, max: 5)
+        let ocr = SceneVocabulary.readableTexts(seen.texts.filter { $0.confidence >= 0.5 }.map(\.text))
+        let verdict = CloudSceneGate.check(cloud, lidar: lidar, ocr: ocr, detectedNouns: nouns)
+        guard let safe = verdict.sentence else {
+            // ⚠ The description that follows is LABELLED, and the label is the point (review
+            // round 1). "I can't answer that. Sidewalk with trees ahead." is still two sentences a
+            // walker reads as one answer — the second half sounds like the reason there is no
+            // bench. "What I can describe is:" makes it a different statement about a different
+            // question, which is what it actually is.
+            var description = OnDeviceVLMClient.template(seen, lidar: lidar)
+            if let onDevice = client.onDeviceFallback, let text = try? await onDevice.describe(jpeg: jpeg),
+               !text.isEmpty {
+                description = text
+            }
+            guard !description.isEmpty else { return ("I can't answer that.", verdict.note) }
+            return ("I can't answer that. What I can describe is: " + description, verdict.note)
         }
         guard !lidar.isEmpty, !SceneVocabulary.mentionsDistance(safe, from: lidar) else {
             return (safe, verdict.note)

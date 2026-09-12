@@ -117,10 +117,18 @@ sensors did not see is ever spoken.*
 - `feat/rename-opencane` — the product is OpenCane, the code is still CaneKit
 - front-camera rotation, first attempt (0f32282) — coordinator angle, still tilted on device
 
-**Uncommitted in the main checkout (device build green, Logic tests not yet run):**
+**Uncommitted in the main checkout (Step 16 — gate before committing):**
 - `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
-  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15,
-  CHANGELOG). `make run` build succeeded on device; still needs `make test` before committing.
+  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15).
+  Device build green, 316 Logic tests green, front inset verified on the phone.
+- Emergency sirens — `SoundAlerts.swift` + tests (verbatim), `SoundWatcher` + `AppModel`
+  wireSounds/commonLines (merged, renames kept).
+- Hands-free — `HandsFreeIntents.swift`, `QuestionPrompt` / `StatusSummary` + tests,
+  `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
+  `SceneDescriber` ask path, `describe_result` question field (merged).
+- `CHANGELOG.md` (Step 16), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
+  QuestionPrompt/StatusSummary, HandsFreeIntents, cloudPrimary sections; AppIntents rewritten;
+  stale 8/12 s timeouts and 243-test count fixed).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).

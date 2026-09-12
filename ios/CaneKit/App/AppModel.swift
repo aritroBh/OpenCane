@@ -279,6 +279,21 @@ final class AppModel {
     /// because of something you did yesterday is not a setting, it is a surprise. Turning it on is
     /// cheap; noticing it turned itself on is not.
     ///
+    /// **Should it default to ON?** It is the only sensor that can hear an ambulance behind the
+    /// walker, which is the one hazard no other sensor here can reach — so the question is real,
+    /// and the answer today is still no, on evidence rather than caution:
+    ///   · With `.playAndRecord` + `.allowBluetoothA2DP` and no HFP (hard rule 7), AirPods stay an
+    ///     *output*. The input is the phone's own microphone — clamped to a cane, near the ground,
+    ///     swinging, in the wind. What the classifier hears on a real walk has never been measured,
+    ///     so the false-alarm rate of a feature that now says "do not start crossing" is unknown.
+    ///   · The route guard that reverts to `.playback` the moment the output moves was hardened on
+    ///     2026-09-11 but has **not** been exercised with AirPods on a walk. If it is wrong, the
+    ///     cost is the HRTF beacon and the natural voice — two primary channels — to gain one
+    ///     advisory line.
+    /// Flip it on by hand at the top of a demo walk (one switch, zero launch-time risk) until a
+    /// 20-minute street recording with AirPods connected shows the route holding and the false
+    /// alarms counted. Then default it on, and persist it in the same change or not at all.
+    ///
     /// Writes from `SoundWatcher.onFailure` (a refused microphone, a degraded audio route, a dead
     /// analyser) go through `applyingDangerSounds`, exactly as `bothCamerasEnabled` uses
     /// `applyingBothCameras`: they only put the switch back on screen, they must not re-enter the
@@ -360,6 +375,10 @@ final class AppModel {
             self?.logger.event("describe_result", [
                 "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
                 "gate": gate, "cloud_text": cloudText,
+                // "" for a plain "Where am I"; the walker's words for an "Ask OpenCane" run, so a
+                // walk log shows which question an answer belonged to (an answer with no question
+                // beside it cannot be read back). Never `kind` or `t` — `TripLogRecord` owns those.
+                "question": self?.describer.lastQuestion ?? "",
                 "provider": self?.describer.providerName ?? "none",
                 "frame": frame,
                 "labels": OnDeviceVision.lastClassify.withLock { $0.labels },
@@ -1100,24 +1119,36 @@ final class AppModel {
     /// Wires the microphone watch: what it says and what it logs. Called once from `start()`,
     /// before the setting is read, so nothing can fire unwired.
     ///
-    /// A sound alert is spoken at `.obstacle` priority — below route lines and below "Head
-    /// height." (docs/design.md §5). A siren the walker can also hear is worth less than a
-    /// warning they cannot, and it must never cut a crossing instruction. The 6 s TTL matches the
-    /// obstacle cue lines: long enough to survive queuing behind a route line, short enough that
-    /// a horn is not announced after it has passed.
+    /// The band a sound alert is spoken in comes from `DangerSound.urgency` and its TTL from
+    /// `DangerSound.speechTTL` (both CaneKitLogic, both tested), so every number stays out of this
+    /// file and this method is a mapping (AGENTS.md hard rule 3):
+    ///   · `.emergency` — an emergency-vehicle siren — → `.nav`, the band route and crossing lines
+    ///     use. What a siren tells a blind pedestrian *is* a crossing fact: it masks the traffic
+    ///     sound they judge a crossable gap from, and the vehicle may cross against the signal.
+    ///   · `.ambient` — horn, vehicle — → `.obstacle`, exactly as before.
+    /// It is deliberately **not** `.safety`. Equal priorities queue FIFO in `SpeechQueue`, so a
+    /// siren line in that band would *delay* "Head height." or a LiDAR drop-off by its own length;
+    /// keeping it out is what protects the never-suppressed rule rather than weakening it. The
+    /// full argument, with the accessibility research behind it, is in `SoundWatcher`'s file header
+    /// and in SoundAlerts.swift. `.safety` still pre-empts `.nav` instantly and the haptic cue
+    /// channel is untouched, so nothing here can delay an obstacle or head-height warning; the only
+    /// line a siren can interrupt is an obstacle *name*, which is what every route line already
+    /// does and which resumes afterwards.
     /// There is no haptic for sound alerts on purpose: the cane's taps mean "something is in your
     /// path", and borrowing them for something heard would make the safety channel ambiguous.
     ///
-    /// It also wires `onFailure`, which is the *other* thing this feature can say. That line shares
-    /// the `.obstacle` band with the alerts, and for the same reason: a microphone that stopped
-    /// working is never more urgent than an obstacle in the path or a crossing instruction. The
-    /// watcher hands over a short hand-written sentence for speech and keeps the technical detail
-    /// (`NSError` descriptions, audio port names) for `lastError` and the trip log.
+    /// It also wires `onFailure`, which is the *other* thing this feature can say. That line stays
+    /// in the `.obstacle` band whatever the alerts do: a microphone that stopped working is never
+    /// more urgent than an obstacle in the path or a crossing instruction. The watcher hands over a
+    /// short hand-written sentence for speech and keeps the technical detail (`NSError`
+    /// descriptions, audio port names) for `lastError` and the trip log.
     private func wireSounds() {
         sounds.onDiagnostic = { [weak self] kind, fields in self?.logger.event(kind, fields) }
         sounds.onAlert = { [weak self] sound in
-            self?.speech.say(sound.spokenLine, .obstacle, ttl: 6)
-            self?.logger.event("speech", ["text": sound.spokenLine, "priority": "obstacle"])
+            let priority: SpeechPriority = sound.urgency == .emergency ? .nav : .obstacle
+            self?.speech.say(sound.spokenLine, priority, ttl: sound.speechTTL)
+            self?.logger.event("speech", ["text": sound.spokenLine,
+                                          "priority": sound.urgency == .emergency ? "nav" : "obstacle"])
         }
         // A failed start used to leave this switch ON: the watcher gave up, but every
         // foregrounding and every `start()` retried it, failed again, announced again and moved
@@ -1637,8 +1668,9 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
-        // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine`.
-        "Siren nearby.", "Horn nearby.", "Vehicle sound nearby.",
+        // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
+        // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
+        "Siren. Do not start crossing.", "Horn nearby.", "Vehicle sound nearby.",
     ]
 
     /// Shared start sequence for both route sources. Order matters: prefetch → location →

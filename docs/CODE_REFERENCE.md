@@ -471,9 +471,17 @@ Pure ranking behind the Guide card's "as you type" suggestions. Foundation only;
   - `announcement(count:)` — "No matching places" / "1 result" / "N results", posted by `DestinationField` as the app's one VoiceOver announcement.
 - Tests: `DestinationSuggestionsTests.swift` (14).
 
+### `SoundAlerts.swift` — danger sounds, emergency-siren policy (Step 16)
+
+`DangerSound` (siren/horn/vehicle) carries `spokenLine`, `minimumConfidence` (siren 0.60, horn 0.60, vehicle 0.75), `requiredWindows` (siren 3, else 2, at the ~0.5 s window hop), `repeatInterval`, `speechTTL` (5/4/6 s) and `selectionRank` (siren 2 > horn 1 > vehicle 0). `SoundUrgency` (ambient/emergency) decides the speech band in `AppModel.wireSounds` (emergency → `.nav`, ambient → `.obstacle`, never `.safety`). `SoundAlerts.best(of:)` picks the most urgent kind clearing its own gate (never the raw highest confidence, so traffic noise cannot shadow a siren); `SoundAlertPolicy.update(kind:confidence:now:)` needs consecutive agreeing windows and resets on a below-gate window. `MicrophoneStart` owns the input-format settle (one retry, whole budget < 0.5 s). Tests: `SoundAlertsTests.swift` (incl. `spokenLinesAreThePrefetchedOnes`, `anEmergencySirenIsNotShadowedByTheAmbientTrafficClass`).
+
+### `QuestionPrompt.swift` / `StatusSummary.swift` — hands-free content (Step 16)
+
+Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswerable questions) / `.text(for:)` (the model prompt); `StatusFacts` (gathered by `AppModel` at speak time) → `StatusSummary.lines` / `.sentence` (fixed six-clause order: obstacle detection, GPS, audio, haptics, route, battery) / `.hapticsLine` (shared with `announceChannels` so one fact has one sentence everywhere). Tests: `QuestionPromptTests.swift`, `StatusSummaryTests.swift`.
+
 ---
 
-### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 243 tests
+### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 316 tests on main before Step 16 (run `make test` for the count with the Step 16 cases)
 **CueDeciderTests.swift** (14; helper `report(head:torso:trusted:)` builds a trusted, depth-available report)
 - `centerApproachFiresThenUpdatesDistance` — first centre frame → `.fire(.centerApproach)`, next → `.updateCenter`, `active == .center`.
 - `centerDistanceIsClampedToNearFloor` — 0.3 m reports as 0.5 m (`centerNear`).
@@ -794,21 +802,25 @@ Other triggers into the same paths: `describeScene()` (logs `describe {provider}
 
 ### `AppIntents.swift` — Action button / Siri entry points
 
-**Purpose.** Three `AppIntent`s that open the app (ARKit needs the foreground) and call into `AppModel.shared`, plus the `AppShortcutsProvider`.
+**Purpose.** Seven route `AppIntent`s (Where am I, Take me to \<place\>, Take me somewhere, Navigate to CIF from here, Start demo route, Repeat, Next, Stop) that open the app (ARKit needs the foreground) and call into `AppModel.shared`, plus the `AppShortcutsProvider`. Spoken name is OpenCane via `\(.applicationName)` (display name — no edit needed on rename); code names stay CaneKit.
 
 | Type | Kind | Role |
 |---|---|---|
 | `WhereAmIIntent` | `struct: AppIntent` | title "Where am I"; `perform()` → `model.describeScene()`. |
-| `StartDemoRouteIntent` | `struct: AppIntent` | title "Start CaneKit route"; `perform()` → `model.startDemoRoute()`. |
-| `RepeatInstructionIntent` | `struct: AppIntent` | title "Repeat instruction"; `perform()` → `model.repeatInstruction()`. |
-| `IntentSupport` | `enum` namespace | `struct NotReady: Error, CustomLocalizedStringResourceConvertible` ("CaneKit is still starting. Try again."); `@MainActor static func model() async throws -> AppModel` polls `AppModel.shared` up to 20 × 100 ms (2 s) on a cold lock-screen launch, then throws `NotReady`. |
-| `CaneKitShortcuts` | `struct: AppShortcutsProvider` | Registers the three shortcuts; every phrase must contain `\(.applicationName)`. |
+| `TakeMeToIntent` / `TakeMeSomewhereIntent` | `struct: AppIntent` | Gazetteer-first / free-text destination → `model.navigate(to:)`. |
+| `NavigateToCIFIntent` | `struct: AppIntent` | MKDirections to the route file's last waypoint as a bare coordinate. |
+| `StartDemoRouteIntent` | `struct: AppIntent` | title "Start route"; `perform()` → `model.startDemoRoute()`. |
+| `RepeatInstructionIntent` / `NextWaypointIntent` / `StopRouteIntent` | `struct: AppIntent` | Repeat / Next / Stop. |
+| `IntentSupport` | `enum` namespace | `struct NotReady: Error` ("OpenCane is still starting. Try again."); `@MainActor static func model() async throws -> AppModel` polls `AppModel.shared` up to 20 × 100 ms (2 s) on a cold lock-screen launch, then throws `NotReady`. |
+| `CaneKitShortcuts` | `struct: AppShortcutsProvider` | Registers **all ten** shortcuts (Step 16 added Status / Ask / Silence-haptics); every phrase must contain `\(.applicationName)`. ⚠ The list is full — anything new must be a plain `AppIntent` or replace one. |
 
-All three intents: `static let supportedModes: IntentModes = .foreground(.immediate)`; `perform()` is `@MainActor`, returns `.result()`.
-
-Phrases: `"Where am I in <app>"`, `"<app> describe the scene"` (`eye`); `"Start my route in <app>"` (`figure.walk`); `"Repeat in <app>"`, `"<app> say that again"` (`arrow.counterclockwise`).
+All intents: `static let supportedModes: IntentModes = .foreground(.immediate)`; `perform()` is `@MainActor`, returns `.result()`.
 
 ⚠ Do not change `supportedModes` away from foreground — `describeScene()` needs a live ARKit frame, which only exists while the app is frontmost.
+
+### `App/HandsFreeIntents.swift` — Siri status, questions, voice switches (Step 16)
+
+`StatusIntent` → `model.speakStatus()` (six clauses via `StatusSummary`); `AskSceneIntent` (String parameter, Siri asks "What do you want to know?") → `model.askAboutScene(_)` → `SceneDescriber.ask`; `SilenceHapticsIntent` (optional `SwitchState`, defaults off) → `model.setHapticsSilenced(_)`; `RecenterIntent` / `SetOptionIntent` (Shortcuts-app only, no Siri phrase — the 10-shortcut list is full). The `AppModel` methods live as an extension in this file: `speakStatus()` (`.scene`, ttl 20 per clause), `askAboutScene(_:)`, `setHapticsSilenced(_:)` (`.nav`, ttl 10), `setOption(_:enabled:)` + `isOptionEnabled(_:)` (reads state back after writing, so a refused feature is never announced as on; "Both cameras" and face-tracking AR restart deliberately unreachable by voice). ⚠ `SetOptionIntent` only touches warning subsets — core obstacle/head-height cues are not reachable.
 
 ---
 
@@ -1253,7 +1265,8 @@ Purpose: transport + key plumbing for the vision-language providers, and the clo
 | `.gemini` | `GEMINI_API_KEY` | `GEMINI_MODEL` (`gemini-2.5-flash`) | `GeminiClient`, `"Gemini"` |
 | `.openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` (`gpt-4o-mini`) | `OpenAICompatibleClient` at `https://api.openai.com/v1`, `"OpenAI"` |
 
-- `vlmSession` — `nonisolated private let URLSession`: **`waitsForConnectivity = false`**, **`timeoutIntervalForRequest = 8`**, **`timeoutIntervalForResource = 12`** — fail fast on a dead network so the on-device fallback answers instead of 20 s of silence.
+- `vlmSession` — `nonisolated private let URLSession`: **`waitsForConnectivity = false`**, **`timeoutIntervalForRequest = 18`**, **`timeoutIntervalForResource = 25`** (measured: Muse Spark reasoning needs ~10.7 s end to end; 8/12 s cancelled it every time) — a dead network still fails fast via `waitsForConnectivity = false`.
+- `cloudPrimary` (Step 16) — the cloud client inside this one (`self` for bare providers, `primary.cloudPrimary` for `FallbackVLMClient`, nil for on-device). Only "Ask OpenCane" uses it: the fallback chain would answer a question with a generic description, so the question path asks the cloud directly and reports failures. ⚠ New clients that ignore `prompt` must return nil here (fails open by default — see the protocol doc).
 - `post(_ url:headers:body:) async throws -> Data` (nonisolated private) — `POST`, `Content-Type: application/json` + provider headers; no `HTTPURLResponse` → `VLMError.malformed("no HTTP response")`; status checked by `VLMResponse.checkStatus` (throws `VLMError.http(code, provider message or first 200 bytes)`).
 - `OpenAICompatibleClient` (`nonisolated struct: VLMClient`; `name`, `baseURL`, `apiKey`, `model`) — `describe(jpeg:prompt:)` normalises the base URL (trim, strip trailing `/`, append `/chat/completions` unless already present; missing scheme → `.malformed("bad base URL")`), header `Authorization: Bearer <key>`, body `VLMRequest.openAICompatible(model:jpegBase64:prompt:)`, parse `VLMResponse.openAICompatible`.
 - `AnthropicClient` — `https://api.anthropic.com/v1/messages` (a constant literal, the one remaining `!`), headers `x-api-key`, `anthropic-version: 2023-06-01`; `VLMRequest.anthropic(model:jpegBase64:prompt:)` / `VLMResponse.anthropic`.
@@ -1276,6 +1289,7 @@ Purpose: "Where am I" — latest camera frame → 1024 px JPEG → the shared `V
 - `onResult: ((String?, String?, Int?) -> Void)?` (`@ObservationIgnored`) — every outcome (sentence, error, ms) on the main actor: no frame, success, failure. `AppModel.wireDescriber` logs it as `describe_result`, so a walk log shows what "Where am I" actually said.
 - Triggers, all via `AppModel.describeScene()`: `GuideCard` "Where am I" button, watch `.describe`, `AppIntents.swift` (Action button App Shortcut), `AppModel.cameraControlPressed()`, and the automation hook `AppModel.describeEveryWaypoint` (`CANEKIT_DESCRIBE_EVERY_WAYPOINT=1`: route start + every waypoint, used by the Street View e2e).
 - All speech is `.scene` (lowest priority) — a description never interrupts a route or safety line and is dropped after its ttl if the voice is busy. ⚠ Do not change the no-frame / failure paths without re-running `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (expects a text containing "camera" or starting "Scene:" within 8 s, and the button back) and `make uitest-streetview`.
+- "Ask OpenCane" (Step 16): `ask(_:)` cleans via `QuestionPrompt`, snapshots one frame, asks `client.cloudPrimary` directly (a fallback answer would be a different question's answer), gates with `CloudSceneGate`, speaks one sentence. `lastQuestion` records the walker's words ("" for plain Where-Am-I) and is logged by `AppModel` in `describe_result`, so every answer sits beside its question.
 
 ---
 
