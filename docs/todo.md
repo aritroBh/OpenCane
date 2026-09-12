@@ -54,27 +54,31 @@ sensors did not see is ever spoken.*
   agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
   do the same for any new one, or install only from the main checkout.
 
-### In flight right now (branches, none merged — main has 2 failing UI tests)
+### Branch state (updated 2026-09-11 ~20:15)
 
-- `feat/all-sensors` — both-cameras mode, front-camera head tracking, microphone sound recognition
-- `fix/veer-gap-regression` — the safety regression below
-- `fix/voice-consistency` — stop the voice alternating between Bella and Apple's
-- `fix/cloud-scene-gate` — gate the cloud sentence + the Muse reasoning-token fix (committed)
-- `feat/detect-people` — people/animal detection (committed)
-- `feat/fm-image-describe` — Apple on-device model with the image (experiment, off by default)
-- main — the search-box suggestion rework (committed) + its two failing UI tests
+**Merged into main and verified (243 Logic tests, simulator build clean, `make uitest` green):**
+- the destination-search rework + its accessibility fix
+- `fix/cloud-scene-gate` — the cloud sentence is gated, and Muse Spark can actually answer
+  (`max_tokens` 120 → 1024 and `reasoning_effort: "low"`; it was spending the whole budget
+  reasoning and returning nothing after 11 s)
+- `feat/detect-people` — people and animals named with direction and a LiDAR-measured distance
+- the widget-embed fix: **the Live Activity had never been in any installed build**
 
-### Open safety items (these outrank every feature)
+**Committed on a branch, not yet merged:**
+- `fix/voice-consistency` — 74 warning lines (1,722 characters, 17.2 % of the monthly free tier)
+  prefetched so warnings stop alternating between Bella and Apple's voice. It also fixes a bug the
+  first attempt introduced: the launch batch was cancelled by the first warning the walker heard,
+  so most of the set was never synthesized.
+- `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
+  **Deliberately held**: it conflicts with the people-detection work in the same files and buys
+  nothing for the demo.
 
-- [ ] **Veer regression.** A veer cue needs 3 s of continuous off-course. A Muse review earlier today
-      made a *gated* moment (poor/stale fix, or not walking) end the episode — so under jittery GPS
-      the hold never accumulates and **the veer warning never fires at all**. Caught by `make e2e`
-      (`wrong_turn`, `gps_jitter`). Being fixed with failing tests first, for both directions: no
-      phantom veer after a real GPS gap, and no missing veer under mere jitter.
-- [ ] **`wrong_turn` also reports "no arrival (last waypoint index 3)"** — same cause or a second bug,
-      under investigation.
-- [ ] Two failing XCUITests on main (`testDestinationFieldRejectsEmptyQuery`,
-      `testTypingOffersCampusSuggestionsAndClearsTheError` — the "Go" button is not found at all).
+**Uncommitted work in worktrees — these are the only copies:**
+- `/Users/aritro/Downloads/cane-wt-veer` — the veer safety fix
+- `/Users/aritro/Downloads/cane-wt-all-sensors` — both-cameras mode, front-camera head tracking,
+  microphone sound recognition (~800 lines). ⚠ **Do not merge all-sensors without care**: it adds
+  to `AppModel`'s safety path, touches `Info.plist` and `project.yml`, and its sound watcher wants
+  `.playAndRecord`, which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
 
 ### The merge gate (nothing lands on main that fails any step)
 

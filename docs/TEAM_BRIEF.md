@@ -5,7 +5,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Status right now (Fri 2026-09-11, ~15:30 CT) — read this first
 
-- **Main branch is tested and pushed.** 146 logic tests pass; the app builds, installs and runs on
+- **Main branch is tested and pushed.** 243 logic tests pass; the app builds, installs and runs on
   Aritro's iPhone 17 Pro Max (iOS 27).
 - **Proven on the real phone (desk test):**
   - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
@@ -27,7 +27,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Setup checklist for tonight (do these in order)
 
-1. **Pull:** `git pull`, then `cd ios && make test` (146 tests).
+1. **Pull:** `git pull`, then `cd ios && make test` (243 tests).
 2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
    `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
    `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
