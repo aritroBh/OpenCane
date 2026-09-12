@@ -37,3 +37,13 @@ graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/cost.json
 graphify-out/20*/
+
+# Rendered printables. The .scad file is the source of truth; an STL is a
+# build artifact that goes stale the moment a parameter moves.
+# Regenerate with scripts/build_stl.ps1.
+hardware/**/stl/
+*.stl
+*.3mf
+*.gcode
+# OpenSCAD preview renders
+hardware/**/*.png

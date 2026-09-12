@@ -2,6 +2,50 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 14 — Screwless phone mount, Windows CAD toolchain (Fri Sep 11)
+
+Hardware side, on Sagar's Windows machine. Nothing here touches the app.
+
+**Why another mount.** `hardware/mount/` needs four M4 screws, four M4 brass heat-set inserts, an
+M5 bolt and nyloc, two M3 countersunk screws, two M3 inserts, two nylon screws and two nylon nuts,
+plus a soldering iron with a heat-set tip. On the night before the build none of that was confirmed
+to be in the building, and heat-set inserts are the one item no hardware store in Champaign stocks.
+`hardware/mount_screwless/` does the same job with four printed parts and nothing else. It is an
+alternative, not a replacement — whichever gets fitted, say which in this file.
+
+**Clamp is a collet**, not a snap fit and not a printed bolt across a C-clamp. The collar's nose is
+a slotted cone; the ring screws down over it and squeezes the slots onto the cane, like a drill
+chuck. Clamping force comes from a wedge, so sweep vibration cannot walk it loose, and both thread
+helices run along the print Z axis — the only orientation a printed thread is reliable in. A printed
+bolt across the split would have put the thread axis horizontal, where it prints as stacked overhangs.
+
+**Modularity is the pitch.** collar (cane interface) | arm (angle interface) | cradle (phone
+interface), all meeting at one sliding dovetail that runs along the cane axis, so the phone's weight
+loads every joint in shear across its widest face instead of trying to peel it open. Different cane,
+different pose or different phone each reprint exactly one part. `arm_angle` stays derived as
+`90 - cane_angle + cam_down`, so the 3–8° camera requirement is inherited, not re-litigated.
+
+**Toolchain.** OpenSCAD 2021.01 (the winget release, `OpenSCAD.OpenSCAD`) has no Manifold backend
+and renders the threaded collar in **6 min 52 s**. The 2025.09.15 portable snapshot renders it in
+**0.3 s**. `scripts/build_stl.ps1` prefers a snapshot in `%USERPROFILE%\Tools\` and warns loudly
+when it falls back. Two Windows PowerShell 5.1 traps are commented in that script because both fail
+silently: 5.1 strips the quotes from `-D part="collar"` so OpenSCAD renders an empty file, and a
+local `$png` clobbers the `-Png` switch parameter because variables are case-insensitive.
+
+**Coupons carry notches, not numbers.** `text()` needs fontconfig, which the portable Windows
+snapshot does not ship; it renders as nothing at all, silently, leaving four identical unlabelled
+bore rings. Count notches instead — which also reads by thumb.
+
+**`.gitignore` now covers `stl/`, `*.stl`, `*.3mf`, `*.gcode`.** It did not before, and the
+hardware brief wrongly claimed it did.
+
+**Not done:** never printed, never fitted, never walked. Every clearance in the file is a guess
+until the coupons come off the bed. No rain hood. The pawl spring thickness is untested and may be
+too stiff to click or too thin to survive.
+
+test on device: n/a (no app change). On the printer: coupons `what="bore"` first, set `bore_clear`,
+then thread and dovetail coupons, then collar + ring, then arm + cradle.
+
 ## Step 13 — Voice control, live camera view, natural voice, nearest-result search (Fri Sep 11, on device)
 
 Everything in this step was driven by the phone itself, not the simulator.

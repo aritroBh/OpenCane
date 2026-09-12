@@ -101,6 +101,23 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Install on the phone, verify each item from the trip log, push
 - [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
 
+### Hardware tonight (Sagar, Windows machine)
+- [x] OpenSCAD on Windows: 2021.01 via winget renders the threaded collar in 6 min 52 s; 2025.09.15
+      portable snapshot does it in 0.3 s and is unzipped at `%USERPROFILE%\Tools\`
+- [x] `scripts/build_stl.ps1` — one command, all five printables, binary STL, finds the fast OpenSCAD
+- [x] `hardware/mount_screwless/` designed and rendering clean: collet clamp (collar + ring), arm,
+      cradle, coupons. Zero screws, inserts, nuts or magnets.
+- [x] `.gitignore` now covers `stl/`, `*.stl`, `*.3mf`, `*.gcode` — it did not before
+- [ ] **Print `coupons.scad` `what="bore"` (17 cm³) and set `bore_clear` from it.** Everything else
+      waits on this number.
+- [ ] Thread + dovetail coupons; set `thr_clear` and `dt_clear`
+- [ ] Print collar + ring; check the ring actually closes the collet on the real cane
+- [ ] Print arm + cradle; T0 fit with the phone in it
+- [ ] Measure `pole_d` again with calipers at the exact spot the collar sits (28.75 / 28.70 unresolved)
+- [ ] Decide on the day: `hardware/mount/` (screwed) or `hardware/mount_screwless/`. Record which in
+      CHANGELOG.md.
+- [ ] T7 shake / T8 drop on whichever is fitted; check the camera still reads 3–8° down afterwards
+
 ### Scene understanding: the decision, and why (researched 2026-09-11, 65 agents)
 
 **Question asked:** run Gemma 4 2B/4B locally via Cactus so the app can name everything it sees,

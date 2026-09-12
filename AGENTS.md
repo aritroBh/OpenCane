@@ -28,7 +28,8 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 | `ios/project.yml`, `ios/scripts/gen.sh`, `ios/Makefile` | XcodeGen project + CLI build/test/install |
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
 | `docs/` | `README.md` (index), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` |
-| `hardware/` | Phone-to-cane mount: design brief + parametric OpenSCAD (Sagar) |
+| `hardware/mount/` | Phone-to-cane mount, screwed: design brief + parametric OpenSCAD (Sagar) |
+| `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity, `scripts/build_stl.ps1` (Sagar) |
 | `graphify-out/` | Knowledge graph of the repo: `graphify query "<question>"`, `GRAPH_REPORT.md`, `graph.html` |
 
 ## Hard rules
