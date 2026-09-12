@@ -124,8 +124,10 @@ Still to do on the phone: siren ~1.5 s behavior, "How is OpenCane doing" order, 
 inset re-check after reinstall.
 
 **Committed in the main checkout:**
-- `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
-  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15).
+- `ios/CaneKit/Depth/DualCameraSession.swift` — per-camera rotation (`DualCameraRotation`: back 90,
+  front 0, both fixed for the portrait-only UI; superseded capture-first after the back feed came out sideways, 2026-09-12),
+  unmirrored front inset, `front_rotation` / `back_rotation` / `front_mirrored` / `*_capture_angle` /
+  `*_size` / `*_portrait` in diagnostics (Step 15).
   Device build green, 316 Logic tests green, front inset verified on the phone.
 - Emergency sirens — `SoundAlerts.swift` + tests (verbatim), `SoundWatcher` + `AppModel`
   wireSounds/commonLines (merged, renames kept).
