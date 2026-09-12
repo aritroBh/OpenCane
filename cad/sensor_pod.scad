@@ -2,6 +2,14 @@
 // Clamps a 12.7 mm cane shaft, aims the sensor down-forward at the ground ahead.
 // DRAFT: unrendered. Verify the sensor pocket against your actual breakout.
 // Print: PETG, hood opening up, may need supports under the hood lip.
+// LEGACY (ESP32 era, cut 2026-09-10 when the app went phone-only): do not print for the demo.
+// Sized for a 12.7 mm aluminium/graphite shaft; the prototype stick is 27.65 mm (measured
+// 2026-09-12), so nothing here fits it. The live mount is hardware/mount_screwless/ (see
+// cad/README.md and hardware/README.md). Not rendered by any script (scripts/build_stl.ps1 covers
+// hardware/ only); no tests; no owner on the current team. Units: millimetres throughout.
+// Why it existed: the VL53L1X ground-distance sensor for the grip firmware's local drop-off /
+// step-up fail-safe (firmware/canekit_grip/tof.cpp; README says aim ~40-60 cm ahead of the tip).
+// The phone-only app replaced it with LiDAR ground hazards (AGENTS.md, Step 11).
 
 $fn = 64;
 shaft_d = 12.7; clear = 0.4;
@@ -11,6 +19,7 @@ brd_l = 26; brd_w = 18; brd_t = 5;   // sensor board pocket (adds clearance)
 hood_len = 10;                // lip over the ToF window to shed rain
 bolt_d = 3.2;
 
+// Split ring clamping the shaft (axis +Z), with a pinch-bolt ear on the +Y side.
 module clamp_ring() {
     difference() {
         cylinder(d = shaft_d + 2*clear + 2*clamp_wall, h = clamp_len);
@@ -27,6 +36,8 @@ module clamp_ring() {
         translate([0, shaft_d/2 + clear + 3, clamp_len/2]) rotate([0, 90, 0]) cylinder(d = bolt_d, h = 30, center = true);
     }
 }
+// Open-fronted box for the breakout: board pocket, a window for the sensor, a cable slot at the
+// bottom, and hood_len of wall beyond the board as the rain hood.
 module sensor_box() {
     difference() {
         translate([-brd_w/2 - 2, -brd_t - 4, 0]) cube([brd_w + 4, brd_t + 4, brd_l + 4 + hood_len]);

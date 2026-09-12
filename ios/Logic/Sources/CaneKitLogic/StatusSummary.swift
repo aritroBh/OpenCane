@@ -31,10 +31,16 @@
 //      accuracy, metres to the next waypoint, battery percent). Nothing is estimated, and no
 //      clause promises the path is clear — the same rule `CloudSceneGate` enforces on the model.
 //
-//  Owner: `AppModel.speakStatus()` (app) fills `StatusFacts` from the live engines and speaks
-//  `lines(_:)` at `.scene`, the lowest priority, so a status answer can never delay a warning.
-//  Callers: the "How is CaneKit doing" App Intent, and the same method the UI could use.
-//  Tests: StatusSummaryTests.swift.
+//  Owner: `AppModel.speakStatus()` (app, HandsFreeIntents.swift) fills `StatusFacts` from the live
+//  engines, speaks each of `lines(_:)` at `.scene` (the lowest priority, TTL 20 s) so a status
+//  answer can never delay a warning, and logs `status_spoken` with `sentence(_:)`.
+//  Callers: `StatusIntent` (Siri "How is OpenCane doing" / Shortcuts / Action button) →
+//  `speakStatus()`; `AppModel.setHapticsSilenced` (`hapticsLine(healthy:silenced:watchReachable:)`
+//  as the voice confirmation); `ConversationCoordinator` (the conversational assistant answers a
+//  status question with one clause — `gpsLine`, `audioLine`, `routeLine`, `batteryLine`,
+//  `hapticsLine` — or `sentence`, from its own `currentStatusFacts()`).
+//  Isolation: stateless and nonisolated; `StatusFacts` is a plain `Sendable` value.
+//  Tests: StatusSummaryTests.swift (12).
 //
 
 import Foundation
@@ -64,12 +70,13 @@ public struct StatusFacts: Sendable, Equatable {
     /// The route name to say ("AirPods Pro"); ignored when nothing is connected.
     public var headphoneName: String
     /// A head-yaw source is live (AirPods motion or the front-camera face tracker), which is what
-    /// makes the audio beacon point where the walker is looking.
+    /// makes the audio beacon point where the walker is looking. `speakStatus` passes
+    /// `head.isConnected || faceHead.isTracking`.
     public var headTracking: Bool
 
     /// `HapticPlayer.isHealthy` — the engine started and can buzz.
     public var hapticsHealthy: Bool
-    /// `HapticPlayer.silenced` — the walker turned the cane buzz off.
+    /// `AppModel.hapticsSilenced` — the walker turned the cane buzz off.
     public var hapticsSilenced: Bool
     /// `PhoneWatchLink.isReachable` — where obstacle cues go when the cane cannot buzz.
     public var watchReachable: Bool
@@ -83,6 +90,7 @@ public struct StatusFacts: Sendable, Equatable {
     public var metresToNext: Int?
 
     /// `AppModel.batteryPercent`, 0–100, or negative when unknown (simulator) — then omitted.
+    /// (`ConversationCoordinator` says "Battery level unknown." itself in that case.)
     public var batteryPercent: Int
 
     /// Memberwise, with every field required: a new fact must be decided at every call site rather
@@ -138,7 +146,10 @@ public enum StatusSummary {
     /// sentence ending in a full stop, so the caller can speak them as separate lines and let a
     /// warning interrupt one clause rather than the whole report.
     /// - Parameter f: what the app measured, right now.
-    /// - Returns: five or six sentences (battery is omitted when unknown). Never empty.
+    /// - Returns: five or six clauses (battery is omitted when unknown), each ending in a full stop;
+    ///   one clause may hold two short sentences ("GPS weak, 25 meters. Waypoint cues are paused.").
+    ///   Never empty. Pinned by `statusClausesAlwaysComeInTheSameOrder`,
+    ///   `healthyStatusStillNamesEveryChannel`, `noStatusClauseEverPromisesAClearPath`.
     public static func lines(_ f: StatusFacts) -> [String] {
         var out = [obstacleLine(f), gpsLine(f), audioLine(f), hapticsLine(f), routeLine(f)]
         if let battery = batteryLine(f) { out.append(battery) }
@@ -158,6 +169,8 @@ public enum StatusSummary {
     /// Obstacle detection: the channel that stops the walker hitting things, so it is spoken first.
     /// A running session with no frames arriving gets its own wording — that state looks exactly
     /// like a clear path from the outside and must never be reported as "on".
+    /// Pinned by `aRunningDepthSessionWithNoFramesIsNotReportedAsOn`,
+    /// `obstacleDetectionOffAndNoSensorReadDifferently`.
     public static func obstacleLine(_ f: StatusFacts) -> String {
         guard f.lidarSupported else { return "This phone has no depth sensor, so there are no obstacle warnings." }
         guard f.obstacleDetectionRunning else { return "Obstacle detection is off." }
@@ -168,6 +181,9 @@ public enum StatusSummary {
     /// GPS: whether a route can be followed at all, and how well. The accuracy number is
     /// CoreLocation's own; `weakGPSAccuracyM` is the same threshold at which the waypoint fences
     /// stop firing, so "GPS good" and "the fences are working" mean the same thing.
+    /// Order: denied beats everything, then no fix, then unknown (negative) accuracy, then
+    /// good (≤ 20 m, inclusive) / weak. Pinned by `gpsClauseSeparatesDeniedFromNoFix`,
+    /// `gpsWeakThresholdMatchesTheGeofenceGate`.
     public static func gpsLine(_ f: StatusFacts) -> String {
         if f.locationDenied { return "Location permission is denied, so no route can run." }
         guard f.gpsFix else { return "No GPS fix yet." }
@@ -181,6 +197,7 @@ public enum StatusSummary {
     /// Audio: where speech is coming out, and whether the beacon can use head direction.
     /// Losing the AirPods is the most common real failure on a walk and the least visible one —
     /// speech simply moves to the phone speaker under the walker's arm.
+    /// A blank route name reads "Headphones". Pinned by `losingHeadphonesSaysWhatStoppedWorking`.
     public static func audioLine(_ f: StatusFacts) -> String {
         guard f.headphonesConnected else {
             return "No headphones. Speech is on the phone speaker and the beacon is paused."
@@ -194,16 +211,19 @@ public enum StatusSummary {
 
     /// Haptics: whether the cane can buzz, and — when it cannot — where the obstacle cues went
     /// instead. Saying only "silenced" would leave the walker unsure whether cues still exist;
-    /// `announceChannels` makes the same promise at route start and this keeps it.
+    /// `AppModel.announceChannels` makes the same promise at route start (in its own wording — it
+    /// does not call this, and it only speaks for an unhealthy engine) and this keeps it.
     public static func hapticsLine(_ f: StatusFacts) -> String {
         hapticsLine(healthy: f.hapticsHealthy, silenced: f.hapticsSilenced,
                     watchReachable: f.watchReachable)
     }
 
     /// The haptics clause on its own, because it is also the confirmation spoken when the walker
-    /// silences or un-silences the cane by voice (`AppModel.setHapticsSilenced`). One function so
-    /// the status report and the confirmation cannot drift into saying different things about the
-    /// same switch.
+    /// silences or un-silences the cane by voice (`AppModel.setHapticsSilenced`, at `.nav`, TTL
+    /// 10 s) and the assistant's haptics answer (`ConversationCoordinator`). One function so the
+    /// status report and the confirmation cannot drift into saying different things about the
+    /// same switch. An unhealthy engine wins over the switch (the cane cannot buzz either way).
+    /// Pinned by `silencedHapticsAlwaysSayWhereTheCuesWent`.
     /// - Parameters:
     ///   - healthy: `HapticPlayer.isHealthy` — the engine can actually buzz.
     ///   - silenced: the walker's switch.
@@ -220,6 +240,7 @@ public enum StatusSummary {
     /// Route: whether guidance is running, and if so the line the walker is following. The
     /// instruction is repeated here on purpose — "is a route running" and "which one" are the same
     /// question when you cannot see the card.
+    /// Pinned by `noRouteIsStillAnAnswer`, `everyStatusClauseIsOneFinishedSentence`.
     public static func routeLine(_ f: StatusFacts) -> String {
         guard f.routeRunning else { return "No route running." }
         let instruction = f.routeInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -233,7 +254,7 @@ public enum StatusSummary {
 
     /// Battery: omitted entirely when unknown (the simulator reports −1) rather than spoken as a
     /// wrong number. A walk that ends because the phone died is a safety failure, so the low case
-    /// says so in words and not only in digits.
+    /// says so in words and not only in digits. Pinned by `lowBatteryIsWordedAndUnknownBatteryIsOmitted`.
     public static func batteryLine(_ f: StatusFacts) -> String? {
         guard f.batteryPercent >= 0 else { return nil }
         return f.batteryPercent <= lowBatteryPercent

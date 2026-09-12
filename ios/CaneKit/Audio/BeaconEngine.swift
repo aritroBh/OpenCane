@@ -27,12 +27,21 @@
 //  `MainActor.assumeIsolated` is legal inside them (hard rule 1); only the decoded
 //  `InterruptionType` crosses in. The restart-retry `Task` inherits the main actor.
 //
-//  Inputs (all main actor, from AppModel): `setHeading` on every compass update, and a 10 Hz
-//  ticker that pushes `setSpeaking` (SpeechQueue.isSpeaking), `setHeadYaw` (0 until the
-//  auto-recenter has re-zeroed the AirPods on the new leg) and `setTarget` (nil when not
-//  navigating, or while NavigationEngine keeps the beacon silent — settling at a crossing, a
-//  curved leg). `start()` / `stop()` bracket a route (`AppModel.beginRoute`; `stopRoute` and
-//  arrival).
+//  Inputs (all main actor, from AppModel): `setHeading` on every heading update
+//  (`LocationService.onHeading`: GPS course, or a compass reading that passed the gyro gate), and a
+//  10 Hz ticker (`AppModel.startTicker`) that pushes `setSpeaking` (SpeechQueue.isSpeaking),
+//  `setHeadYaw` (CaneKitLogic `HeadYawSelector`: AirPods yaw, else the front camera's
+//  `FaceHeadPose` yaw, else 0 — forced to 0 while a recenter is pending on a new leg) and
+//  `setTarget` (nil when not navigating, or while NavigationEngine keeps the beacon silent —
+//  settling at a crossing, a curved leg). `start()` / `stop()` bracket a route
+//  (`AppModel.startRouteNow`; `stopRoute`, `endRouteQuietly` and arrival). `headphonesConnected`
+//  comes from `AudioRouteMonitor`; `enabled` from the persisted "Audio beacon while navigating"
+//  setting, and `VoiceInputEngine` turns it off while the walker dictates and restores it after.
+//
+//  Readers: GuideCard's beacon pill (`renderedVolume`, `isRunning`). Tests: none (AVAudioEngine,
+//  device-only); the bearings it is given are pinned by `NavSupportTests` (settling, crossings),
+//  the head yaw by `HeadYawSourcesTests`. ⚠ The rotation convention and the sign of head yaw need
+//  the AirPods device walk: turn the head with the body still and the click moves the other way.
 //
 
 import AVFoundation
@@ -59,14 +68,17 @@ final class BeaconEngine {
     /// 0…1, what the mixer is set to (debug).
     /// Also drives the GuideCard pill ("Beacon N%"), so it must be 0 whenever nothing plays.
     private(set) var renderedVolume: Float = 0
-    /// User setting (persisted by AppModel). False silences immediately; turning it back on
-    /// takes effect at the next input update (≤ 100 ms via the ticker).
+    /// User setting (persisted by AppModel as `beaconEnabled`). False silences immediately; turning
+    /// it back on takes effect at the next input update (≤ 100 ms via the ticker). Also written by
+    /// `VoiceInputEngine` (off while listening, then its previous value), so the click never plays
+    /// over the walker's dictation.
     var enabled = true {
         didSet { if !enabled { silence() } }
     }
     /// Only render into headphones: a spatial click out of the cane-mounted speaker is noise
-    /// for everyone and carries no direction. Set by the AudioRouteMonitor.
-    /// (via `AppModel.wireAudioRoute()`); re-renders immediately on change.
+    /// for everyone and carries no direction. Set from `AudioRouteMonitor` via
+    /// `AppModel.wireAudioRoute()` — undebounced (`onImmediateChange`), so the click stops the moment
+    /// the AirPods drop; re-renders immediately on change.
     var headphonesConnected = false {
         didSet { render() }
     }
@@ -89,7 +101,8 @@ final class BeaconEngine {
     @ObservationIgnored private var targetBearing: Double?
     /// Phone/body heading, degrees true; nil = silent (no compass yet).
     @ObservationIgnored private var heading: Double?
-    /// Head yaw relative to the recentred forward, degrees, right-positive.
+    /// Head yaw relative to the recentred forward, degrees, right-positive; 0 = no head source (the
+    /// beacon then pans from the heading alone).
     @ObservationIgnored private var headYaw: Double = 0
     /// Speech is playing → volume × `duckWhileSpeaking`.
     @ObservationIgnored private var speaking = false
@@ -104,6 +117,8 @@ final class BeaconEngine {
     /// Volume multiplier (0…1) applied while speech plays so instructions stay intelligible.
     var duckWhileSpeaking: Float = 0.3
 
+    /// The engine and node objects exist from here, but nothing is attached, scheduled or started
+    /// until the first `start()` (route start); no observers are installed either.
     init() {}
 
     // MARK: Lifecycle
@@ -111,7 +126,8 @@ final class BeaconEngine {
     /// Build the graph on first use, start the engine, (re)start the click loop, install the
     /// route/interruption observers (once) and render the current inputs. Idempotent while
     /// running. On failure sets `lastError` and leaves `isRunning == false`. Caller:
-    /// `AppModel.beginRoute`. Requires the app audio session to be configured already.
+    /// `AppModel.startRouteNow` (after the depth-readiness gate). Requires the app audio session to
+    /// be configured already (`SpeechQueue.configureAudioSession`, at launch).
     func start() {
         guard !isRunning else { return }
         do {
@@ -150,7 +166,8 @@ final class BeaconEngine {
     /// Stop the click and the engine (graph and observers stay for the next route). After this
     /// `restartEngine` is a no-op, so interruptions no longer revive the beacon. Does not reset
     /// `renderedVolume`; the next input update (any `set…`) renders silence since
-    /// `isRunning` is false. Callers: `AppModel.stopRoute` and the arrival handler.
+    /// `isRunning` is false. Callers: `AppModel.stopRoute`, `endRouteQuietly` (a route replaced
+    /// mid-walk) and the `nav.onArrived` handler.
     func stop() {
         player.stop()
         engine.stop()
@@ -195,8 +212,9 @@ final class BeaconEngine {
         }
     }
 
-    /// Called when the app returns to the foreground: the engine can stop across a screen lock
-    /// without an interruption notification; restart it if a route is running (Muse M4).
+    /// Called when the app returns to the foreground (`AppModel.scenePhaseChanged(.active)`): the
+    /// engine can stop across a screen lock without an interruption notification; restart it if a
+    /// route is running (Muse M4).
     func resumeIfNeeded() {
         guard isRunning, !engine.isRunning else { return }
         restartEngine()
@@ -229,21 +247,25 @@ final class BeaconEngine {
 
     // MARK: Inputs
 
-    /// Where to walk, degrees true. nil = no target → silent.
+    /// Where to walk, degrees true. nil = no target → silent. Pushed at 10 Hz by the ticker with
+    /// `nav.targetBearing` while navigating (nil on a curved leg or while a crossing settles).
     func setTarget(bearing: Double?) {
         targetBearing = bearing
         render()
     }
 
-    /// The phone's heading, degrees true (already gyro-gated).
+    /// The phone's heading, degrees true: the GPS course while walking, or a compass reading the
+    /// caller already gyro-gated (only the compass is gated — gating the course froze it mid-sweep,
+    /// Muse H1). nil = silent.
     func setHeading(_ h: Double?) {
         heading = h
         render()
     }
 
     /// Head yaw relative to the recentred forward direction, degrees, right-positive.
-    /// AppModel passes 0 while `recenterPending` (after a turn the old reference would
-    /// double-count the body turn the heading already contains — AGENTS.md).
+    /// AppModel passes `HeadYawSelector.choose(...)`: AirPods yaw, else front-camera yaw, else 0, and
+    /// 0 while `recenterPending` (after a turn the old reference would double-count the body turn the
+    /// heading already contains — AGENTS.md).
     func setHeadYaw(_ yaw: Double) {
         headYaw = yaw
         render()
@@ -260,8 +282,8 @@ final class BeaconEngine {
 
     /// Apply the current inputs to the graph (main actor; called after every input change).
     ///
-    /// Silent (volume 0, `renderedError` nil) unless running, enabled, in headphones, with both a
-    /// target and a heading. Otherwise: source at the absolute target bearing 10 m out, listener
+    /// Silent (volume 0, `renderedError` nil) unless running, enabled, in headphones, not
+    /// `SpeechQueue.muted` (automation stays silent), with both a target and a heading. Otherwise: source at the absolute target bearing 10 m out, listener
     /// yawed to the absolute facing (heading + head yaw, negated because AVAudio yaw is CCW),
     /// error wrapped to (−180, 180], volume ramped linearly from 0 at `silentError` to 1 at
     /// `fullVolumeError`, then ducked while speaking.

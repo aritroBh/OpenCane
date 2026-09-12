@@ -11,15 +11,25 @@
 //    · `a`…`d` are points along the real ISR → Goodwin → Springfield path.
 //    · The shipped-route pins (crossings [4, 6, 7], curved [1], 12 m turns on 3/6/8) must be
 //      updated on purpose whenever the route JSON changes.
+//    · `shippedRouteFileIsConsistent` reads the JSON through `#filePath` (three directories up,
+//      then `../CaneKit/Resources/`), so moving this file or the route breaks the path.
+//
+//  Callers of the pinned code: `RouteSource` (app; `Route.load` for the bundled demo route,
+//  `RouteBuilder.waypoints` for an `MKDirections` walking route). `ios/scripts/e2e.py` also depends
+//  on the waypoint count and wrist-cue list of the shipped file.
 //
 
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// ISR (Illinois St), the start of the MapKit fixture's first step.
 private let a = Coordinate(latitude: 40.1095, longitude: -88.2214)
+/// The Goodwin Ave corner: end of step 1, where the first waypoint (a crossing) is placed.
 private let b = Coordinate(latitude: 40.1096, longitude: -88.2244)
+/// Up Goodwin to the Springfield turn: the second waypoint.
 private let c = Coordinate(latitude: 40.1107, longitude: -88.2244)
+/// Further north: the final step's end, which becomes the "Arrived at CIF." waypoint.
 private let d = Coordinate(latitude: 40.1128, longitude: -88.2244)
 
 /// Any MapKit destination becomes speakable waypoints: next step's line, crossing flag, 15/20 m fences.

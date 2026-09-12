@@ -16,6 +16,17 @@
  *
  * Fail-safe: no BLE connection for 5 s and ToF present -> LOCAL mode: buzz both
  * motors on drop-off (> baseline+250 mm) or step-up (< 60 % baseline).
+ *
+ * STATUS: stretch / history only. Cut on 2026-09-10 when the project went phone-only (AGENTS.md
+ * "What this is": no ESP32, no external sensors). The shipping iOS app never talks to it; the
+ * only client ever written is ios/stretch/CaneBLE.swift (not in any target), which speaks this
+ * exact protocol. Kept so the grip can be revived; the drafts for its housing are cad/.
+ * Owner: nobody on the current team. Callers: a BLE central writing NUS RX (CaneBLE.swift, or
+ * nRF Connect by hand — firmware/README.md "Testing").
+ * Tests: none automated, never built in CI. Manual bench test in firmware/README.md; the
+ * drop-off / step-up thresholds below are untuned guesses, never measured on a cane.
+ * Threading: NimBLE callbacks run on the NimBLE host task; everything else runs in loop().
+ * The only data crossing is `connected`, `lastConnMs` and the RX ring (see below).
  */
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -44,6 +55,7 @@
   #error "Unsupported board: build for XIAO ESP32-S3 or ESP32-C3"
 #endif
 
+// Battery divider ratio: multiply the ADC-pin voltage by this to get the cell voltage.
 #define BAT_DIV_RATIO   2.0f  // (R_top+R_bot)/R_bot, e.g. 100k/100k -> 2.0
 #define PWM_FREQ        200   // Hz, per spec (ERM motors are fine here; 200 Hz is audible-ish)
 #define PWM_RES         8     // bits -> duty 0..255
@@ -53,14 +65,21 @@
 #define NUS_RX  "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  // phone -> cane (write)
 #define NUS_TX  "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  // cane -> phone (notify)
 
+// TX (notify) characteristic, created in bleSetup(); telemetry is pushed through it from loop().
 static NimBLECharacteristic* txChar = nullptr;
+// True between onConnect and onDisconnect. Written on the NimBLE host task, read in loop().
 static volatile bool connected = false;
 static uint32_t lastConnMs = 0;          // last time we were connected (for 5 s fail-safe)
 
 // RX bytes arrive on the NimBLE host task; hand them to loop() via a SPSC ring.
+// Single-producer / single-consumer: only RxCB::onWrite advances rxHead, only rxUpdate() advances
+// rxTail, so no lock is needed. One slot is always left empty (full = head+1 == tail), so the ring
+// holds 255 bytes; bytes past that are dropped silently (a burst of > 255 bytes between loops).
 static uint8_t  rxRing[256];
 static volatile uint8_t rxHead = 0, rxTail = 0;
 
+// Connection state. On disconnect it restarts advertising at once (NimBLE stops advertising
+// while connected) and stamps lastConnMs so the 5 s local-mode delay counts from the drop.
 class ServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo&) override { connected = true; }
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
@@ -68,6 +87,7 @@ class ServerCB : public NimBLEServerCallbacks {
     NimBLEDevice::startAdvertising();
   }
 };
+// RX writes: copy bytes into the ring and return quickly; parsing happens in loop() (rxUpdate).
 class RxCB : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
     NimBLEAttValue v = c->getValue();
@@ -79,6 +99,9 @@ class RxCB : public NimBLECharacteristicCallbacks {
   }
 };
 
+// NUS peripheral named "CANE": RX accepts write and write-without-response, TX notifies. The
+// service UUID is advertised so a central can scan for NUS (CaneBLE.swift also matches the name).
+// MTU 64 is ample: the longest valid command ("H:B:4:10000") is 11 bytes, telemetry < 24.
 static void bleSetup() {
   NimBLEDevice::init("CANE");
   NimBLEDevice::setMTU(64);
@@ -97,6 +120,7 @@ static void bleSetup() {
 }
 
 // ---------------------------------------------------------------- motors / haptics
+// Motor bit mask: bit 0 left, bit 1 right; both = 3.
 enum { M_L = 1, M_R = 2, M_B = 3 };
 struct Step { uint8_t mask, duty; uint16_t ms; };            // ms == 0 terminates a sequence
 static const uint8_t DUTY[5] = { 0, 102, 153, 204, 255 };    // intensity 0..4 -> 0/40/60/80/100 %
@@ -106,19 +130,28 @@ static const Step PAT_LTRIPLE[] = { {M_L,255,100}, {0,0,80}, {M_L,255,100}, {0,0
 static const Step PAT_RTRIPLE[] = { {M_R,255,100}, {0,0,80}, {M_R,255,100}, {0,0,80}, {M_R,255,100}, {0,0,0} };
 static const Step PAT_STOP[]    = { {M_B,255,700}, {0,0,0} };
 static const Step PAT_STEPUP[]  = { {M_B,255,400}, {0,0,0} };     // local-mode only
+// Indexed by the P:<n> number (1..4); index 0 unused. PAT_STEPUP is not reachable from BLE.
 static const Step* const PATTERNS[] = { nullptr, PAT_DOUBLE, PAT_LTRIPLE, PAT_RTRIPLE, PAT_STOP };
 
 // Command queue: up to 4 pending commands (each = one H step or one pattern).
 struct Cmd { const Step* seq; Step single; };
 #define QUEUE_LEN 4
+// Ring of pending commands: qHead = oldest, qCount = how many. The playing command is NOT in the
+// queue (it moved to curSeq), so up to 4 wait behind the one playing. Loop-only state.
 static Cmd     queue[QUEUE_LEN];
 static uint8_t qHead = 0, qCount = 0;
 static const Step* curSeq = nullptr;   // sequence being played (nullptr = idle)
 static Step    oneShot[2];             // storage for an H command while it plays
+// Index of the playing step inside curSeq.
 static uint8_t curIdx = 0;
+// millis() at which the playing step ends.
 static uint32_t stepEndMs = 0;
+// S:1 state. ⚠ Sticky across disconnects: a phone that sets S:1 and then drops leaves the grip
+// silent, and local fail-safe alerts are also skipped while silenced (see loop()).
 static bool silenced = false;
 
+// One motor's PWM duty (0..255). Arduino-ESP32 3.x addresses LEDC by pin; 2.x by channel
+// (left = channel 0, right = 1, attached in motorsSetup).
 static void motorWrite(uint8_t pin, uint8_t duty) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(pin, duty);                        // core 3.x: pin-based API
@@ -126,6 +159,7 @@ static void motorWrite(uint8_t pin, uint8_t duty) {
   ledcWrite(pin == MOTOR_L_PIN ? 0 : 1, duty); // core 2.x: channel-based API
 #endif
 }
+// Attach both motor pins to LEDC at PWM_FREQ / PWM_RES and start them off.
 static void motorsSetup() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(MOTOR_L_PIN, PWM_FREQ, PWM_RES);
@@ -136,23 +170,31 @@ static void motorsSetup() {
 #endif
   motorWrite(MOTOR_L_PIN, 0); motorWrite(MOTOR_R_PIN, 0);
 }
+// Drive the motors in `mask` at `duty` and turn the others off (a step's whole motor state).
 static void motorsApply(uint8_t mask, uint8_t duty) {
   motorWrite(MOTOR_L_PIN, (mask & M_L) ? duty : 0);
   motorWrite(MOTOR_R_PIN, (mask & M_R) ? duty : 0);
 }
+// Flush the queue, abandon the playing sequence and stop both motors. Used by P:4, S:1 and a
+// local-mode alert (so the alert is never stuck behind queued phone commands).
 static void hapticStopAll() { qCount = 0; curSeq = nullptr; motorsApply(0, 0); }
 
+// Returns false only when the queue is full (the parser then logs "rejected"). While silenced the
+// command is accepted and discarded, so S:1 never produces rejection noise.
 static bool enqueue(const Cmd& c) {
   if (silenced) return true;                   // accepted, silently dropped
   if (qCount >= QUEUE_LEN) return false;
   queue[(qHead + qCount) % QUEUE_LEN] = c; qCount++;
   return true;
 }
+// Queue one H: buzz (motor mask, duty 0..255, duration ms).
 static bool enqueueStep(uint8_t mask, uint8_t duty, uint16_t ms) {
   Cmd c; c.seq = nullptr; c.single = { mask, duty, ms }; return enqueue(c);
 }
+// Queue a built-in pattern (a static, {0,0,0}-terminated Step array).
 static bool enqueuePattern(const Step* seq) { Cmd c; c.seq = seq; return enqueue(c); }
 
+// Apply curSeq[curIdx] to the motors and set its end time.
 static void startStep() {
   const Step& s = curSeq[curIdx];
   motorsApply(s.mask, s.duty);
@@ -175,10 +217,15 @@ static void hapticUpdate() {
 }
 
 // ---------------------------------------------------------------- command parser
+// The line being assembled from RX bytes (47 chars + NUL; extra characters are dropped, so an
+// over-long line is parsed truncated), its length, and millis() of its last appended byte.
 static char     line[48];
 static uint8_t  lineLen = 0;
 static uint32_t lineTs = 0;
 
+// Parse and act on one command line (leading spaces skipped, command letter case-insensitive),
+// echo it to Serial, and log a rejection for bad syntax, out-of-range values or a full queue.
+// Unknown letters are rejected too. Runs in loop() only.
 static void handleLine(char* s) {
   while (*s == ' ') s++;
   Serial.printf("[rx] %s\n", s);
@@ -212,6 +259,8 @@ static void handleLine(char* s) {
   }
   if (!ok) Serial.println("[rx] rejected (bad syntax or queue full)");
 }
+// Drain the RX ring into `line`; CR or LF ends a line (a CRLF pair yields one line, empty ones
+// are ignored).
 static void rxUpdate() {
   while (rxTail != rxHead) {
     char c = (char)rxRing[rxTail]; rxTail++;
@@ -223,6 +272,8 @@ static void rxUpdate() {
 }
 
 // ---------------------------------------------------------------- battery
+// Battery percentage 0..100 from 8 averaged ADC reads, or -1 when BAT_SENSE_PIN is not defined.
+// Linear 3.3 V = 0 % .. 4.2 V = 100 % (crude; a LiPo is not linear). Sampled once a second in loop().
 static int batteryPct() {
 #ifdef BAT_SENSE_PIN
   uint32_t mv = 0;
@@ -236,15 +287,26 @@ static int batteryPct() {
 }
 
 // ---------------------------------------------------------------- local (fail-safe) mode
+// Local fail-safe tuning. ⚠ Untuned guesses from the original spec, never measured on a cane:
+//   LOCAL_MODE_DELAY_MS  ms without a phone before local mode starts
+//   BASE_N               readings in the baseline window (at the 50 ms feed rate, ~1 s)
+//   STABLE_SPREAD_MM     window max-min allowed for the baseline to update
+//   DROPOFF_MM           rise above baseline that counts as a drop-off
+//   ALERT_COOLDOWN_MS    minimum ms between local alerts
 #define LOCAL_MODE_DELAY_MS  5000
 #define BASE_N               20
 #define STABLE_SPREAD_MM     40      // max-min of last 20 readings to count as "stable"
 #define DROPOFF_MM           250
 #define ALERT_COOLDOWN_MS    1500
+// Circular window of the last BASE_N distances (mm) for the baseline, write index and fill count.
 static int16_t  hist[BASE_N];
 static uint8_t  histIdx = 0, histFill = 0;
+// Ground distance (mm) the sensor normally sees; -1 until the first stable window. It is kept, not
+// cleared, while readings are unstable, and it re-learns from any surface held steady ~1 s: standing
+// still over a step-down makes the lower ground the new baseline.
 static int      baseline = -1;
 static uint32_t lastAlertMs = 0;
+// Recomputed every loop(): no phone for LOCAL_MODE_DELAY_MS and a ToF sensor found at boot.
 static bool     localMode = false;
 
 // Feed every valid reading; baseline = median of the last 20 readings while stable.
@@ -255,6 +317,9 @@ static void baselineFeed(int d) {
   for (int i = 1; i < BASE_N; i++) { int16_t v = s[i]; int j = i - 1; while (j >= 0 && s[j] > v) { s[j+1] = s[j]; j--; } s[j+1] = v; }
   if (s[BASE_N-1] - s[0] <= STABLE_SPREAD_MM) baseline = (s[BASE_N/2 - 1] + s[BASE_N/2]) / 2;
 }
+// One local-mode decision for distance `d` mm: drop-off (d > baseline + 250) -> double pulse,
+// step-up / obstacle (d < 60 % of baseline) -> one 400 ms buzz. Flushes the queue first. No-op
+// before a baseline exists or within the cooldown.
 static void localModeCheck(int d) {
   if (baseline <= 0 || millis() - lastAlertMs < ALERT_COOLDOWN_MS) return;
   bool drop = d > baseline + DROPOFF_MM;
@@ -268,6 +333,8 @@ static void localModeCheck(int d) {
 }
 
 // ---------------------------------------------------------------- LED
+// Status LED from millis(): solid connected, 125 ms blink in local mode, 100 ms blip per second
+// while advertising. Called every loop().
 static void ledUpdate() {
   uint32_t t = millis();
   bool on = connected ? true                      // solid: connected
@@ -277,6 +344,8 @@ static void ledUpdate() {
 }
 
 // ---------------------------------------------------------------- setup / loop
+// Arduino entry: serial at 115200, LED, motors, ToF (probe only; absent is fine), BLE advertising.
+// lastConnMs starts at boot so local mode needs 5 s of no connection after power-on too.
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
@@ -287,6 +356,9 @@ void setup() {
   Serial.printf("CaneKit grip on %s, ToF %s, advertising as CANE\n", BOARD_NAME, tof ? "OK" : "absent");
 }
 
+// Arduino main loop, non-blocking: RX parse, haptic scheduler, ToF poll; baseline feed + local check
+// at most every 50 ms; local-mode flag; battery every 1 s; telemetry every 100 ms (only sent while
+// connected); LED.
 void loop() {
   static uint32_t lastTx = 0, lastBat = 0, lastTofMs = 0;
   static int batPct = -1;

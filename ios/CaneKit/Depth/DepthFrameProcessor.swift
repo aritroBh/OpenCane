@@ -8,7 +8,9 @@
 //  the newest report.
 //
 //  Thread-safety model: the class is `@unchecked Sendable`; every mutable field is behind
-//  `settings` (a Mutex) or `imageLock`. Nothing here touches UI or the main-actor model.
+//  `settings` (a Mutex) or `imageLock`, or is "queue-only" (touched only on the serial `queue`;
+//  `latestPublishedSequence()` reads `publishedCount` through `queue.sync`). Nothing here touches
+//  UI or the main-actor model.
 //  ARKit objects (ARFrame, CVPixelBuffer, ARMeshAnchor) never leave the callback except for
 //  the single retained camera buffer used by `jpegSnapshot`.
 //
@@ -17,16 +19,26 @@
 //      `rotationRate`, and every field marked "queue-only" below — no lock needed because the
 //      queue is serial and nothing else touches them.
 //    · main actor: `startMotion` / `stopMotion` (DepthEngine lifecycle), `settings` writes
-//      (DepthEngine.apply / setMeshClassification).
-//    · any thread: `jpegSnapshot` (SceneDescriber, `@concurrent`, i.e. the global executor) and
-//      `hasCameraFrame` (main) — both go through `imageLock` / `settings`.
+//      (DepthEngine.apply / setMeshClassification / setHighFrameRate), `synchronize` and
+//      `latestPublishedSequence` (both `queue.sync` — never call them *on* `queue`, it would
+//      deadlock), `dropLatestImage` (DepthEngine pause and reconfiguration).
+//    · any thread: `jpegSnapshot` (HazardScanner, AppModel's hazard photo, ConversationCoordinator)
+//      and `jpegSnapshotWithDepth` (SceneDescriber), from `@concurrent` code, i.e. the global
+//      executor, and `hasCameraFrame` (main) — all go through `imageLock` / `settings`.
 //  The class is `nonisolated` (overriding the module's MainActor default) precisely so ARKit
 //  can call it on `queue`; the `@unchecked Sendable` is justified by the locking model above,
 //  not added to silence the compiler (AGENTS.md hard rule 1).
 //
 //  Budget: at 30 Hz a published frame has ~33 ms (60 Hz high-rate has ~16 ms). Frames between publishes return right after
 //  the rate check; the lane math reads the 256×192 depth map in place (no copy), and the mesh
-//  lookup is throttled to every 4th publish and capped by `MeshClassifier.faceBudget`.
+//  lookup is throttled to every 8th publish (`meshEveryNthFrame`: ≈ 3.75 Hz at 30 Hz, 7.5 Hz in
+//  high-rate mode) and capped by `MeshClassifier.faceBudget`.
+//
+//  Owner: `DepthEngine` (one instance, `processor`). Frames arrive through `SessionObserver`.
+//  Tests: the pure pieces it drives — `LaneMathTests` (lanes, `PublishGate`, `MountTilt`),
+//  `HazardTests` (`GroundHazardDetector`), `DepthSnapshotTests`, `DepthReadinessTests`
+//  (`frameSequence` continuity). The ARKit / CoreMotion / Core Image glue here is verified on the
+//  phone (trip-log `fps`, `tilt`, `scan`, `describe_result`), not by a unit test.
 //
 
 import ARKit
@@ -38,6 +50,9 @@ import ImageIO
 import Synchronization
 
 /// Runtime-tunable knobs, replaced atomically from the main actor.
+/// ⚠ `sweepThreshold`, `maxRate` and `meshEveryNthFrame` were tuned against `CueDecider`'s
+/// seconds-based timing and a real cane sweep; change them only with a device walk
+/// (`CueDeciderTests.untrustedFramesFreezeState` assumes sweeps exceed 0.6 rad/s).
 /// Lives inside `DepthFrameProcessor.settings` (a `Mutex`); the frame callback copies the whole
 /// struct once per frame, so a frame never sees a half-applied change.
 struct ProcessorSettings: Sendable {
@@ -52,10 +67,15 @@ struct ProcessorSettings: Sendable {
     /// Run the mesh-classification lookup at the image centre (step 4). Costs ~10–15 % CPU.
     /// Turned off by the thermal watchdog (`DepthEngine.setMeshClassification`).
     var meshLookupEnabled = true
-    /// Mesh lookups happen every Nth published frame (30 Hz / 8 ≈ 4 Hz: the costly part stays put).
+    /// Mesh lookups happen every Nth published frame (30 Hz / 8 ≈ 3.75 Hz, the "~4 Hz" the docs
+    /// quote; 7.5 Hz in 60 Hz high-rate mode). When the publish cap went 15 → 30 Hz this went 4 → 8
+    /// so the costly part stayed at the same wall-clock rate. Between lookups the last hit is
+    /// re-attached, so `centerHit` can be up to 7 published frames old.
     var meshEveryNthFrame = 8
     /// LiDAR ground-hazard detection (drop-offs, holes, curbs; GroundSampler + CaneKitLogic
     /// GroundHazardDetector). Evaluated on published frames at most every 0.1 s (up to 10 Hz).
+    /// ⚠ `true` is only the struct default: `AppModel.pushDepthSettings()` overwrites it from init
+    /// with the "Detect drop-offs" setting, which defaults **false** (untuned on the real cane).
     var groundHazardsEnabled = true
     /// |gyro| (rad/s) under which a frame is good enough for the *ground* path. Looser than
     /// `sweepThreshold`: GroundSampler registers every point through `camera.transform` in the
@@ -87,6 +107,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Snapshot the last published sequence on the processor's serial queue. `DepthEngine` uses
     /// this at a route-start transition to exclude a report already buffered in the newest-only
     /// stream but not yet consumed on the main actor.
+    /// Blocks the caller until `queue` is free (`queue.sync`); main actor only, never on `queue`.
     func latestPublishedSequence() -> Int {
         queue.sync { publishedCount }
     }
@@ -94,15 +115,17 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Drain callbacks already admitted by ARKit before a session configuration changes.
     /// `ARSession.run` can overlap the tail of the old configuration; synchronizing this serial
     /// queue gives `DepthEngine` a real hand-off boundary before it captures the next readiness
-    /// baseline. Caller: `DepthEngine` immediately before every reconfiguration.
+    /// baseline. Callers: `DepthEngine.pause`, `resume`, `setHighFrameRate`, `setFaceTracking`,
+    /// `setMeshClassification`. Blocks until the in-flight frame (≤ one publish budget) finishes.
     func synchronize() {
         queue.sync { }
     }
 
     // MARK: State
 
-    /// Tunables shared with the main actor. Written by `DepthEngine` (main), read once per frame
-    /// on `queue` and by `jpegSnapshot` (any thread).
+    /// Tunables shared with the main actor. Written by `DepthEngine` (main: `apply`,
+    /// `setMeshClassification`, `setHighFrameRate`), read once per frame on `queue` and by
+    /// `encode` (any thread, for `lane.rotateForPortrait`).
     let settings = Mutex(ProcessorSettings())
 
     /// Gyro source for the sweep gate. Started/stopped on main by `DepthEngine`; pull mode (no
@@ -139,9 +162,13 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     private var latestImageAt: TimeInterval = 0
     /// Seconds after which the retained frame is too old to describe or scan.
     static let maxFrameAge: TimeInterval = 2
-    /// ARKit timestamp (s) of the last published report; drives the `maxRate` cap.
+    /// ARKit timestamp (s) of the last published report. Written on every publish but no longer
+    /// read: `publishGate` keeps its own last-publish time and is what enforces the `maxRate` cap.
     private var lastPublished: TimeInterval = 0        // queue-only
-    /// Rate cap for published reports (queue-only); see `ProcessorSettings.maxRate`.
+    /// Rate cap for published reports (queue-only); see `ProcessorSettings.maxRate`. The 15 here
+    /// is a placeholder from the 15 Hz era: `session(_:didUpdate:)` overwrites `maxRate` from
+    /// `settings` before the first check. Tolerance and the 10-Hz-instead-of-15 bug it fixed:
+    /// `PublishGate` (pinned by `LaneMathTests.publishGateHitsFifteenHertzFromThirtyHertzFrames`).
     private var publishGate = PublishGate(maxRate: 15)
     /// Published-report counter (wrapping); selects every Nth frame for a mesh lookup.
     private var publishedCount = 0                     // queue-only
@@ -152,16 +179,27 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Last mesh lookup result, re-attached to the frames between lookups (so `centerHit` does
     /// not flicker between published frames); cleared when mesh lookup is disabled.
     private var lastMeshHit: MeshHit?                  // queue-only, reused between lookups
+    /// Pure ground-hazard confirmer (CaneKitLogic): a hazard must agree in position on 3 of the
+    /// last 5 evaluations. Reset whenever the ground path is switched off. Queue-only.
     private var groundDetector = GroundHazardDetector() // queue-only, confirms over frames
+    /// Last confirmed ground hazard, re-attached to every report until the next evaluation
+    /// (evaluations run at most every 0.1 s). Queue-only.
     private var lastGroundHazard: GroundHazard?         // queue-only, reused between evaluations
+    /// ARKit time (s) of the last ground evaluation, for the 0.1 s spacing. Queue-only.
     private var lastGroundEval: TimeInterval = 0        // queue-only, ARKit clock
-    /// Smoothed horizontal walking direction (~0.5 s EMA at the normal 30 Hz publish rate), queue-only.
+    /// Smoothed horizontal walking direction (world frame, unit length; ~0.5 s EMA at the normal
+    /// 30 Hz publish rate), queue-only. nil until the first frame with a non-vertical camera.
     private var walkDirection: SIMD3<Float>?
-    /// Metres walked along `walkDirection` since launch, and the last camera position.
+    /// Metres walked along `walkDirection` since launch (signed; steps ≥ 1 m are ignored as
+    /// relocalisation jumps). `GroundHazardDetector` uses it to check that a hazard stays put in
+    /// the world as the walker approaches. Queue-only.
     private var travelled: Float = 0
+    /// Horizontal camera position (world x, 0, z) at the previous published frame. Queue-only.
     private var lastCamPos: SIMD3<Float>?
-    /// Camera look direction below the horizon (deg, + = down), ~0.5 s EMA of trusted frames at
-    /// the normal 30 Hz rate, for the Mount card's "Camera tilt" line (MountTilt). Queue-only.
+    /// Camera look direction below the horizon (deg, + = down), EMA (factor 0.07, ~0.5 s at the
+    /// normal 30 Hz rate) over **every published frame** — trusted or not, because the pose is
+    /// gravity-aligned even mid-sweep — for the Mount card's "Camera tilt" line (MountTilt) and the
+    /// ground path's `MountTilt.groundUsable` gate. nil before the first published frame. Queue-only.
     private var tiltDownDeg: Float?
 
     /// Builds the newest-only report stream. Called on main by `DepthEngine`'s property
@@ -201,11 +239,16 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
 
     /// Per-frame pipeline, on `queue` (forwarded by `SessionObserver`, up to 60 Hz):
     /// 1. retain the camera image (every frame, under `imageLock`);
-    /// 2. snapshot `settings`, drop the frame if < 1 / `maxRate` s since the last publish;
-    /// 3. sweep gate: `isTrusted = |ω| < sweepThreshold`;
-    /// 4. depth → `LaneGrid` (or an empty, `depthAvailable: false` report if depth is missing);
+    /// 2. snapshot `settings`, drop the frame unless `publishGate` admits it (1 / `maxRate` s,
+    ///    4 ms tolerance); count it in `publishedCount` (the report's `frameSequence`);
+    /// 3. sweep gate: `isTrusted = |ω| < sweepThreshold`; read `trackingNormal` from this frame;
+    ///    update the camera tilt EMA (every published frame);
+    /// 4. depth → `LaneGrid` + `DepthSnapshot` (or an empty, `depthAvailable: false` report if
+    ///    depth is missing); store the snapshot beside the image under `imageLock`;
     /// 5. mesh lookup every `meshEveryNthFrame`th publish (reusing the last hit in between);
-    /// 6. yield the report into the newest-only stream.
+    /// 6. ground path when enabled: walk tracking every publish, evaluation ≤ every 0.1 s on frames
+    ///    under `groundSweepThreshold` with a mount-like tilt;
+    /// 7. yield the report into the newest-only stream.
     /// Must return quickly: ARKit recycles a small pool of frames and stalls if they are held.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Keep the latest camera image for "Where am I". One buffer only — ARKit recycles
@@ -296,12 +339,19 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
 
     /// Smooths the camera's angle below the horizon (queue-only). ARKit's world is gravity-aligned
     /// (+Y up) and the camera looks along −Z of `camera.transform`, whatever the device orientation.
+    /// EMA factor 0.07 per published frame, seeded by the first; sign pinned by
+    /// `LaneMathTests.tiltSignIsDownPositive` (`MountTilt.downDegrees`).
     private func trackTilt(_ frame: ARFrame) {
         let deg = MountTilt.downDegrees(cameraZColumnY: frame.camera.transform.columns.2.y)
         tiltDownDeg = tiltDownDeg.map { $0 + 0.07 * (deg - $0) } ?? deg
     }
 
     /// Updates the smoothed walking direction and the distance walked along it (queue-only).
+    /// Camera forward (−Z column) flattened to horizontal; ignored when shorter than 0.2 (camera
+    /// pointing at the sky or the feet), else folded in with `simd_mix` 0.07. Only runs while the
+    /// ground path is enabled. ⚠ Keep the `|step| < 1` guard and pass `walkDirection` (not the
+    /// camera forward) to `GroundSampler`: `HazardTests` `sweepFramesDoNotConfirm` /
+    /// `aCurbYouWalkTowardStillConfirms` assume both.
     private func trackWalk(_ frame: ARFrame) {
         let T = frame.camera.transform
         var f = -SIMD3<Float>(T.columns.2.x, T.columns.2.y, T.columns.2.z)
@@ -382,9 +432,13 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     ///
     /// Copies the buffer reference under `imageLock` and encodes outside it, so the frame queue
     /// is never blocked by encoding. Portrait rotation follows `settings.lane.rotateForPortrait`
-    /// (the same flag the lanes use). Returns nil before the first frame or if encoding fails.
+    /// (the same flag the lanes use). Returns nil before the first frame, when the frame is older
+    /// than `maxFrameAge`, or if encoding fails. In the simulator with `FrameReplay` active it
+    /// returns the replay JPEG as-is (no resize, no rotation).
     /// Holding the buffer during encoding briefly keeps one extra ARKit buffer alive.
-    /// Caller: `SceneDescriber.snapshot` (off main, via `@concurrent`).
+    /// Callers (all off main, via `@concurrent`): `HazardScanner.snapshot` (signs / hazard watch),
+    /// `AppModel.frame` (768 px hazard-map photo), `ConversationCoordinator` (defaults).
+    /// "Where am I" uses `jpegSnapshotWithDepth` instead.
     /// - Parameters:
     ///   - maxDimension: long-edge cap in pixels (downscale only).
     ///   - quality: JPEG lossy quality 0…1.
@@ -438,7 +492,12 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// One camera buffer → an upright JPEG, long edge ≤ `maxDimension`. Never called with
     /// `imageLock` held, so the frame queue is not blocked by encoding. Portrait rotation follows
     /// `settings.lane.rotateForPortrait` (the same flag the lanes use) and applies **no** mirror,
-    /// which is why `DepthSnapshot` is built unmirrored too.
+    /// which is why `DepthSnapshot` is built unmirrored too. sRGB via the shared GPU `ciContext`;
+    /// nil if the colour space or the encode fails.
+    /// - Parameters:
+    ///   - buffer: the retained `capturedImage` (YCbCr).
+    ///   - maxDimension: long-edge cap in pixels (downscale only).
+    ///   - quality: JPEG lossy quality 0…1.
     private func encode(_ buffer: CVPixelBuffer, maxDimension: CGFloat, quality: CGFloat) -> Data? {
         let rotate = settings.withLock { $0.lane.rotateForPortrait }
         var image = CIImage(cvPixelBuffer: buffer)
@@ -455,9 +514,11 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         return ciContext.jpegRepresentation(of: image, colorSpace: colorSpace, options: options)
     }
 
-    /// Forget the retained camera frame. Called by `DepthEngine.pause()`: after a background /
-    /// foreground cycle the old frame shows a place the walker has left, and "Where am I" or the
-    /// sign scan must wait for a fresh one instead of describing it (review round 5).
+    /// Forget the retained camera frame and its depth grid (both timestamps back to 0). Called by
+    /// `DepthEngine.pause()`: after a background / foreground cycle the old frame shows a place the
+    /// walker has left, and "Where am I" or the sign scan must wait for a fresh one instead of
+    /// describing it (review round 5). Also called before every session re-run
+    /// (`setHighFrameRate`, `setFaceTracking`, `setMeshClassification`). Thread-safe (`imageLock`).
     func dropLatestImage() {
         imageLock.lock()
         latestImage = nil
@@ -468,7 +529,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     }
 
     /// True once a camera frame has been retained since the session last (re)started (used by
-    /// the "camera warming up" guard). Thread-safe (takes `imageLock`); polled on main every
+    /// the "camera warming up" guard) and it is no older than `maxFrameAge`; always true while
+    /// `FrameReplay` is active. Thread-safe (takes `imageLock`); polled on main every
     /// 100 ms by `SceneDescriber.describe` for up to 3 s. False again after `dropLatestImage()`.
     var hasCameraFrame: Bool {
         if FrameReplay.shared.isActive { return true }

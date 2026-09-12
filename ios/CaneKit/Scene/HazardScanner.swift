@@ -12,8 +12,24 @@
 //      (CaneKitLogic.HazardWatchPolicy).
 //  Ground hazards (drop-offs, potholes, curbs) come from LiDAR in DepthFrameProcessor, not here.
 //
-//  Every spoken hazard goes out through `onHazard` so AppModel can speak it, buzz, and write it to
-//  the hazard map (HazardLog) with the current GPS fix and the frame.
+//  Every spoken hazard goes out through `onHazard` so AppModel can speak it (`.obstacle`, TTL 8 s
+//  for a sign, 6 s for a caution) and write it to the hazard map (HazardLog) with the current GPS
+//  fix and the frame. Nothing here buzzes: the cane taps belong to LiDAR ground hazards
+//  (`AppModel.groundHazardFound`), which never pass through this class.
+//
+//  Why it exists: the LiDAR lanes see *that* something is there, not *what* it says or whether it
+//  is a cone. Reading signs and asking a vision model are the camera's only contributions to
+//  safety beyond depth, and both are slow (Vision text, a network round trip), so they live on
+//  their own 500 ms loop instead of the ~30 Hz depth path.
+//
+//  Owner: `AppModel.hazards` (built in `AppModel.init` with the shared `VLMClient`; wired and
+//  started by `AppModel.wireHazards`; stopped on background and while "Both cameras" pauses
+//  ARKit; `paused` while the phone is hot). UI: `HazardsCard` (toggles, last lines, provider).
+//  Tests: the decisions are pure and live in CaneKitLogic — `HazardTests` (`SignPolicy`,
+//  `HazardWatchPolicy`: `signsAreReadOnceAndSpecifically`, `hazardWatchAsksOnlyWhileWalkingAndRarely`,
+//  `hazardWatchRepliesBecomeShortCautions`, `aLateReplyLosesItsDistance`, …) and
+//  `SignPhraseFilterTests` (CueProfileTests.swift, `signAllowedPhrases`). This class itself is
+//  exercised end to end by `make e2e SCENARIO=streetview` (`scan` / `hazard_watch` log records).
 //
 //  Threading / isolation: `@MainActor @Observable`. The loop is a main-actor Task that awaits
 //  `@concurrent` helpers for the expensive parts (JPEG encode, Vision, network), so the main
@@ -24,64 +40,131 @@ import CaneKitLogic
 import Foundation
 import Observation
 
-/// Where a hazard came from (for the log, the UI and the haptic choice).
+/// Where a hazard came from. The raw value is the `source` field of the trip log's `hazard`
+/// event (`AppModel.recordHazard`) and, for signs and vision, also the hazard-map record's `kind`
+/// (a ground hazard's kind is its `GroundHazard.kind` instead). `AppModel.onHazard` also keys the
+/// speech TTL on it (sign 8 s, caution 6 s).
+///
+/// Cases: `ground` — a LiDAR ground hazard (drop-off / hole / curb / low obstacle), produced by
+/// `AppModel.groundHazardFound`, never by `HazardScanner`; `sign` — a sign phrase read on-device
+/// by `scanSigns` ("Sign: sidewalk closed."); `vision` — a hazard-watch caution from the vision
+/// model (`runWatch`).
 enum HazardSource: String, Sendable {
     case ground, sign, vision
 }
 
+/// The camera's hazard loop: on-device sign reading every `signPeriod` s and, while walking a
+/// route, one vision-model hazard check every 8 s. Emits spoken lines through `onHazard` and
+/// what it saw through `onDiagnostic`; owns no speech, haptics or log of its own.
+/// Owner: `AppModel.hazards`. Main actor.
 @MainActor
 @Observable
 final class HazardScanner {
 
     // MARK: Published (UI)
 
+    /// True between `start()` and `stop()` (the loop task exists). Not shown in the UI today.
     private(set) var isRunning = false
     /// Last sign line spoken, for the Hazards card.
     private(set) var lastSign: String?
     /// Last hazard-watch caution spoken.
     private(set) var lastCaution: String?
-    /// Which backend the hazard watch uses ("Muse", "Gemini", "On-device", …).
+    /// Which backend the hazard watch uses: `watchClient.name`, fixed at init ("Muse + On-device"
+    /// with a cloud key, "On-device" without one). Shown as a pill on `HazardsCard`, logged as
+    /// `provider` in every `hazard_watch` record.
     private(set) var watchProvider: String
-    /// Round-trip of the last hazard-watch request (ms).
+    /// Round-trip of the last hazard-watch request (ms), measured from just before
+    /// `watchClient.describe` to its return (excludes the JPEG encode). nil after a failure.
     private(set) var lastWatchMs: Int?
+    /// "Hazard watch: <localized error>" from the last failed request; cleared by the next reply.
+    /// Shown in red on `HazardsCard`. Sign scans never set it (Vision failures yield no text).
     private(set) var lastError: String?
 
-    /// User toggles (persisted by AppModel).
+    /// "Read signs" switch. Default here is true, but `AppModel.init` overwrites it from the
+    /// persisted `AppModel.signsEnabled` (default on) and its `didSet` keeps it in step.
     var signsEnabled = true
+    /// "Hazard watch" switch. Default here is true, but `AppModel.init` overwrites it from the
+    /// persisted `AppModel.hazardWatchEnabled` — ⚠ **off by default** until tuned on the cane —
+    /// and `CANEKIT_HAZARD_WATCH=1` (Street View e2e) forces it on without persisting.
+    /// Checked at ask time and again when the reply lands (a reply after switch-off is silent).
     var watchEnabled = true
+    /// Sign phrases that may be spoken (nil = all). Set by `AppModel.applyCueRules` from
+    /// `CueRules.allowedSignPhrases` (Quiet / Indoors: safety signs only); forwarded to
+    /// `SignPolicy.allowedPhrases`.
+    @ObservationIgnored var signAllowedPhrases: Set<String>? {
+        get { signPolicy.allowedPhrases }
+        set { signPolicy.allowedPhrases = newValue }
+    }
 
-    /// Output: (spoken line, source, JPEG of the frame it came from).
+    /// Output: (spoken line, source, JPEG of the frame it came from). Called on the main actor,
+    /// once per line the policies decided to say. `AppModel.wireHazards` speaks it at `.obstacle`
+    /// and records it in `HazardLog` + the trip log (`hazard {type, text, source}`).
     @ObservationIgnored var onHazard: ((String, HazardSource, Data?) -> Void)?
     /// Diagnostics for the trip log (AppModel → `logger.event(kind, fields)`): one `scan` record
     /// per sign scan (what text was read, what was said) and one `hazard_watch` record per hazard-watch
     /// reply (reply, latency, and why it was dropped). Without these a walk log, or the Street
     /// View mock, only shows what was spoken, never what the camera saw.
+    /// Fields: `scan {texts (first 8), said ("" when silent), frame}`; `hazard_watch {reply, ms,
+    /// provider, frame, said | dropped: "stale"}` or `hazard_watch {error, provider}`. `frame` is
+    /// the `FrameReplay` file name in the simulator, "" on the phone. Never name a field `t` or
+    /// `kind` (`TripLogRecord` owns those; e2e.py fails a run on `field_kind`).
     @ObservationIgnored var onDiagnostic: ((String, [String: Any]) -> Void)?
-    /// Inputs polled by the loop (set by AppModel).
+    /// Inputs polled by the loop (set by `AppModel.wireHazards`).
+    /// True while a route is guiding (`nav.isNavigating`); the hazard watch only asks then.
     @ObservationIgnored var isNavigating: () -> Bool = { false }
+    /// Walking speed in m/s from the last GPS fix, or 0 when there is none or it is older than 5 s
+    /// (CoreLocation stops sending fixes while standing, so a stale speed would keep the watch
+    /// asking at a curb). Gates `HazardWatchPolicy.shouldAsk` (> 0.5 m/s) and sizes `maxReplyAge`.
     @ObservationIgnored var currentSpeed: () -> Double = { 0 }
 
     // MARK: Private
 
+    /// Source of camera frames (`jpegSnapshot`); the same instance `DepthEngine` feeds, so a
+    /// snapshot is the latest ARKit frame (or a Street View frame under `FrameReplay`).
     @ObservationIgnored private let processor: DepthFrameProcessor
+    /// The shared vision client (`VLMClientFactory.resolved`); for `FallbackVLMClient` a hazard
+    /// prompt gets 2.5 s of cloud, then the on-device answer (`OnDeviceHazards`).
     @ObservationIgnored private let watchClient: any VLMClient
+    /// The 500 ms loop task; nil when stopped. `start()` is idempotent on it.
     @ObservationIgnored private var loop: Task<Void, Never>?
+    /// Which sign phrases to say and when (once per phrase per minute, size rules, cue-level
+    /// filter). Value type from CaneKitLogic; persists its "last said" stamps for the app's life.
     @ObservationIgnored private var signPolicy = SignPolicy()
+    /// When to ask the vision model (8 s interval, walking only) and how to turn a reply into a
+    /// short caution ("NONE" → silent).
     @ObservationIgnored private var watchPolicy = HazardWatchPolicy()
+    /// True from the tick that launches `runWatch` until it returns (`defer`): at most one hazard
+    /// request in flight, however slow the network is.
     @ObservationIgnored private var watchInFlight = false
+    /// Reference-date seconds of the last sign scan that had a frame; −∞ so the first tick scans,
+    /// and reset to −∞ when a scan found no frame so the next 500 ms tick retries.
     @ObservationIgnored private var lastSignScan: TimeInterval = -.infinity
-    /// Seconds between sign scans (text recognition is the costly half of Vision).
+    /// Seconds between sign scans (text recognition is the costly half of Vision). Nothing
+    /// overrides the 3 s default today. A scan that finds no frame does not use up its slot.
     var signPeriod: TimeInterval = 3
-    /// Set by AppModel from the thermal state: when hot, skip sign scans and the hazard watch
-    /// (ARKit + LiDAR keep the lanes and haptics alive; the camera extras are optional).
+    /// Set by AppModel from the thermal state (`updateThermal`: `.serious` / `.critical`): when
+    /// hot, skip sign scans and the hazard watch (ARKit + LiDAR keep the lanes and haptics alive;
+    /// the camera extras are optional). Also read by `LiveView.state` as "hot" for the live view.
     var paused = false
     /// A hazard-watch reply about a frame older than this (s) is not spoken: the walker has moved.
     /// Scaled by walking speed at request time: ~4 m of walking, capped at 5 s (1.2 m/s → 3.3 s).
+    /// Speeds under 0.5 m/s count as 0.5, so standing or slow always gets the 5 s cap.
+    /// ⚠ A number in the app rather than in CaneKitLogic, and not unit-tested; lengthening it
+    /// speaks hazards the walker has already passed. Change it only with a device walk with the
+    /// hazard watch on (review round 5 set these ages).
+    /// - Parameter speed: m/s at request time (`currentSpeed()`).
+    /// - Returns: the oldest reply age, in seconds, that may still be spoken.
     static func maxReplyAge(speed: Double) -> TimeInterval { min(5, 4 / max(speed, 0.5)) }
     /// Replies older than this (s) keep their hazard but lose any spoken distance ("3 meters"
-    /// was measured from where the walker stood when the frame was taken).
+    /// was measured from where the walker stood when the frame was taken). The strip itself is
+    /// `HazardWatchPolicy.withoutDistance` (pinned by `aLateReplyLosesItsDistance`).
     var distanceFreshFor: TimeInterval = 2
 
+    /// Builds an idle scanner; nothing runs until `start()`.
+    /// - Parameters:
+    ///   - processor: `depth.processor`, the source of camera frames.
+    ///   - watchClient: the app's one resolved `VLMClient` (shared with `SceneDescriber`); its
+    ///     `name` becomes `watchProvider`.
     init(processor: DepthFrameProcessor, watchClient: any VLMClient) {
         self.processor = processor
         self.watchClient = watchClient
@@ -90,7 +173,10 @@ final class HazardScanner {
 
     // MARK: Lifecycle
 
-    /// Idempotent. Called once the depth engine is running (AppModel.start).
+    /// Starts the 500 ms loop. Idempotent (`guard loop == nil`). Callers: `AppModel.wireHazards`
+    /// (launch, after the depth engine), the return to `.active`, and every path that resumes
+    /// ARKit after "Both cameras" (`resumeARKitPipelines`, a failed or ended two-camera start).
+    /// The task holds `self` weakly, so a released scanner ends its own loop.
     func start() {
         guard loop == nil else { return }
         isRunning = true
@@ -102,6 +188,9 @@ final class HazardScanner {
         }
     }
 
+    /// Cancels the loop. Callers: `AppModel.scenePhaseChanged(.background)` (no scanning a frozen
+    /// last frame) and "Both cameras" on (ARKit paused, no frames). A hazard-watch request already
+    /// in flight is not cancelled; its reply is dropped only if `watchEnabled` / `paused` say so.
     func stop() {
         loop?.cancel()
         loop = nil
@@ -110,6 +199,12 @@ final class HazardScanner {
 
     // MARK: Loop
 
+    /// One 500 ms loop step. Does nothing while `paused`. Otherwise:
+    ///   · hazard watch — when enabled, a route is guiding, nothing is in flight and
+    ///     `HazardWatchPolicy.shouldAsk` agrees (> 0.5 m/s, ≥ 8 s since the last ask), launches
+    ///     `runWatch` in an **unawaited** Task, so a slow network never stalls sign reading;
+    ///   · signs — when enabled and `signPeriod` has passed, awaits `scanSigns` (signs are read
+    ///     with or without a route).
     private func tick() async {
         let now = Date().timeIntervalSinceReferenceDate
         guard !paused else { return }
@@ -124,6 +219,10 @@ final class HazardScanner {
         }
     }
 
+    /// One sign scan: a 1280 px, quality 0.8 JPEG (small letters survive compression) → Vision
+    /// text only → `SignPolicy.line(for: seenTexts)` → `onHazard(.sign)` when a phrase is due.
+    /// Always emits one `scan` diagnostic when it had a frame, even when nothing was said.
+    /// - Parameter now: the tick's reference-date seconds (the policy's repeat clock).
     private func scanSigns(now: TimeInterval) async {
         let frameName = FrameReplay.shared.currentName ?? ""
         guard let jpeg = await Self.snapshot(processor, maxDimension: 1280, quality: 0.8) else {
@@ -150,6 +249,13 @@ final class HazardScanner {
                                "frame": frameName])
     }
 
+    /// One hazard-watch request: a 768 px JPEG (quality 0.6) → `watchClient.describe(prompt:
+    /// HazardPrompt.text)` → age checks → `HazardWatchPolicy.line(forReply:)` → `onHazard(.vision)`.
+    /// No frame → `watchPolicy.refund` (retry in 2 s instead of waiting 8). `maxAge` is fixed at
+    /// request time from the speed then. The reply is silent (and unlogged) if the switch went
+    /// off or the phone got hot while it was in flight; a reply older than `maxAge` is logged
+    /// `dropped: "stale"` and not spoken; older than `distanceFreshFor` it loses its metres.
+    /// Clears `watchInFlight` on every exit.
     private func runWatch() async {
         defer { watchInFlight = false }
         guard let jpeg = await Self.snapshot(processor, maxDimension: 768) else {
@@ -191,7 +297,14 @@ final class HazardScanner {
         }
     }
 
-    /// JPEG of the latest camera frame, encoded off the main actor.
+    /// JPEG of the latest camera frame, encoded off the main actor. `@concurrent` is load-bearing:
+    /// a static method of this main-actor class would otherwise encode on main (tens of ms per
+    /// scan, every 3 s). `DepthFrameProcessor` is Sendable, so passing it across is safe.
+    /// - Parameters:
+    ///   - p: the frame source.
+    ///   - maxDimension: longest side in pixels (1280 for signs, 768 for the hazard watch).
+    ///   - quality: JPEG quality 0…1.
+    /// - Returns: the JPEG, or nil when there is no fresh frame (just unlocked, ARKit stalled).
     @concurrent
     private static func snapshot(_ p: DepthFrameProcessor, maxDimension: CGFloat,
                                  quality: CGFloat = 0.6) async -> Data? {

@@ -16,6 +16,12 @@
 //  a spoken value ("left one meter, center clear, right clear" / "no depth data").
 //  ⚠ test contract: testAccessibilityLabelsExist queries `app.otherElements["Head row"]`.
 //
+//  Owner / caller: `ObstaclesCard` (ContentView.swift), a leaf view that reads `depth.report` so
+//  the ~30 Hz observation dependency re-renders only this card, on the Sense page.
+//  Tests: `CaneKitUITests.testAccessibilityLabelsExist` ("Head row"); the colour thresholds are
+//  `TileLevel` in CaneKitLogic (`LaneMathTests.tileLevels`). The 4.5 m "clear" cutoff is
+//  display-only and lives here, untested.
+//
 
 import CaneKitLogic
 import SwiftUI
@@ -32,6 +38,8 @@ struct LaneGridView: View {
     /// Column names, left → right; used for the tile captions and the spoken row value.
     private static let laneNames = ["Left", "Center", "Right"]
 
+    /// "Obstacles" card: the trust pill right-aligned ("Trusted" = the gyro gate accepted the
+    /// frame, "Sweeping" = warnings paused while the cane swings), then the Head and Torso rows.
     var body: some View {
         CKCard(title: "Obstacles") {
             HStack {

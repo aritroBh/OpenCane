@@ -42,7 +42,16 @@
 //  Owner: `AppModel.bothCameras` (one instance). Driven only by the Hazards card's "Both cameras
 //  (pauses obstacle detection)" switch, which is **off by default and never persisted** — no
 //  launch can ever come up with the safety path suspended. Refused outright while a route is
-//  running.
+//  running or waiting to start (`AppModel.setBothCameras`), and starting a route turns it off
+//  (`AppModel.beginRoute`). Every start / stop runs on
+//  `AppModel.serializeBothCameras`, so a quick ON → OFF → ON can never start this session while
+//  ARKit has already been resumed.
+//
+//  Tests: the numbers and decisions live in CaneKitLogic — `DualCameraRotation`, `BothCameras`
+//  state and `BothCamerasLayout` (`LiveViewTests`), `MultiCamCost` (`MultiCamDepthTests`
+//  `hardwareCostOverOneNeedsTheFrameRateCut`, `unreadableHardwareCostChangesNothing`). The capture
+//  pipeline itself has no simulator (multi-cam is unsupported there): its evidence is the
+//  `both_cameras` trip-log record built from `diagnostics`.
 //
 //  Threading / isolation: `@MainActor @Observable`. The two `AVSampleBufferDisplayLayer`s are
 //  `CALayer`s and belong on the main actor, which is where `BothCamerasView` attaches them and
@@ -83,6 +92,8 @@ import Synchronization
 
 /// Front + back camera preview at the same time, via `AVCaptureMultiCamSession`, rendered from
 /// video data output buffers. The AR session must be paused by the caller for the duration.
+/// Owned by `AppModel` (`bothCameras`); drawn by `BothCamerasView` (`backLayer` / `frontLayer`);
+/// read by `HazardsCard` (`frontConnected`, `lastError`).
 @MainActor
 @Observable
 final class DualCameraSession {
@@ -96,12 +107,16 @@ final class DualCameraSession {
 
     // MARK: Published
 
-    /// True once the capture session is running.
+    /// True once the capture session is running. Set from `session.isRunning` after `start()`;
+    /// cleared by `stop()` and by a runtime-error notification. `AppModel.resumeARKitPipelines`
+    /// refuses to resume ARKit while it is true.
     private(set) var isRunning = false
-    /// True when the back camera's feed is connected (it always should be).
+    /// True when the back camera's feed is connected (it always should be on a multi-cam phone).
     private(set) var backConnected = false
     /// True when the **front** camera's feed is connected — the thing the owner asked to see.
-    /// False on a phone without multi-cam support, where only the back feed is shown.
+    /// False when the front camera could not be connected (then `lastError` says only the back
+    /// camera is shown), before `start()`, after `stop()`, and on a phone without multi-cam
+    /// support — where `start()` opens no camera at all.
     private(set) var frontConnected = false
     /// Why the mode is degraded or dead: no multi-cam, a device error, an interruption. Shown on
     /// the Hazards card in the warning colour and spoken by `AppModel`; never cleared silently.
@@ -118,6 +133,7 @@ final class DualCameraSession {
     /// before the session refused to run, which is the difference between "no camera opened" and
     /// "both cameras opened and the session would not start" in the trip log.
     @ObservationIgnored private(set) var frontOpened = false
+    /// The back camera's half of the pair above (`back_opened` in the trip log).
     @ObservationIgnored private(set) var backOpened = false
 
     /// Buffers actually handed to a display layer's renderer since the last `start()`.
@@ -171,6 +187,10 @@ final class DualCameraSession {
     /// log. When the front inset still looks tilted on the device, these two numbers say whether
     /// the coordinator or the fallback is to blame — no second guess-run needed.
     @ObservationIgnored private var appliedRotationAngles: [String: Double] = [:]
+    /// What the coordinator's horizon-level CAPTURE angle read per camera when it connected — not
+    /// applied (see `DualCameraRotation`), logged as `front_capture_angle` / `back_capture_angle` so a
+    /// phone that reads differently is visible in the trip log.
+    @ObservationIgnored private var coordinatorCaptureAngles: [String: Double] = [:]
     /// The `isVideoMirrored` actually in effect on the front connection, kept for the trip log
     /// beside the rotation angles. Read back from the connection after setting, so the log
     /// records what AVFoundation accepted, not what was asked.
@@ -182,6 +202,8 @@ final class DualCameraSession {
     /// rendered, so ordering between them costs nothing and one queue is one fewer thread.
     @ObservationIgnored private let captureQueue = DispatchQueue(label: "canekit.dualcam", qos: .userInitiated)
 
+    /// Creates an idle session holder: the two display layers exist, no camera is touched.
+    /// One instance, created by `AppModel`'s property initialiser.
     init() {}
 
     // MARK: Lifecycle
@@ -198,6 +220,9 @@ final class DualCameraSession {
     /// A failure at any step leaves `lastError` set and the session torn down — *every* path,
     /// including "the session did not start", because of the `guard session == nil` on the first
     /// line (see the file header's invariants).
+    /// Resets every counter and flag first, so each start's `diagnostics` describe that start only.
+    /// Caller: `AppModel.setBothCameras(true)`, inside the serialised camera chain, after
+    /// `depth.pause()`.
     func start() async {
         guard session == nil else { return }
         lastError = nil
@@ -209,6 +234,7 @@ final class DualCameraSession {
         frontOpened = false
         backOpened = false
         appliedRotationAngles.removeAll()
+        coordinatorCaptureAngles.removeAll()
         frontMirrored = false
 
         guard Self.isSupported else {
@@ -268,6 +294,12 @@ final class DualCameraSession {
     /// of the previous one.
     /// Safe to call when nothing is running (the Hazards card, backgrounding and route start all
     /// call it unconditionally).
+    /// Never touches `lastError`, `frontOpened` / `backOpened` or the frame counters, so a failed
+    /// start's evidence survives the teardown; the relays (and with them `front_frames` /
+    /// `back_frames`) are released, so read `diagnostics` *before* calling this.
+    /// Callers: `AppModel.setBothCameras(false)` (the switch, and `beginRoute` turning the mode off
+    /// for a route) and its failed-start rollback, `start()` itself, and
+    /// `AppModel.scenePhaseChanged(.background)`.
     func stop() async {
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers.removeAll()
@@ -297,6 +329,7 @@ final class DualCameraSession {
         inputs.removeAll()
         rotationCoordinators.removeAll()
         appliedRotationAngles.removeAll()
+        coordinatorCaptureAngles.removeAll()
         frontMirrored = false
         relays.removeAll()
         backLayer.sampleBufferRenderer.flush()
@@ -314,7 +347,9 @@ final class DualCameraSession {
     ///   - name: "front" / "back", used for the error text and the frame counters.
     ///   - layer: the layer this camera's buffers are enqueued into.
     ///   - session: the multi-cam session being configured (inside begin/commit).
-    /// - Returns: true when the camera is connected and its buffers will reach `layer`.
+    /// - Returns: true when the camera is connected and its buffers will reach `layer`. On false,
+    ///   `lastError` names the step that failed and everything this call added is removed again
+    ///   (except a missing device, which adds nothing and leaves `lastError` untouched).
     private func connect(_ position: AVCaptureDevice.Position, device type: AVCaptureDevice.DeviceType,
                          name: String, to layer: AVSampleBufferDisplayLayer,
                          in session: AVCaptureMultiCamSession) -> Bool {
@@ -349,6 +384,7 @@ final class DualCameraSession {
             session.removeInput(input)
             relays[name] = nil
             appliedRotationAngles[name] = nil
+            coordinatorCaptureAngles[name] = nil
             return false
         }
         guard let port = input.ports(for: .video, sourceDeviceType: type,
@@ -376,33 +412,26 @@ final class DualCameraSession {
         // The phone is clamped to a cane in portrait, and a preview layer would have handled the
         // rotation itself; a data output will not, so it is set explicitly.
         //
-        // NOT a hard-coded 90°. That is right for the back sensor and wrong for the front one,
-        // which is mounted the other way round — the front feed came out sideways on the device,
-        // and still tilted after the first coordinator fix.
-        // `AVCaptureDevice.RotationCoordinator` computes the correct angle for THIS device, which
-        // is why Apple added it; a table of per-camera magic numbers is wrong on the next model.
-        // The coordinator must be retained: it observes device orientation and a released one
-        // stops updating.
-        // Capture angle first, not preview: this connection feeds a video data output (a capture
-        // connection), and the preview angle follows the interface orientation while the capture
-        // angle follows the horizon — on a clamped phone those can disagree by exactly the 90°
-        // tilt seen on the front inset. Last resort is per-position, not a blind 90: the front
-        // sensor needs 270 in portrait where the back needs 90.
+        // PER CAMERA, via `DualCameraRotation.angle` (CaneKitLogic, pinned by LiveViewTests). One
+        // angle for both cameras failed three times on the owner's phone, each fix breaking the
+        // other feed: preview-for-both (1caff45) left the BACK feed sideways — trip log
+        // 2026-09-12T22-02-03Z `back_rotation: 0` plus the owner's screenshot — and capture-for-both
+        // (103d548) tilted the FRONT inset. The UI is portrait-only, so the back gets the fixed
+        // portrait-up 90 (the coordinator's capture angle follows the phone's physical orientation
+        // and would read 0 if Both cameras started with the phone sideways — Muse, Step 36), and the
+        // front gets the measured portrait-up 0, then 270 (the preview angle is sampled once here and
+        // reads wrong if the phone starts flat — Muse / Antigravity, Step 37 review). ⚠ Do not "unify"
+        // this again without a device screenshot of BOTH feeds and the logged `*_rotation` /
+        // `*_capture_angle` / `*_size` / `*_portrait`. The coordinator is still retained (it stops
+        // updating once released) so the trip log can record what it reads on another phone.
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         rotationCoordinators.append(coordinator)
-        let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
-        let previewAngle = coordinator.videoRotationAngleForHorizonLevelPreview
-        let fallbackAngle: CGFloat = position == .front ? 270 : 90
-        let applied: CGFloat
-        if connection.isVideoRotationAngleSupported(captureAngle) {
-            applied = captureAngle
-        } else if connection.isVideoRotationAngleSupported(previewAngle) {
-            applied = previewAngle
-        } else if connection.isVideoRotationAngleSupported(fallbackAngle) {
-            applied = fallbackAngle
-        } else {
-            applied = connection.videoRotationAngle
-        }
+        coordinatorCaptureAngles[name] = Double(coordinator.videoRotationAngleForHorizonLevelCapture)
+        let applied = DualCameraRotation.angle(
+            front: position == .front,
+            preview: Double(coordinator.videoRotationAngleForHorizonLevelPreview),
+            supports: { connection.isVideoRotationAngleSupported(CGFloat($0)) })
+            .map { CGFloat($0) } ?? connection.videoRotationAngle
         connection.videoRotationAngle = applied
         appliedRotationAngles[name] = Double(applied)
         // The front inset is NOT mirrored, on purpose. Selfie-mirror convention is for the
@@ -498,6 +527,9 @@ final class DualCameraSession {
     /// Watch for the two things that silently kill a capture session, so the card can say why the
     /// picture went black instead of just showing black. Both observers use `queue: .main`, which
     /// is what makes `MainActor.assumeIsolated` legal (AGENTS.md hard rule 1).
+    /// A runtime error sets `lastError` and clears `isRunning`; an interruption only sets
+    /// `lastError` (with the `AVCaptureSession.InterruptionReason` raw value). Tokens go into
+    /// `observers` and are removed by `stop()`. Nothing is spoken from here.
     private func observe(_ session: AVCaptureMultiCamSession) {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
@@ -524,7 +556,10 @@ final class DualCameraSession {
     /// is the second half of that answer: frames the cameras delivered *and* this class handed to
     /// a renderer. Camera frames climbing while `enqueued` stays at 0 is a black view with live
     /// cameras, which is exactly what the old `isReadyForMoreMediaData` guard produced.
-    /// Read by `AppModel` when the mode is switched on and off.
+    /// Read by `AppModel.setBothCameras(true)` right after `start()` (the `both_cameras` record
+    /// with `action: start`) and by the both-cameras self test (`front_frames` / `back_frames`).
+    /// The off path logs only `hardware_cost`: `stop()` has released the relays by then.
+    /// Rotation angles read -1 for a camera that never connected.
     var diagnostics: [String: Any] {
         [
             "supported": Self.isSupported,
@@ -535,6 +570,13 @@ final class DualCameraSession {
             "front_opened": frontOpened,
             "back_opened": backOpened,
             "front_frames": relays["front"]?.frameCount ?? 0,
+            // Delivered buffer size after rotation ("1440x1920" is portrait, i.e. upright for this
+            // screen): evidence for `DualCameraRotation`, not a guess (owner report 2026-09-12).
+            "front_size": relays["front"]?.frameSize ?? "",
+            "back_size": relays["back"]?.frameSize ?? "",
+            // `DualCameraRotation.isPortrait` of the latest buffer (false before the first frame).
+            "front_portrait": relays["front"]?.isPortrait ?? false,
+            "back_portrait": relays["back"]?.isPortrait ?? false,
             "back_frames": relays["back"]?.frameCount ?? 0,
             // Frames that reached a renderer, and renderer resurrections. `enqueued` far below
             // `front_frames + back_frames` means frames arrived and were dropped before the
@@ -543,6 +585,8 @@ final class DualCameraSession {
             "renderer_flushes": rendererFlushes,
             "front_rotation": appliedRotationAngles["front"] ?? -1,
             "back_rotation": appliedRotationAngles["back"] ?? -1,
+            "front_capture_angle": coordinatorCaptureAngles["front"] ?? -1,
+            "back_capture_angle": coordinatorCaptureAngles["back"] ?? -1,
             "front_mirrored": frontMirrored,
             "hardware_cost": Double((hardwareCost * 100).rounded() / 100),
             "system_pressure_cost": Double((systemPressureCost * 100).rounded() / 100),
@@ -592,10 +636,19 @@ private nonisolated final class DualCameraFrameRelay: NSObject,
 
     /// Counter + in-flight flag together, so one lock covers both.
     private struct State {
+        /// Buffers delivered by the camera, including the ones dropped while a hop was in flight.
         var frames = 0
+        /// True from the moment a buffer is handed to a main-actor hop until `render` returns.
         var inFlight = false
+        /// Pixel size of the latest delivered buffer, after the connection's rotation — the
+        /// orientation evidence (`DualCameraRotation.isPortrait`); (0, 0) before the first frame.
+        var width = 0
+        /// Height (px) of the latest delivered buffer, after rotation.
+        var height = 0
     }
 
+    /// All mutable relay state; locked from the capture queue (writes) and the main actor
+    /// (diagnostics reads, the in-flight reset after `render`).
     private let state = Mutex(State())
     /// Enqueues the buffer into this camera's layer, on the main actor.
     private let render: @MainActor (CaptureHandoff<CMSampleBuffer>) -> Void
@@ -611,12 +664,26 @@ private nonisolated final class DualCameraFrameRelay: NSObject,
     /// actually produce frames?".
     var frameCount: Int { state.withLock { $0.frames } }
 
+    /// "WxH" of the latest delivered buffer (after rotation), or "" before the first frame; logged
+    /// as `front_size` / `back_size` so a sideways feed is visible in the trip log.
+    var frameSize: String { state.withLock { $0.width > 0 ? "\($0.width)x\($0.height)" : "" } }
+
+    /// Whether the latest delivered buffer is portrait (`DualCameraRotation.isPortrait`); false before
+    /// the first frame. Logged as `front_portrait` / `back_portrait`.
+    var isPortrait: Bool { state.withLock { DualCameraRotation.isPortrait(width: $0.width, height: $0.height) } }
+
     /// Capture queue. Marks the buffer for immediate display and hops it to main, unless a hop is
-    /// already outstanding.
+    /// already outstanding. Every buffer updates the count and the delivered size first, so the
+    /// trip log sees frames the display never got.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        let pixels = CMSampleBufferGetImageBuffer(sampleBuffer)
+        let w = pixels.map(CVPixelBufferGetWidth) ?? 0
+        let h = pixels.map(CVPixelBufferGetHeight) ?? 0
         let busy = state.withLock { state -> Bool in
             state.frames += 1
+            state.width = w
+            state.height = h
             if state.inFlight { return true }
             state.inFlight = true
             return false
@@ -654,6 +721,9 @@ private nonisolated final class DualCameraFrameRelay: NSObject,
 /// race (AGENTS.md hard rule 1). Used by `DualCameraSession` (sessions and sample buffers) and
 /// `SensorProbe` (`startRunning` / `stopRunning`).
 nonisolated final class CaptureHandoff<T>: @unchecked Sendable {
+    /// The carried object. Immutable reference; the *object's* thread-safety is the caller's
+    /// single-handover discipline above, not this box's.
     let value: T
+    /// Wraps `value` for exactly one hop.
     init(_ value: T) { self.value = value }
 }

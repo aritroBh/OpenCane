@@ -9,15 +9,27 @@
 //
 //  Key invariants / fixtures:
 //    · `isr` / `cif` are the real demo endpoints; `wps` = 2-waypoint ISR → CIF (15 m, 20 m).
-//    · `line` = 4 waypoints ~100 m apart due north (1e-3° lat ≈ 111 m), radii 15/15/15/20 m.
+//    · `line` = 4 waypoints ~100 m apart due north (9e-4° lat ≈ 100 m), radii 15/15/15/20 m.
 //    · `fix(_:accuracy:speed:t:)` defaults to a good walking fix: 5 m accuracy, 1.2 m/s.
 //    · Distances metres, speeds m/s, bearings degrees true, times seconds.
+//    · `OffCourseDetector` and `GeofenceTracker` are classes; each test builds a fresh one.
+//
+//  Callers of the pinned code: `NavigationEngine` (app) owns one `GeofenceTracker` per route and one
+//  `OffCourseDetector` (fed ~1 Hz, `gated(at:)` for a poor / stale fix, `endEpisode()` for a
+//  standing one); `AppModel` and `TripTracker` use the distance / bearing maths. Breaks these catch: a turn
+//  fence firing on a 30 m blob or while standing at a curb; arrival (irreversible) on one bad fix;
+//  a route stuck behind a fence missed under trees; a beacon swinging sideways beside a waypoint;
+//  and the veer cue either nagging (a wobble, a GPS gap's stale history, a stop mid-drift) or never
+//  firing under jitter (e2e `wrong_turn`, the `maxEvidenceGap` tests at the end of the file).
 //
 
 import Testing
 @testable import CaneKitLogic
 
+/// ISR Townsend Hall doors (route start), approximate; used for the crow-flies distance and as a
+/// "far away" fix.
 private let isr = Coordinate(latitude: 40.1095, longitude: -88.2214)
+/// CIF east entrance area (route end), approximate; the second waypoint of `wps` sits here.
 private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
 
 /// Haversine gives the real ISR → CIF crow-flies distance (600–750 m), so metre cues are sane.
@@ -81,10 +93,14 @@ private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
     #expect(d.update(error: -40, now: 5.5) == .left)
 }
 
+/// A `GeoFix` at `c`; defaults are a good walking fix (5 m accuracy, 1.2 m/s, t = 0). Pass −1 for
+/// CoreLocation's "unknown" accuracy / speed.
 private func fix(_ c: Coordinate, accuracy: Double = 5, speed: Double = 1.2, t: Double = 0) -> GeoFix {
     GeoFix(coordinate: c, accuracy: accuracy, speed: speed, timestamp: t)
 }
 
+/// Two-waypoint ISR → CIF route: a 15 m crossing fence at Goodwin (leg bearing 0°) and the 20 m
+/// arrival fence at the CIF door (no next bearing).
 private let wps = [
     Waypoint(id: 1, lat: 40.1096, lon: -88.2244, radiusM: 15, say: "Goodwin. Crossing.", crossing: true, bearingNextDeg: 0),
     Waypoint(id: 2, lat: 40.1125, lon: -88.2283, radiusM: 20, say: "CIF east entrance.", crossing: false, bearingNextDeg: nil),
@@ -136,7 +152,8 @@ private let wps = [
     #expect(t.update(fix(near2, accuracy: 12, speed: -1)) == .reached(index: 1, waypoint: wps[1], isLast: true))
 }
 
-/// Three waypoints ~100 m apart on a north-south line (1e-3° lat ≈ 111 m).
+/// Four waypoints ~100 m apart on a due-north line (9e-4° lat ≈ 100 m): three 15 m turn fences with
+/// leg bearing 0°, then a 20 m arrival fence.
 private let line = [
     Waypoint(id: 1, lat: 40.1100, lon: -88.2240, radiusM: 15, say: "one", crossing: false, bearingNextDeg: 0),
     Waypoint(id: 2, lat: 40.1109, lon: -88.2240, radiusM: 15, say: "two", crossing: false, bearingNextDeg: 0),

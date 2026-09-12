@@ -2,7 +2,7 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-## Step 34 — Cane events reach the family: the Grok Bot webhook client (Sat Sep 12)
+## Step 38 — Cane events reach the family: the Grok Bot webhook client (Sat Sep 12)
 
 OpenCane can now tell someone. Cane detections become one JSON event POSTed to the Grok Bot
 routine **"OpenCane cane events"** (folder `opencane-cane-events`), which owns the alerting
@@ -66,6 +66,330 @@ test on device: Settings → Family alerts → Send test event, with the phone o
 Airplane Mode (expect "Could not reach Grok Bot" after the one retry, ~12 s, and no crash); then
 switch the toggle on and walk a route to see one breadcrumb every two minutes in the Grok Bot run
 log, and let the battery fall below 20 % to see exactly one `low_battery` event.
+
+## Step 37 — Talk floor: a direction cut by a warning resumes from its clause; a pause between the two (Sat Sep 12)
+
+**Why:** the owner said "when the app is giving directions and it's giving notifications on objects
+near you, it interrupts each other". Two trip logs show the pattern.
+- **2026-09-12T22-20-53Z:** 5 of 58 dispatched lines were restarts, and 9 line starts were < 1 s apart.
+- **22-27-00Z** (a friend's 37-minute handheld walk): 45 "Head height." lines, and 4 restarts,
+  including the whole route intro played twice.
+
+Every restart was a `.nav` line cut by `.safety` "Head height." and replayed from its first word.
+
+**Design decision:**
+- **First plan rejected (Muse review):** hold "Head height." behind a direction, with a buzz and a
+  chirp now and the words later. A walker reaches a 1.5 m overhang in about 1.5 s, before the words.
+- **Owner chose "Cut in, then resume":** the warning stays instant, and the direction continues from
+  the clause it was cut in.
+- **Owner chose "Leave as is" for walls:** they still get "Head height."
+
+**What changed**
+- New CaneKitLogic `SpeechResume`:
+  - Clause starts are `. ! ? , ; :` plus a space, but not after "St." / "Dr." / "U.S.".
+  - `resumeOffset` handles a word-boundary stop that finishes the last word, and snaps to a
+    character boundary.
+  - `nextResume`: at most 3 resumes, and the resume point never moves backwards.
+  - mp3 progress is mapped proportionally and backed off 8 UTF-16 units. The seek starts 0.25 s early.
+  - `gapSeconds`: 0.35 s between different bands. `.safety` never waits, and the app passes the
+    safety band in.
+- `SpeechQueue`:
+  - Progress comes from `willSpeakRangeOfSpeechString` (system voice) or `currentTime / duration`
+    (mp3).
+  - A resumed line speaks its remainder (system voice) or seeks the whole cached clip. The text
+    stays whole as coalescing, cache and Repeat key.
+  - A call / Siri or dictation restarts from the top, since a fragment after seconds has no context.
+  - The TTL is extended on the first cut only.
+  - `inGap` pause state, with its own generation: `.safety`, or a same-band line that ties the head,
+    ends it. `sayAgain` ranks against the queue head. `stopAll`, an interruption or a voice hold
+    clears it. `isSpeaking` stays true, so the beacon stays ducked.
+- Trip log:
+  - `speech_dispatch` gains `resume_from`.
+  - New `speech_end {priority}` for natural line ends.
+- `cue_audit.py`: new `replays_resumed_mid_line` / `replays_from_line_start`, and
+  `cross_band_pause_under_0_3s` measured from `speech_end` to the next start.
+- Docs:
+  - AGENTS rule 8, design.md §5.1 and CODE_REFERENCE are updated.
+  - todo: talk floor inserted as 37, and the later cue v2 steps are renumbered 38–45. The "Step 40"
+    references to torso taps in code are now "Step 41".
+
+**Review** (Muse, Antigravity, 4-lens adversarial workflow with a verifier per finding). Every
+finding was checked against the code; fixed unless noted.
+- **Muse** (no blocking findings):
+  - The front camera trusted a one-shot preview angle (camera commit).
+  - The TTL was re-extended on every resume.
+  - mp3 timing is uneven, so progress is now backed off.
+  - `safetyBand` was a copied literal.
+  - Stale `maxReplays` comments.
+  - `stopAll` left resume state behind.
+  - Accepted: explicit Repeat skips the pause.
+- **Antigravity:**
+  - A re-cut within `clipLead` of an mp3 resume was dropped as "no progress". This led to
+    `nextResume`.
+  - Progress inside an emoji or combining accent emptied the remainder and dropped the line. A
+    script confirmed it on the old code at offsets 4 and 14.
+  - `sayAgain` during a pause could jump a higher queued line.
+  - A same-band line waited out a pause meant for another band.
+  - A stray end callback could cut the pause short (the pause now bumps the generation).
+  - The front camera angle.
+- **Workflow:**
+  - A resumed line cut before its first new word was dropped along with unheard clauses (same fix
+    as `nextResume`).
+  - The pause metric compared start times and could never see a missing pause (`speech_end` added).
+  - Low severity: abbreviations split clauses; a word-boundary cut on the last word replayed a
+    clause; a finished mp3 whose callback was still in flight was re-queued from the top; call and
+    dictation resumes lost context; a misleading audit label; `isPortrait` was unused.
+- **Refuted:** the front preview-angle claim (already fixed in the tree).
+- **Deferred to todo:**
+  - A system-voice line resumed from a cached mp3 maps an exact word offset to a proportional time.
+  - The pre-existing interruption resume retry is not cancelled by a new `.began`.
+
+**Verification:**
+- `make test` 457/457. `make sim` green. `make e2e` PASS (266 s).
+- `make uitest` 11 run, 10 passed, 1 skipped (needs a key), 0 failures.
+- `cue_audit.py --selftest` ok.
+- Installed on the phone 2026-09-12 evening.
+
+test on device: start the route and let the intro play; point the phone at a wall at head height 1 m
+away mid-sentence. You hear "Head height.", a short pause, then the intro CONTINUES from the phrase it
+was on (not "Route started." again). Repeat on 2–3 later directions. Plug in, `make audit`:
+`replays_resumed_mid_line` > 0, `replays_from_line_start` only for cuts in a first clause, and
+`cross_band_pause_under_0_3s` = 0.
+
+## Fix — Both cameras: the back feed was sideways again; rotation is now chosen per camera (Sat Sep 12)
+
+**Why:** the owner's screenshot showed the back picture rotated 90° while the front inset was upright,
+"idk why u keep messing it up". Trip log 2026-09-12T22-02-03Z had `back_rotation: 0`. Three earlier fixes
+each used ONE `RotationCoordinator` angle for both cameras, and each fixed one feed by breaking the other.
+Preview-for-both (0f32282, 1caff45) left the back sideways. Capture-for-both (103d548) tilted the front.
+
+**What changed**
+- CaneKitLogic `DualCameraRotation` (`LiveView.swift`):
+  - The back camera gets the fixed portrait-up 90. The UI is portrait-only, and the coordinator's
+    capture angle follows the phone's physical orientation. Muse caught that it reads 0 if Both
+    cameras starts with the phone held sideways.
+  - The front camera gets the measured upright 0, then 270. It never gets a coordinator angle: the
+    preview angle is read once at connect and is wrong if Both cameras starts with the phone flat
+    (Muse and Antigravity, round 2), and the capture angle is the one that tilted it.
+- `DualCameraSession` logs `front_size` / `back_size` (delivered buffer WxH after rotation),
+  `front_portrait` / `back_portrait` (`DualCameraRotation.isPortrait`), and `front_capture_angle` /
+  `back_capture_angle`, so the next report is evidence.
+
+**Review:** Muse round 1 (capture-for-back version); Muse, Antigravity and a 4-lens agent workflow,
+round 2.
+- **Fixed:**
+  - Its fallback order could land back on the sideways preview angle.
+  - A capture angle read while the phone is sideways would rotate the feed.
+  - The tests passed for any "take the first angle" rule. They are rewritten to pin each camera's
+    angle and the forbidden fallback.
+  - Round 2: the front still trusted a one-shot preview angle, so it is now fixed at 0 as well.
+  - Round 2: `isPortrait` was documented as a diagnostics check but nothing called it. It is now
+    logged.
+- **Rejected:** "re-apply the angle on every orientation change". The UI never rotates
+  (`UISupportedInterfaceOrientations` = portrait), so a fixed display angle is correct.
+- **Open question, unverified:** whether buffer dimensions swap under `videoRotationAngle`.
+  `front_size` is logged as evidence only, and nothing reads it.
+
+**Verification:** `make test` and `make sim` pass; UI and review results are in the commit message.
+Device evidence from the installed build (trip log 2026-09-12T22-20-53Z): `back_rotation` 90,
+`front_rotation` 0, `front_size` 1080x1920.
+
+test on device: Sense → Both cameras with the phone upright, then again after starting it with the phone
+held sideways: the back picture and the front inset are both upright each time.
+
+## Step 36 — Cue detail (Quiet / Standard / Detailed) × Place (Outdoors / Indoors); names off by default (Sat Sep 12)
+
+**Why:** cue design v2 §3.3 / §3.5 and the owner's "overstimulating" report. The walker picks how
+much OpenCane volunteers, and indoor clutter gets quieter. **Speech only in this step:** haptics are
+identical at every level until Step 40.
+
+**What changed**
+- New pure `CueRules` (CaneKitLogic `CueProfile.swift`).
+  - Obstacle names: Quiet and Indoors name nothing. Standard names doors, and only while a route
+    guides. Detailed names everything except walls.
+  - Signs: Quiet and Indoors read only `safetySignPhrases` (closures, danger, caution, wet floor,
+    push button). Other levels read every sign.
+  - Head distance: 1.5 m outdoors (today), 1.2 m indoors [H].
+  - `namesLimitLine` for voice feedback.
+- `SignPolicy.allowedPhrases`: a disallowed phrase is skipped unstamped and never counts as matched.
+- `AppModel.cueLevel` / `cuePlace` are persisted (`Settings.string`). **Default Detailed + Outdoors**
+  (owner decision, until a mounted log tunes the calmer levels). A change is applied to the decider
+  and the sign policy, spoken once ("Quiet cues.", "Indoor mode.", prefetched) and logged
+  `cue_profile`. The `start` record carries `cue_level`, `cue_place`, `obstacle_names`.
+- **`obstacleNamesEnabled` now defaults off** (research #2, lowest risk). Walkers who never touched
+  the switch lose names until they turn it on; D6 in `docs/stress_test_plan.md` now says to.
+- Settings → new **Cues** card first on the page: two segmented pickers with visible labels, VoiceOver
+  containers and a caption that says what the level does today.
+- "Turn on obstacle names" by voice now adds why it may stay quiet ("Quiet cues name nothing.").
+- New XCUITest `testCuePickersChangeAndRestore`, restoring defaults in a teardown block. The segment
+  titles are added to AGENTS.md rule 9 and design.md §9.
+
+**Review** (35-agent adversarial workflow, Muse, Antigravity), every finding verified by hand:
+- **Antigravity:** "no serious defects".
+- **Muse:** no blocking defects. Its latent sign-swallow note is fixed (filter before `matched`,
+  `sameFrameAllowedPhraseSurvives`). Its teardown note is fixed. Its stale `SpokenPhrases` comment is
+  fixed; the wall prefetch lines are kept as a few unreachable kB.
+- **Fixed (agents):**
+  - Caption and hint promised haptic changes this step does not make.
+  - The UI test could leave Standard / Indoors persisted after a failed assert.
+  - Voice "Obstacle names on." was a silent promise under Quiet / Indoors.
+  - Segmented pickers had no VoiceOver context.
+  - D6 expected names by default and wall names.
+  - The design.md §9 contract table and the CODE_REFERENCE `Settings` row were stale.
+- **Rejected with evidence:**
+  - "Safety-sign allowlist would mute a future phrase" (2/2 refuted: today it equals every phrase
+    minus EXIT / ENTRANCE / PULL / PUSH; a new phrase is a deliberate table edit).
+  - "Test title claims same-frame behaviour" (2/2 refuted; same-frame test added anyway).
+  - "Names default flip contradicts Detailed = today" (2/2 refuted: the default flip is research #2,
+    approved in the plan; the comment is now precise about who loses names).
+- **Noted, by design:** switching to Indoors while a head cue is active at 1.35–1.5 m clears it. That
+  is opt-in calming, and the hysteresis never latches (Muse, Antigravity).
+
+**Verification:** `make test` 438/438, `make sim` green. `make uitest` first failed to COMPILE — the
+teardown block captured the implicitly-unwrapped `app` as an Optional (`guard let app` fixed it); the
+re-run result is in the commit message. On the phone (trip log 2026-09-12T22-20-53Z, t = 132–152 s) the
+owner flipped every level and place: each tap logged one `cue_profile` record and dispatched its line.
+
+test on device: Settings → Cues. Tap Quiet: hear "Quiet cues.", and no obstacle names even with Speak
+obstacle names on. Tap Indoors: hear "Indoor mode.", and an EXIT sign is not read while a WET FLOOR /
+CLOSED sign is. Detailed + Outdoors with names on: a door and a table are named, a wall never is. The
+trip log `start` record shows `cue_level`, `cue_place`, `obstacle_names`.
+
+## Step 35 — Cue design v2 research, plan, and the "measure first" audit script (Sat Sep 12)
+
+**Device report (owner):** the voice is choppy and it is overstimulating: "although it's describing
+everything it's seeing, I don't think it's the goal we want it to achieve."
+
+**Research** (`docs/cue_design_v2.md`): 4 researchers (O&M practice, blind users' reviews of travel
+aids, HCI studies, haptic/audio design) and 4 source fact-checkers produced 74 kept findings, with 10
+dropped as unsupported, then one synthesis. Core principles: don't repeat what the cane already
+finds; silence means clear; ears are the long-range sensor; the real gap is overhangs, which are
+rare. Owner approved "Full v2" with the default level Detailed (= today) until a mounted log tunes
+it. Muse's 17 plan findings are folded in (see docs/todo.md, "Cue design v2").
+
+**Measured, not assumed:** new `ios/scripts/cue_audit.py` (`make audit`). On the first field log:
+- 360 head-band cells under 1.5 m: 349 torso equally near (wall, furniture or person), 8 overhang
+  signature, 3 torso dropouts (missing data, not overhangs).
+- 34 head cues/min; 7.6 unsolicited spoken lines/min (6.7 excluding route lines); "Head height." ×10.
+- ⚠ That walk was handheld: tilt median 25.8°, only 14 % inside 3–8°. **Zero** head cells fell in
+  frames at mount tilt, so this log is no evidence either way for the mounted cane. The
+  wall-vs-overhang argument (v2 §2 V1) rests on the mechanism (the band has no gravity correction and
+  no torso check), not on these numbers. The script prints the mounted verdict and a mounted-frames-only
+  head band on every log.
+
+**New key:** ElevenLabs key rotated into the git-ignored Secrets.plist (main checkout + the 3 worktrees).
+`/v1/text-to-speech` returns HTTP 200 with a real mp3. The key lacks `user_read`, so
+`/v1/user/subscription` is 401; the app never calls it.
+
+**Review (Muse; Antigravity returned no output, retried on Step 36):** 11 findings, all verified.
+- Fixed: torso dropouts counted as overhangs (new `torso_dropout`); head band banked from handheld
+  frames (new `head_band_mounted_frames`); tilt taken only from depth frames; route lines counted as
+  unsolicited (new `unsolicited_non_route_per_min`); dispatch gaps unsorted, crashing on a record
+  without `t`, and counting negative gaps; `--pull` swallowing devicectl errors and missing
+  `DEVICE ?=`; no verdict when a log has no tilt; suppressed lines by reason only (now also by load);
+  path in this entry.
+- Folded into the plan: the Step 37 still-detector must not read cane swing as walking; Step 40
+  torso taps also hold at a crossing; Step 36's "Detailed = today" names its one delta (no wall
+  names).
+
+**Verification:** `ios/scripts/cue_audit.py --selftest` ok (fixture: wall-like, overhang and dropout
+cells, mounted tilt, one replay, a dispatch without `t`, one field collision). Run on the field log
+above. Step 34 installed and
+launched on the phone (`make run`: BUILD SUCCEEDED, Launched).
+
+test on device: walk 2 minutes with the phone ON THE MOUNT, then plug in and run `make audit`: it must
+say "ON THE MOUNT", and its head-band and per-minute numbers are the baseline Steps 36–41 are judged
+against.
+
+## Step 34 — Flashlight switch, both-cameras "does nothing", face tracking mid-route (Sat Sep 12)
+
+**Device report (owner, trip log `canekit-2026-09-12T20-57-17Z`):** "the both cameras button don't
+work" and "the flashlight slide thing is bugging".
+
+**Cause 1 — flashlight (measured, t = 106–120 s):** every press logged twice with opposite results,
+`torch on, active: false` then, on the *next* press, `on, active: true`. `setTorch` set the torch and
+read `AVCaptureDevice.isTorchActive` on the next line; iOS updates it asynchronously, so the read was
+the old state. The switch snapped back and said it failed, then the torch came on anyway, so every
+change took two presses.
+**Fix:** new pure `TorchSwitch` (CaneKitLogic) and `AppModel.setTorch` / `observeTorch` /
+`applyTorch`. The switch shows the request at once; KVO on `isTorchActive` confirms it; a 2 s settle
+deadline (a hypothesis to confirm on the phone) decides failure. Tests first: `TorchSwitchTests` (16).
+
+**Cause 2 — both cameras (measured, t = 33.7 and 84–87 s):** the voice command "set the location from
+here to Granger library" had **started a real route** (`route action: start`, 750 m). Every press
+was refused, and that refusal is correct: a spotter's picture must not pause obstacle detection
+mid-route. But `setBothCameras` snaps the switch back to off at once, and
+`BothCameras.state(enabled: false, navigating: true)` returned `.off`, so the "cannot run while a
+route is guiding you" caption was never on screen. The switch just bounced. (The spoken refusal
+left no trip-log record because direct `say` lines were never logged, so whether it was heard is
+unknown.)
+**Fix:** `.blockedByRoute` for the whole route, whatever the switch shows; the caption adds "Stop the
+route on the Guide tab first." Test first: `bothCamerasExplainTheRefusalForTheWholeRoute`.
+
+**Cause 3 — face tracking (measured, t = 80.7 s; audit item todo:194):** "Head tracking without
+AirPods" was switched on mid-route. `DepthEngine.setFaceTracking` pauses and re-runs the AR session
+(~1–2 s with no obstacle frames), with no warning.
+**Fix:** `FaceTrackingChange.decide` (CaneKitLogic). The `didSet` refuses while a route guides or
+starts: it writes the old value back, speaks why at `.nav` and logs `face_tracking
+{action: refused_*}`. The debug self test refuses too, and its 15 s restore waits for a route to end.
+Sense caption. Tests first: `LiveViewTests.faceTracking*`.
+
+**Instrumentation:** `SpeechQueue.onDispatch` → trip-log `speech_dispatch {text, priority, replays}`
+for every line handed to a voice backend, whoever called `say`. Dispatched is not the same as heard.
+
+**Audit (8 agents, 4 auditors + 4 skeptics) of every open software item in docs/todo.md:**
+- Already done, todo was stale: cloud scene gate, scene prompt, hazard watch off by default,
+  skipped waypoints, idle timer, back-camera copy.
+- Still open (not in this step):
+  1. The conversation fallthrough is not grounded in the scene context.
+  2. The hazard-watch prompt still asks for metres.
+  3. The AirPods head tracker starts without checking that headphones are connected.
+  4. `observeThermalAndBattery` runs before the audio session is configured.
+  5. The background teardown of both cameras has no background-task assertion.
+  6. The debug probe + demo-route flag clash.
+  7. Steps 27–33 never had their Muse/Antigravity reviews.
+
+**Review (31-agent adversarial workflow + Muse + Antigravity), each finding verified by hand:**
+- Fixed (agents + Muse + Antigravity independently): the first version still reported the
+  same-instant read. After a quick OFF→ON it could confirm from the stale value, and the OFF's late
+  KVO was then announced as "The flashlight turned off." A window now stays open to its deadline, and
+  reports inside it are the walker's own requests landing (`quickReversalSpeaksOnce`). No synchronous
+  report.
+- Fixed (agents + Antigravity): the deadline slept on `ContinuousClock` but compared `systemUptime`,
+  which stops in system sleep, so a window could never close. The task is the deadline and ticks with
+  `now: .infinity` (`infiniteTickAlwaysResolves`).
+- Fixed (Muse + Antigravity): KVO holds its target weakly and main-actor hops are not FIFO. The device
+  is now stored, and each hop re-reads `isTorchActive` instead of trusting `newValue`.
+- Fixed (agents + Antigravity): the failure, device-change and refusal lines were not prefetched, and
+  a cache miss holds the queue and ducks the beacon. `commonLines` now includes
+  `TorchSwitch.allSpokenLines` (pinned by `allSpokenLinesMatchOutcomes`) and the four refusal lines.
+  Failure and device-change lines wait 12 s in the queue (`queueSeconds`).
+- Fixed (agents + Muse): the self-test restore could re-run the session mid-route; it now waits.
+  `onSpoken` was renamed `onDispatch`, because it fires at dispatch, not at playback. The face
+  refusal no longer sets `routeError`, which nothing cleared. Captions cover route start. The
+  `liveCaption` doc and the design.md §5.1 table are updated.
+- Rejected, with evidence:
+  - Muse: "refusal lines can flood `.nav`". `SpeechQueue.say` coalesces a line identical to the one
+    playing or queued, so hammering the toggle leaves at most one playing and one queued.
+  - Muse: "no test for enabled + navigating". Already pinned by
+    `bothCamerasAreRefusedWhileARouteIsGuiding`.
+  - Muse #5: "optimistic display shows ON for up to 2 s before a silent refusal". This is the
+    deliberate trade for the measured snap-back, and the deadline speaks the failure.
+  - Agents: "KVO `newValue` snapshot". Refuted 2/2, and moot now that the hop re-reads.
+
+Muse re-review of the final diff: all nine fixes verified closed. One new defect: the deferred
+restore logged every second with no cancellation check. It now logs once and stops on cancellation.
+
+**Verification:** `make test` 423/423. `make sim` BUILD SUCCEEDED. `make uitest` on the iPhone 17 Pro
+Max simulator (iOS 27): 10 tests, 1 skipped (streetview, expected), 0 failures, on the post-review
+build. Not yet verified on the phone: it went unavailable mid-session.
+
+test on device: reinstall (`make run`). Sense tab: Flashlight on, off, on. Each press should move the
+switch once and say "Flashlight on." / "Flashlight off." once, with no snap-back; then tap off→on fast
+and expect one confirmation, no "turned off". Start a route, then press Both cameras: the switch
+bounces and the caption "…Stop the route on the Guide tab first." stays visible while the route runs.
+Press Head tracking without AirPods mid-route: it is refused and spoken. In the trip log, check
+`speech_dispatch` records for those refusal lines and `torch {action: confirmed(on: true)}`.
 
 ## Step 33 — Snappy tab switches: fade-in, one landing time (Sat Sep 12)
 

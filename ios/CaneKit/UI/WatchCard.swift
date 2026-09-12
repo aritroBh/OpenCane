@@ -13,6 +13,10 @@
 //  the watch is unreachable. No XCUITest queries this card (the simulator has no watch), so
 //  none of its strings are a test contract; the visual tour only photographs it.
 //
+//  Owner / caller: `SettingsPage` in ContentView.swift (between `HapticsCard` and the Mount card).
+//  Data: `AppModel.watch` (`PhoneWatchLink`, WatchConnectivity state) and `fallbackToWatch`.
+//  Tests: none automated; the wire format it sends through is pinned by `WatchMessageTests`.
+//
 
 import CaneKitLogic
 import SwiftUI
@@ -23,6 +27,8 @@ struct WatchCard: View {
     /// App-wide owner of `watch` (PhoneWatchLink) and the `fallbackToWatch` setting.
     @Environment(AppModel.self) private var model
 
+    /// Link pill (+ the last watch command, e.g. "describe", when one arrived), link error in red,
+    /// the persisted mirror toggle, and the four send buttons in one row.
     var body: some View {
         @Bindable var model = model
         CKCard(title: "Watch") {

@@ -10,10 +10,24 @@
 //    · `ConversationResponseParser` — decodes the model's structured tool calls and spoken answers,
 //      stripping markdown code fences and applying safety filters against hallucinated clear-path claims.
 //
+//  Why it exists: a query the deterministic `FastPathIntentClassifier` cannot answer (and that is not
+//  a scene question) goes to the cloud model. The reply is spoken to a walker mid-route, so it has
+//  to be short, may trigger an app action, and must never promise that the way is clear.
+//
+//  Owner / callers: `ConversationCoordinator.handleQuery` (app, main actor) builds the prompt with
+//  `buildUserPrompt`, sends it with a camera JPEG through `VLMClient.cloudPrimary.describe(jpeg:prompt:)`
+//  (every provider takes ONE prompt string, so the system instruction is inlined, not a system
+//  role), parses the reply with `ConversationResponseParser.parse`, runs `ToolInvocation`s through
+//  `executeTool`, and speaks `spokenResponse` at `.scene` priority (lowest band).
+//
 //  Key invariants:
 //    · Pure Foundation only; no networking or keys here.
 //    · Enforces strict anti-slop rules (< 25 words, no pleasantries, never say safe/clear).
-//    · Tested in `ConversationPromptTests`.
+//    · The reassurance filter is `CloudSceneGate.reassurance(in:)` — the same table the scene gate
+//      and the hazard watch use, so no path can promise a clear way another path refuses.
+//    · ⚠ Tool names are `ConversationTool` raw values; the declarations below must match them.
+//  Tests: `ConversationLogicTests.swift` (`promptConstruction`, `responseParserJSON`,
+//  `responseParserReassuranceSanitization`, `responseParserPlainTextFallback`).
 //
 
 import Foundation
@@ -24,6 +38,9 @@ import Foundation
 public enum ConversationPrompt {
 
     /// System instruction establishing persona, voice constraints, and safety bans.
+    /// Inlined at the top of every `buildUserPrompt` result. The 25-word rule is also enforced in
+    /// code (`ConversationResponseParser.sanitizeSpoken`), because a model's compliance is a hope.
+    /// Pinned (the "CRITICAL RULES" header) by `promptConstruction`.
     public static let systemInstruction: String = """
     You are OpenCane, an intelligent navigation assistant clamped to a white cane for a blind pedestrian.
     Your replies are SPOKEN via headphones while the user is actively walking.
@@ -38,6 +55,17 @@ public enum ConversationPrompt {
     """
 
     /// Declarations of available tools for LLM reasoning.
+    ///
+    /// ⚠ Known mismatches with the app, left as they are (documentation only):
+    ///   · `ToolInvocation.arguments` decodes as `[String: String]`, so a model that follows
+    ///     `"enabled": "boolean"` / `"silenced": "boolean"` literally and sends a JSON `true` makes
+    ///     the whole reply fail to decode: no tool runs and the raw reply text is spoken through
+    ///     `sanitizeSpoken` instead. Only string "true" / "false" works.
+    ///   · `set_setting`'s `option` must be a `HandsFreeOption` raw value ("beacon", "dropOffs", …),
+    ///     which the model is never told; any other string is ignored by `executeTool`.
+    ///   · `query_status` lists no "haptics" and `query_history` says "distance|hazards", not the
+    ///     `HistoryMetric` raw values — harmless today because `executeTool` does not act on either
+    ///     tool (the model's spoken reply is the whole answer).
     public static let toolDeclarationsJSON: String = """
     [
       {"name": "navigate_to", "description": "Start route to destination", "parameters": {"destination": "string"}},
@@ -52,6 +80,19 @@ public enum ConversationPrompt {
     """
 
     /// Formats the user query, context telemetry, and dialogue history into a single compact prompt.
+    ///
+    /// Layout: `systemInstruction`, `[TOOLS]`, `[LIVE TELEMETRY]` (a sorted-key JSON object),
+    /// `[RECENT DIALOGUE]` (the last 3 turns of `history`, "None" when empty), `[USER QUERY]`, then
+    /// the required reply schema `{"tool", "args", "spoken_response"}`.
+    /// Telemetry keys written, each only when known: `destination`, `next_waypoint`,
+    /// `meters_to_next`, `battery` ("88%", omitted for −1), `headphones` (the output name, or
+    /// "none"), `steps`, `distance_walked_m` (omitted for 0), `recent_hazard` (the last hazard's
+    /// description only), `saved_markers` (comma-joined names). Nothing else in the context is sent.
+    /// - Parameters:
+    ///   - query: the walker's words, quoted verbatim (not escaped).
+    ///   - context: `ConversationCoordinator.buildContext()`.
+    ///   - history: memory BEFORE this turn — the coordinator appends the current turn after the reply.
+    /// - Returns: one prompt string for `VLMClient.describe(jpeg:prompt:)`. Pinned by `promptConstruction`.
     public static func buildUserPrompt(query: String, context: ConversationContext, history: ConversationHistory) -> String {
         var ctxDict: [String: String] = [:]
         if let d = context.currentDestination { ctxDict["destination"] = d }
@@ -68,10 +109,14 @@ public enum ConversationPrompt {
             ctxDict["saved_markers"] = context.savedMarkers.map(\.name).joined(separator: ", ")
         }
 
+        // Sorted keys: the same context always yields byte-identical prompt text. An encode
+        // failure (never expected for [String: String]) degrades to "{}", never a throw.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let ctxJSON = (try? encoder.encode(ctxDict)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
 
+        // Only the last 3 turns: the window holds 6, but every extra turn is prompt tokens and
+        // latency on a walker's question.
         var turnsText = ""
         for t in history.turns.suffix(3) {
             turnsText += "User: \(t.userQuery)\n"
@@ -107,11 +152,14 @@ public enum ConversationPrompt {
 
 /// The parsed result of an LLM conversational turn.
 public struct ParsedConversationResponse: Sendable, Equatable {
-    /// Tool invocation requested by the model, if any.
+    /// Tool invocation requested by the model, if any. nil for `"tool": null`, an unknown tool
+    /// name, or a reply that was not decodable JSON.
     public let toolCall: ToolInvocation?
-    /// Sanitized spoken response for speech synthesis.
+    /// Sanitized spoken response for speech synthesis. Never empty ("I didn't catch that." when
+    /// nothing speakable came back).
     public let spokenResponse: String
 
+    /// Memberwise; built by `ConversationResponseParser.parse`.
     public init(toolCall: ToolInvocation?, spokenResponse: String) {
         self.toolCall = toolCall
         self.spokenResponse = spokenResponse
@@ -121,14 +169,30 @@ public struct ParsedConversationResponse: Sendable, Equatable {
 /// Decodes model wire format and applies safety sanitization.
 public enum ConversationResponseParser {
 
+    /// The reply schema requested by `buildUserPrompt`. Every field is optional so a partial
+    /// reply still decodes; `spokenResponse` accepts camel-case from models that "correct" the
+    /// snake-case key. ⚠ `args` is `[String: String]`: any non-string value fails the whole decode.
     private struct WireFormat: Decodable {
+        /// A `ConversationTool` raw value, or null / absent for no tool.
         var tool: String?
+        /// Tool arguments as strings.
         var args: [String: String]?
+        /// The requested key for the line to speak.
         var spoken_response: String?
+        /// Tolerated camel-case spelling of the same field.
         var spokenResponse: String?
     }
 
     /// Parses raw model completion text into structured tool calls and a clean spoken string.
+    ///
+    /// 1. Trim; strip one leading "```json" or "```" and one trailing "```" (exact, case-sensitive —
+    ///    "```JSON" leaves "JSON" in front and the decode fails).
+    /// 2. Decode `WireFormat`. On success: speak `sanitizeSpoken(spoken_response ?? spokenResponse
+    ///    ?? "")`, and build a `ToolInvocation` when `tool` is a known name (its `resultSummary` is
+    ///    the sanitized line).
+    /// 3. Otherwise treat the ORIGINAL `rawText` (fences included) as plain speech, sanitized, with
+    ///    no tool. Pinned by `responseParserJSON`, `responseParserPlainTextFallback`.
+    /// - Parameter rawText: the provider's completion text.
     public static func parse(rawText: String) -> ParsedConversationResponse {
         var cleaned = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -162,6 +226,12 @@ public enum ConversationResponseParser {
     }
 
     /// Sanitizes spoken responses to prevent unsafe promises ("path is clear") and wordiness.
+    ///
+    /// Rules, in order: collapse whitespace; no letters → "I didn't catch that."; any
+    /// `CloudSceneGate.reassurance(in:)` hit → the WHOLE reply becomes "Caution: unable to confirm
+    /// <promise>." (e.g. "… confirm clear."; a harmless "nothing" or "safely" trips it too, and a
+    /// tool call in the same reply still runs); else the first 25 words, with "." added unless it
+    /// already ends in ". ! ?". Pinned by `responseParserReassuranceSanitization`.
     public static func sanitizeSpoken(_ text: String) -> String {
         let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard collapsed.contains(where: \.isLetter) else { return "I didn't catch that." }

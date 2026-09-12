@@ -2,19 +2,30 @@
 //  CaneKitUITests.swift
 //  CaneKitUITests
 //
-//  Drives the real app in the simulator the way a person would: reads the guide, starts the
-//  demo route, checks the instruction and distance appear, exercises Next / Recenter / Stop,
-//  the haptic test buttons, the settings toggles, and VoiceOver labels. LiDAR, haptics and
-//  the watch need a phone; everything else here runs on `make uitest`.
+//  Drives the real app in the simulator the way a person would: starts the demo route and checks
+//  the waypoint lines appear, exercises Next / Repeat / Recenter / Stop, "Where am I" without a
+//  key (and, opt-in, on a Street View frame), the haptic test buttons, the Mount toggles, the
+//  Cues pickers, the three root tabs, "Navigate to CIF from here", and the destination field's
+//  error line and campus suggestions. LiDAR, haptics and the watch need a phone; everything else
+//  here runs on `make uitest`.
 //
-//  Verifies docs/design.md §6.1 (Guide controls) and the accessibility labels that AGENTS.md
-//  rule 9 freezes. Every string literal passed to `app.buttons[...]`, `app.switches[...]`,
-//  `app.otherElements[...]` or `app.staticTexts[...]` below is a ⚠ test contract: it is the
-//  VoiceOver label in ios/CaneKit/UI (or AppModel / the route file) and must change in the
-//  same commit as the UI string.
+//  Verifies docs/design.md §6.1 / §6.3 (Guide controls, route choice) and the accessibility
+//  labels that AGENTS.md rule 9 freezes (design.md §9 is the table). Every string literal passed
+//  to `app.buttons[...]`, `app.switches[...]`, `app.otherElements[...]`, `app.textFields[...]` or
+//  `app.staticTexts[...]` below is a ⚠ test contract: it is the VoiceOver label in ios/CaneKit/UI
+//  (or AppModel / CaneKitLogic / the route file) and must change in the same commit as the UI
+//  string.
+//
+//  How to run: `cd ios && make uitest` (iPhone 17 Pro Max / iOS 27 simulator; `make sim17` once).
+//  That runs the whole target, so `CaneKitVisualTour.testTour` runs too: 11 tests, with the
+//  Street View test skipping itself unless `make uitest-streetview` passes a frame folder.
+//  ⚠ Set a simulator location first (`xcrun simctl location <udid> set 40.1140,-88.2249`) or the
+//  route tests fail for want of a GPS fix (AGENTS.md "Commands"). `make sim-grant` pre-grants
+//  location and motion. The app is silent under `CANEKIT_UITEST=1` (`SpeechQueue` mutes itself).
 //
 //  Target builds with SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated (XCTest is not
-//  MainActor-friendly); see project.yml.
+//  MainActor-friendly); see project.yml. UI settings changed by a test persist in the simulator's
+//  UserDefaults across tests, so every test that flips one flips it back.
 //
 
 import XCTest
@@ -22,11 +33,14 @@ import XCTest
 /// Functional XCUITests for the phone app (iPhone 17 Pro Max / iOS 27 simulator).
 final class CaneKitUITests: XCTestCase {
 
-    /// The app under test, relaunched fresh for every test.
+    /// The app under test, relaunched fresh for every test. Implicitly unwrapped because XCTest
+    /// assigns it in `setUp`; a teardown block must `guard let` it (Step 36 compile failure).
     private var app: XCUIApplication!
 
     /// Launches the app with `CANEKIT_UITEST=1`, which makes `AppModel.start()` skip the location
-    /// permission prompt so the system alert cannot race the first tap. Stops at the first failure.
+    /// permission prompt so the system alert cannot race the first tap, and mutes `SpeechQueue`
+    /// so the run makes no sound. It does not start a route (that is `CANEKIT_DEMO_ROUTE=1`,
+    /// which the tests never set). Stops at the first failure.
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -73,8 +87,10 @@ final class CaneKitUITests: XCTestCase {
     /// describer is used, and in the simulator (no camera) it reports "camera …" or answers
     /// "Scene: …"; the button must come back.
     ///
-    /// ⚠ test contract: button "Where am I" (GuideCard); the describer's no-key error text.
-    /// Rule 4 of AGENTS.md: a missing key must never crash.
+    /// ⚠ test contract: button "Where am I" (GuideCard); a static text containing "camera"
+    /// (`SceneDescriber.lastError` "No camera frame" — the simulator has no camera) or beginning
+    /// "Scene:" (the answer's label in GuideCard). Rule 4 of AGENTS.md: a missing key must never
+    /// crash. The "WithoutKey" name predates the on-device fallback; no key is involved any more.
     func testWhereAmIWithoutKeyReportsGracefully() {
         let button = app.buttons["Where am I"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
@@ -92,6 +108,10 @@ final class CaneKitUITests: XCTestCase {
     /// (Apple Vision + Apple's on-device model or its template) must produce a sentence.
     /// Run with `make uitest-streetview` (passes TEST_RUNNER_CANEKIT_FRAME_DIR); skipped otherwise.
     /// The frames are local-only (git-ignored): capture them per ios/scripts/streetview/README.md.
+    /// xcodebuild strips the `TEST_RUNNER_` prefix, so this runner sees `CANEKIT_FRAME_DIR` and
+    /// relaunches the app with it (`FrameReplay` then stands in for the camera), then waits up to
+    /// 45 s for a "Scene:" line. Attaches a screenshot and prints
+    /// `WHERE-AM-I: <label>` so the sentence is visible in the log, not just "passed".
     func testWhereAmIDescribesAStreetViewFrame() throws {
         guard let dir = ProcessInfo.processInfo.environment["CANEKIT_FRAME_DIR"], !dir.isEmpty else {
             throw XCTSkip("Set TEST_RUNNER_CANEKIT_FRAME_DIR to a folder with frames.json (make uitest-streetview)")
@@ -113,7 +133,8 @@ final class CaneKitUITests: XCTestCase {
 
     /// Taps each haptic pattern test button, then toggles "Silence haptics" on and off.
     /// No haptic is asserted (the simulator has no Taptic Engine); this proves the controls exist
-    /// and do not crash.
+    /// and do not crash. The switch is tapped directly (not through `flip`) an even number of
+    /// times, so the persisted setting ends where it started only if both taps land.
     ///
     /// ⚠ test contract: tab "Settings"; buttons "Test left haptic", "Test center haptic",
     /// "Test right haptic", "Test head haptic" and switch "Silence haptics" (HapticsCard).
@@ -131,7 +152,9 @@ final class CaneKitUITests: XCTestCase {
     }
 
     /// Flipping "Mirror left / right" changes the switch value; flips it back afterwards so the
-    /// persisted setting is left as found.
+    /// persisted setting is left as found. Despite the name it proves only that the tap lands and
+    /// the value changes; persistence itself (`Settings.bool` in `AppModel`) is not re-read after
+    /// a relaunch.
     ///
     /// ⚠ test contract: tab "Settings"; switch "Mirror left / right" (Settings Mount card).
     func testMountTogglesPersist() {
@@ -145,9 +168,38 @@ final class CaneKitUITests: XCTestCase {
         flip(mirror)   // restore
     }
 
+    /// Settings → Cues: both segmented pickers exist, a tap selects a segment, and the test puts the
+    /// defaults back (Detailed / Outdoors) so later tests and walks start from today's behaviour.
+    /// ⚠ The segment titles are `CueLevel.title` / `CuePlace.title` (CaneKitLogic); the defaults
+    /// are `AppModel.cueLevel` / `cuePlace` (Step 36). Selection is read through `isSelected`,
+    /// which is how a segmented `Picker` segment reports its state to XCUITest.
+    func testCuePickersChangeAndRestore() {
+        openTab("Settings")
+        // Registered first, so a failed assert below (continueAfterFailure = false) still puts the
+        // defaults back; otherwise later tests, the tour and e2e would inherit Standard / Indoors.
+        addTeardownBlock { [app] in
+            guard let app else { return }
+            if app.buttons["Detailed"].exists { app.buttons["Detailed"].tap() }
+            if app.buttons["Outdoors"].exists { app.buttons["Outdoors"].tap() }
+        }
+        let standard = app.buttons["Standard"]
+        XCTAssertTrue(standard.waitForExistence(timeout: 10), "Cue detail picker should show Standard")
+        standard.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { standard.isSelected }, "Standard should become selected")
+        let indoors = app.buttons["Indoors"]
+        XCTAssertTrue(indoors.waitForExistence(timeout: 5), "Place picker should show Indoors")
+        indoors.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { indoors.isSelected }, "Indoors should become selected")
+        app.buttons["Detailed"].tap()
+        app.buttons["Outdoors"].tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { app.buttons["Detailed"].isSelected && app.buttons["Outdoors"].isSelected },
+                      "defaults restored")
+    }
+
     /// A SwiftUI `Toggle` is exposed as a switch whose centre is the *label*; tapping there does
-    /// nothing. Tap the nested switch when there is one, else the knob at the trailing edge.
-    /// Keep identical to `CaneKitVisualTour.flip(_:)`.
+    /// nothing. Tap the nested switch when there is one, else the knob at the trailing edge
+    /// (normalized x 0.94, mid-height). Keep identical to `CaneKitVisualTour.flip(_:)`.
+    /// - Parameter toggle: the `app.switches[label]` element.
     private func flip(_ toggle: XCUIElement) {
         let knob = toggle.switches.firstMatch
         if knob.exists, knob != toggle {
@@ -158,6 +210,10 @@ final class CaneKitUITests: XCTestCase {
     }
 
     /// Polls `condition` every 0.2 s (spinning the run loop) until it is true or `timeout` passes.
+    /// For state XCUITest has no `waitFor…` for (a switch value, `isSelected`).
+    /// - Parameters:
+    ///   - timeout: seconds to keep polling.
+    ///   - condition: re-evaluated against the live element tree on each poll.
     /// - Returns: the condition's final value.
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -168,7 +224,9 @@ final class CaneKitUITests: XCTestCase {
         return condition()
     }
 
-    /// Spot-checks the VoiceOver tree across the three root tabs.
+    /// Spot-checks the VoiceOver tree across the three root tabs: the tab buttons and two Guide
+    /// buttons on launch, "Head row" after opening Sense, "Write trip log" after opening Settings
+    /// (only the selected page is in the tree since Step 27).
     ///
     /// ⚠ test contract: tabs "Guide", "Sense", "Settings"; button "Start route to CIF",
     /// element "Head row" (LaneGridView row label), button "Where am I",
@@ -186,7 +244,8 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(app.switches["Write trip log"].waitForExistence(timeout: 5))
     }
 
-    /// Selects a root tab by its VoiceOver label (icon-only on screen).
+    /// Selects a root tab by its VoiceOver label (icon-only on screen). Fails the test if the tab
+    /// is missing after 5 s (the tour's copy just skips instead).
     ///
     /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
     private func openTab(_ name: String) {
@@ -196,7 +255,8 @@ final class CaneKitUITests: XCTestCase {
     }
 
     /// "Navigate to CIF from here" is on the idle guide, enabled, and gives way to the route
-    /// controls while a route runs. Not tapped: it would start GPS and an Apple Maps request.
+    /// controls while a route runs. Not tapped: it would send a real Apple Maps walking-directions
+    /// request to the route file's last waypoint and start that route.
     ///
     /// ⚠ test contract: button "Navigate to CIF from here" (GuideCard; its label is its text),
     /// "Start route to CIF", "Stop route".
@@ -213,8 +273,9 @@ final class CaneKitUITests: XCTestCase {
 
     /// Tapping Go with an empty destination shows the error line instead of building a route.
     ///
-    /// ⚠ test contract: button "Go" (GuideCard) and the exact static text
-    /// "Type a destination first" (set by `AppModel.startMapKitRoute()`, shown by GuideCard).
+    /// ⚠ test contract: button "Go" (`DestinationField`, on the idle Guide card) and the exact
+    /// static text "Type a destination first" (set by `AppModel.navigate(to:)` via
+    /// `startMapKitRoute()`, shown by GuideCard as a plain `Text`).
     func testDestinationFieldRejectsEmptyQuery() {
         let go = app.buttons["Go"]
         XCTAssertTrue(go.waitForExistence(timeout: 10))
@@ -229,8 +290,11 @@ final class CaneKitUITests: XCTestCase {
     /// (MKLocalSearch's own answer for that word is an industrial supply store in another town).
     /// The row is not tapped: that would start a real Apple Maps route.
     ///
-    /// ⚠ test contract: text field "Destination" and the suggestion row's VoiceOver label
-    /// "<place>, campus place" (`DestinationSuggestion.voiceOverLabel`, CaneKitLogic).
+    /// ⚠ test contract: text field "Destination" and the suggestion row's VoiceOver label, matched
+    /// as BEGINSWITH "Grainger Engineering Library" AND CONTAINS "campus place"
+    /// (`DestinationSuggestion.voiceOverLabel`, CaneKitLogic). Ordering is checked against any
+    /// button whose label contains "Urbana, IL" (a MapKit row's address): each must sit lower on
+    /// screen. With no network in the simulator there may be no map rows, and the loop is empty.
     func testTypingOffersCampusSuggestionsAndClearsTheError() {
         let go = app.buttons["Go"]
         XCTAssertTrue(go.waitForExistence(timeout: 10))

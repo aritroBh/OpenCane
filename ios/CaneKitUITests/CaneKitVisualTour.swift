@@ -3,11 +3,19 @@
 //  CaneKitUITests
 //
 //  Not a pass/fail test so much as a camera: walks every screen state a person can reach in the
-//  simulator (idle guide, navigating, after Next / Repeat / Recenter, haptics card, watch card,
-//  scene card, stopped) and saves a PNG of each so the screens can be reviewed without a human
-//  tapping. Run with
+//  simulator (idle Guide, navigating, after Repeat / Next / Recenter, "Where am I" with no camera,
+//  the Sense page, the Settings page with the haptic tests and "Silence haptics", stopped, and Go
+//  with an empty destination) and saves a PNG of each so the screens can be reviewed without a
+//  human tapping. Run with `make tour`, which is
 //    TEST_RUNNER_CANEKIT_SHOTS=<dir> xcodebuild … -only-testing:CaneKitUITests/CaneKitVisualTour test
-//  Screenshots land in <dir> (and as attachments in the .xcresult either way).
+//  Screenshots land in <dir> (and as attachments in the .xcresult either way). `make uitest` also
+//  runs it (it is in the same target), without writing PNGs.
+//
+//  Why it exists: a layout bug no assertion can see is caught only by looking (Step 27: the new
+//  tab bar filled most of the screen and still passed every label check). Look at the PNGs.
+//  Prerequisites are the same as CaneKitUITests (simulator location set, `make sim-grant`).
+//  States the simulator cannot reach — arrival, live LiDAR tiles, a real camera frame — are not
+//  in the tour.
 //
 //  Covers the screens of docs/design.md §6 for visual review (`make tour` → ios/build/shots).
 //  It reaches every control through the same VoiceOver labels as CaneKitUITests, so the ⚠ test
@@ -39,6 +47,12 @@ final class CaneKitVisualTour: XCTestCase {
     /// The whole tour, in order: idle Guide, navigating, after Repeat / Next / Recenter,
     /// "Where am I" without a key, Sense page, Settings (haptic tests + silence), stopped,
     /// and Go with an empty destination.
+    ///
+    /// Shot names, in order: idle-top, idle-middle, idle-bottom, navigating, after-repeat,
+    /// after-next, after-recenter, navigating-middle, navigating-bottom, where-am-i-no-key (only if
+    /// the button exists), sense-top, sense-bottom, settings-top, haptics-silenced (only if the
+    /// switch exists), settings-bottom, stopped, go-empty — each prefixed "NN-" by `snap`. The
+    /// route is still running while Sense and Settings are shot; the tour returns to Guide to Stop.
     ///
     /// ⚠ test contract: every `app.buttons[...]` / `app.switches[...]` label used below.
     func testTour() {
@@ -92,7 +106,8 @@ final class CaneKitVisualTour: XCTestCase {
         app.buttons["Go"].tap(); pause(0.5); snap("go-empty")
     }
 
-    /// Selects a root tab by its VoiceOver label (icon-only on screen).
+    /// Selects a root tab by its VoiceOver label (icon-only on screen). Unlike the
+    /// `CaneKitUITests` copy it does not assert: a missing tab skips the tap and the tour goes on.
     ///
     /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
     private func openTab(_ name: String) {
@@ -102,21 +117,24 @@ final class CaneKitVisualTour: XCTestCase {
 
     // MARK: Helpers
 
-    /// Captures the full screen as "<NN>-<name>" and hands it to `save`.
+    /// Captures the full screen as "<NN>-<name>" (two-digit running `shotIndex`) and hands it to
+    /// `save`.
     private func snap(_ name: String) {
         shotIndex += 1
         let png = XCUIScreen.main.screenshot().pngRepresentation
         save(png, name: String(format: "%02d-%@", shotIndex, name))
     }
 
-    /// Scrolls the element into view first, then captures the whole screen.
+    /// Swipes up once if the element is not hittable (a rough scroll-into-view, not a loop), then
+    /// captures the whole screen.
     private func snapElement(_ element: XCUIElement, _ name: String) {
         if !element.isHittable { app.swipeUp() }
         snap(name)
     }
 
     /// Writes `<name>.png` into `$CANEKIT_SHOTS` when set (xcodebuild strips the `TEST_RUNNER_`
-    /// prefix), and always attaches the PNG to the .xcresult with `keepAlways` lifetime.
+    /// prefix), and always attaches the PNG to the .xcresult with `keepAlways` lifetime. A write
+    /// failure (missing folder) is ignored: `make tour` creates the folder first.
     private func save(_ png: Data, name: String) {
         if let dir = ProcessInfo.processInfo.environment["CANEKIT_SHOTS"] {
             try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
@@ -129,7 +147,8 @@ final class CaneKitVisualTour: XCTestCase {
     /// One swipe up plus a short settle.
     private func scrollDown() { app.swipeUp(); pause(0.4) }
 
-    /// Four swipes down to get back to the top of the scroll view, plus a short settle.
+    /// Four swipes down to get back to the top of the scroll view, plus a short settle. No check
+    /// that the top was reached: a page that grows much longer may need more swipes.
     private func scrollToTop() {
         for _ in 0..<4 { app.swipeDown() }
         pause(0.4)

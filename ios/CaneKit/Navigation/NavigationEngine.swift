@@ -32,7 +32,11 @@
 //  Owner: `AppModel.nav` (one instance). Module `navigation-trip` in docs/CODE_REFERENCE.md.
 //  Inputs arrive from `AppModel.wireNavigation()` (fixes from LocationService, gyro-gated
 //  headings); outputs are the `on…` callbacks, all installed by AppModel. The UI (GuideCard)
-//  reads the published state and calls `next()`; the 10 Hz ticker reads `targetBearing`.
+//  reads the published state; Next goes through `AppModel.nextWaypoint()` → `next()`; the 10 Hz
+//  ticker (`AppModel.startTicker`) reads `targetBearing` and calls `tick(now:)`.
+//  Since bf03253 GPS runs for the whole foreground session (not only during a route), so
+//  `update(fix:)` is called while idle too — its `isNavigating` guard drops those fixes, which is
+//  why `lastFix` only ever holds a fix seen *during* a route.
 //
 //  Threading / isolation: `@MainActor @Observable`. Every input and callback runs on the main
 //  actor. Clocks: `GeoFix.timestamp` and the heading `now` are both wall clock
@@ -45,9 +49,14 @@
 //    · Passed-by never speaks the passed waypoint's own line; skip-ahead says "Passed one waypoint."
 //    · Repeat speaks the last line actually spoken, via `onRepeat` (bypasses queue coalescing).
 //    · Arrival is irreversible.
-//  ⚠ No unit test covers this class (app target). Do not change the ±30° turn delta, the veer
-//  gate or its mute conditions, or the settle construction in `reached` without re-running the
-//  GeoMath / NavSupport tests listed in docs/CODE_REFERENCE.md and the step-10 device walk.
+//    · A route started with no fix at all says "GPS weak…" after `noFixAfter` (20 s) instead of
+//      going silent (cc04946: the demo run sheet starts the route indoors).
+//  Tests: ⚠ no unit test covers this class (app target). The decisions it delegates are pinned by
+//  `GeoMathTests` (GeofenceTracker, OffCourseDetector incl. `aStopMidDriftRestartsTheHold`),
+//  `NavSupportTests` (TurnSettle), `CourseSmootherTests`; the class itself only end to end, by
+//  `make e2e` (clean / missed_fence / gps_jitter / wrong_turn replay its trip-log lines).
+//  Do not change the ±30° turn delta, the veer gate or its mute conditions, or the settle
+//  construction in `reached` without re-running those tests, `make e2e` and the step-10 device walk.
 //
 
 import CaneKitLogic
@@ -61,15 +70,22 @@ final class NavigationEngine {
 
     // MARK: Published
 
-    /// The route being (or last) walked. Not cleared by `stop()`; the arrival card reads it.
+    /// The route being (or last) walked. Not cleared by `stop()`: `AppModel`'s `onArrived` handler
+    /// reads its last waypoint's `say` for the spoken trip summary after `isNavigating` went false.
     private(set) var route: Route?
-    /// True from `start` until arrival or `stop()`. Gates every input.
+    /// True from `start` until arrival or `stop()`. Gates every input (`update(fix:)`,
+    /// `update(heading:now:)`, `tick`, `next`). Read by AppModel (ticker, Live Activity, watch
+    /// status, hands-free status, conversation context) and GuideCard.
     private(set) var isNavigating = false
-    /// True once the last waypoint is reached (irreversible until the next `start`).
+    /// True once the last waypoint is reached (irreversible until the next `start`). GuideCard and
+    /// ContentView show the arrival card / Repeat on it; `repeatInstruction()` still works.
     private(set) var arrived = false
-    /// Text of the *next* waypoint's line ("Goodwin Avenue. Crossing.") for the UI / watch preview.
+    /// Text of the *next* waypoint's line ("Goodwin Avenue. Crossing.") for the UI, the watch
+    /// status and the Live Activity. "No route" when idle or stopped, "Arrived: <say>" after
+    /// arrival (`reached`), bare "Arrived" when the tracker has no current waypoint.
     private(set) var instruction = "No route"
-    /// Metres to the next waypoint, nil when unknown.
+    /// Metres to the next waypoint, rounded; nil when unknown (no fix yet this route, or after
+    /// `stop()`); 0 after arrival. The watch status sends nil as -1.
     private(set) var distanceToNext: Int?
     /// Bearing to walk right now (degrees true), nil when unknown or deliberately silent (settling
     /// at a crossing, curved leg). While a turn is settling this is the *previous* leg's bearing.
@@ -78,28 +94,42 @@ final class NavigationEngine {
     /// Signed error target − heading in (−180, 180], nil when either is unknown.
     /// Positive = the target is to the user's right. Degrees.
     private(set) var bearingError: Double?
-    /// Number of waypoints reached so far (= index of the current target waypoint).
+    /// Number of waypoints reached so far (= index of the current target waypoint). Logged as the
+    /// `waypoint` record's `index` by AppModel.
     private(set) var waypointIndex = 0
-    /// Wall-clock time `start` ran.
+    /// Wall-clock time `start` ran; `tick` measures `noFixAfter` from it.
     private(set) var startedAt: Date?
-    /// True while accuracy has been worse than `veerMaxAccuracy` for ≥ `gpsWeakAfter` seconds.
+    /// True while "GPS weak" is in force: accuracy worse than `veerMaxAccuracy` for ≥ `gpsWeakAfter`
+    /// seconds (`update(fix:)`), or no fix at all for `noFixAfter` seconds after `start` (`tick`).
+    /// Cleared, with "GPS back.", by the next fix inside the accuracy gate. GuideCard shows a pill.
     private(set) var gpsWeak = false
-    /// True between a waypoint being reached and the user having actually made the turn.
+    /// True between a waypoint being reached and the user having actually made the turn
+    /// (`TurnSettle` not yet live). Veer is muted and `targetBearing` is the held (or nil) bearing.
+    /// Read by `AppModel.autoRecenterIfWalkingStraight` (no recenter mid-turn).
     private(set) var isSettling = false
-    /// The waypoint reached most recently (auto-recenter needs to know if it was a crossing).
+    /// The waypoint reached most recently (auto-recenter needs to know if it was a crossing; the
+    /// course smoother is kept empty while a fix is inside its fence). Kept by `stop()`, cleared by
+    /// `start`.
     private(set) var lastReached: Waypoint?
 
-    /// Outputs, all on the main actor.
-    /// Every waypoint / GPS / veer line; priority is always `.nav`. AppModel → `speech.say(ttl: 12)`.
+    // Outputs, all invoked synchronously on the main actor; all installed by
+    // `AppModel.wireNavigation()`.
+    /// Every waypoint / GPS / veer / arrival-hint line; priority is always `.nav`.
+    /// AppModel → `speech.say(ttl: 12)` + a `speech` trip-log record.
     @ObservationIgnored var onSpeak: ((String, SpeechPriority) -> Void)?
     /// "Say that again": must bypass the queue's coalescing (the line may still be playing).
+    /// AppModel → `speech.sayAgain(_, .nav)` + a `speech` record with `repeat: true`.
     @ObservationIgnored var onRepeat: ((String) -> Void)?
-    /// Wrist tap (`.crossing`, `.turnLeft/.turnRight`, `.arrived`); also feeds the Live Activity glyph.
+    /// Wrist + cane cue: `.crossing`, `.turnLeft/.turnRight` (a turn at a waypoint *or* a veer),
+    /// `.arrived`. AppModel sends it to the watch, buzzes the cane (`haptics.playNav`), stores it
+    /// as the Live Activity glyph kind and logs `navcue`.
     @ObservationIgnored var onNavCue: ((NavCue) -> Void)?
     /// Fired after every advance (fence, passed-by or manual), after `instruction` is refreshed so
-    /// the watch / Live Activity see the new leg. AppModel marks a head recenter pending here.
+    /// the watch / Live Activity see the new leg. AppModel logs `waypoint`, pushes the watch status
+    /// and marks a head recenter pending here.
     @ObservationIgnored var onWaypointAdvanced: (() -> Void)?
-    /// Fired once when the last waypoint is reached, after `onWaypointAdvanced`.
+    /// Fired once when the last waypoint is reached, after `onWaypointAdvanced`. AppModel stops the
+    /// beacon / head / ticker, ends the Live Activity and speaks the trip summary (GPS stays on).
     @ObservationIgnored var onArrived: (() -> Void)?
 
     // MARK: Tunables
@@ -110,7 +140,8 @@ final class NavigationEngine {
     /// `GeofenceTracker.maxAccuracy` (20 m) — the "GPS weak" line promises the fences are paused
     /// (AGENTS.md: "GPS weak" is spoken at the same 20 m).
     var veerMaxAccuracy: Double = 20
-    /// Seconds of bad accuracy before "GPS weak" is spoken.
+    /// Seconds of continuously bad accuracy (fix clock) before "GPS weak" is spoken. Long enough
+    /// that one blurry fix under a tree never interrupts guidance with a warning.
     var gpsWeakAfter: TimeInterval = 10
     /// Seconds after a route starts with NO fix at all before the walker is told.
     ///
@@ -119,48 +150,69 @@ final class NavigationEngine {
     /// waypoints, no veer, no beacon, and nothing to say why. The demo run sheet starts the route
     /// indoors, which reproduces it exactly. 20 s is long enough that a normal outdoor start never
     /// hears it (a first fix takes a few seconds) and short enough that nobody walks half a block
-    /// believing they are being guided.
+    /// believing they are being guided. (cc04946; measured from `startedAt` on the wall clock.)
     var noFixAfter: TimeInterval = 20
 
     // MARK: Private
 
-    /// Geofence state machine for the current route (lookahead 2, passed-by, arrival streak).
+    /// Geofence state machine for the current route (lookahead 2, passed-by, arrival streak,
+    /// 20 m accuracy gate copied from `veerMaxAccuracy`). Built by `start`, dropped by `stop()`.
     @ObservationIgnored private var tracker: GeofenceTracker?
-    /// "Veer" decider: 25° off for 3 s, 10 s cooldown (CaneKitLogic defaults).
+    /// "Veer" decider: 25° off for 3 s, 10 s cooldown, holes in the evidence up to
+    /// `maxEvidenceGap` (2 s) bridged (CaneKitLogic defaults). Fed `update(error:now:)`,
+    /// `gated(at:)` (a hole) or `endEpisode()` (a change of situation) by `update(heading:now:)`;
+    /// `reset()` at start, every waypoint and every settle release.
     @ObservationIgnored private let offCourse = OffCourseDetector()
-    /// Most recent fix (kept across `stop()`/`start()`); used for distances, the veer gate, the
-    /// clock-driven arrival hint (`tick`) and by AppModel to geotag hazards after arrival.
+    /// Most recent fix seen *while navigating* (idle fixes are dropped by the guard in
+    /// `update(fix:)`). Kept across `stop()`; `start()` keeps it only if < 30 s old. Used for
+    /// distances, the veer gate, the clock-driven arrival hint (`tick`) and by
+    /// `AppModel.recordHazard` (when < 120 s old) to geotag hazards.
     @ObservationIgnored private(set) var lastFix: GeoFix?
-    /// Latest gyro-gated body heading, degrees true.
+    /// Latest gyro-gated body heading, degrees true (compass when slow, GPS course when walking).
+    /// Cleared by `start` so a previous route's heading cannot aim the new one (Muse).
     @ObservationIgnored private var heading: Double?
     /// Direction of travel over ≥ 15 m (CaneKitLogic.CourseSmoother). Veer decisions use this
     /// while walking, so a few metres of GPS jitter never becomes "Veer left/right"
     /// (e2e gps_jitter: 28 false veers with the per-fix course).
     @ObservationIgnored private var courseSmoother = CourseSmoother()
+    /// The smoother's latest output, degrees true; nil until ≥ 15 m of good track on this leg,
+    /// inside the fence of the corner just reached, and right after a veer cue. While walking
+    /// (> 0.7 m/s) nil means no veer judgement at all (reported as a hole).
     @ObservationIgnored private var smoothedCourse: Double?
     /// Standing near the last waypoint without the two plausible arrival fixes (GPS under the
     /// entrance overhang): after 20 s say so once, so the walker is never left wondering.
+    /// When the current standing-near-the-door stretch began (caller's clock); nil otherwise.
     @ObservationIgnored private var nearArrivalSince: TimeInterval?
+    /// The arrival hint has been spoken on this route (once per route; reset by `start`).
     @ObservationIgnored private var arrivalHintGiven = false
     /// Fix timestamp at which accuracy first went bad; nil while accuracy is good.
     @ObservationIgnored private var weakSince: TimeInterval?
-    /// Bearing the user was walking when this waypoint was reached (turn direction for the wrist).
+    /// Recorded bearing (`bearing_next_deg`) of the leg that led to the waypoint about to be
+    /// reached — the leg's direction, not a measured one. `reached` compares it with the new leg
+    /// for the turn wrist cue and holds it as the settle's bearing.
     @ObservationIgnored private var previousBearing: Double?
     /// Settling state for the most recently reached waypoint (see TurnSettle in CaneKitLogic).
+    /// Value type: mutated as copy → update → write back. nil once live, and after arrival/stop.
     @ObservationIgnored private var settle: TurnSettle?
-    /// What Repeat says: the last waypoint line actually spoken (not the upcoming one).
+    /// What Repeat says: the last waypoint line actually spoken (not the upcoming one), including a
+    /// skip prefix, the passed-by line or the route intro, plus the arrival summary once
+    /// `appendToLastSpoken` added it. Not changed by veer, GPS or arrival-hint lines.
     @ObservationIgnored private var lastSpokenLine = ""
-    /// The leg now being walked is curved: no veer, beacon quiet.
+    /// The leg now being walked is curved (`"curved": true` on the waypoint just reached, e.g. WP1 of
+    /// the route file): no veer, beacon quiet (`effectiveBearing` returns nil).
     @ObservationIgnored private var legCurved = false
 
-    /// Idle until `start(_:)`.
+    /// Idle until `start(_:)`. Created once as `AppModel.nav`.
     init() {}
 
     // MARK: Control
 
     /// Begins guidance on `route`: fresh tracker (with `maxAccuracy = veerMaxAccuracy`), all flags
     /// reset, then speaks "Route started. <name>. First: <line>" and stores it for Repeat.
-    /// Called by `AppModel.beginRoute`. Does not clear `lastFix`.
+    /// Called by `AppModel.startRouteNow` (reached from `beginRoute` once the depth-readiness
+    /// interlock clears). `lastFix` survives only if it is < 30 s old; `heading` is always cleared.
+    /// ⚠ The intro string is also built, byte for byte, in `AppModel.startRouteNow`'s prefetch list
+    /// (natural-voice cache) — change both together or the intro falls back to the system voice.
     func start(_ route: Route) {
         self.route = route
         let t = GeofenceTracker(waypoints: route.waypoints)
@@ -193,8 +245,9 @@ final class NavigationEngine {
         onSpeak?(intro, .nav)
     }
 
-    /// Ends guidance (AppModel.stopRoute). Clears live outputs so the beacon goes silent; keeps
-    /// `route`, `arrived`, `lastSpokenLine` and `lastReached`.
+    /// Ends guidance (`AppModel.stopRoute`, and `endRouteQuietly` before a restart). Clears live
+    /// outputs so the beacon goes silent; keeps `route`, `arrived`, `lastSpokenLine`,
+    /// `lastReached` and `lastFix`. Speaks nothing (AppModel says "Route stopped.").
     func stop() {
         isNavigating = false
         tracker = nil
@@ -206,17 +259,19 @@ final class NavigationEngine {
         bearingError = nil
     }
 
-    /// Manual "next" from the watch / Action button: speaks the skipped waypoint's line.
-    /// Also the GuideCard "Next" button and the watch crown gesture. The new leg is live at once
-    /// (no settling: the user asked to move on).
+    /// Manual "next": speaks the skipped waypoint's line and sends its wrist cue.
+    /// Reached only through `AppModel.nextWaypoint()` — the GuideCard "Next" button, the watch
+    /// Next button and crown gesture, and Siri `NextWaypointIntent`. The new leg is live at once
+    /// (no settling: the user asked to move on). No-op when idle (AppModel says "No route running.").
     func next() {
         guard isNavigating, let tracker, let wp = tracker.advance() else { return }
         reached(wp, index: waypointIndex, isLast: tracker.isFinished, skipped: [], manual: true)
     }
 
-    /// Re-speak the last waypoint line (watch "Repeat", Siri, on-screen button), then where the
-    /// next waypoint is, so a line cut off at a curb is always recoverable.
-    /// Works after arrival too (last line only). With no route: "No route running." via `onSpeak`.
+    /// Re-speak the last waypoint line (watch "Repeat", Siri, on-screen button — all through
+    /// `AppModel.repeatInstruction()`), then where the next waypoint is, so a line cut off at a curb
+    /// is always recoverable. Works after arrival too (last line plus the trip summary, no
+    /// distance). With no route: "No route running." via `onSpeak` (not `onRepeat`).
     func repeatInstruction() {
         guard isNavigating || arrived else { onSpeak?("No route running.", .nav); return }
         var text = lastSpokenLine.isEmpty ? instruction : lastSpokenLine
@@ -226,18 +281,21 @@ final class NavigationEngine {
         onRepeat?(text)
     }
 
-    /// Add a line spoken outside the engine (the arrival trip summary) to what Repeat says.
-    /// Called by AppModel's `onArrived` handler.
+    /// Add a line spoken outside the engine (the arrival trip summary) to what Repeat says, joined
+    /// with one space. Called by AppModel's `onArrived` handler after `await trip.stop()`, so
+    /// Repeat at the door includes the numbers.
     func appendToLastSpoken(_ text: String) {
         lastSpokenLine = lastSpokenLine.isEmpty ? text : lastSpokenLine + " " + text
     }
 
     // MARK: Inputs
 
-    /// Every GPS fix (from `location.onFix`). Order matters: GPS-weak bookkeeping → settle update
-    /// → distance / target bearing for the current waypoint → geofence update (which may call
-    /// `reached`). The fix that reaches a waypoint is never fed to the new settle; it only sets
-    /// its start distance.
+    /// Every GPS fix (from `location.onFix`, idle or not; ignored unless navigating). Order
+    /// matters: `lastFix` + course smoother (emptied inside the just-reached corner's fence) →
+    /// GPS-weak bookkeeping → settle update → distance / target bearing for the current waypoint →
+    /// geofence update (which may call `reached`) → arrival hint. The fix that reaches a waypoint
+    /// is never fed to the new settle; it only sets its start distance.
+    /// - Parameter fix: accuracy / speed −1 = invalid; `timestamp` on the wall clock.
     func update(fix: GeoFix) {
         guard isNavigating, let tracker else { return }
         lastFix = fix
@@ -290,8 +348,10 @@ final class NavigationEngine {
 
     /// Clock-driven checks that must not wait for a GPS fix. Called at 10 Hz by AppModel's
     /// ticker while a route runs: CoreLocation stops delivering fixes when the walker stands
-    /// still, which is exactly when the arrival hint is needed (review round 5).
-    /// - Parameter now: wall clock, same clock as `GeoFix.timestamp`.
+    /// still, which is exactly when the arrival hint is needed (review round 5). With no fix at
+    /// all since `start`, it speaks "GPS weak…" once after `noFixAfter` (cc04946).
+    /// - Parameter now: wall clock, same clock as `GeoFix.timestamp`. (The no-fix branch reads
+    ///   `Date()` itself.)
     func tick(now: TimeInterval) {
         guard isNavigating else { return }
         guard let f = lastFix else {
@@ -311,7 +371,12 @@ final class NavigationEngine {
 
     /// Near the destination for 20 s but arrival has not fired (GPS too poor for the two-hit
     /// rule): one spoken hint, then leave it to the walker (Next finishes the route).
-    /// A fix older than 5 s counts as standing still (no new fixes = not moving).
+    /// A fix older than 5 s counts as standing still (no new fixes = not moving); a speed of −1
+    /// (unknown) also counts as standing. Only while the *last* waypoint is current; anything else
+    /// resets the 20 s clock. Does not touch `lastSpokenLine`.
+    /// - Parameters:
+    ///   - fix: the fix just received (`update(fix:)`) or `lastFix` (`tick`).
+    ///   - now: wall clock (the fix's own timestamp from `update(fix:)`, the ticker's from `tick`).
     private func checkArrivalHint(_ fix: GeoFix, now: TimeInterval) {
         guard isNavigating, let tracker, let wp = tracker.current,
               tracker.index == tracker.waypoints.count - 1 else { nearArrivalSince = nil; return }
@@ -330,11 +395,15 @@ final class NavigationEngine {
     }
 
     /// Heading in degrees true, already gyro-gated by the caller (body facing: the phone is on
-    /// the cane, so a head turn never counts).
+    /// the cane, so a head turn never counts). `AppModel` gates only compass headings — a GPS
+    /// course (walking > 0.7 m/s) always arrives (Muse H1: gating it froze the heading mid-walk).
     /// `now` is wall clock (same clock as `GeoFix.timestamp`). While settling, a heading within
     /// 30° of the new leg releases the turn and swings the beacon immediately. Veer is decided
     /// here (fix accuracy in [0, veerMaxAccuracy], speed > 0.5 m/s, fix < 5 s old, not settling,
     /// not curved, not near the current waypoint), then speaks "Veer left/right." + a wrist tap.
+    /// Veer therefore only runs as often as headings arrive (compass ≥ 2° change, or each moving
+    /// fix); every non-judgement is routed to `offCourse.gated(at:)` or `endEpisode()` — see the
+    /// ⚠ guard-order comment inside (f39c751).
     func update(heading h: Double, now: TimeInterval) {
         guard isNavigating else { return }
         heading = h
@@ -445,7 +514,10 @@ final class NavigationEngine {
     // MARK: Internals
 
     /// Clears the settle once TurnSettle says the new leg is live (and restarts the off-course
-    /// hold timer on the new leg); otherwise keeps `isSettling` true.
+    /// hold timer on the new leg); otherwise keeps `isSettling` true. With no settle, just
+    /// `isSettling = false`. Called after every settle mutation (fix, heading) and from `reached`
+    /// (an immediate settle — manual / passed-by — is cleared on the spot).
+    /// - Parameter now: wall clock, compared against the settle's `releaseAt`.
     private func refreshSettling(now: TimeInterval) {
         guard let s = settle else { isSettling = false; return }
         if s.isLive(at: now) {
@@ -458,13 +530,19 @@ final class NavigationEngine {
     }
 
     /// Curved leg → silent; settling → held / silent (TurnSettle); otherwise the live bearing.
+    /// The single place that decides what the beacon aims at; nil means no clicks.
+    /// - Parameters:
+    ///   - live: `GeofenceTracker.targetBearing(from:)` (already the recorded leg bearing near the
+    ///     current waypoint or on a poor fix), or a recorded leg bearing when there is no fix.
+    ///   - now: wall clock for `TurnSettle.bearing(live:at:)`.
     private func effectiveBearing(live: Double?, now: TimeInterval) -> Double? {
         if legCurved { return nil }
         if let s = settle { return s.bearing(live: live, at: now) }
         return live
     }
 
-    /// `bearingError = wrap180(targetBearing − heading)`, nil if either is unknown.
+    /// `bearingError = wrap180(targetBearing − heading)`, nil if either is unknown. Uses the raw
+    /// heading, not the smoothed course; the walking-speed veer check substitutes the course itself.
     private func recomputeError() {
         guard let t = targetBearing, let h = heading else { bearingError = nil; return }
         bearingError = GeoMath.bearingError(target: t, heading: h)
@@ -474,13 +552,18 @@ final class NavigationEngine {
     /// wrist, advance, and build the TurnSettle for the corner.
     /// - `index`: route index of `wp`; `skipped`: fences missed on the way (skip-ahead);
     ///   `manual`: from `next()`; `passedBy`: walked past without entering the fence.
-    /// - Passed-by: says "Passed <place>. <Next place> in N meters." — never `wp.say` (its "turn
-    ///   right…" would be wrong by then) — and sends no wrist cue.
+    /// - Passed-by: says "Passed <place>." (+ " <Next place> in N meters." when a next waypoint and
+    ///   a fix exist) — never `wp.say` (its "turn right…" would be wrong by then). No wrist cue for
+    ///   an intermediate waypoint; a passed-by *destination* still sends `.arrived` (c550425, Muse
+    ///   nav review: GPS jumping past the arrival fence was silent on the wrist and cane).
     /// - Otherwise: "Passed one waypoint." / "Passed N waypoints." first if any were skipped, then
     ///   `wp.say`. Wrist precedence: skipped crossing → `.crossing`; last → `.arrived`; crossing →
     ///   `.crossing`; else a turn cue when the leg bearing changes by more than ±30°.
     /// - Manual or passed-by advances are live at once (`releasedAt: now`); otherwise the previous
     ///   leg's bearing is held until TurnSettle releases it.
+    /// - Every advance resets `offCourse`, the course smoother and `legCurved`; the last waypoint
+    ///   sets `arrived`, clears `isNavigating` and fires `onArrived` after `onWaypointAdvanced`.
+    /// - `lastSpokenLine` becomes the line just spoken (with the skip prefix), for Repeat.
     /// ⚠ Do not change the ±30° delta or the settle construction without re-running the
     /// TurnSettle tests in `NavSupportTests` and the device walk (see file header).
     private func reached(_ wp: Waypoint, index: Int, isLast: Bool, skipped: [Waypoint], manual: Bool,
@@ -563,7 +646,8 @@ final class NavigationEngine {
 
     /// Sets `instruction` to the current waypoint's line (or "Arrived") and recomputes distance and
     /// target bearing. Without a fix yet, the target is the recorded bearing of the leg just
-    /// reached (nil before WP1).
+    /// reached (nil before WP1, so a fresh route with no fix has a silent beacon until one arrives).
+    /// Called by `start` and by `reached` for a non-final waypoint.
     private func refreshInstruction() {
         guard let tracker, let wp = tracker.current else { instruction = "Arrived"; return }
         instruction = wp.say
@@ -578,19 +662,27 @@ final class NavigationEngine {
     }
 }
 
+/// Pure helper kept on the engine type (not in CaneKitLogic, untested) because only `reached` uses it.
 extension NavigationEngine {
-    /// True when the bearing change at a waypoint is a real turn (> 30°).
+    /// True when the bearing change at a waypoint is a real turn (> 30°, the same threshold as the
+    /// turn wrist cue). `next == nil` (the destination) → false; `prev == nil` (WP1, or no recorded
+    /// leg) with a `next` → true, so a heading release is allowed when the change is unknown.
+    /// Decides whether `TurnSettle` gets a `nextBearing` (heading release): at a straight-through
+    /// crossing a heading release would end the curb silence on the fence-entry fix (Step 11 review).
     static func isTurn(from prev: Double?, to next: Double?) -> Bool {
         guard let prev, let next else { return next != nil }
         return abs(GeoMath.wrap180(next - prev)) > 30
     }
 }
 
+/// File-private string helper for the passed-by line.
 private extension String {
-    /// "the CIF east entrance" → "The CIF east entrance" when it opens a sentence.
+    /// "the CIF east entrance" → "The CIF east entrance" when it opens a sentence. Upper-cases
+    /// only the first character; the rest is left as written (so "CIF" stays "CIF").
     var sentenceCased: String { prefix(1).uppercased() + dropFirst() }
 }
 
+/// File-private collection helper for `reached`.
 private extension Array {
     /// Bounds-checked index: nil instead of a trap past the last waypoint.
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }

@@ -6,6 +6,27 @@
 //  obstacle; slopes and single noisy frames must NOT trigger), sign phrases, the vision-model
 //  hazard reply parser, and the GeoJSON hazard map.
 //
+//  Types pinned and their app callers: `GroundHazardDetector` (`classify` one frame, `update` over
+//  frames — `DepthFrameProcessor`), `GroundHazardPolicy` (announce once / ≥ 1 m closer / 30 s —
+//  `AppModel`),
+//  `SignPolicy` (closed phrase table, close-vs-far text, stacked lines — `HazardScanner`,
+//  `OnDeviceVision`), `HazardWatchPolicy` (cloud hazard-watch replies — `HazardScanner`) and
+//  `HazardGeoJSON` (`HazardLog`). Both hazard features ship OFF by default until a phone walk
+//  validates them (AGENTS.md "Things that look wrong"); do not flip the defaults on these tests alone.
+//
+//  Breaks these catch: a ramp, a desk under a hand-held phone, a partial wall or a single noisy /
+//  sweeping frame spoken as a curb; a real curb missed when its face lands mid-bin, when the walker
+//  approaches it, or behind an occlusion shadow (reported at the near edge, never 1 m too far);
+//  a warning that nags a walker standing at a curb; a STOP sign or storefront word read aloud, or
+//  two far unrelated words joined into a phantom "ROAD CLOSED"; a cloud reply of "clear" or an
+//  invented object wrapped in "Caution:"; a stale reply keeping its now-wrong distance; and a hazard
+//  map with lat/lon swapped or a (0, 0) point for a log without a fix. The "Review round 4" MARK
+//  and the tests after it are later review-round fixes (the "Final reviews" ones are logged in
+//  CHANGELOG Step 12, "Final Muse + Antigravity reviews (after 33fc636)").
+//
+//  Fixtures: `ground(_:)` (10 cm spacing) and `denseGround(_:)` (5 cm, so a face can fall mid-bin);
+//  heights are relative to flat ground 0.9 m below the phone; distances metres, times seconds.
+//
 
 import Foundation
 import Testing

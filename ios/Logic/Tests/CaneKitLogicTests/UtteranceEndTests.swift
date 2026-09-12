@@ -13,6 +13,15 @@
 //    · The hard cap (`maxListen`, 10 s) still ends listening — with or without words — and a
 //      run with words at the cap is a submit, not a timeout.
 //    · Whitespace-only transcripts count as no words.
+//    · The first terminal verdict is sticky: later updates repeat it and never flip back.
+//
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/UtteranceEnd.swift` (`UtteranceEndDetector`,
+//  `silenceAfterSpeech` 1.5 s, `maxListen` 10 s, `checkInterval` 0.25 s). Caller:
+//  `VoiceInputEngine.startListening()` (app), which builds one detector per listen and polls it
+//  every `checkInterval` and on each partial result → `stopListeningAndSubmit` on
+//  `.endOfUtterance`. Breaks these catch: a slow talker cut off mid-sentence, a stuck recogniser
+//  holding the microphone (and the muted beacon) open, a timeout that throws the walker's words away,
+//  and a double submission from a late tick.
 //
 
 import Testing
@@ -59,8 +68,9 @@ import Testing
     #expect(d.update(transcript: "take me to Grainger", now: 5.4) == .endOfUtterance)
 }
 
-/// The recogniser may re-punctuate or re-case the same words; only a change in the trimmed text
-/// counts, so trailing whitespace does not keep the microphone open.
+/// The recogniser may pad the same words with leading or trailing whitespace; only a change in the
+/// trimmed text counts, so padding does not keep the microphone open. (Re-casing or
+/// re-punctuating *is* a change — the comparison is exact after trimming — and restarts the clock.)
 @Test func trailingWhitespaceIsNotAChange() {
     var d = UtteranceEndDetector(startedAt: 0)
     #expect(d.update(transcript: "stop", now: 1) == .listening)
@@ -79,8 +89,9 @@ import Testing
             == .endOfUtterance)
 }
 
-/// The submit verdict is not repeated once given: the engine stops on the first one and a stale
-/// tick after that must not produce a second submission.
+/// The verdict is sticky once given: a later update returns the same `.endOfUtterance` (it never
+/// flips back to `.listening` or on to `.timeout`). The engine stops on the first one, so a stale
+/// tick after that cannot start a second, different outcome.
 @Test func verdictIsStableAfterTheEnd() {
     var d = UtteranceEndDetector(startedAt: 0)
     _ = d.update(transcript: "hello", now: 1)

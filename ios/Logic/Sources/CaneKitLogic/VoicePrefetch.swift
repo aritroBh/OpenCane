@@ -8,6 +8,14 @@
 //  notices until a walk: a prefetch that runs out of order leaves the *first* cue uncached, which
 //  is the one cue prefetch existed to make instant.
 //
+//  Callers: `ElevenLabsVoice.prefetch` (queue + `maxConcurrent` workers) and its error type's
+//  fatal check (`isFatal`). The batches come from `SpeechQueue.prefetch` (the caller's lines, then
+//  the route's lines, then `backgroundLines` = `SpokenPhrases.warningLines`), so dropping cached
+//  lines here is also what lets a cancelled batch resume instead of paying twice.
+//  Isolation: stateless and nonisolated; `isCached` is called synchronously on the caller's task.
+//  Tests: VoicePrefetchTests.swift (5; `SpokenPhrasesTests.aCancelledWarmUpResumesInsteadOfStartingOver`
+//  covers the resume).
+//
 
 import Foundation
 
@@ -21,6 +29,7 @@ public enum VoicePrefetch {
     /// would put four in flight and earn an HTTP 429 on the one line a walker is waiting to hear.
     /// Raising this makes the cache warm sooner at the cost of rate-limiting live speech, which is
     /// the wrong trade for a blind walker: a warm cache is a convenience, a late turn is a wrong turn.
+    /// Pinned by `prefetchConcurrencyLeavesRoomForALiveRequest`.
     public static let maxConcurrent = 2
 
     /// Whether an HTTP status from the voice service means "stop asking" rather than "try the next
@@ -31,6 +40,9 @@ public enum VoicePrefetch {
     /// route prefetch into twenty rejected requests — noise in the log, and a way to get an IP
     /// rate-limited right before a demo. Everything else (429, 5xx, transport errors) is
     /// per-request bad luck and the next line is still worth trying.
+    /// - Parameter status: the HTTP status code of a failed synthesis request.
+    /// - Returns: true for 401, 403 and 422 only. Pinned by
+    ///   `aBadKeyStopsThePrefetchInsteadOfRepeatingItselfTwentyTimes`.
     public static func isFatal(status: Int) -> Bool {
         status == 401 || status == 403 || status == 422
     }
@@ -48,6 +60,10 @@ public enum VoicePrefetch {
     ///   - lines: spoken lines, in speaking order. Blank lines are dropped (nothing to synthesize).
     ///   - isCached: whether this exact line is already on disk.
     /// - Returns: the lines to request, in speaking order, without repeats.
+    /// Repeats are exact byte matches (the cache is keyed by exact text); blank means empty after
+    /// trimming whitespace and newlines, but a kept line is returned untrimmed.
+    /// Pinned by `prefetchKeepsSpeakingOrderSoTheFirstCueIsReadyFirst`,
+    /// `prefetchDropsRepeatsAndAlreadyCachedLinesButKeepsTheRest`, `prefetchIgnoresBlankLines`.
     public static func queue(_ lines: [String], isCached: (String) -> Bool) -> [String] {
         var seen = Set<String>()
         return lines.filter { line in

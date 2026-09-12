@@ -5,11 +5,30 @@
 //  Unit tests for the conversational assistant, memory history, fast-path intent classifier,
 //  and response parser. Pure Foundation logic using Swift Testing.
 //
+//  Sources pinned: `ConversationModels.swift` (`WalkMarker`, `ConversationTurn`,
+//  `ConversationHistory` ring buffer), `FastPathIntentClassifier.swift` (`classify`,
+//  `isSceneQuestion`) and `ConversationPrompt.swift` (`ConversationPrompt.buildUserPrompt`,
+//  `ConversationResponseParser.parse`). The classifier's "Nod to talk" rule is pinned separately in
+//  `NodToTalkFastPathTests.swift`. (⚠ The source headers name `ConversationPromptTests` /
+//  `FastPathIntentClassifierTests`; no such files exist — this file is those tests.)
+//  Caller of everything pinned here: `ConversationCoordinator` (app); the dropped markers are
+//  persisted by `PostStore` (app) as `[WalkMarker]` JSON.
+//
+//  Breaks these catch: the posts file (`Documents/posts/posts.json`) no longer decoding after a
+//  `WalkMarker` change; the history growing past `maxTurns` (prompt cost) or losing the tool /
+//  latency update on the newest turn; a settings / stop / status / marker / campus phrase falling
+//  through to the cloud model (latency and tokens) or, the reverse, an open-ended or visual question
+//  being swallowed by the fast path; the prompt losing its telemetry or its "CRITICAL RULES" block;
+//  a model reply that says the path is "clear" or "safe" reaching speech unchanged; and a
+//  plain-text (non-JSON) reply being dropped instead of spoken.
+//
 
 import CaneKitLogic
 import Foundation
 import Testing
 
+/// One suite for the whole conversational pipeline, in pipeline order: models → history →
+/// fast path → prompt → response parser. Stateless: every test builds its own values.
 @Suite("Conversational Agent Logic")
 struct ConversationLogicTests {
 

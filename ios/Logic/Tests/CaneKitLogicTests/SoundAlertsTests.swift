@@ -17,6 +17,15 @@
 //      not become a running commentary over the route instructions.
 //    · The spoken lines match `AppModel.commonLines` byte for byte (the natural-voice prefetch).
 //
+//  Sources pinned: `SoundAlerts.swift` (`DangerSound`, `SoundUrgency`, `SoundAlerts.kind` /
+//  `best` / `candidateLabels`, `SoundAlertPolicy`, `MicrophoneStart`) and, in the last MARK,
+//  `SoundRecognitionGuard.swift` (the microphone recognition lifetime guard, Step 28).
+//  Callers: `SoundWatcher` (app; classifier windows → `best` → `SoundAlertPolicy`, the input-format
+//  retry, the guard), `AppModel.wireSounds` (urgency → speech band), `VoiceInputEngine`
+//  (`MicrophoneStart` retry), `SensorProbe` (`candidateLabels`), `SpeechQueue` (route snapshots).
+//  ⚠ Mutating guard calls are hoisted into locals (`g1`, `g2`, …) before `#expect`, which captures
+//  its argument immutably (AGENTS.md).
+//
 
 import Testing
 @testable import CaneKitLogic
@@ -357,7 +366,7 @@ import Testing
 /// the format exactly `formatAttempts` times and always terminates; a caller that started at a
 /// negative attempt gets no retry at all.
 /// ⚠ Pins the loop shape shared by `SoundWatcher.startEngine(attempt:)` and
-/// `VoiceInputEngine.startListening(attempt:)`.
+/// `VoiceInputEngine.startEngine(attempt:sessionField:)`.
 @Test func theRetryLoopReadsTheFormatExactlyFormatAttemptsTimes() {
     var attempt = 0
     var reads = 0
@@ -380,6 +389,8 @@ import Testing
 
 // MARK: - Recognition lifetime guard
 
+/// A usable route snapshot (speaker out, built-in mic in, `.usable`): the baseline every guard test
+/// starts from before feeding it a degraded, changed or missing route.
 private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
                                                        input: "BuiltInMic",
                                                        inputQuality: .usable)

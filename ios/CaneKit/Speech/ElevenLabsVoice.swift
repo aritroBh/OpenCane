@@ -6,6 +6,15 @@
 //  before (and every route line, pre-synthesized when a route starts) plays with zero network
 //  latency. `SpeechQueue` calls `audio(for:)`; a miss with no network falls back to AVSpeech.
 //
+//  Why it exists: the system voice is always there, but a natural voice is easier to understand on
+//  a street corner, and the owner chose one for the demo (Bella). Every line is cached forever after
+//  its first synthesis because the free tier is 10,000 characters a month (`SpokenPhrases` budget).
+//  Owner: `SpeechQueue.naturalVoice` (one value, built at launch). Callers: `SpeechQueue.speakNow`
+//  (`cached`, `audio(for:)`) and `SpeechQueue.prefetch` (`prefetch`).
+//  Tests: none for this file (network, device); the pure pieces are pinned in CaneKitLogic —
+//  `VoicePrefetchTests` (request order, `maxConcurrent`, fatal HTTP codes) and `SpokenPhrasesTests`
+//  (the prefetched warning lines and their character budget).
+//
 //  Secrets.plist: ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID (default: a warm premade voice),
 //  ELEVENLABS_MODEL (default eleven_flash_v2_5 — lowest latency).
 //
@@ -31,7 +40,8 @@ import CryptoKit
 import Foundation
 
 /// ElevenLabs text-to-speech client with a content-addressed mp3 cache. Built once by
-/// `SpeechQueue.naturalVoice`; see the file header for threading.
+/// `SpeechQueue.naturalVoice`; see the file header for threading. A value type: `prefetch` works on
+/// a copy with a longer timeout (`withTimeout`) without touching the live one.
 nonisolated struct ElevenLabsVoice: Sendable {
 
     /// ElevenLabs API key (`xi-api-key` header). Never logged.
@@ -40,9 +50,10 @@ nonisolated struct ElevenLabsVoice: Sendable {
     let voiceID: String
     /// ElevenLabs model ID (`model_id` in the body); part of the cache key.
     let model: String
-    /// Hard cap on a live synth call; beyond this the queue speaks with AVSpeech instead.
-    /// Seconds; applied as the `URLRequest.timeoutInterval` (idle timeout between bytes). At
-    /// walking pace 2.5 s is ~3.5 m, which is why warnings never wait for it at all.
+    /// Timeout for a live synth call, seconds; applied as the `URLRequest.timeoutInterval`, which
+    /// is an *idle* timeout between bytes, not a total cap — a slow trickle can outlast it, so
+    /// `SpeechQueue.speakNow` races the fetch against its own 2.5 s total deadline and then speaks
+    /// with AVSpeech. At walking pace 2.5 s is ~3.5 m, which is why warnings never wait for it at all.
     var timeout: TimeInterval = 2.5
 
     /// Timeout for `prefetch` only. Nothing is waiting on a prefetch — it runs on a detached
@@ -67,6 +78,7 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     /// A copy of this voice whose live `timeout` is `seconds`. Used by `prefetch` to give
     /// background synthesis more headroom than a line someone is waiting to hear.
+    /// - Parameter seconds: the copy's `URLRequest` idle timeout.
     func withTimeout(_ seconds: TimeInterval) -> ElevenLabsVoice {
         var copy = self
         copy.timeout = seconds
@@ -88,7 +100,8 @@ nonisolated struct ElevenLabsVoice: Sendable {
         return dir
     }()
 
-    /// Deterministic file for (voice, model, text): the first 12 bytes of
+    /// Deterministic file for (voice, model, text): the first 12 bytes (96 bits — collisions are not
+    /// a practical concern for a few thousand lines) of
     /// SHA-256("voiceID|model|text") as 24 hex characters + ".mp3". Text must match exactly
     /// (SpeechQueue trims it first), so "Turn left." and "Turn left" are different files.
     private func cacheURL(for text: String) -> URL {
@@ -172,7 +185,11 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     /// One failed line: what to show, and whether the rest of the batch is worth attempting.
     private struct Failure: Sendable {
+        /// `localizedDescription` of the error, e.g. "ElevenLabs HTTP 401: …"; becomes
+        /// `SpeechQueue.voiceError` (debug card only, never spoken).
         let message: String
+        /// True when every other line would fail the same way (`VoiceError.isFatal`); the batch is
+        /// cancelled at the first fatal result instead of burning quota and rate limit.
         let fatal: Bool
     }
 
@@ -227,6 +244,8 @@ nonisolated struct ElevenLabsVoice: Sendable {
             if case .http(let code, _) = self { return VoicePrefetch.isFatal(status: code) }
             return false
         }
+        /// Card text: "ElevenLabs: empty response" or "ElevenLabs HTTP <code>: <≤ 200 body bytes>".
+        /// ⚠ Shown on the Haptics card only (via `SpeechQueue.voiceError`); never spoken.
         var errorDescription: String? {
             switch self {
             case .badResponse: return "ElevenLabs: empty response"

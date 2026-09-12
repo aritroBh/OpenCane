@@ -13,7 +13,12 @@
 //
 //  Purpose: keep every numeric walking rule (metres, seconds, degrees, m/s) out of the
 //  MainActor app classes so it can be pinned by `swift test`. Owners: `NavigationEngine.settle`
-//  (TurnSettle), `AppModel.straightWalk` / `AppModel.cueSpeech`, `WatchModel.crown`.
+//  (TurnSettle; built in `reached`, fed by `update(fix:)` / `update(heading:now:)`, cleared in
+//  `refreshSettling` once live), `AppModel.straightWalk` (`autoRecenterIfWalkingStraight`) /
+//  `AppModel.cueSpeech` (`speakCueIfNeeded`, `cleared()` on every `CueOutput.stop`), and
+//  `WatchModel.crown` (`crownMoved(delta:now:)`).
+//  Isolation: the package has no default actor isolation, so these are nonisolated values; each
+//  app owner holds its copy in a main-actor `var` (`if var s = settle { s.update(fix); settle = s }`).
 //
 //  Key invariants:
 //    · All four are `Sendable` value types with `mutating` updates and no clock of their own:
@@ -81,7 +86,9 @@ public struct TurnSettle: Sendable, Equatable {
     public let isCrossing: Bool
     /// The tunables this instance was created with.
     public let config: Config
-    /// Metres of recede needed: max(minRecedeM, radius / 2).
+    /// Metres of recede needed: max(minRecedeM, radius / 2). A 12 m turn fence needs 6 m, a 20 m
+    /// fence 10 m — a bigger fence fires further before the corner, so "went round it" must be
+    /// proven by a bigger margin.
     public let recedeM: Double
 
     /// Closest good moving approach to `anchor` so far, metres (starts at `startDistance`).
@@ -97,6 +104,8 @@ public struct TurnSettle: Sendable, Equatable {
     /// Timestamp of the previous fix, for `movingSeconds`.
     private var lastTime: TimeInterval?
 
+    /// Opens a settle window at a just-reached waypoint (normal fence entry), or a window that is
+    /// already released (`releasedAt`) for a manual Next or a passed-by advance.
     /// - Parameters:
     ///   - anchor: the reached waypoint's coordinate.
     ///   - radiusM: that waypoint's fence radius, metres (sets `recedeM`).
@@ -141,6 +150,11 @@ public struct TurnSettle: Sendable, Equatable {
     }
 
     /// Feed every GPS fix. Returns `isLive` after the update.
+    /// Order inside: the moving-time clock first (gap clamped to 0…5 s so a GPS outage cannot
+    /// jump the 25 s cap), then the crossing curb check (a good fix below `minSpeed` — speed −1
+    /// counts as standing — within `nearM + curbSlackM`), then the near / recede releases, which
+    /// only good *moving* fixes may drive.
+    /// - Parameter fix: the fix; `timestamp` is the clock for `releaseAt` and `movingSeconds`.
     /// Pinned by `settleDoesNotReleaseOnOneJitteryFix`, `settleReleasesAfterTwoConsecutiveRecedingFixes`,
     /// `stationaryOrPoorFixesNeverReleaseByDistance`, `aPauseShortOfTheCurbDoesNotReleaseACrossing`.
     @discardableResult
@@ -174,6 +188,10 @@ public struct TurnSettle: Sendable, Equatable {
     }
 
     /// Feed the gyro-gated body heading (the phone is on the cane, so a head turn never counts).
+    /// Releases at once (no grace) when the heading is within `headingMatchDeg` of `nextBearing`;
+    /// does nothing once released or when `nextBearing` is nil (`NavigationEngine` passes nil for
+    /// a waypoint that is not a turn, so walking straight on never releases early).
+    /// Caller: `NavigationEngine.update(heading:now:)`.
     /// - Parameters:
     ///   - heading: body heading, degrees true.
     ///   - now: seconds.
@@ -189,7 +207,8 @@ public struct TurnSettle: Sendable, Equatable {
 /// "Walking straight" = `requiredFixes` consecutive fixes (the first one counts) at walking speed
 /// with a good accuracy, a steady course and a still head. Any miss restarts the count.
 ///
-/// Used by `AppModel` to auto-recenter the AirPods head reference (never on a timer, never near
+/// Used by `AppModel` to auto-recenter the head reference — AirPods and the front-camera face
+/// tracker alike (never on a timer, never near
 /// a crossing — those gates live in the app). Pinned by
 /// `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn`.
 public struct StraightWalkDetector: Sendable, Equatable {
@@ -215,18 +234,24 @@ public struct StraightWalkDetector: Sendable, Equatable {
     /// Creates a detector with the default 0.6 m/s / 20 m / 15° / 8° / 3-fix tuning.
     public init() {}
 
-    /// Start over (route start, waypoint advance, settling, AirPods disconnected).
+    /// Start over (route start, waypoint advance, settling, no head source, within 15 m of a
+    /// crossing — `AppModel.autoRecenterIfWalkingStraight` and the route start / advance paths).
     public mutating func reset() {
         count = 0
         lastHeading = nil
         lastYaw = nil
     }
 
+    /// Feed one GPS fix (with the head yaw at that moment). A fix that fails the speed, accuracy
+    /// or heading gate restarts the count; a qualifying fix that is not steady or not still starts
+    /// a new run at 1 (it is the first fix of the next run).
+    /// Caller: `AppModel.autoRecenterIfWalkingStraight(_:)`, per fix while navigating.
     /// - Parameters:
     ///   - speed: ground speed, m/s (negative = invalid → restart).
     ///   - accuracy: horizontal accuracy, metres (negative = invalid → restart).
     ///   - heading: course / body heading, degrees true; nil restarts.
-    ///   - headYaw: AirPods head yaw, degrees (0 when unknown).
+    ///   - headYaw: head yaw, degrees — `AppModel` passes `HeadYawSelector.choose` (HeadYawSources
+    ///     .swift): the AirPods, else the front-camera face tracker, else 0.
     /// - Returns: true on the fix that completes a straight stretch (then starts over).
     public mutating func update(speed: Double, accuracy: Double, heading: Double?, headYaw: Double) -> Bool {
         guard speed > minSpeed, accuracy >= 0, accuracy <= maxAccuracy, let heading else {
@@ -273,6 +298,9 @@ public struct CueSpeechPolicy: Sendable, Equatable {
     public init() {}
 
     /// The decider reported `.stop` (nothing in range): the next head cue is a new episode.
+    /// `AppModel` also calls it when the app goes to the background. The per-kind limiter is kept, so a
+    /// new episode inside `headInterval` of the last "Head height." is still silent
+    /// (`headEpisodesAreRateLimitedAcrossEpisodes`).
     public mutating func cleared() { episodeKind = .clear }
 
     /// Decide whether a fired haptic cue should also be spoken.
@@ -280,7 +308,8 @@ public struct CueSpeechPolicy: Sendable, Equatable {
     ///   - cue: the cue `CueDecider` just fired.
     ///   - phoneCannotBuzz: true when the haptic engine is unhealthy or silenced.
     ///   - now: seconds (the depth report's timestamp in the app).
-    /// - Returns: the line and its tier, or nil to stay silent.
+    /// - Returns: the line and its tier, or nil to stay silent. `AppModel.speakCueIfNeeded` maps
+    ///   `.safety` → `SpeechPriority.safety`, `.obstacle` → `.obstacle`, TTL 6 s.
     public mutating func line(for cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) -> (text: String, tier: Tier)? {
         let newEpisode = episodeKind != cue.kind
         // Only a head cue, or a side cue that is actually spoken, moves the episode: a silent
@@ -334,6 +363,9 @@ public struct CrownAccumulator: Sendable, Equatable {
     /// Creates an accumulator with the default 3 detents / 1 s / 0.8 s tuning.
     public init() {}
 
+    /// Feed one Digital Crown callback. A gesture that completes inside the debounce is consumed
+    /// (travel reset) rather than carried over, so a long spin fires once, not every 3 detents.
+    /// Caller: `WatchModel.crownMoved(delta:now:)` → `send(.nextWaypoint)`.
     /// - Parameters:
     ///   - delta: crown rotation since the last call, in detents (sign ignored).
     ///   - now: seconds (the watch passes `Date().timeIntervalSinceReferenceDate`).

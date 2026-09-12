@@ -105,7 +105,12 @@ struct HazardsCard: View {
             Toggle("Head tracking without AirPods", isOn: $model.faceHeadTrackingEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!DepthEngine.supportsFrontCameraWithLiDAR)
-                .accessibilityHint("Uses the front camera to follow your head direction, so the beacon works without AirPods")
+                .accessibilityHint("Uses the front camera to follow your head direction, so the beacon works without AirPods. Cannot change while a route is guiding you.")
+            if model.nav.isNavigating {
+                liveCaption("Head tracking without AirPods cannot change while a route is guiding you.")
+            } else if model.routeStartWaiting {
+                liveCaption("Head tracking without AirPods cannot change while a route is starting.")
+            }
 
             Toggle("Live camera view", isOn: $model.liveViewEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
@@ -146,7 +151,7 @@ struct HazardsCard: View {
                         hint: "Debug. Runs the front camera head tracking for 15 seconds and writes what it saw to the trip log. Obstacle detection keeps running") {
                 model.startFaceTrackingSelfTest()
             }
-            .disabled(model.selfTestRunning || model.routeStartWaiting)
+            .disabled(model.selfTestRunning || model.nav.isNavigating || model.routeStartWaiting)
             if !model.selfTestStatus.isEmpty {
                 Text(model.selfTestStatus)
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
@@ -172,7 +177,7 @@ struct HazardsCard: View {
         case .off:
             EmptyView()
         case .blockedByRoute:
-            liveCaption("Both cameras cannot run while a route is guiding you.")
+            liveCaption("Both cameras cannot run while a route is guiding you. Stop the route on the Guide tab first.")
         case .unsupported:
             // No picture on this path, and the caption says exactly that: the app has no
             // single-camera fallback, and `AppModel.setBothCameras` refuses before pausing
@@ -260,8 +265,11 @@ struct HazardsCard: View {
         }
     }
 
-    /// Small grey line standing in for the live view (hot / camera off); hidden from VoiceOver
-    /// like the view itself. Called only by `liveView`.
+    /// Small grey line explaining why a camera mode shows nothing: the live view while hot or with
+    /// the camera off, the two-camera view while a route blocks it or the phone lacks multi-cam,
+    /// and why head tracking without AirPods cannot change during a route. **Spoken** by VoiceOver
+    /// (its `accessibilityLabel`) — a paused view or a refused mode is exactly what a blind user
+    /// needs to hear. Callers: `liveView`, `bothCameras`, the head-tracking toggle row.
     private func liveCaption(_ text: String) -> some View {
         Text(text).font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)

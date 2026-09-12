@@ -10,10 +10,14 @@
 //  label says name + kind + distance.
 //
 //  Key invariants / fixtures:
-//    · `fromCIF(m:)` moves the CIF entrance north by exact metres, so distance ordering is
+//    · `fromCIF(_:)` moves the CIF entrance north by exact metres, so distance ordering is
 //      arithmetic rather than a hand-computed guess.
 //    · The debounce interval and the row caps are asserted here because the app reads the
 //      constants instead of repeating the numbers.
+//
+//  Caller of the pinned code: `DestinationSearch` (app; owns the `MKLocalSearchCompleter`, hands
+//  rows in as `CompletionLine`s) → the Guide card's `DestinationField`. The VoiceOver label / hint
+//  strings are part of the XCUITest contract (AGENTS.md rule 9): change them with the UI tests.
 //
 
 import Foundation

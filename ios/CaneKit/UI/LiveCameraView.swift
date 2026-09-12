@@ -2,10 +2,13 @@
 //  LiveCameraView.swift
 //  CaneKit
 //
-//  The Hazards card's "Live camera view": ARKit's own camera frames drawn on the GPU at the
-//  camera's frame rate (30 fps, or 60 with the Mount card's "60 fps camera" switch), for a sighted
-//  helper and the demo video. Replaces a ~3 Hz JPEG refresh loop that looked choppy and cost a
-//  CPU encode per frame.
+//  The Hazards card's "Live camera view": ARKit's own camera frames drawn on the GPU for a sighted
+//  helper and the demo video, at `CameraRate.previewFramesPerSecond` — the camera's rate capped at
+//  `CameraRate.previewCap` = 30, so it is 30 fps whether or not the Mount card's "60 fps camera
+//  (warmer)" switch runs the camera at 60 (Muse review: a helper's picture must not add heat
+//  that pauses the walker's obstacle warnings; pinned by `liveViewRendersAtMostThirtyFramesPerSecond`).
+//  Replaces a ~3 Hz JPEG refresh loop (`HazardsCard.refreshLoop` + `AppModel.liveFrameJPEG`,
+//  both removed) that looked choppy and cost a CPU encode per frame.
 //
 //  How: a `UIViewRepresentable` around `ARSCNView` whose `session` is the app's single ARSession,
 //  owned by `DepthEngine` (`depth.arSession`). The view only *displays* that session: it never
@@ -25,9 +28,11 @@
 //  `nonisolated` because SceneKit calls `ARSCNViewDelegate` on its render thread; it holds no
 //  state, so it is trivially safe there.
 //
-//  Built only while the switch is on and the phone is cool and ARKit is running
-//  (`LiveView.state`, CaneKitLogic, pinned by LiveViewTests); hidden from VoiceOver (it carries
-//  nothing a blind user needs). Caller: `HazardsCard.liveView`.
+//  Built only while the switch is on, the phone is cool, ARKit is running and the app is in the
+//  foreground (`LiveView.state`, CaneKitLogic, pinned by LiveViewTests); hidden from VoiceOver (it
+//  carries nothing a blind user needs). Caller: `HazardsCard.liveView`.
+//  Tests: `LiveViewTests` (state + rate); the view itself only renders on a device (the simulator
+//  has no ARKit session to show).
 //
 
 import ARKit
@@ -42,8 +47,9 @@ struct LiveCameraView: UIViewRepresentable {
     /// The app's one session (`DepthEngine.arSession`). Displayed only; never run, paused or
     /// delegated from here.
     let session: ARSession
-    /// Render rate, equal to the camera's frame rate (`LiveView.live(fps:)`): drawing faster than
-    /// the camera delivers frames would only add heat.
+    /// Render rate from `LiveView.live(fps:)` = `CameraRate.previewFramesPerSecond`: the camera's
+    /// frame rate capped at 30. Drawing faster than the camera delivers frames would only add
+    /// heat, and the cap keeps a 60 fps camera's preview at 30 too.
     let framesPerSecond: Int
 
     /// Builds the `ARSCNView`: attaches the shared session, turns off every optional render effect,
@@ -64,8 +70,10 @@ struct LiveCameraView: UIViewRepresentable {
         return view
     }
 
-    /// SwiftUI re-render: follow the camera rate when the Mount card's 60 fps switch flips
-    /// (`DepthEngine.setHighFrameRate` re-runs the session; the view keeps drawing it).
+    /// SwiftUI re-render: follow `framesPerSecond` if it changes. With today's 30 fps preview cap
+    /// the Mount card's 60 fps switch no longer changes it; the check stays so a different cap
+    /// needs no view change (`DepthEngine.setHighFrameRate` re-runs the session; the view keeps
+    /// drawing it).
     func updateUIView(_ uiView: ARSCNView, context: Context) {
         if uiView.preferredFramesPerSecond != framesPerSecond {
             uiView.preferredFramesPerSecond = framesPerSecond
@@ -76,7 +84,7 @@ struct LiveCameraView: UIViewRepresentable {
     /// never calls a released coordinator. The session is left exactly as it was (not paused).
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
         // Stop rendering and let go of the shared session *before* the view dies, so SceneKit's
-        // render thread cannot touch it mid-frame (Muse review: a teardown with live mesh anchers
+        // render thread cannot touch it mid-frame (Muse review: a teardown with live mesh anchors
         // risked a render-thread crash or an interrupted session, which would silence the lanes).
         // `isPlaying = false` stops the view's rendering only; the ARSession keeps running for the
         // depth pipeline. The throwaway session is never run.
