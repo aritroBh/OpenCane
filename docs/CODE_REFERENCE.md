@@ -573,6 +573,10 @@ Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswera
 - Invariant: tests may use only core `Testing` + `Foundation` types (no overlay-dependent APIs). Extra args pass through (e.g. `--filter`).
 - CI: `.github/workflows/ci.yml` (manual `workflow_dispatch` only for now) job `logic-tests` runs plain `swift test` in `ios/Logic` on Linux (`swift:6.2` container); the `sim-build` job (macOS, newest Xcode) is informational (`continue-on-error`). Tests must therefore also pass on Linux Foundation (e.g. `CourseSmootherTests` uses its own LCG rather than a seeded Foundation RNG).
 
+### `ios/scripts/appicon.py` — renders the app icon (committed generator, Step 17)
+- `python3 ios/scripts/appicon.py` writes `Icon-1024.png` into both `AppIcon` sets (iPhone `CaneKit/Resources/Assets.xcassets`, Watch `CaneKitWatch/Assets.xcassets`); no `project.yml` change needed (asset files only).
+- Design ("White Cane" v2): navy gradient field, black straight grip + gold joint ring, white shaft with two red wraps, red tip leaning lower-right, faint gold signal arcs top-right. Pieces are square-ended and overlapped (round caps only on the two outer ends) so no hairline seams; the whole cane is scaled 0.88 about the centre so the tip survives the squircle mask (verified by bbox probe + masked render, not by eye alone).
+
 ### Cross-module contracts (who uses what)
 - `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~30 Hz.
 - `AppModel` (MainActor) owns `CueDecider`; feeds each `LaneReport` with `now`; routes `CueOutput` to `HapticPlayer` (which uses `GeigerRate.hertz`), mirrors `CueKind` to the watch via `PhoneToWatch.obstacle`, and asks `CueSpeechPolicy` which cues to speak (`cleared()` on `.stop`).

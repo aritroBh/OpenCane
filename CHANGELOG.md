@@ -4,12 +4,19 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 
 ## Step 17 — App icon (Sat Sep 12, needs install)
 
-Both `AppIcon` sets were empty — the app shipped with no icon. New "Folded Signal" mark:
-black field, white cane-shaft bar, gray fold bar, one red tip quoting a real white cane's red
-section (InsForge-like geometry, cane soul, no words). One 1024 PNG generated from
-`/tmp/icon.py`, added to the iPhone + Watch sets.
+Both `AppIcon` sets were empty — the app shipped with no icon. v1 ("Folded Signal", from
+`/tmp/icon.py`) was abstract bars; v2 ("White Cane") is a real mobility cane on the navy
+field: black grip, gold joint ring, white shaft with two red wraps, red tip leaning
+lower-right, faint gold signal arcs. Generator committed as `ios/scripts/appicon.py`
+(`python3 ios/scripts/appicon.py` rewrites both 1024 PNGs).
 
-test on device: OpenCane icon on the Home Screen after install; no white bars clipped by the
+Review: `agy` could not run here (CLI needs localhost bind + log writes the sandbox denies,
+and approval prompts are off). Substituted a numeric self-review: bbox probe of the render
+caught the v2 tip sitting exactly on the squircle mask boundary (dist ~226 vs radius 225 —
+the masked preview showed it clipped), fixed by scaling the cane 0.88 about the centre;
+re-probe + masked 180 px + 60 px renders confirm the tip clear and the cane legible.
+
+test on device: OpenCane icon on the Home Screen after install; red tip intact inside the
 squircle at small sizes (check a folder view too).
 
 Installed 2026-09-12 ~01:25 via `make run` (build + `actool` icon compile + devicectl install
