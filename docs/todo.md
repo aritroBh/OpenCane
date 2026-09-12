@@ -88,6 +88,42 @@ sensors did not see is ever spoken.*
   to `AppModel`'s safety path, touches `Info.plist` and `project.yml`, and its sound watcher wants
   `.playAndRecord`, which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
 
+### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
+
+Twelve findings; three were fixed on the spot (a failed both-cameras start left the walker with no
+obstacle detection; "Obstacle detection is back" was spoken before it was true; the microphone
+setting persisted across launches). **Every one below is in a feature that is OFF by default**, so
+none blocks the demo — but they are real, and several need the phone to judge.
+
+- [ ] **A route can start while the cameras are still being released.** `beginRoute` turns the
+      two-camera switch off and then calls `nav.start(route)` without waiting for the serialised
+      stop + ARKit warm-up (~1–3 s), so guidance begins with LiDAR still down. Either await the
+      chain or refuse Go while a switch operation is in flight.
+- [ ] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
+      output route immediately after `setActive(true)`, but iOS settles the route ~0.5 s later — so
+      an AirPods flip to HFP would pass the check. Subscribe to route-change notifications for the
+      whole time the mic is on and revert on any change. (The AirPods case is still unmeasured; this
+      is the finding most likely to bite when it is.)
+- [ ] **Analyzer death keeps the microphone session open.** `SoundWatcher`'s failure path sets
+      `lastError` only: `isRunning` stays true, the session stays `.playAndRecord` (orange dot,
+      degraded beacon), and no alert ever fires again. It should `stop()` and revert.
+- [ ] **Permission race can start the mic after the user turned it off.** The `.undetermined` branch
+      restarts unconditionally in the permission callback, so toggling on → off → "Allow" records
+      with the switch showing off. Check a generation counter or the live toggle first.
+- [ ] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
+      The two-camera mode correctly refuses during a route; this path does not.
+- [ ] **The mic input format is read synchronously before the route settles**, so the first-ever
+      enable with AirPods can fail spuriously with "No microphone input available". Re-read after
+      the engine starts, with one short retry.
+- [ ] **"Degrades to the back camera alone" is documented but not implemented** — on a phone without
+      multi-cam the mode shows no picture. Implement the single-session fallback or correct the
+      header and the card copy.
+- [ ] **Backgrounding enqueues the camera teardown**, so if the system suspends first the app can
+      hold both cameras in the background. Tear down best-effort with a timeout before pausing depth.
+- [ ] **Debug-only:** launching with both the sensor-probe and demo-route flags guides a route for
+      ~40 s with no depth, and the probe's 40 s announcement queues ahead of route lines with a 20 s
+      TTL.
+
 ### The merge gate (nothing lands on main that fails any step)
 
 1. `cd ios/Logic && swift test` · 2. `make sim` · 3. `make uitest` (muted) · 4. `make e2e` (4 scenarios)
