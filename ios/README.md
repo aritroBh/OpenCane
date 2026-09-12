@@ -28,7 +28,8 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status (HEAD `076fcaa`).** Steps 0–37 have landed; the latest are Step 34 (flashlight switch,
+**Status (Step 37, `076fcaa`; HEAD `d775d4b` adds only comment/doc passes and the stand-alone
+`scripts/streetview_stim.py`).** Steps 0–37 have landed; the latest are Step 34 (flashlight switch,
 both-cameras refusal), Step 35 (cue design v2 research + `scripts/cue_audit.py`), Step 36 (cue
 detail Quiet / Standard / Detailed × Outdoors / Indoors, obstacle names off by default), the
 per-camera rotation fix, and Step 37 (talk floor: a direction cut by a warning resumes from its
@@ -48,7 +49,7 @@ the source of truth.
 | `Shared/LiveActivity/` | `NavActivityAttributes`, compiled into the app and the widget |
 | `Logic/` | `CaneKitLogic`, 37 source files. Depth and obstacles: `LaneMath`, `LaneReport`, `DepthSnapshot`, `DepthReadiness`, `MultiCamDepth`, `CueDecider`, `PeopleAhead`, `Hazards`. Cues and speech: `CueProfile` (`CueRules`), `SpeechResume`, `SpeechLoadPolicy`, `SpokenPhrases`, `UtteranceEnd`, `VoicePrefetch`. Navigation: `GeoMath`, `CourseSmoother`, `NavSupport`, `Waypoint`, `CampusPlaces`, `DestinationSuggestions`. Scene: `VLMCodec`, `SceneVocabulary`, `CloudSceneGate`. Hands-free and conversation: `ConversationModels`, `ConversationPrompt`, `FastPathIntentClassifier`, `HeadNodDetector`, `QuestionPrompt`, `StatusSummary`. Devices and app state: `WatchMessage`, `HeadYawSources`, `SoundAlerts`, `SoundRecognitionGuard`, `TorchSwitch`, `LiveView`, `LaunchRecovery`, `TripLogRecord`. Plus `Tests/` |
 | `project.yml` | XcodeGen spec. `CaneKit.xcodeproj` is generated and git-ignored. |
-| `Makefile`, `scripts/` | `gen.sh` (project generation), `test.sh` (logic tests), `e2e.py` (GPS-replay end-to-end), `cue_audit.py` (cue load of one trip log, `make audit`), `vision_probe.swift` / `sign_probe.swift` (on-device Vision and sign-reading range against Street View frames), `streetview/` (`frames.json` + git-ignored JPEGs), `appicon.py` (renders the app icon) |
+| `Makefile`, `scripts/` | `gen.sh` (project generation), `test.sh` (logic tests), `e2e.py` (GPS-replay end-to-end), `cue_audit.py` (cue load of one trip log, `make audit`), `vision_probe.swift` / `sign_probe.swift` (on-device Vision and sign-reading range against Street View frames), `streetview/` (`frames.json` + git-ignored JPEGs), `streetview_stim.py` (run by hand, no Makefile target: a stand-alone Street View walk visualiser that shells out to `vision_probe.swift` and writes `build/streetview_stim/`; it runs no app code, so use `make e2e SCENARIO=streetview` for what the app says), `appicon.py` (renders the app icon) |
 | `Secrets.example.plist` | Template for `CaneKit/Resources/Secrets.plist` |
 | `local.mk` | Git-ignored, and you create it: `TEAM` and `DEVICE` for device builds |
 | `stretch/`, `drafts/` | Not in any target (old ESP32 BLE client, iOS 18 starter files). Leave them alone. |
@@ -93,8 +94,9 @@ on the phone with `make run` (CHANGELOG Steps 35 and 37). A second Mac or phone 
    ```
 6. First install (`make run`), then on the phone: Settings → General → VPN & Device Management →
    trust the developer app.
-7. Phone Settings → Action Button → Shortcut → **Where am I**. The shortcut appears after the first
-   launch.
+7. Phone Settings → Action Button → Shortcut → OpenCane → **Talk to OpenCane** (the target
+   `docs/handsfree.md` §3 recommends; one press listens, and "What is in front of me?" covers the
+   scene) or **Where am I** (scene only). The shortcuts appear after the first launch.
 8. Settings → Bluetooth → (i) next to the AirPods → **Spatial Audio: Off** and **Head Tracking: Off**.
    System head-tracking would re-spatialize the beacon. The rest of the AirPods and watch list is in
    `docs/devices_setup.md`.
@@ -113,7 +115,8 @@ on the phone with `make run` (CHANGELOG Steps 35 and 37). A second Mac or phone 
 
 Also: mesh classification ("Two meters ahead, door") is an **indoor** feature. LiDAR range is ~5 m and
 sunlight kills it. Outdoors the product is the lanes (distance only). Demo doors are at the ISR
-lobby and the CIF entrance.
+lobby and the CIF entrance. Since Step 36 names are spoken only with "Speak obstacle names" on (default
+off) and the Settings → Cues place on **Outdoors**: the Indoors place names nothing (`CueRules`).
 
 ## 3. Build, install, launch
 
@@ -317,8 +320,9 @@ on the watch. `NSSupportsLiveActivities` is on for the Dynamic Island.
 ## 5. Testing
 
 The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must be green. For UI
-changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
-`make e2e` for navigation or speech changes. Then run the Muse review of the diff.
+changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator.
+"How we engineer" 4 adds `make e2e` (and `SCENARIO=streetview` when the camera path changed). Then
+run the Muse review of the diff.
 
 - **Unit tests (`Logic/`, no device):** 457 Swift Testing `@Test` annotations in 34 files under
   `Logic/Tests/CaneKitLogicTests/`. By layer, file names without the `Tests.swift` suffix (count per
@@ -432,8 +436,9 @@ xcodebuild's environment (the Makefile does this). None of them is set on a norm
   `docs/devices_setup.md`, untethered demo step 4). Keep
   a power bank on the strap, since ARKit + LiDAR run ≈ 3–4 h.
 - **Thermal.** `.serious` or worse turns off mesh classification, and with it the obstacle names.
-  Lanes and haptics never stop. (Obstacle names are also off by default since Step 36, and the cue
-  level decides which ones are spoken when they are on.)
+  Lanes and haptics never stop. (Obstacle names are also off by default since Step 36; when they
+  are on, `CueRules.allowsName` decides: Quiet and the Indoors place name nothing, Standard names
+  doors while a route guides, Detailed names everything except walls.)
 - **xcodebuild hangs after "Test Suite … passed".** Seen with `make tour` / `make uitest-streetview`
   when old test-runner processes were left on the simulator (hours old). The tests themselves had
   passed. Fix: `xcrun simctl shutdown all`, then rerun. `make e2e` relaunches the app itself and is

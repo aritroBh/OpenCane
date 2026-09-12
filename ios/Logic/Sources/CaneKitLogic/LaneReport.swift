@@ -13,16 +13,27 @@
 //      monotonic clock (the `now` `CueDecider` receives).
 //    · `ObstacleClass` raw values mirror `ARMeshClassification` (order must stay in sync).
 //    · `depthAvailable == false` or `isTrusted == false` → `CueDecider` emits nothing.
-//  Tests: `tileLevels` (LaneMathTests.swift); the report itself is exercised by CueDeciderTests.
+//  Owners: built by `DepthFrameProcessor.session(_:didUpdate:)` (serial depth queue) and yielded
+//  into a newest-only `AsyncStream`; `DepthEngine.ingest` publishes it on the main actor
+//  (`DepthEngine.report`) and feeds `DepthReadiness`; `AppModel.handle(_:)` routes it to
+//  `CueDecider`, `ObstacleNamer`, `GroundHazardPolicy`, `SceneContext` and the `lanes` trip-log
+//  record (throttled to 2 Hz by `TripLogger.lanes`). `MountTilt` also drives the Settings → Mount
+//  "Camera tilt" row; `TileLevel` colours `LaneGridView`; `PublishGate` is the processor's rate cap.
+//  Tests: `tileLevels`, `mountTiltWindow`, `tiltSignIsDownPositive`,
+//  `publishGateHitsFifteenHertzFromThirtyHertzFrames`, `groundHazardsNeedAMountLikeTilt` (all in
+//  LaneMathTests.swift); the report itself is exercised by CueDeciderTests and DepthReadinessTests.
 //
 
 import Foundation
 
 /// ARKit mesh classification, mirrored here so the logic package stays free of ARKit.
+/// Produced by the app's `MeshClassifier.nearestFace` (ARKit mesh faces along the centre ray).
 public enum ObstacleClass: Int, Sendable, Codable, CaseIterable {
+    // ⚠ Raw values must equal `ARMeshClassification`'s (0 none … 7 door); the app converts by raw value.
     case none = 0, wall, floor, ceiling, table, seat, window, door
 
-    /// Spoken name, or nil for classes we never announce.
+    /// Spoken name, or nil for classes we never announce. Whether a speakable name is actually
+    /// said is `CueRules.allowsName` (Detailed never says "wall", Step 36).
     public var spokenName: String? {
         switch self {
         case .wall: return "wall"
@@ -52,7 +63,8 @@ public struct MeshHit: Sendable, Equatable {
 public struct LaneReport: Sendable, Equatable {
     /// Per-lane head / torso depths (metres) from `LaneMath`.
     public var grid: LaneGrid
-    /// False while the cane is being swept (|ω| ≥ threshold): depth is smeared, cues freeze.
+    /// False while the cane is being swept (|ω| ≥ `ProcessorSettings.sweepThreshold`, 0.6 rad/s):
+    /// depth is smeared, cues freeze. Also one of `DepthReadiness`'s three same-frame facts.
     public var isTrusted: Bool
     /// |rotation rate| rad/s (logged as `omega` in the trip log).
     public var rotationRate: Float
@@ -69,7 +81,9 @@ public struct LaneReport: Sendable, Equatable {
     /// a `bufferingNewest(1)` delivery gap and conservatively restart the consecutive run rather
     /// than treating reports on either side of a dropped frame as adjacent.
     public var frameSequence: Int
-    /// Nearest classified mesh face at the image centre, if any.
+    /// Nearest classified mesh face at the image centre, if any. Looked up every
+    /// `meshEveryNthFrame`-th published frame (8) and re-attached in between, so it can be up to
+    /// 7 reports old; nil while mesh classification is off (thermal).
     public var centerHit: MeshHit?
     /// Confirmed LiDAR ground hazard ahead (drop-off, hole, curb, low obstacle), if any.
     /// Set by `DepthFrameProcessor` from `GroundHazardDetector` (evaluated up to 10 Hz, confirmed over frames).
@@ -121,6 +135,9 @@ public enum MountTilt {
     /// the horizon, i.e. roughly the way the mount holds it. The real phone's false "Hole ahead"
     /// calls came at 10-57 deg with the phone held in the hand, pointed at desks and the floor.
     public static let groundAim: ClosedRange<Float> = 0...15
+    /// True when a ground-hazard evaluation may run at this camera tilt (degrees below the horizon,
+    /// + = down). `DepthFrameProcessor` passes 90 (unusable) before the first tilt estimate.
+    /// Pinned by `groundHazardsNeedAMountLikeTilt`.
     public static func groundUsable(downDeg d: Float) -> Bool { groundAim.contains(d) }
 
     /// Camera angle below the horizon (degrees, positive = down) from the Y component of the
@@ -134,6 +151,7 @@ public enum MountTilt {
     /// One line for the Mount card and whether the aim is inside `aim`:
     /// "Camera tilt 5° down, good", "Camera tilt 12° down: tilt the phone up",
     /// "Camera tilt 2° up: tilt the phone down", "Camera level: tilt the phone down".
+    /// Caller: `ContentView`'s `MountAimRow` (Settings → Mount). Pinned by `mountTiltWindow`.
     public static func status(downDeg d: Float) -> (text: String, ok: Bool) {
         let n = Int(abs(d).rounded())
         // Judge the number that is shown: 2.6° reads "3°" and must be "good", not "tilt down"
@@ -149,6 +167,8 @@ public enum MountTilt {
 
 /// Tile colouring for the debug grid: green ≥ 2.0 m, yellow ≥ 1.2 m, red < 0.7 m (orange between).
 public enum TileLevel: Sendable {
+    // `clear` ≥ 2.0 m or nothing, `far` 1.2–2.0 m, `near` 0.7–1.2 m, `urgent` < 0.7 m,
+    // `noData` before the first depth frame. Display only: cue thresholds live in `CueThresholds`.
     case clear, far, near, urgent, noData
 
     /// - Parameters:
@@ -171,11 +191,16 @@ public enum TileLevel: Sendable {
 /// (first device run, 2026-09-11). A small tolerance (a quarter of a 60 Hz frame) fixes it.
 /// Pinned by `publishGateHitsFifteenHertzFromThirtyHertzFrames`.
 public struct PublishGate: Sendable {
+    /// Cap in Hz. `DepthFrameProcessor` rewrites it on every frame from `ProcessorSettings.maxRate`
+    /// (30, or 60 with the high-frame-rate camera), so its initial 15 is never what runs.
     public var maxRate: Double
+    /// Timestamp of the last published frame; −∞ so the first frame always publishes.
     private var last: TimeInterval = -.infinity
+    /// A gate that has published nothing yet.
     public init(maxRate: Double) { self.maxRate = maxRate }
 
-    /// True when a frame at `now` (seconds) should be published; records it if so.
+    /// True when a frame at `now` (seconds, ARKit frame clock) should be published; records it if so.
+    /// Rule: `now − last ≥ 1/maxRate − 0.004`.
     public mutating func shouldPublish(at now: TimeInterval) -> Bool {
         guard now - last >= 1.0 / maxRate - 0.004 else { return false }
         last = now

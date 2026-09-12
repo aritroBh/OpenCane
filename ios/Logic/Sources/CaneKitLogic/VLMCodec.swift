@@ -49,6 +49,8 @@ public enum VLMProvider: String, Sendable, Codable, CaseIterable {
 }
 
 /// Why a scene description failed. `errorDescription` is loggable (and short enough to speak).
+/// The app's `FallbackVLMClient` treats every case (any error but cancellation) as "try on-device
+/// instead"; the "Ask OpenCane" path calls the cloud client directly and has no fallback.
 public enum VLMError: Error, Equatable, LocalizedError {
     /// Non-2xx status and the provider's error message (or the first 200 bytes of the body).
     case http(Int, String)
@@ -151,6 +153,8 @@ public enum VLMRequest {
     /// `max_tokens` `openAIMaxTokens`, temperature 0.2.
     /// - Parameters:
     ///   - model: model id sent verbatim (e.g. "muse-spark-1.3-contributor").
+    ///   - jpegBase64: the frame as base64 JPEG (wrapped here in a `data:image/jpeg;base64,` URI).
+    ///   - prompt: the instruction text.
     ///   - reasoningEffort: value for the top-level `reasoning_effort` field, or nil to omit it.
     ///     Omitted by default because a plain OpenAI chat model rejects the field outright; the
     ///     `custom` provider passes `lowReasoningEffort` because Muse Spark always reasons and, left
@@ -240,6 +244,7 @@ public enum VLMResponse {
     }
 
     /// Shared HTTP-status handling: throws `.http` with the provider's message when not 2xx.
+    /// Called first by `post(_:headers:body:)` in the app's VLMClient.swift, before any parser.
     /// - Parameters:
     ///   - status: HTTP status code.
     ///   - data: response body (used for the message; first 200 bytes if not the error envelope).
@@ -372,6 +377,11 @@ public enum SpokenDistance {
     }
 
     /// "very close", "half a meter", "one meter", "one and a half meters", "two meters", "3 meters"…
+    /// Rounds `meters × 2` half-away-from-zero, then: < 0.5 → "very close" (negative too); 0.5, 1,
+    /// 1.5, 2 → words; any other whole number → digits ("3 meters"); otherwise one decimal
+    /// ("2.5 meters"). `SpokenPhrases.bucketSamples` sweeps this function rather than assuming the
+    /// buckets, so a change here re-shapes the prefetch set by itself (and must stay inside
+    /// `SpokenPhrases.warningCharacterBudget`).
     /// - Parameter meters: distance in metres.
     /// - Returns: the phrase; "" for a non-finite distance. Pinned by `spokenDistances`.
     public static func phrase(_ meters: Float) -> String {

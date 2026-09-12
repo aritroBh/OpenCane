@@ -125,6 +125,8 @@ enum { M_L = 1, M_R = 2, M_B = 3 };
 struct Step { uint8_t mask, duty; uint16_t ms; };            // ms == 0 terminates a sequence
 static const uint8_t DUTY[5] = { 0, 102, 153, 204, 255 };    // intensity 0..4 -> 0/40/60/80/100 %
 
+// Built-in patterns: {mask, 255 = full duty, ms} buzzes, {0,0,ms} pauses, {0,0,0} ends the sequence.
+// PAT_DOUBLE = P:1 and the local drop-off alert; PAT_STOP = P:4; PAT_STEPUP = local step-up alert.
 static const Step PAT_DOUBLE[]  = { {M_B,255,120}, {0,0,100}, {M_B,255,120}, {0,0,0} };
 static const Step PAT_LTRIPLE[] = { {M_L,255,100}, {0,0,80}, {M_L,255,100}, {0,0,80}, {M_L,255,100}, {0,0,0} };
 static const Step PAT_RTRIPLE[] = { {M_R,255,100}, {0,0,80}, {M_R,255,100}, {0,0,80}, {M_R,255,100}, {0,0,0} };

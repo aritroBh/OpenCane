@@ -24,7 +24,7 @@
 //      are reported as `gated(at:)` and only a hole longer than `maxEvidenceGap` (2 s) drops the
 //      episode — jitter must not silence a veer warning, a GPS gap must not fire one. A moment
 //      muted because the *situation* changed (a corner, a curved leg) ends the episode instead.
-//  Tests: GeoMathTests.swift (25 tests).
+//  Tests: GeoMathTests.swift (26 tests).
 //
 
 import Foundation
@@ -129,12 +129,16 @@ public enum GeoMath {
 /// A turn / veer direction. `OffCourseDetector` output; `NavigationEngine` speaks it as
 /// "Veer left." / "Veer right." and taps it on the watch as `.turnLeft` / `.turnRight`.
 public enum Turn: String, Sendable, Codable, Equatable {
+    // `left` = the target bearing is counter-clockwise of the heading (negative error), `right` =
+    // clockwise (positive error).
     case left, right
 }
 
 /// Off-bearing > `threshold` continuously for `hold` seconds → one veer cue, then `cooldown`.
 ///
-/// Not Sendable on purpose: owned and driven by `NavigationEngine` on the main actor. After a
+/// Not Sendable on purpose: owned and driven by `NavigationEngine` on the main actor (it calls
+/// `update` with the veer error, `gated(at:)` for holes, `endEpisode()` when the situation changes
+/// or after a cue, `reset()` at route start, when a turn settles and at every waypoint). After a
 /// cue fires, `offSince` restarts, so a further full `hold` is needed before the next one.
 ///
 /// "Continuously" is about the *evidence*, not the samples: the caller cannot judge every moment
@@ -323,12 +327,15 @@ public enum NavEvent: Sendable, Equatable {
 /// Not Sendable on purpose: created per route and driven by `NavigationEngine` on the main actor.
 /// Pinned by the geofence tests in GeoMathTests.swift (gating, arrival streak, skip-ahead,
 /// look-ahead arrival, passed-by, leg-bearing).
+/// Owner: `NavigationEngine` (created in `start(_:)`, fed in `update(fix:)`, `advance()` on
+/// Next, `targetBearing` / `isNearCurrent` for the beacon and the veer gate).
 public final class GeofenceTracker {
     /// The route's waypoints in walking order (fixed for the tracker's lifetime).
     public private(set) var waypoints: [Waypoint]
     /// Index of the waypoint currently being approached; `waypoints.count` once finished.
     public private(set) var index: Int = 0
-    /// Ignore fixes worse than this (metres) for intermediate waypoints.
+    /// Ignore fixes worse than this (metres) for intermediate waypoints. `NavigationEngine.start`
+    /// overwrites it with its `veerMaxAccuracy` (also 20), so "GPS weak" and the fences agree.
     public var maxAccuracy: Double = 20
     /// Ignore fixes slower than this (m/s) for intermediate waypoints (standing still near a fence).
     /// The comparison is strict: `speed > minSpeed` passes (pinned by
@@ -338,7 +345,8 @@ public final class GeofenceTracker {
     public var maxArrivalAccuracy: Double = 30
     /// Consecutive plausible in-fence fixes needed for arrival.
     public var arrivalHits: Int = 2
-    /// Consecutive plausible in-fence arrival fixes seen so far (reset on a judged miss / advance).
+    /// Consecutive plausible in-fence arrival fixes seen so far (reset on a judged miss / advance;
+    /// a fix too poor to judge leaves it alone — `aGatedOutFixDoesNotBreakTheArrivalStreak`).
     private var arrivalStreak = 0
     /// How many waypoints beyond the current one a fix may claim.
     public var lookahead: Int = 2
@@ -351,7 +359,8 @@ public final class GeofenceTracker {
     private var minDistance: Double = .infinity
     /// Distance (metres) of the previous gated fix to the current waypoint; nil after an advance.
     private var lastDistance: Double?
-    /// Consecutive gated fixes that did not get closer (1 m jitter tolerance).
+    /// Consecutive gated fixes that did not get closer (1 m jitter tolerance); reset whenever a fix
+    /// sets a new closest approach (`passedByResetsRecedingStreakDuringSlowApproach`).
     private var recedingFixes = 0
 
     /// - Parameter waypoints: the route in walking order; the last one is the arrival fence.

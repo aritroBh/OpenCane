@@ -138,7 +138,7 @@ final class AppModel {
     let hazards: HazardScanner
     /// Hazard map: every announced hazard with GPS + photo → Documents/hazards/*.geojson.
     let hazardLog = HazardLog()
-    /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 38).
+    /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 39).
     /// Off unless `familyAlertsEnabled`; unconfigured (no webhook key) is a no-op that says so.
     let family = FamilyAlerts()
     /// Last LiDAR ground hazard spoken ("Two meters ahead, drop-off."), for the Hazards card's

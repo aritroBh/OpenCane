@@ -5,7 +5,9 @@ per-camera rotation fix are on `main`. Written for Aritro, Aarav, Tejas, Sagar a
 AI agents picking the work up. It says what exists, what is proven, what is not, what is open, and
 which decisions are already made so nobody re-litigates them at 2 a.m. Every sentence marked
 **historical** was true when it was written and is kept for context; everything else was checked
-against the code, `git log` and `CHANGELOG.md` at `076fcaa`.
+against the code, `git log` and `CHANGELOG.md` at `076fcaa`. The commits after it (`e459b3a`,
+`c706856`, `d775d4b`) are documentation passes plus the new `ios/scripts/streetview_stim.py`; they
+change no Swift code outside comments, so every behaviour and test count here still holds.
 
 > **The 2-minute version: [`TEAM_BRIEF.md`](TEAM_BRIEF.md). Open work: [`todo.md`](todo.md) →
 > "Cue design v2 — Steps 35–45".** AI agents: read §10 ("How an agent resumes") before touching
@@ -30,7 +32,7 @@ against the code, `git log` and `CHANGELOG.md` at `076fcaa`.
 
 An iPhone 17 Pro Max (iOS 27) clamped to a non-metal cane is the only computer (the prototype
 shaft is a broom handle measured at 27.65 mm by the printed bore rings; the older 28.75 mm figure
-is retired in the `.scad` files). LiDAR warns about waist-to-head obstacles by shaking the cane
+is retired as `pole_d` in both mount models and survives only as the alternate-cane fit check). LiDAR warns about waist-to-head obstacles by shaking the cane
 (Core Haptics), GPS walks a 9-waypoint route from ISR Townsend Hall to the CIF east entrance (or
 any destination through the campus gazetteer and MapKit), AirPods Pro play a spatial click from the
 direction to walk and speak the instructions, and an Apple Watch taps turns and crossings onto the
@@ -56,8 +58,9 @@ yourself before claiming anything (AGENTS.md "How we engineer" 1).
 | GPS replay through the real app | **PASS** (266 s) | `make e2e` (silent: the app mutes itself) |
 | Cue audit script fixtures | `cue_audit.py --selftest` ok | `python3 scripts/cue_audit.py --selftest` |
 
-Every step from 34 to 37 and the rotation fix also had its own adversarial review (multi-agent
-workflow, Muse, Antigravity; Step 35's Antigravity run returned no output). The findings, fixes
+Steps 34, 36, 37 and the rotation fix each had their own adversarial review (multi-agent
+workflow, Muse, Antigravity). Step 35 had Muse only: its Antigravity run returned no output and was
+retried on Step 36. The findings, fixes
 and rejections with evidence are in each CHANGELOG entry. A review is not a device test.
 
 ### 2.2 What landed on the app line, Steps 26–37
@@ -67,7 +70,7 @@ and rejections with evidence are in each CHANGELOG entry. A review is not a devi
 | 26 | Team credits: software is Aritro, Aarav and Tejas; hardware is Sagar and Tommy (docs only) | `1724a74`, `2f4e37d` |
 | 27 | Three icon-only root tabs (`CKTabBar`, `ios/CaneKit/UI/TabBar.swift`); `make test` compile fix for `#expect` + `mutating` | `e1c2c93` / `a4b4ed0`, `073fc5e` |
 | 28 | Sound recognition ("Listen for sirens and horns", off by default) fails safe across its whole microphone lifetime (`SoundRecognitionGuard`) | `a428d66` |
-| 29 | "Talk to OpenCane" registered as an App Shortcut, so the Action Button can pick it; warnings lead with distance ("Two meters ahead, door.") | `6bac446` |
+| 29 | "Talk to OpenCane" registered as an App Shortcut, so the Action Button can pick it; warnings lead with distance ("Two meters ahead, door") | `6bac446` |
 | 30 | Speech holds while the walker talks (`SpeechQueue.setVoiceHold`); `.safety` still speaks through; `docs/auditory-load.md` | `6bac446` |
 | 31 | Instant system-voice answers, "set location / destination" phrases, Sift / Granger aliases, exit-first clause on a weak fix | `6bac446` |
 | 32 | Flashlight toggle; why both cameras pause obstacle detection | `6bac446` |
@@ -79,7 +82,8 @@ and rejections with evidence are in each CHANGELOG entry. A review is not a devi
 | 37 | Talk floor: a line cut by a warning resumes from the clause it was cut in (`SpeechResume`, at most 3 resumes), with a 0.35 s pause between different priority bands that `.safety` never waits for; trip log gains `resume_from` and `speech_end` | `076fcaa` |
 
 Hardware line on the same day (Sagar's machine): Step 25 (screwless mount simulated, redesigned
-and re-sliced, `verify_mount.ps1` with 30 checks) and the committed G-code / STLs (`0c425de`).
+and re-sliced, `scripts/verify_mount.ps1`; the Step 25 entry says 30 checks, the script now prints
+32 PASS/FAIL lines on a full run) and the committed G-code / STLs (`0c425de`).
 Step numbers 15, 16, 17, 21, 22 and 25 each appear twice in `CHANGELOG.md` on purpose; read the
 date and subject, not the number.
 
@@ -88,7 +92,7 @@ date and subject, not the number.
 | Trip log (`canekit-…jsonl`) | Build | What it showed |
 |---|---|---|
 | `2026-09-12T20-57-17Z` | before Step 34 | The flashlight read `isTorchActive` too early, so every change took two presses. A voice command ("set the location from here to Granger library") had started a real 750 m route, so every Both-cameras press was correctly refused with no visible caption. Face tracking was switched on mid-route (t = 80.7 s). The first cue-load baseline: **handheld** (tilt median 25.8°, only 14 % of frames inside 3–8°), 34 head cues/min, 7.6 unsolicited lines/min, of 360 head-band cells under 1.5 m 349 had the torso equally near, zero head cells in mount-tilt frames. Fixed in Step 34; measured in Step 35 |
-| `2026-09-12T22-02-03Z` | capture-angle rotation | `back_rotation: 0` with the owner's screenshot of a sideways back feed. Led to the per-camera rotation fix |
+| `2026-09-12T22-02-03Z` | preview-angle rotation for both cameras (`1caff45`) | `back_rotation: 0` with the owner's screenshot of a sideways back feed. Led to the per-camera rotation fix |
 | `2026-09-12T22-20-53Z` | Step 36 + rotation fix | `back_rotation` 90, `front_rotation` 0, `front_size` 1080x1920. At t = 132–152 s every Cues level and place tap logged one `cue_profile` record and dispatched its line. 5 of 58 dispatched lines were restarts, and 9 line starts were < 1 s apart |
 | `2026-09-12T22-27-00Z` | Step 36 | A friend's 37-minute **handheld** walk: 45 "Head height." lines and 4 restarts, including the whole route intro played twice. With 22-20-53Z this led to Step 37 |
 
@@ -138,17 +142,19 @@ In the order it unblocks the most. Each item is the "test on device" line of its
    message); the back picture and front inset must be upright each time. Whether buffer dimensions
    swap under `videoRotationAngle` is an open question; `front_size` is logged as evidence only.
 5. **Flashlight, both-cameras caption, face tracking (Step 34).** Written and simulator-green; the
-   phone went unavailable mid-session, and no later log confirms it. Flashlight on, off, on: each
+   phone went unavailable mid-session, and although the build was installed during Step 35, no log
+   since confirms these fixes. Flashlight on, off, on: each
    press moves the switch once and speaks once; a fast off→on gives one confirmation and no "turned
    off". Mid-route, Both cameras bounces and the caption "…Stop the route on the Guide tab first."
    stays; Head tracking without AirPods is refused and spoken. Trip log: `speech_dispatch` for the
    refusal lines and `torch {action: confirmed(on: true)}`. The 2 s settle deadline is a hypothesis
    to confirm here.
-6. **Older unticked device items** (`todo.md` → "TONIGHT"): Action Button → Talk to OpenCane
+6. **Older device items.** Unticked in `todo.md` → "TONIGHT": Action Button → Talk to OpenCane
    (`voice_toggle {source: actionButton}`), distance-first warnings on a walk, the 7 s speech calm
    window, voice hold (Step 30), the blindfold walk to Grainger / Siebel (Step 31), flashlight with a
-   route and inside Both cameras (Step 32), tab-switch feel (Step 33), the sound-recognition AirPods
-   / HFP / permission checklist (Step 28), and the Step 25 camera interlock checklist.
+   route and inside Both cameras (Step 32). Only in the `test on device` lines of their CHANGELOG
+   entries: tab-switch feel (Step 33), the sound-recognition AirPods / HFP / permission checklist
+   (Step 28), and the Step 25 camera interlock checklist.
 7. **Not proven on the cane at all:** LiDAR distances through the clamp, how the haptics feel in
    the hand, the beacon's left / right, wrist-down watch taps, GPS fence timing on campus, heat and
    battery over a 20-minute walk, and the ground-hazard thresholds on real pavement. That is what
@@ -361,9 +367,10 @@ first thing** (stress plan D17): it should name what is there.
 
 - **Install the graph tool once:** `uv tool install graphifyy` (or `pipx install graphifyy`); the
   command is `graphify`. The graph is committed in `graphify-out/`, so queries work right after a
-  pull. ⚠ At `076fcaa`, `graphify-out/GRAPH_REPORT.md` says it was built from `d1238ebf`, before
-  Steps 34–37, so `TorchSwitch`, `CueRules`, `DualCameraRotation` and `SpeechResume` may be
-  missing: run `graphify update .` first.
+  pull. The committed `graphify-out/GRAPH_REPORT.md` (refreshed in `e459b3a`) says it was built
+  from `076fcaa8`, so it includes `TorchSwitch`, `CueRules`, `DualCameraRotation` and
+  `SpeechResume`; compare it with `git rev-parse HEAD` and run `graphify update .` after any code
+  change.
 - **Ask the knowledge graph first:** from the repo root, `graphify query "how does a curb warning reach
   the speech queue"`, `graphify path "HazardScanner" "SpeechQueue"`, `graphify explain "TurnSettle"`.
   Communities are listed in `graphify-out/GRAPH_REPORT.md`; `graphify-out/graph.html` opens in a

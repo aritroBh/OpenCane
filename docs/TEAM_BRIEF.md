@@ -44,12 +44,12 @@ resume from its §10.
 ## What changed for you
 
 - **Obstacle names are off by default now** (Step 36). Turn on Settings → Haptics → "Speak
-  obstacle names" if a test expects "Two meters ahead, door." (stress plan D6 says so).
+  obstacle names" if a test expects "Two meters ahead, door" (stress plan D6 says so).
 - **Settings → Cues** is new and first on the Settings tab: **Quiet / Standard / Detailed** and
   **Outdoors / Indoors**, default Detailed + Outdoors. Changing it speaks once ("Quiet cues.",
   "Indoor mode."). Quiet and Indoors name nothing and read only safety signs; Indoors warns about
   head height at 1.2 m instead of 1.5 m. Haptics are the same at every level for now.
-- **Warnings say the distance first:** "Two meters ahead, door.", not "door ahead, two meters".
+- **Warnings say the distance first:** "Two meters ahead, door", not "door ahead, two meters".
 - **"Head height." still cuts in at once.** The direction it cut now continues from its phrase
   after a short pause, instead of starting over.
 - **Where things are:** Guide tab (route, Where am I); Sense tab (depth status, Obstacles, Hazards
@@ -91,7 +91,7 @@ resume from its §10.
   and a bench-test plan. The screwless mount's runbook is `hardware/mount_screwless/PRINTING.md`;
   run `scripts/verify_mount.ps1` after any `.scad` change.
 - The prototype shaft is a broom handle measured at **27.65 mm** by the bore rings (28.75 is
-  retired in the `.scad` files). Next prints: `coupons_next` (thread + dovetail clearances), then
+  retired as `pole_d` in both mount models). Next prints: `coupons_next` (thread + dovetail clearances), then
   collar + ring, cradle, arm.
 - The mount is yours to redesign however you like. The app needs only four things:
   - the phone upright with the back camera and LiDAR clear;
@@ -119,8 +119,8 @@ resume from its §10.
   commit, with a `test on device:` line at the end of the commit message.
 - The step-by-step resume checklist is `TEAM_HANDOFF.md` §10.
 - To find anything: install the graph tool once with `uv tool install graphifyy`, then run
-  `graphify update .` (the committed graph predates Steps 34–37) and `graphify query "your question"`
-  from the repo root.
+  `graphify update .` after any code change (the committed graph was built from `076fcaa`) and
+  `graphify query "your question"` from the repo root.
 
 ## Installing on the phone (Aritro)
 

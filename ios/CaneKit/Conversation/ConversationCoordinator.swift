@@ -45,20 +45,36 @@ import Foundation
 import Observation
 
 /// Orchestrates user queries, fast-path shortcuts, LLM tool calling, and action execution.
+/// One instance (`AppModel.conversation`); main actor; one query at a time (`isProcessing`).
 @MainActor
 @Observable
 final class ConversationCoordinator {
 
     // MARK: - Published State
+    /// Rolling memory of the last `ConversationHistory.defaultMaxTurns` (6) turns — every path
+    /// appends one, including fast-path and scene turns. The last 3 are sent to the cloud model as
+    /// `[RECENT DIALOGUE]` by `ConversationPrompt.buildUserPrompt` (the current turn is appended
+    /// only after the reply). In memory only: lost on relaunch.
     private(set) var history = ConversationHistory()
     /// Posts dropped by voice or by the `drop_marker` tool, persisted across launches by `PostStore`.
     var markers: [WalkMarker] { store.markers }
     /// Documents/posts/posts.json; both marker paths go through `dropPost(name:)`.
     let store = PostStore()
+    /// True while `handleQuery` runs (including the cloud round trip). A second query meanwhile is
+    /// dropped silently by `handleQuery`'s guard — the voice path speaks "Still working on your last
+    /// question." in AppModel; the Siri / Shortcuts path (`handleSpokenQuery`) says nothing.
+    /// GuideCard titles the Talk button "Thinking…" from it.
     private(set) var isProcessing: Bool = false
+    /// The last answer text (fast path, scene acknowledgement, cloud reply or error line), shown
+    /// under the Talk button. For an action that spoke for itself it is the coordinator's own
+    /// summary ("Routing to X."), which may differ from what was actually spoken.
     private(set) var lastResponse: String?
 
     // Minimal 1x1 valid JPEG fallback when no camera frame is available
+    /// Sent with a cloud query when `DepthFrameProcessor.jpegSnapshot()` returns nil (no retained
+    /// camera frame yet, or it was dropped when ARKit paused, or encoding failed):
+    /// `VLMClient.describe(jpeg:prompt:)` always takes an image, and a conversational question
+    /// must not fail for want of one.
     private static let minimalJPEG = Data([
         0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48,
         0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -72,9 +88,19 @@ final class ConversationCoordinator {
     ])
 
     // MARK: - Dependencies
+    /// The engine owner every effect goes through. Weak: `AppModel` owns this coordinator, and a
+    /// query can span a network await (Step 23 Muse finding 3). Every function returns quietly (or
+    /// with neutral facts) when it is nil.
     private weak var appModel: AppModel?
+    /// The app's shared vision client (`VLMClientFactory.resolved`). Only its `cloudPrimary` is
+    /// used here: the on-device client ignores a conversational prompt and answers with a scene
+    /// description, which is a wrong answer to anything else (Step 23 Muse finding 1).
     private let client: any VLMClient
 
+    /// - Parameters:
+    ///   - appModel: the owner (held weakly).
+    ///   - client: the same `VLMClient` `SceneDescriber` and `HazardScanner` use.
+    /// Called once from `AppModel.init`, after every stored property is set.
     init(appModel: AppModel, client: any VLMClient) {
         self.appModel = appModel
         self.client = client
@@ -83,6 +109,12 @@ final class ConversationCoordinator {
     // MARK: - Query Handling
 
     /// Main entry point for spoken or typed conversational queries.
+    /// Takes one of the four paths in the file header and always leaves one `history` turn,
+    /// `lastResponse` and a trip-log record behind — except when it returns early: a query while
+    /// `isProcessing`, no `appModel`, or a blank query (nothing spoken, nothing logged).
+    /// - Parameter rawQuery: the recogniser's transcript or the intent's text; trimmed here.
+    /// Speech TTLs: fast path and no-cloud line 12 s, cloud answer 15 s, error 8 s (all `.scene`,
+    /// `immediate`).
     func handleQuery(_ rawQuery: String) async {
         guard !isProcessing else { return }
         guard let model = appModel else { return }
@@ -202,6 +234,9 @@ final class ConversationCoordinator {
     // MARK: - Action & Tool Execution
 
     /// Executes an immediate fast-path action and returns the confirmation sentence plus whether it already spoke.
+    /// `alreadySpoken == true` means the AppModel effect announced itself, so `handleQuery` only
+    /// records the returned text (history, `lastResponse`, `conv_turn`) and does not speak it.
+    /// ⚠ Answers here must be facts the app actually holds — see the `.hazardsEncountered` note.
     private func executeAction(_ action: ConversationAction) -> (response: String, alreadySpoken: Bool) {
         guard let model = appModel else { return ("", false) }
         switch action {
@@ -217,6 +252,8 @@ final class ConversationCoordinator {
         case .updateSetting(let opt, let enabled):
             if let option = HandsFreeOption(rawValue: opt) {
                 model.setOption(option, enabled: enabled)
+                // The recorded line is the *request*; `setOption` speaks the read-back state (and,
+                // for "off", what stops), so a refused switch is spoken correctly but logged as asked.
                 let line = enabled ? "\(option.spokenName) on." : "\(option.spokenName) off."
                 return (line, true) // setOption already speaks at .nav
             }
@@ -241,6 +278,8 @@ final class ConversationCoordinator {
 
         case .startRoute(let dest):
             model.navigate(to: dest)
+            // navigate(to:) speaks "Finding a route to <dest>." at once, then "Walking to <place>, N
+            // meters." (or the failure line) once the MapKit build finishes — all at .nav.
             return ("Routing to \(dest).", true) // navigate(to:) already speaks "Walking to ..." at .nav
 
         case .stopRoute:
@@ -261,12 +300,19 @@ final class ConversationCoordinator {
                 let m = Int(model.trip.distanceM.rounded())
                 return ("You have walked \(m) meters on this route.", false)
             case .hazardsEncountered:
+                // ⚠ Fixed sentence: it does NOT consult `AppModel.hazardLog.records`, so it is said
+                // even after hazards were announced and mapped on this route. Known gap; a real
+                // answer should count this route's hazard records.
                 return ("No severe hazards reported on this route.", false)
             default:
+                // `.pastWaypoints` / `.recentEvents`: not implemented on the fast path.
                 return ("No trip records available.", false)
             }
 
         case .inspectScene(let question):
+            // The acknowledgement is spoken now; `SceneDescriber` speaks the answer later. Unlike
+            // the scene-question path in `handleQuery`, a refused ask (describer busy) is not
+            // distinguished here — the Bool from `askAboutScene` is discarded.
             model.askAboutScene(question)
             return ("Checking the scene ahead.", false)
 
@@ -276,6 +322,12 @@ final class ConversationCoordinator {
     }
 
     /// Executes tool calls generated by the LLM. Returns true if tool handled its own speech.
+    /// Arguments are strings (`ToolInvocation.arguments`); a missing or unparseable argument makes
+    /// the tool a no-op returning false, so the model's `spoken_response` is spoken instead — which
+    /// may claim an action that did not happen. `query_status` / `query_history` fall to `default`
+    /// (no local effect; the model answers from the context it was sent).
+    /// ⚠ `.dropMarker` discards `dropPost`'s confirmation, including "could not be saved": the
+    /// model's sentence is spoken, and only the `marker_dropped` log shows `persisted: false`.
     @discardableResult
     private func executeTool(_ invocation: ToolInvocation) -> Bool {
         guard let model = appModel else { return false }
@@ -318,6 +370,10 @@ final class ConversationCoordinator {
     /// land here so the store, the trip log and the wording cannot drift apart. No fix → still
     /// recorded at (0, 0) so the name is not lost, and the confirmation says "GPS weak" so the
     /// walker knows the spot is not pinned. Returns the confirmation sentence.
+    /// The fix is `location.fix` at any accuracy and age (no gate, unlike `recordHazard`'s 120 s).
+    /// Logs `marker_dropped` with `name`, `lat`, `lon`, `has_fix`, `persisted` and, on a store
+    /// failure, `error`.
+    /// - Parameter name: the spoken name, or "Marker N" from the tool path when none was given.
     @discardableResult
     private func dropPost(name: String) -> String {
         let fix = appModel?.location.fix
@@ -340,6 +396,12 @@ final class ConversationCoordinator {
 
     // MARK: - Context Gathering
 
+    /// The telemetry snapshot serialised into the cloud prompt (`ConversationPrompt`).
+    /// Known approximations (the model is NOT told about them — keep them in mind when reading replies):
+    /// `currentDestination` is the *next waypoint's instruction*, not the destination name;
+    /// `nextWaypointName` is the same instruction, and "No route" when idle (never nil in
+    /// practice); `recentObstacles` / `recentHazards` are always empty (not wired). With no
+    /// `appModel`, a neutral all-unknown context.
     private func buildContext() -> ConversationContext {
         guard let model = appModel else {
             return ConversationContext(
@@ -382,6 +444,10 @@ final class ConversationCoordinator {
         )
     }
 
+    /// The same `StatusFacts` `AppModel.speakStatus()` builds for the Siri status report, read live
+    /// from the engines, so a fast-path status answer and the spoken status use one wording
+    /// (`StatusSummary`). Battery −1 and GPS accuracy −1 mean unknown. With no `appModel`, all
+    /// false / unknown.
     private func currentStatusFacts() -> StatusFacts {
         guard let model = appModel else {
             return StatusFacts(

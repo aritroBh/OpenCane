@@ -12,7 +12,7 @@ shipped code disagree, the code is the truth: fix this file (and say so in `CHAN
 OpenCane is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
 user along GPS waypoints and warns about waist-to-head obstacles. The **phone is the only computer**:
 an iPhone 17 Pro Max (iOS 27) clamped to a non-metal cane shaft — for the prototype a 27.65 mm broom
-handle, measured by the bore-ring coupons (CHANGELOG Step 21; the old 28.75 figure is retired) —
+handle, measured by the bore-ring coupons (CHANGELOG hardware "Step 21 — The bore rings were printed"; the old 28.75 figure is retired) —
 plus AirPods Pro (beacon + speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
 external sensors. The demo route is ISR Townsend Hall → CIF on the UIUC campus
 (`ios/CaneKit/Resources/route_isr_cif.json`), but any destination works via MapKit walking directions.
@@ -47,7 +47,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    **by bytes**. "OpenCane ready." appears both there and at the `speech.say` in `AppModel.start()`;
    change one without the other and that line silently falls back to Apple's system voice.
 2. ⚠ Changing `CFBundleDisplayName` changes **what the walker must say to Siri**: the phrase is
-   "… in OpenCane" now, not "… in CaneKit". `docs/design.md` §6 lists the current phrases.
+   "… in OpenCane" now, not "… in CaneKit". `docs/design.md` §6.3 and `docs/handsfree.md` list the current phrases.
 
 ## Layout
 
@@ -60,7 +60,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | `ios/Shared/` | Types compiled into more than one target (Live Activity attributes) |
 | `ios/CaneKitUITests/` | XCUITests + the screenshot tour |
 | `ios/project.yml`, `ios/scripts/gen.sh`, `ios/Makefile` | XcodeGen project + CLI build/test/install |
-| `ios/scripts/` | `test.sh` (`make test`), `e2e.py` (`make e2e`, asserts on the trip log), `cue_audit.py` (`make audit`, cue load of one walk), `sign_probe.swift` / `vision_probe.swift` (measure what Vision reads), `streetview/` (`frames.json` + git-ignored JPEGs for `SCENARIO=streetview`), `appicon.py` |
+| `ios/scripts/` | `test.sh` (`make test`), `e2e.py` (`make e2e`, asserts on the trip log), `cue_audit.py` (`make audit`, cue load of one walk), `sign_probe.swift` / `vision_probe.swift` (measure what Vision reads), `streetview/` (`frames.json` + git-ignored JPEGs for `SCENARIO=streetview`), `streetview_stim.py` (run by hand: a demo / dataset visualiser over the Street View frames with its own nav approximation and template narration — runs no CaneKit code, no Makefile target, no tests), `appicon.py`, `gen.sh` |
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
 | `docs/` | `README.md` (index of every doc), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `cue_design_v2.md` (cue research, Step 35), `auditory-load.md` (speech-load research, Step 30), `handsfree.md` (Siri / Action Button use), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` (history), `TEAM_BRIEF.md` / `TEAM_HANDOFF.md` (dated status snapshots), `superpowers/` (speech-load plan + spec) |
 | `hardware/mount/` | Phone-to-cane mount, screwed: design brief + parametric OpenSCAD (Sagar) |
@@ -89,7 +89,8 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    `ios/Secrets.example.plist` is the template). `Secrets` returns nil for missing keys and the app
    speaks a graceful line; it must never crash without a key.
 5. **`CaneKit.xcodeproj` is generated and git-ignored.** Edit `ios/project.yml`, then run
-   `ios/scripts/gen.sh` (it also applies the XcodeGen watch-embed patch and copies Secrets). Never
+   `ios/scripts/gen.sh` (it also applies the XcodeGen watch-embed patch and, only when
+   `Secrets.plist` is missing, creates it from the example — it never overwrites real keys). Never
    hand-edit the pbxproj, never regenerate unless `project.yml` or the file list changed.
 6. **Bundle IDs are frozen**: `com.aritro.canekit`, `.watchkitapp`, `.widget` (free personal team, 10
    App IDs per week).
@@ -358,8 +359,10 @@ bench has *disproved* must never sit in the file as though it were settled — m
   appearing in a log is an app bug and `ios/scripts/e2e.py` fails the run on it.
 - Route cues are felt on the cane as long soft buzzes (turn left 1, right 2, crossing 3, arrived
   long-short-long) — deliberately unlike the crisp obstacle taps.
-- "Head tracking without AirPods" (`faceHeadTrackingEnabled`) is **not persisted**, and
-  `LaunchRecovery` removes any stored value: a persisted `true` crashed the app inside ARKit warm-up
+- "Head tracking without AirPods" (`faceHeadTrackingEnabled`) is **not persisted** (the property
+  never reads its old `UserDefaults` key), and a recovered launch (`Settings.launchMode`: the
+  previous launch's marker was still there) removes that key with the rest of
+  `LaunchRecovery.optionalFeatureKeys`: a persisted `true` crashed the app inside ARKit warm-up
   on every launch (trip logs `canekit-2026-09-12T02-40-53Z` / `02-41-13Z`), with the off switch on a
   screen the app never reached. The flashlight (`torchEnabled`) is not persisted either (a pocketed
   torch is a dead battery and a burn risk).
@@ -416,8 +419,9 @@ bench has *disproved* must never sit in the file as though it were settled — m
   capture angle follows the phone's physical orientation and the preview angle is sampled once at
   connect, so both are wrong when Both cameras starts with the phone sideways or flat. The UI is
   portrait-only (`UISupportedInterfaceOrientations` in `ios/project.yml`), so a fixed angle is right;
-  "re-apply the angle on every orientation change" was rejected. The coordinator angles and
-  `front_size` / `back_size` / `*_portrait` are still logged as evidence. Pinned by `LiveViewTests`
+  "re-apply the angle on every orientation change" was rejected. The applied `*_rotation`, the
+  coordinator's *capture* angle (`front_capture_angle` / `back_capture_angle`; the preview angle is
+  passed in but not logged) and `front_size` / `back_size` / `*_portrait` are still logged as evidence. Pinned by `LiveViewTests`
   (`backCameraIsPortraitUpWhateverThePhoneReads`, `frontCameraIsPortraitUpWhateverThePhoneReads`).
 - **A line cut by a warning resumes from its clause; a call, Siri or dictation restarts it.** A
   pre-emption (`say` of a higher band) re-queues the playing line at the front of its band from the

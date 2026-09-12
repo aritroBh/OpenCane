@@ -105,6 +105,21 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(g.torso[1] == 4)
 }
 
+/// At point-blank range (< 35 cm, e.g. 15 cm against a wall), SPAD saturation marks returns
+/// confidence 0. Proximity overrides confidence so the wall registers as an urgent obstacle rather than clear.
+@Test func pointBlankLowConfidenceObstacleIsDetected() {
+    // 15 cm return across the left third with confidence 0 (low).
+    let d = portraitBuffer { x, _ in x < 64 ? 0.15 : 4.0 }
+    var conf = [UInt8](repeating: 2, count: 256 * 192)
+    for by in 0..<192 {
+        for bx in 0..<256 where (192 - 1 - by) < 64 { conf[by * 256 + bx] = 0 }
+    }
+    let g = LaneMath.computeLanes(depth: d, confidence: conf, width: 256, height: 192)
+    #expect(abs(g.head[0] - 0.15) < 0.01)
+    #expect(abs(g.torso[0] - 0.15) < 0.01)
+    #expect(g.torso[1] == 4)
+}
+
 /// A thin pole covering 20 % of a cell registers; a 5 % speck of noise does not.
 @Test func tenthPercentileNeedsMoreThanTenPercentOfCell() {
     // 20 % of the centre torso cell at 1 m → reports 1 m; 5 % → reports the 4 m background.
