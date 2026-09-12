@@ -1,0 +1,424 @@
+<title>OpenCane Hardware Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --ground:#F4F5F3;--surface:#FFFFFF;--ink:#1B1E21;--muted:#5A6169;--rule:#D9DCDF;--soft:#ECEEEB;
+  --accent:#B42318;--go:#2F7A4B;--partial:#9A620F;--no:#6B7280;--shaft:#FFFFFF;--shaft-edge:#C9CDD1;
+  --display:"Archivo Narrow","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#111315;--surface:#1A1D20;--ink:#E6E8EA;--muted:#9BA2AA;--rule:#2D3136;--soft:#202428;
+  --accent:#F07A6D;--go:#6CC08E;--partial:#E2AA4E;--no:#8E959E;--shaft:#E9EBED;--shaft-edge:#E9EBED;}}
+:root[data-theme="dark"]{
+  --ground:#111315;--surface:#1A1D20;--ink:#E6E8EA;--muted:#9BA2AA;--rule:#2D3136;--soft:#202428;
+  --accent:#F07A6D;--go:#6CC08E;--partial:#E2AA4E;--no:#8E959E;--shaft:#E9EBED;--shaft-edge:#E9EBED;}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:400 15.5px/1.6 var(--body);padding-inline:20px;padding-block:0 64px}
+.wrap{max-width:860px;margin:0 auto}
+.cane{height:10px;margin-top:28px;border-radius:5px;border:1px solid var(--shaft-edge);
+  background:linear-gradient(90deg,var(--shaft) 0 84%,var(--accent) 84% 100%)}
+header{padding-block:22px 8px}
+.eyebrow{font:500 12px/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:700 clamp(34px,6vw,50px)/1.02 var(--display);letter-spacing:-.01em;margin:8px 0 14px;text-wrap:balance}
+h2{font:600 26px/1.15 var(--display);margin:0 0 6px;text-wrap:balance}
+h3{font:600 18px/1.25 var(--display);margin:0 0 4px;letter-spacing:.01em}
+p{margin:0;max-width:68ch}
+.lede{font-size:17.5px;color:var(--ink);max-width:62ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:16px;font:400 13px/1.4 var(--mono);color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500}
+section{padding-block:34px 0;display:grid;gap:14px}
+section>.head{border-top:1px solid var(--rule);padding-top:22px;display:grid;gap:4px}
+.muted{color:var(--muted)}
+.note{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:var(--mono);font-size:.88em}
+.figure-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.fig{background:var(--surface);padding:14px 16px;display:grid;gap:2px}
+.fig .n{font:600 28px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.fig .n.acc{color:var(--accent)}
+.fig .l{font-size:13px;color:var(--muted)}
+.tbl{overflow-x:auto;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:600px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--rule)}
+tr:last-child td{border-bottom:0}
+th{font:500 11.5px/1.3 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--soft)}
+td.num{font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:13px;white-space:nowrap}
+.pill{display:inline-block;font:500 11.5px/1 var(--mono);letter-spacing:.04em;padding:4px 7px;border-radius:3px;border:1px solid currentColor;white-space:nowrap}
+.go{color:var(--go)}.partial{color:var(--partial)}.no{color:var(--no)}.cut{color:var(--no);text-decoration:line-through}
+.modules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.mod.cutmod{grid-column:1/-1}
+@media (max-width:600px){.modules{grid-template-columns:1fr}}
+.mod{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:16px 18px;display:grid;gap:8px;align-content:start}
+.mod .tag{font:500 11.5px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.mod ul{margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px}
+.mod.cutmod{background:transparent;border-style:dashed}
+ul.plain,ol.plain{margin:0;padding-left:18px;display:grid;gap:6px;max-width:72ch}
+.diagram{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:12px;overflow-x:auto}
+.diagram svg{display:block;width:100%;min-width:640px;height:auto}
+svg .box{fill:var(--soft);stroke:var(--rule)}
+svg .boxk{fill:var(--surface);stroke:var(--ink);stroke-width:1.4}
+svg .t{fill:var(--ink);font:600 15px var(--display)}
+svg .s{fill:var(--muted);font:400 11.5px var(--mono)}
+svg .ln{stroke:var(--ink);stroke-width:1.4;fill:none}
+svg .lnd{stroke:var(--muted);stroke-width:1.2;fill:none;stroke-dasharray:4 4}
+svg .lab{fill:var(--accent);font:500 11.5px var(--mono)}
+svg .ah{fill:var(--ink)}
+svg .ahm{fill:var(--muted)}
+.bits{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));border:1px solid var(--rule);border-radius:6px;overflow:hidden;font:500 12px/1.3 var(--mono);text-align:center;background:var(--rule);gap:1px}
+.bits div{background:var(--surface);padding:8px 2px}
+.bits .h{background:var(--soft);color:var(--muted);font-size:11px}
+.bits .m{color:var(--accent)}
+.checks{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.checks li{display:grid;grid-template-columns:18px 1fr;gap:10px;align-items:start}
+.checks li::before{content:"";width:13px;height:13px;margin-top:5px;border:1.5px solid var(--muted);border-radius:2px}
+.src{font-size:13.5px;display:grid;gap:5px;padding-left:18px;margin:0}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.callout{border-left:3px solid var(--accent);padding:4px 0 4px 14px;max-width:70ch}
+</style>
+
+<div class="wrap">
+<div class="cane" aria-hidden="true"></div>
+<header>
+  <div class="eyebrow">OpenCane · 54FoundersHack · Hardware &amp; feasibility · Sep 11 2026</div>
+  <h1>OpenCane Hardware Brief</h1>
+  <p class="lede">The phone does the seeing, thinking, and talking. The kit adds two small things to a normal white cane: a phone mount and a haptic handle. Weather, maps, and object ID are software. Everything below is sized for a 24-hour build and a cheap product.</p>
+  <div class="meta"><span>Phone <b>iPhone 17 Pro Max · 233 g · LiDAR</b></span><span>Handle MCU <b>XIAO ESP32C3</b></span><span>Link <b>BLE, 1-byte msgs</b></span></div>
+</header>
+
+<section>
+  <div class="figure-row">
+    <div class="fig"><span class="n acc">~$25–35</span><span class="l">Core add-on kit, excl. phone and cane (est.)</span></div>
+    <div class="fig"><span class="n">$850 / $1,150</span><span class="l">WeWALK Smart Cane 2 / 2+</span></div>
+    <div class="fig"><span class="n">5 m</span><span class="l">iPhone LiDAR depth range</span></div>
+    <div class="fig"><span class="n">15 ms</span><span class="l">iOS minimum BLE connection interval</span></div>
+  </div>
+  <p class="note">Kit total is an estimate from the BOM below. Only the XIAO and DRV2605L prices were checked online; verify the rest at checkout.</p>
+</section>
+
+<section>
+  <div class="head"><h2>Can we build it?</h2><p class="muted">Every feature, where it runs, and a verdict for the 24-hour build and for a real product.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Capability</th><th>Runs on</th><th>24h</th><th>Product</th><th>Why</th></tr></thead>
+    <tbody>
+    <tr><td>Obstacle + drop-off detection</td><td>Phone LiDAR (ARKit <code>sceneDepth</code>)</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>Up to 5 m, per-pixel confidence. Class-agnostic, so it catches poles, curbs, stairs YOLO has no class for.</td></tr>
+    <tr><td>Directional haptic cues</td><td>Handle, 3 motors</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>Cheap and simple. Risk: left and right buzz can blur in one rigid grip. See print notes.</td></tr>
+    <tr><td>Turn-by-turn walking nav</td><td>Phone GPS + MapKit / Mapbox</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>GPS is off by meters. Fine for "turn left in 20 m", not for sidewalk edges.</td></tr>
+    <tr><td>Point-to-Identify</td><td>Phone camera + cloud vision model</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>Needs data and takes a second or two. Apple's Point and Speak already reads text you point at with a finger. Our angle is hands-free: the cane is the pointer.</td></tr>
+    <tr><td>Weather-aware mode</td><td>Phone, WeatherKit</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>500k free calls/month. Minute-by-minute rain forecast in some regions.</td></tr>
+    <tr><td>Emergency button → call + text a chosen contact</td><td>Handle button, phone, Twilio</td><td><span class="pill go">GO</span></td><td><span class="pill go">GO</span></td><td>A server places the call, so there is no iOS confirmation sheet in the way.</td></tr>
+    <tr><td>One-press 911 from our app</td><td>Phone</td><td><span class="pill no">NOT IN DEMO</span></td><td><span class="pill partial">PARTIAL</span></td><td>iOS forces a confirmation sheet on every call an app starts. Route through Apple SOS or a dispatch service instead.</td></tr>
+    <tr><td>AI auto-calls 911 on a "threat"</td><td>—</td><td><span class="pill cut">CUT</span></td><td><span class="pill cut">CUT</span></td><td>Misfires send police toward a bystander the model misjudged. AI may suggest; only the user calls.</td></tr>
+    <tr><td>Overhead obstacles</td><td>Phone ultra-wide (120°)</td><td><span class="pill partial">PARTIAL</span></td><td><span class="pill partial">PARTIAL</span></td><td>Depends on mount angle. Camera points down the shaft; top of frame may reach chest height. LiDAR field is narrower. Test it.</td></tr>
+    <tr><td>Wet / icy surface detection</td><td>None</td><td><span class="pill no">NO</span></td><td><span class="pill partial">RESEARCH</span></td><td>No cheap reliable sensor. Warn from forecast data instead.</td></tr>
+    <tr><td>Crosswalk signal reading</td><td>Phone camera</td><td><span class="pill no">SKIP</span></td><td><span class="pill partial">MAYBE</span></td><td>OKO already does this free and offline on iOS. Not worth 24h.</td></tr>
+    <tr><td>Handle IMU</td><td>—</td><td><span class="pill cut">CUT</span></td><td><span class="pill cut">CUT</span></td><td>Phone is bolted to the shaft. Phone motion sensors = cane pointing angle and sweep.</td></tr>
+    <tr><td>Tip ultrasonic / ToF sensor</td><td>—</td><td><span class="pill cut">CUT</span></td><td><span class="pill partial">OPTIONAL</span></td><td>LiDAR covers the path ahead; the cane tip itself physically finds drop-offs.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="head"><h2>The modules</h2><p class="muted">Two required, two optional off-the-shelf, three cut. Each clips on or pairs; none needs the others to be useful.</p></div>
+  <div class="modules">
+    <div class="mod">
+      <span class="tag go">Required · print</span>
+      <h3>Phone mount</h3>
+      <ul>
+        <li>PETG shaft clamp + cradle that grips the phone's long edges only. Keep the camera and LiDAR corner clear.</li>
+        <li>Fixed angle on one M5 bolt with serrated faces, not a free ball joint. Ball joints slip under sweep vibration and break the Point-to-Identify calibration.</li>
+        <li>Place 15–25 cm below the grip. A 233 g phone lower on the shaft means more wrist torque every sweep.</li>
+        <li>Printed lip over the camera block as a rain hood.</li>
+        <li>Plan B: buy a bike phone mount head, print only the shaft adapter.</li>
+        <li>Dev stick shaft: 28.75 mm (1.132 in). Real white canes are thinner, so give the clamp swappable shims.</li>
+      </ul>
+    </div>
+    <div class="mod">
+      <span class="tag go">Required · print + solder</span>
+      <h3>Haptic handle</h3>
+      <ul>
+        <li>XIAO ESP32C3: $4.99, 21 × 17.5 mm, BLE 5.0, built-in LiPo charging.</li>
+        <li>3 coin motors, 10 × 3 mm, 3 V: Left, Right, Thumb.</li>
+        <li>2 tactile buttons under a printed rocker cap = the "dual-mode rocker".</li>
+        <li>1S LiPo, 300–500 mAh, plus a slide power switch.</li>
+        <li>Guarded SOS button on the end cap, away from the rocker.</li>
+        <li>Dumb by design: only debounces buttons and plays buzz patterns. All logic lives on the phone.</li>
+      </ul>
+    </div>
+    <div class="mod">
+      <span class="tag muted">Demo · team-owned</span>
+      <h3>AirPods Pro</h3>
+      <ul>
+        <li>Run in Transparency mode so traffic stays audible. Pro and Max models only.</li>
+        <li>Bonus: head tracking (<code>CMHeadphoneMotionManager</code>) lets the app place speech in space, so "door" sounds from the right.</li>
+        <li>Production: open-ear or bone conduction. Anything in the ear canal is the first objection blind travelers will raise.</li>
+      </ul>
+    </div>
+    <div class="mod">
+      <span class="tag muted">Optional · buy</span>
+      <h3>Clip-on light</h3>
+      <ul>
+        <li>Bike light on the shaft. Drivers see the user at night; camera detection improves.</li>
+        <li>LiDAR is its own light source, so depth works in the dark regardless.</li>
+      </ul>
+    </div>
+    <div class="mod cutmod">
+      <span class="tag no">Cut</span>
+      <h3>IMU, tip sensor, weather sensors</h3>
+      <ul>
+        <li>IMU: phone already has one on the same rigid shaft.</li>
+        <li>Tip ToF/ultrasonic: LiDAR + the cane itself.</li>
+        <li>Temp/humidity/rain sensor: WeatherKit knows the weather at the user's GPS position.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="callout">Why the DRV2605L haptic driver ($7.95) is not in v1: nicer waveforms, but its I²C address is fixed, so three motors need a multiplexer. Worth it for a product, not for 24 hours.</p>
+</section>
+
+<section>
+  <div class="head"><h2>How the pieces talk</h2><p class="muted">Solid lines are the core loop. Dashed lines are optional.</p></div>
+  <div class="diagram">
+  <svg viewBox="0 0 820 330" role="img" aria-label="System diagram: phone connects to handle over BLE, to AirPods over Bluetooth audio, and to cloud services">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+      <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahm" d="M0,0 L10,5 L0,10 z"/></marker>
+    </defs>
+    <rect class="boxk" x="290" y="70" width="240" height="190" rx="8"/>
+    <text class="t" x="306" y="98">Phone (on shaft)</text>
+    <text class="s" x="306" y="122">SENSE  LiDAR · camera · GPS</text>
+    <text class="s" x="306" y="140">       compass · motion · mic</text>
+    <text class="s" x="306" y="166">THINK  ARKit depth grid</text>
+    <text class="s" x="306" y="184">       CoreML detector</text>
+    <text class="s" x="306" y="202">       route + hazard arbiter</text>
+    <text class="s" x="306" y="228">SPEAK  TTS · haptic commands</text>
+
+    <rect class="boxk" x="20" y="100" width="190" height="130" rx="8"/>
+    <text class="t" x="36" y="128">Haptic handle</text>
+    <text class="s" x="36" y="152">XIAO ESP32C3</text>
+    <text class="s" x="36" y="170">motors L · R · Thumb</text>
+    <text class="s" x="36" y="188">rocker (2) + SOS button</text>
+    <text class="s" x="36" y="206">LiPo 1S</text>
+
+    <path class="ln" d="M290 140 H210" marker-end="url(#a)"/>
+    <text class="lab" x="218" y="132">1 byte: buzz</text>
+    <path class="ln" d="M210 190 H290" marker-end="url(#a)"/>
+    <text class="lab" x="218" y="182">1 byte: button</text>
+
+    <rect class="box" x="610" y="30" width="190" height="112" rx="8"/>
+    <text class="t" x="626" y="58">Cloud</text>
+    <text class="s" x="626" y="82">vision model for ID</text>
+    <text class="s" x="626" y="100">WeatherKit · map tiles</text>
+    <text class="s" x="626" y="118">Twilio: SOS call + SMS</text>
+    <path class="lnd" d="M530 110 H610" marker-end="url(#am)" marker-start="url(#am)"/>
+    <text class="s" x="540" y="102">HTTPS</text>
+
+    <rect class="box" x="610" y="200" width="190" height="80" rx="8"/>
+    <text class="t" x="626" y="228">AirPods Pro (demo)</text>
+    <text class="s" x="626" y="252">Transparency mode on</text>
+    <path class="lnd" d="M530 230 H610" marker-end="url(#am)"/>
+    <text class="s" x="540" y="222">BT audio</text>
+
+    <text class="s" x="20" y="300">User hand ⇄ handle: buzz out, presses in.   User ears ⇄ AirPods: speech out, voice query in.</text>
+  </svg>
+  </div>
+
+  <h3>Phone → handle: one byte per command</h3>
+  <div class="bits" aria-label="Bit layout of haptic command byte">
+    <div class="h">b7</div><div class="h">b6</div><div class="h">b5</div><div class="h">b4</div><div class="h">b3</div><div class="h">b2</div><div class="h">b1</div><div class="h">b0</div>
+    <div class="m">intens</div><div class="m">intens</div><div class="m">intens</div><div>pattern</div><div>pattern</div><div>Thumb</div><div>Right</div><div>Left</div>
+  </div>
+  <p class="note">Intensity 0–7. Pattern: 0 single 80 ms, 1 double, 2 on until next command, 3 ramp. <code>0x00</code> stops all. Sent as write-without-response.</p>
+  <h3>Handle → phone: one byte per event</h3>
+  <p>High nibble = button (1 up, 2 down, 3 SOS). Low nibble = gesture (1 click, 2 double, 3 hold start, 4 hold end). Sent as notify. Battery level rides on the standard Battery Service (<code>0x180F</code>).</p>
+  <ul class="plain">
+    <li><b>Latency.</b> iOS allows a 15 ms minimum connection interval. At normal walking speed (~1.3 m/s) 100 ms of total delay is about 13 cm of travel. BLE is not the bottleneck; the vision pipeline is.</li>
+    <li><b>Link-lost rule.</b> If BLE drops, the handle plays three long thumb buzzes on its own. The user must always know when guidance is off.</li>
+    <li><b>Background.</b> The app needs the <code>bluetooth-central</code> background mode so buzzes keep coming with the screen locked.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><h2>How it talks to the user</h2><p class="muted">Buzz for anything urgent or spatial. Speech only for things that need words.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Event</th><th>Handle</th><th>Speech</th></tr></thead>
+    <tbody>
+      <tr><td>Obstacle left / right</td><td>Left or Right motor; pulse rate rises as it gets closer, like a parking sensor</td><td>None</td></tr>
+      <tr><td>Obstacle dead ahead or drop-off</td><td>Left + Right together, fast</td><td>"Stop" only if under ~1 m</td></tr>
+      <tr><td>Overhead obstacle</td><td>Thumb, long</td><td>"Low branch ahead"</td></tr>
+      <tr><td>Turn coming up</td><td>Left or Right, double pulse</td><td>Street name, distance</td></tr>
+      <tr><td>Arrived / action confirmed</td><td>Thumb, one short tap</td><td>Optional</td></tr>
+      <tr><td>Link lost</td><td>Thumb, three long</td><td>"Guidance off"</td></tr>
+      <tr><td>Camera can't see (covered, dark, rain)</td><td>Left + Right, slow alternating</td><td>"I can't see. Slow down."</td></tr>
+      <tr><td>SOS countdown / help contacted</td><td>Thumb ramp, then slow steady pulse</td><td>"Calling for help in 5. Press any button to cancel."</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Priority:</b> hazard beats navigation beats information. A hazard cuts off any sentence in progress.</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Press</th><th>Up button</th><th>Down button</th></tr></thead>
+    <tbody>
+      <tr><td>Click</td><td>Pause / resume guidance</td><td>Repeat last instruction</td></tr>
+      <tr><td>Hold</td><td>Point-to-Identify: aim, release, hear it</td><td>Push-to-talk voice question</td></tr>
+      <tr><td>Double</td><td colspan="2">Describe the whole scene</td></tr>
+      <tr><td>SOS, hold 2 s</td><td colspan="2">Separate guarded button: emergency countdown, then call for help</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The original spec used hold for both push-to-talk and Point-to-Identify. Two buttons fix that clash. Give the Up button a raised dot so it can be found by feel, through gloves.</p>
+</section>
+
+<section>
+  <div class="head"><h2>Emergency button</h2><p class="muted">A lifeline the user pulls. Never one the AI pulls for them.</p></div>
+  <ol class="plain">
+    <li><b>Hold the SOS button 2 s.</b> It sits recessed under a printed guard ring, so a bump or a pocket can't fire it.</li>
+    <li><b>Countdown.</b> Thumb motor ramps up; phone says "Calling for help in 5. Press any button to cancel."</li>
+    <li><b>Call goes out.</b> Phone hits the backend; Twilio calls the chosen contact with a spoken message and texts a live map link.</li>
+    <li><b>Confirmation.</b> Slow steady thumb pulse while help is being reached; one long buzz when someone picks up.</li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Route</th><th>How</th><th>Confirm prompt?</th><th>Demo</th><th>Product</th></tr></thead>
+    <tbody>
+      <tr><td>Chosen contact via Twilio</td><td>Server calls + texts with location</td><td>No</td><td><span class="pill go">USE</span></td><td><span class="pill go">GO</span></td></tr>
+      <tr><td><code>tel://911</code> from our app</td><td><code>UIApplication.open</code></td><td>Yes, since iOS 10.3. No bypass.</td><td><span class="pill no">NEVER</span></td><td><span class="pill partial">PARTIAL</span></td></tr>
+      <tr><td>Apple Emergency SOS</td><td>Side button 5×, or hold side + volume</td><td>No: countdown, auto-call, then texts contacts your location</td><td><span class="pill partial">MENTION</span></td><td><span class="pill go">FALLBACK</span></td></tr>
+      <tr><td>Apple Watch (team has one)</td><td>Same SOS, plus fall detection</td><td>No</td><td><span class="pill partial">MENTION</span></td><td><span class="pill go">FALLBACK</span></td></tr>
+      <tr><td>Noonlight Dispatch API</td><td>Agent texts the user, then pushes location to 911 dispatchers</td><td>No</td><td><span class="pill no">SKIP</span></td><td><span class="pill go">BEST PATH</span></td></tr>
+      <tr><td>Text to 911</td><td>UIUC police: "call or text 911"</td><td>—</td><td><span class="pill no">SKIP</span></td><td><span class="pill partial">SILENT OPTION</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Twilio trial accounts only reach verified numbers and prefix texts with "Sent from a Twilio Trial account". Verify a teammate's phone before the demo. If texts get blocked, the voice call still carries the location.</p>
+  <h3>Pushback</h3>
+  <ul class="plain">
+    <li><b>No AI-triggered 911.</b> Camera "threat" detection misfires, and a misfire sends police toward a bystander. Judges will ask. The AI may say "Someone is approaching fast. Hold SOS to call for help." The user decides.</li>
+    <li><b>Camera blindness is not an emergency.</b> When the lens is covered or it's too dark, the right answer is a distinct buzz and "I can't see. Slow down."</li>
+    <li><b>Never dial 911 to test.</b> On stage, say production routes to 911 through a dispatch partner. The demo calls a teammate.</li>
+    <li><b>Single point of failure.</b> The button needs phone + BLE. If the link drops, the handle plays link-lost and the user falls back to side-button SOS or the Watch. Teach both in onboarding.</li>
+    <li><b>Stretch: drop detection.</b> Phone sees an impact, then no motion for ~20 s: "Are you OK?" then countdown to the contact. A dropped cane isn't a fallen user, so it always asks first.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><h2>Weather</h2><p class="muted">No weather hardware. The phone knows the forecast; the build handles water.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Condition</th><th>What breaks</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>Rain</td><td>Drops on lens and LiDAR window distort both. Heavy rain cuts lidar range (automotive tests: ~30% at 45 mm/h).</td><td>Rain hood lip on mount. WeatherKit warns "rain in 10 minutes". Rain mode: alerts fire earlier. Phone is IP68.</td></tr>
+      <tr><td>Wet handle</td><td>Water in the seam or USB-C port</td><td>TPU gasket or silicone bead on the clamshell seam, plug on the port, buttons under a TPU membrane.</td></tr>
+      <tr><td>Dark</td><td>Camera detection degrades</td><td>LiDAR unaffected. Clip-on light helps the camera and makes the user visible.</td></tr>
+      <tr><td>Cold</td><td>Phone and handle batteries drain fast; gloves</td><td>Big buttons, raised dot, low-battery buzz pattern.</td></tr>
+      <tr><td>Wind / traffic noise</td><td>Speech gets lost</td><td>Critical info is haptic only. AirPods Transparency keeps traffic audible.</td></tr>
+      <tr><td>Snow</td><td>Curb edges vanish; LiDAR sees the snow surface</td><td>Not solvable cheaply. Say so in Q&amp;A.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="head"><h2>Parts list</h2><p class="muted">Per handle. "Est." prices are not verified. Check before ordering.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Part</th><th>Qty</th><th>Price</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td>Seeed XIAO ESP32C3</td><td class="num">1</td><td class="num">$4.99</td><td>Buy 2; one spare</td></tr>
+      <tr><td>Coin vibration motor, 10 × 3 mm, 3 V</td><td class="num">3</td><td class="num">~$7–10 / pack (est.)</td><td>Packs of 10–20 on Amazon</td></tr>
+      <tr><td>2N2222 NPN + 1 kΩ + 1N4148 diode</td><td class="num">3 each</td><td class="num">~$1 (est.)</td><td>One set per motor</td></tr>
+      <tr><td>12 × 12 mm tactile switch</td><td class="num">2</td><td class="num">&lt;$1 (est.)</td><td>Under printed rocker cap</td></tr>
+      <tr><td>12 mm domed momentary push button (SOS)</td><td class="num">1</td><td class="num">~$1 (est.)</td><td>Recessed in printed guard ring</td></tr>
+      <tr><td>1S LiPo, 300–500 mAh</td><td class="num">1</td><td class="num">~$6–10 (est.)</td><td>Must fit ~30 × 20 × 6 mm pocket</td></tr>
+      <tr><td>Slide switch</td><td class="num">1</td><td class="num">&lt;$1 (est.)</td><td>In battery + line</td></tr>
+      <tr><td>PETG filament</td><td class="num">~80 g</td><td class="num">~$2 (est.)</td><td>Handle + mount</td></tr>
+      <tr><td>M3 heat-set inserts + screws, M5 bolt + nyloc</td><td class="num">set</td><td class="num">~$2 (est.)</td><td>Clamshell + mount hinge</td></tr>
+      <tr><td><i>Optional</i> bike phone mount head</td><td class="num">1</td><td class="num">est.</td><td>Plan B for the cradle</td></tr>
+      <tr><td>AirPods Pro</td><td class="num">1</td><td class="num">$0</td><td>Team-owned; demo only</td></tr>
+      <tr><td>Twilio trial</td><td class="num">—</td><td class="num">$0</td><td>SOS call + SMS to verified numbers</td></tr>
+      <tr><td><i>Optional</i> clip-on bike light</td><td class="num">1</td><td class="num">est.</td><td>Night visibility</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="head"><h2>Wiring</h2><p class="muted">Three identical motor channels and three buttons. No I²C needed now the IMU is gone.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>XIAO pin</th><th>GPIO</th><th>Goes to</th></tr></thead>
+    <tbody>
+      <tr><td class="num">D1</td><td class="num">3</td><td>1 kΩ → 2N2222 base, Left motor</td></tr>
+      <tr><td class="num">D2</td><td class="num">4</td><td>1 kΩ → 2N2222 base, Right motor</td></tr>
+      <tr><td class="num">D3</td><td class="num">5</td><td>1 kΩ → 2N2222 base, Thumb motor</td></tr>
+      <tr><td class="num">D4</td><td class="num">6</td><td>Up button → GND (<code>INPUT_PULLUP</code>)</td></tr>
+      <tr><td class="num">D5</td><td class="num">7</td><td>Down button → GND (<code>INPUT_PULLUP</code>)</td></tr>
+      <tr><td class="num">D6</td><td class="num">21</td><td>SOS button → GND (<code>INPUT_PULLUP</code>). UART TX pin; fine while serial runs over USB (enable USB CDC On Boot).</td></tr>
+      <tr><td class="num">BAT+ / BAT−</td><td class="num">—</td><td>LiPo via slide switch (pads on board underside)</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>Each motor: motor + to battery +, motor − to transistor collector, emitter to GND. 1N4148 across the motor, stripe toward battery +.</li>
+    <li>Motors are rated 3 V; a full LiPo is 4.2 V. Cap PWM duty around 70% in firmware.</li>
+    <li>Keep buttons off D0, D8, D9 (GPIO 2, 8, 9). Those are boot strapping pins; a held button at power-on can drop the board into bootloader mode.</li>
+    <li>Measure real current draw with a USB meter before picking the final battery size.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><h2>Print notes</h2><p class="muted">For Sagar. Measure first, then print the mount before the handle.</p></div>
+  <ul class="plain">
+    <li><b>Measured:</b> dev stick shaft is 28.75 mm. Still decide whether the handle slides over it (bore ~29.1 mm, outer diameter ~38 mm) or replaces the top section.</li>
+    <li><b>SOS guard:</b> raised ring ~3 mm proud of the button top on the end cap or underside. Round and ringed, so it never feels like the rocker.</li>
+    <li><b>Handle:</b> split clamshell, ~160 mm long, PETG, 4 walls, 25–30% gyroid, M3 heat-set inserts. Add +0.3 mm clearance on v1.</li>
+    <li><b>Motor pockets:</b> Left on the left flank under the fingers, Right on the right flank, Thumb next to the rocker. Wrap each motor in TPU or foam tape and keep them as far apart as the grip allows. In a rigid shell all three buzzes blend together.</li>
+    <li><b>Backup encoding:</b> if L/R still blur, the phone can also send Left = 1 pulse, Right = 2 pulses. Direction survives even when location doesn't.</li>
+    <li><b>Mount clamp:</b> PETG, solid around the bolt holes. Orient so clamping force squeezes layers together instead of peeling them apart. Rubber or TPU shim inside for grip.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><h2>Test before the demo</h2></div>
+  <ul class="checks">
+    <li><span><b>Blindfold L/R test.</b> 20 random buzzes per teammate. Aim for 18+ correct. If not, add isolation or switch to pulse-count encoding.</span></li>
+    <li><span><b>Phone heat and battery.</b> Run LiDAR + detector for 30 minutes, log battery drop. Unknown until measured. Bring a MagSafe battery.</span></li>
+    <li><span><b>Mount slip.</b> Sweep for 10 minutes, check the angle hasn't moved.</span></li>
+    <li><span><b>Sweep blur.</b> Watch detections during full-speed sweeps; if poor, run detection only near sweep endpoints.</span></li>
+    <li><span><b>Overhead reach.</b> Walk under a low sign or branch at demo mount angle. Does the frame see it?</span></li>
+    <li><span><b>Link loss.</b> Kill the app mid-walk. Handle must play the three-buzz warning.</span></li>
+    <li><span><b>SOS dry run.</b> Countdown, cancel, then a real call to a teammate's verified number. Never 911.</span></li>
+    <li><span><b>Route.</b> Walk ISR → CIF once with the full kit before judging.</span></li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><h2>Who else does this</h2><p class="muted">The field is real and expensive. That's the pitch.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Product</th><th>Price</th><th>What it is</th><th>vs. OpenCane</th></tr></thead>
+    <tbody>
+      <tr><td>WeWALK Smart Cane 2 / 2+</td><td class="num">$850 / $1,150</td><td>Full cane: ultrasonic overhead detection, haptic handle, speaker, app</td><td>Own sensors in the cane. We reuse the phone.</td></tr>
+      <tr><td>Glidance Glide</td><td class="num">$1,500</td><td>Wheeled self-guided aid with stereo depth cameras</td><td>Replaces the cane. We retrofit it.</td></tr>
+      <tr><td>Apple Magnifier Detection Mode</td><td class="num">Free</td><td>Door, people, text detection on LiDAR iPhones; Point and Speak</td><td>Needs a free hand to hold the phone. Ours is hands-free on the cane with haptics.</td></tr>
+      <tr><td>OKO</td><td class="num">Free</td><td>Crosswalk signal reading, offline, audio + vibration</td><td>Complementary. Don't rebuild it.</td></tr>
+      <tr><td>Clip-on ultrasonic accessory (2025 study)</td><td class="num">—</td><td>Attaches to standard canes; pilot of 7 units</td><td>Evidence retrofit works: 29% faster walking, zero collisions in the pilot.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="head"><h2>Sources</h2></div>
+  <ol class="src">
+    <li><a href="https://techcrunch.com/2025/01/10/these-startups-are-making-smarter-canes-for-people-with-visual-impairments">TechCrunch: startups making smarter canes (WeWALK, Glide prices)</a></li>
+    <li><a href="https://independentliving.com/wewalk-ultrasonic-smartcane-v2-with-ai/">Independent Living: WeWALK V2 specs</a></li>
+    <li><a href="https://www.idownloadblog.com/2023/12/27/how-to-use-detection-mode-in-iphone-magnifier-app/">iDownloadBlog: Magnifier Detection Mode, LiDAR requirement</a></li>
+    <li><a href="https://support.apple.com/en-us/125091">Apple: iPhone 17 Pro Max tech specs</a></li>
+    <li><a href="https://appleinsider.com/articles/20/03/18/what-you-need-to-know-about-apples-lidar-scanner-in-the-ipad-pro">AppleInsider: LiDAR range up to 5 m</a></li>
+    <li><a href="https://developer.apple.com/forums/thread/650321">Apple Developer Forums: LiDAR depth confidence</a></li>
+    <li><a href="https://www.yellowscan.com/knowledge/how-weather-really-affects-lidar-performance/">YellowScan: weather effects on lidar</a></li>
+    <li><a href="https://developer.apple.com/weatherkit/">Apple: WeatherKit</a></li>
+    <li><a href="https://docs.silabs.com/bluetooth/9.1.1/mobile-apps-suitable-connection-parameters/">Silicon Labs: iOS BLE connection parameters</a></li>
+    <li><a href="https://www.cnx-software.com/2022/07/08/seeed-studio-5-xiao-esp32c3-board-wifi-and-ble-battery/">CNX Software: XIAO ESP32C3</a></li>
+    <li><a href="https://www.adafruit.com/product/2305">Adafruit: DRV2605L breakout</a></li>
+    <li><a href="https://developer.apple.com/forums/thread/73406">Apple Developer Forums: tel: URLs require confirmation since iOS 10.3</a></li>
+    <li><a href="https://support.apple.com/guide/personal-safety/emergency-call-text-iphone-apple-watch-ips4f0cd709b/web">Apple: Emergency SOS on iPhone and Apple Watch</a></li>
+    <li><a href="https://www.noonlight.com/products/dispatch-api">Noonlight: Dispatch API</a></li>
+    <li><a href="https://support.twilio.com/hc/en-us/articles/360036052753-Twilio-Free-Trial-Limitations">Twilio: free trial limitations</a></li>
+    <li><a href="https://www.police.illinois.edu/contact/">UIUC Police: call or text 911</a></li>
+    <li><a href="https://support.apple.com/en-us/108918">Apple: AirPods Transparency mode</a></li>
+    <li><a href="https://www.forbes.com/sites/gusalexiou/2023/08/10/oko-app-deploys-ai-to-make-crossing-the-street-safer-for-blind-pedestrians/">Forbes: OKO app</a></li>
+    <li><a href="https://link.springer.com/article/10.1007/s12193-025-00469-w">Springer JMUI 2025: obstacle-detecting white cane accessory pilot</a></li>
+  </ol>
+</section>
+</div>

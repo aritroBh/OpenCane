@@ -1,0 +1,58 @@
+# CaneKit CI — MANUAL for now (Actions tab → CI → Run workflow).
+#
+# Why manual: the repo is private and the account's Actions minutes / spending limit are exhausted
+# ("job was not started because recent account payments have failed or your spending limit needs
+# to be increased"), so every push showed two red X's that said nothing about the code. The local
+# gate is authoritative: `cd ios && make test && make sim && make uitest && make e2e` (AGENTS.md).
+# Re-enable `push` / `pull_request` below once billing is sorted (or the repo goes public).
+#
+#   logic-tests   CaneKitLogic (Foundation + Swift Testing only) on Linux — 1× minute cost, not 10×.
+#   sim-build     XcodeGen + simulator build on macOS (10× minutes) — informational.
+#
+# Nothing here signs or touches a device; Secrets.plist is never present on CI (gen.sh copies the
+# example file, all keys empty, and the app is built to tolerate that).
+
+name: CI
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  logic-tests:
+    name: CaneKitLogic unit tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        working-directory: ios/Logic
+        run: swift test
+
+  sim-build:
+    name: Simulator build (informational)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest Xcode on the runner
+        run: |
+          XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the project (phone-only, no watch embed)
+        working-directory: ios
+        run: WATCH=0 scripts/gen.sh
+      - name: Build for the iOS simulator
+        working-directory: ios
+        run: make sim

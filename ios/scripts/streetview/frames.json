@@ -1,0 +1,86 @@
+[
+ {
+  "file": "wp1_isr_lounge.jpg",
+  "lat": 40.10949,
+  "lon": -88.22135,
+  "heading": 226
+ },
+ {
+  "file": "wp2_approach.jpg",
+  "lat": 40.109225,
+  "lon": -88.221704,
+  "heading": 226
+ },
+ {
+  "file": "wp2_illinois_west.jpg",
+  "lat": 40.10913,
+  "lon": -88.22183,
+  "heading": 267
+ },
+ {
+  "file": "wp3_goodwin_corner.jpg",
+  "lat": 40.10905,
+  "lon": -88.22372,
+  "heading": 267
+ },
+ {
+  "file": "wp3_goodwin_north.jpg",
+  "lat": 40.10904,
+  "lon": -88.2239,
+  "heading": 358
+ },
+ {
+  "file": "wp4_green_st.jpg",
+  "lat": 40.11036,
+  "lon": -88.22395,
+  "heading": 358
+ },
+ {
+  "file": "wp5_mid_goodwin.jpg",
+  "lat": 40.1115,
+  "lon": -88.22396,
+  "heading": 0
+ },
+ {
+  "file": "wp6_springfield.jpg",
+  "lat": 40.11264,
+  "lon": -88.22397,
+  "heading": 0
+ },
+ {
+  "file": "wp6_springfield_west.jpg",
+  "lat": 40.11277,
+  "lon": -88.22397,
+  "heading": 270
+ },
+ {
+  "file": "wp7_mathews.jpg",
+  "lat": 40.11277,
+  "lon": -88.22545,
+  "heading": 270
+ },
+ {
+  "file": "wp7_mathews_west.jpg",
+  "lat": 40.11277,
+  "lon": -88.22563,
+  "heading": 265
+ },
+ {
+  "file": "wp8_cif_path.jpg",
+  "lat": 40.11266,
+  "lon": -88.22723,
+  "heading": 265
+ },
+ {
+  "file": "wp8_cif_turn.jpg",
+  "lat": 40.11265,
+  "lon": -88.22741,
+  "heading": 237
+ },
+ {
+  "file": "wp9_cif_entrance.jpg",
+  "lat": 40.11249,
+  "lon": -88.22774,
+  "heading": 237
+ }
+]

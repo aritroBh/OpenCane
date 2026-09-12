@@ -1,0 +1,50 @@
+# Xcode / Swift
+ios/CaneKit.xcodeproj/
+ios/build/
+ios/**/xcuserdata/
+ios/**/*.xcworkspace/xcuserdata/
+ios/Logic/.build/
+ios/Logic/.swiftpm/
+.build/
+DerivedData/
+*.xcuserstate
+*.mobileprovision
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Secrets (copy Secrets.example.plist → Secrets.plist and fill in keys)
+ios/CaneKit/Resources/Secrets.plist
+
+# macOS
+.DS_Store
+
+# PlatformIO / Arduino (stretch)
+firmware/**/.pio/
+ios/local.mk
+ios/.project.phone-only.yml
+
+# Python bytecode (ios/scripts/e2e.py)
+__pycache__/
+*.pyc
+
+# Google Street View captures are Google's imagery: local test input only, never committed
+ios/scripts/streetview/*.jpg
+# graphify: machine-local paths and the extraction cache (graph.json / report / html are committed)
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json
+graphify-out/20*/
+
+# Rendered printables. The .scad file is the source of truth; an STL is a
+# build artifact that goes stale the moment a parameter moves.
+# Regenerate with scripts/build_stl.ps1.
+hardware/**/stl/
+*.stl
+*.3mf
+*.gcode
+# OpenSCAD preview renders
+hardware/**/*.png
+.gstack/
