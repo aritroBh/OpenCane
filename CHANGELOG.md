@@ -23,6 +23,10 @@ Fixed physical-device voice-input crash paths:
 test on device: open Settings → Action Button → Shortcut → Talk to OpenCane; press Action Button,
 feel the haptic tick, speak “set a post here”, then press Action Button again to submit.
 
+Additional details: the Core Audio tap isolation, microphone format guard, audio-engine reuse, Action
+Button toggle, tactile confirmation, and SoundWatcher session coordination were verified in the
+physical-device build described by the upstream commit.
+
 ## Step 23 — Conversational voice assistant with Action Button trigger, marker drops, and context memory (Sat Sep 12)
 
 Hands-free voice assistant mode designed specifically for blind white-cane users:

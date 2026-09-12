@@ -364,9 +364,7 @@ final class SoundWatcher {
         // is also the only thing allowed to talk to the analyser afterwards.
         let pump = SoundAnalysisPump(analyzer: analyzer, queue: analysisQueue)
         self.pump = pump
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, time in
-            pump.feed(buffer, at: time.sampleTime)
-        }
+        pump.installTap(on: engine.inputNode, format: format)
         do {
             engine.prepare()
             try engine.start()
@@ -591,6 +589,14 @@ private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
     init(analyzer: SNAudioStreamAnalyzer, queue: DispatchQueue) {
         self.analyzer = analyzer
         self.queue = queue
+    }
+
+    /// Installs the audio tap from this `nonisolated` class so the tap closure does not inherit
+    /// `@MainActor` isolation under Swift 6.
+    func installTap(on inputNode: AVAudioNode, format: AVAudioFormat) {
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+            self?.feed(buffer, at: time.sampleTime)
+        }
     }
 
     /// Called on the audio tap thread; returns immediately.

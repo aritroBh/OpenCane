@@ -427,6 +427,8 @@ struct TalkToOpenCaneIntent: AppIntent {
     static let description = IntentDescription("Speak to OpenCane to navigate, set posts, check status, or ask questions.")
     /// ⚠ Foreground only: ensures the app is frontmost with obstacle warnings live.
     static let supportedModes: IntentModes = .foreground(.immediate)
+    /// Direct Action button presses bring OpenCane to the screen immediately.
+    static let openAppWhenRun: Bool = true
 
     /// What the walker wants to ask or command.
     @Parameter(title: "Query", requestValueDialog: "How can OpenCane help?")
@@ -436,7 +438,12 @@ struct TalkToOpenCaneIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         let model = try await IntentSupport.model()
         let text = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw $query.needsValueError("How can OpenCane help?") }
+        if text.isEmpty {
+            // When triggered from Action button or Shortcuts without a pre-set query,
+            // immediately toggle push-to-talk listening in the app.
+            model.toggleVoiceInput()
+            return .result()
+        }
         await model.handleSpokenQuery(text)
         return .result()
     }
