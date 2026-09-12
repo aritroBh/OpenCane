@@ -53,6 +53,15 @@ Keys live only in the git-ignored `Secrets.plist` (`OPENCANE_GROKBOT_WEBHOOK_URL
 rule 4), read from the process environment first so an e2e run can point at a throwaway endpoint.
 Documented with a curl example in `ios/README.md §4.1`.
 
+⚠ **Fixed before pushing: a local signing id had ridden along in this step.**
+`ios/CaneKitWatch/Info.plist` had `WKCompanionAppBundleIdentifier` committed as
+`com.tejaschakrapani.canekit` while the app is `com.aritro.canekit` (hard rule 6 freezes both).
+`gen.sh` rewrites that file from `project.yml`, so it could not reach a build — but the file is
+*generated and tracked*, so it would sit permanently dirty in every checkout, invite itself back
+into a commit, and break watch pairing on the demo phone. Restored to `com.aritro.canekit`. Swap
+ids for a personal team with the git-ignored `ios/scripts/restore-ids.sh` / `gen-local.sh`, never
+by committing the plist.
+
 test on device: Settings → Family alerts → Send test event, with the phone on Wi-Fi and then in
 Airplane Mode (expect "Could not reach Grok Bot" after the one retry, ~12 s, and no crash); then
 switch the toggle on and walk a route to see one breadcrumb every two minutes in the Grok Bot run
