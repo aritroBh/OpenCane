@@ -21,6 +21,44 @@ lower down, this block is right.**
 | ElevenLabs (Bella) reachable | key verified `HTTP 200`, free tier 0/10 000 chars; a real 9 kB mono mp3 at 22.05 kHz came back for the app's exact payload |
 | Muse Spark 1.3 reachable + multimodal | key verified `HTTP 200` from `muse-spark-1.3-contributor`; docs confirm `/v1/chat/completions` and image understanding |
 
+### MEASURED ON THE PHONE: both cameras AND depth is possible, without ARKit
+
+The `multicam_depth` probe ran on Aritro's iPhone 17 Pro Max (iOS 27) on 2026-09-12 and answered the
+question Apple's documentation could not:
+
+```
+multicam_supported:    True
+front_plus_depth_sets: 12
+device_sets:           front:BuiltInWideAngleCamera + back:BuiltInLiDARDepthCamera  depth 320x240
+                       front:BuiltInTrueDepthCamera depth 640x480 + back:BuiltInLiDARDepthCamera
+depth_multicam_formats: 33
+best_format:           video 640x480, depth 320x240
+arkit_depth_size:      256x192
+keeps_depth:           True
+verdict:               depthAboveARKitResolution
+```
+
+**Twelve multi-cam device sets pair the front camera with a depth-capable back camera**, including
+the wide-angle front camera with the LiDAR depth camera. Apple's own sources only ever name the rear
+Telephoto and Ultra Wide as the second camera (WWDC22 110429; DTS forum 702875), so this had to be
+measured. AVFoundation's streaming LiDAR depth is **320×240 — higher than ARKit's 256×192**.
+
+**What this means:** the current design pauses ARKit to show both cameras, because ARKit itself can
+never hand over two images (Apple DTS, forum 677731). But a future version could run
+`AVCaptureMultiCamSession` with `builtInLiDARDepthCamera` + the front camera, take depth from
+`AVCaptureDepthDataOutput`, and have **both feeds and working obstacle detection at once.**
+
+**What it would cost — a real rewrite, not a switch:** no ARKit means no world tracking, no
+classified mesh (the source of "door" / "wall" / "table"), no per-pixel `confidenceMap`, and no
+gravity-aligned world — gravity would come from `CMDeviceMotion.gravity` instead, and the depth map
+would need rectifying with `AVDepthData.cameraCalibrationData` (it is non-rectilinear, unlike
+ARKit's). Also: no `AVCaptureVideoPreviewLayer` anywhere near it (forums 742501), and
+`systemPressureCost` must stay under 1.0 to run indefinitely.
+
+- [ ] **Post-demo:** prototype the AVFoundation depth pipeline behind a setting and compare it with
+      ARKit on the same walk — obstacle-cue parity first, then whether the extra depth resolution
+      buys anything a cane user can feel.
+
 ### What is NOT proven on the phone yet
 
 - People/animal detection (Vision's neural models cannot run in the simulator — phone-only).
