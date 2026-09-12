@@ -369,6 +369,19 @@ final class SpeechQueue {
     /// sensors produced and why the walker did not hear it. Main actor; set by `AppModel.start()`.
     @ObservationIgnored var onSuppressed: ((String, SpeechLoadClass, SpeechSuppressionReason) -> Void)?
 
+    /// Receives every line at the moment the queue hands it to a voice backend (`speakNow`),
+    /// whoever queued it and whether it started at once or drained from the queue.
+    /// ⚠ Why: `speech` trip-log records are written by *callers* (cues, route lines), so lines said
+    /// straight through `say` — the both-cameras refusal, flashlight confirmations — left no trace,
+    /// and a device log could not tell "dropped by the queue" from "dispatched" (trip log
+    /// 2026-09-12T20-57-17Z, t = 84 s). ⚠ Dispatched is not heard: the line may still be cut by a
+    /// higher priority, fail to fetch, or be muted automation — it proves the queue did not drop
+    /// it, nothing more (Step 34 review). Arguments: text, priority, replay count (> 0 when a cut
+    /// line resumes, so a resumed line appears twice). Main actor; set by `AppModel.start()`,
+    /// logged as `speech_dispatch` (a separate kind, so `e2e.py`'s `speech` assertions keep their
+    /// meaning).
+    @ObservationIgnored var onDispatch: ((String, SpeechPriority, Int) -> Void)?
+
     /// Switch the app's one audio session between `.playback` (the normal state) and
     /// `.playAndRecord`, which is the only way to get an `AVAudioEngine` input node for the
     /// danger-sound watch (`.playback` has no input at all — Apple's category table).
@@ -883,6 +896,7 @@ final class SpeechQueue {
         isSpeaking = true
         lastSpoken = text
         armWatchdog(gen: gen, text: text)
+        onDispatch?(text, priority, replays)
 
         // Automation mute (simulator tests, never on a normal launch): keep the queue's timing
         // and logging but make no sound — the line "ends" after its estimated spoken length.

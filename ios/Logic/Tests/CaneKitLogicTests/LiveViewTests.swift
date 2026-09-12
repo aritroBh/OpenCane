@@ -60,14 +60,24 @@ import Testing
 // MARK: - Both cameras (front + back at once)
 
 /// Off by default in every combination: the mode that pauses obstacle detection must never be
-/// reachable without the switch.
+/// reachable without the switch. (During a route the switch-off state is `.blockedByRoute`, a
+/// caption only — see `bothCamerasExplainTheRefusalForTheWholeRoute`; it never goes `.live`.)
 @Test func bothCamerasOffWithTheSwitchOff() {
     for supported in [false, true] {
-        for navigating in [false, true] {
-            #expect(BothCameras.state(enabled: false, supported: supported,
-                                      navigating: navigating) == .off)
-        }
+        #expect(BothCameras.state(enabled: false, supported: supported, navigating: false) == .off)
+        #expect(BothCameras.state(enabled: false, supported: supported, navigating: true) != .live)
     }
+}
+
+/// ⚠ Measured break (trip log 2026-09-12T20-57-17Z, t = 84–87 s): a voice command had started a
+/// route, the owner pressed "Both cameras" four times, and each press was refused — correctly —
+/// but `AppModel.setBothCameras` snaps the switch back to off at once, and this state used to
+/// return `.off` for (switch off, navigating), so the "cannot run while a route is guiding you"
+/// caption was never on screen. The switch just bounced. The reason must stay visible for as long
+/// as it is true: the whole route, whatever the switch shows.
+@Test func bothCamerasExplainTheRefusalForTheWholeRoute() {
+    #expect(BothCameras.state(enabled: false, supported: true, navigating: true) == .blockedByRoute)
+    #expect(BothCameras.state(enabled: false, supported: false, navigating: true) == .blockedByRoute)
 }
 
 /// A route beats the picture. A walking blind user does not lose obstacle warnings so a spotter
@@ -113,4 +123,30 @@ import Testing
     #expect(r.height <= 60 - 2 * BothCamerasLayout.insetMargin + 0.001)
     #expect(r.y >= BothCamerasLayout.insetMargin - 0.001)
     #expect(abs(r.width / r.height - BothCamerasLayout.insetAspectWidthOverHeight) < 0.001)
+}
+
+// MARK: - Face tracking change (front-camera head tracking re-runs the AR session)
+
+/// No route: the change applies (on or off).
+@Test func faceTrackingChangeAppliesWhenNoRouteIsActive() {
+    #expect(FaceTrackingChange.decide(navigating: false, routeStartWaiting: false) == .apply)
+}
+
+/// ⚠ Measured (trip log 2026-09-12T20-57-17Z, t = 80.7 s): "Head tracking without AirPods" was
+/// switched on mid-route. `DepthEngine.setFaceTracking` pauses and re-runs the AR session, which
+/// is ~1–2 s with no obstacle frames while a blind walker is being guided. Either direction
+/// re-runs the session, so both are refused, exactly like the two-camera mode.
+@Test func faceTrackingChangeIsRefusedWhileARouteIsGuiding() {
+    #expect(FaceTrackingChange.decide(navigating: true, routeStartWaiting: false) == .refusedRoute)
+}
+
+/// While a route waits for obstacle detection, a re-run would reset `DepthReadiness` and push the
+/// start back; refuse with the route-start reason.
+@Test func faceTrackingChangeIsRefusedWhileARouteIsStarting() {
+    #expect(FaceTrackingChange.decide(navigating: false, routeStartWaiting: true) == .refusedRouteStart)
+}
+
+/// Guiding wins over starting when both are somehow true (the guiding reason is the one to fix).
+@Test func faceTrackingRouteRefusalTakesPrecedence() {
+    #expect(FaceTrackingChange.decide(navigating: true, routeStartWaiting: true) == .refusedRoute)
 }

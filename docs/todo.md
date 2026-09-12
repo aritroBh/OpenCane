@@ -191,13 +191,15 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [x] **Permission race can start the mic after the user turned it off.** The pure
       `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
       polls permission while it owns the session and cancels any pending continuation on Stop.
-- [ ] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
-      The two-camera mode correctly refuses during a route; this path does not.
+- [x] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
+      The two-camera mode correctly refuses during a route; this path does not. **Step 34:** measured
+      on the phone (t = 80.7 s); now refused while a route guides or starts (`FaceTrackingChange`).
 - [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
       transition. If the input is still absent, sound alerts fail loudly and navigation continues.
-- [ ] **"Degrades to the back camera alone" is documented but not implemented** — on a phone without
+- [x] **"Degrades to the back camera alone" is documented but not implemented** (copy corrected
+      earlier — `BothCameras.unsupported`; confirmed by the Step 34 audit) — on a phone without
       multi-cam the mode shows no picture. Implement the single-session fallback or correct the
       header and the card copy.
 - [ ] **Backgrounding enqueues the camera teardown**, so if the system suspends first the app can
@@ -466,15 +468,15 @@ instead of the fixed 1,303-label Apple classifier that returned *nothing* on the
 cloud-primary / on-device fallback and unit-tested codecs. It needs a key, not code.
 
 - [!] **Gemini key — waiting on Aritro** (optional; the app works without it). See below.
-- [ ] Gate the cloud reply — `SceneVocabulary.isFaithful` runs on the on-device path **only**, so a
+- [x] Gate the cloud reply (done: `CloudSceneGate`, wired in `VLMClient`; Step 34 audit) — `SceneVocabulary.isFaithful` runs on the on-device path **only**, so a
       cloud sentence is currently spoken ungated. Measured hallucinations of exactly this class on our
       own route frames: "S 5th St", "S Grand Blvd". In progress on `fix/cloud-scene-gate`.
-- [ ] Fix the prompt: it asks for clock-face directions and distances in metres. VLMs read clock
+- [x] Fix the prompt (describe + Ask paths done: `ScenePrompt`; ⚠ the **hazard watch** prompt still asks for metres — open, Step 34 audit): it asks for clock-face directions and distances in metres. VLMs read clock
       directions from the *image's* frame rather than the walker's, and distance is the one thing they
       are measurably worst at (below chance — GuideDog, ACL 2026). LiDAR supplies every number.
 - [ ] Measure the real round trip from the phone on campus cellular and write down p50 and max. Do not
       quote anyone's benchmark at the demo; quote ours.
-- [ ] Leave the hazard watch **off** for the demo (it is the only thing that would call a model in a
+- [x] Leave the hazard watch **off** for the demo (default off; don't say "turn on hazard watch" to the assistant in rehearsal) (it is the only thing that would call a model in a
       loop).
 
 **The line to say out loud at the demo:** *the model names things; LiDAR measures them. No number the
