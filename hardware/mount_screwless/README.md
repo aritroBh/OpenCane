@@ -1,6 +1,6 @@
 # hardware/mount_screwless/: the no-hardware phone mount
 
-> **At a printer? The print list at the top of [`PRINTING.md`](PRINTING.md) is the one page you need.**
+> **At a printer? [`../3d_print_files/`](../3d_print_files/) has the G-code, the STLs and the print list.**
 
 **Sagar owns this folder.** It is an alternative to [`../mount/`](../mount/), not a
 replacement — pick whichever one is fitted on the day and say so in `CHANGELOG.md`.

@@ -2,8 +2,9 @@
 
 ## Print list — read this if you are standing at a printer
 
-The G-code is on the repo's **Releases** page (`mount-gcode-step25`), or regenerate it with the
-five commands under "Slicing" below. Check the Filament Selection screen before every job.
+The G-code and STLs are committed in [`hardware/3d_print_files/`](../3d_print_files/) (also on
+the Releases page as `mount-gcode-step25`), or regenerate them with the five commands under
+"Slicing" below and copy them there. Check the Filament Selection screen before every job.
 
 | # | File | Slot | Time | Then |
 |---|---|---|---|---|
