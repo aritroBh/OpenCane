@@ -9,6 +9,124 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 21 — The bore rings were printed, and five things they touched were wrong (Sat Sep 12)
+
+First physical measurement on this project. Everything below either came off the bed or was
+measured against the geometry; nothing here is reasoned-only unless it says so.
+
+**`pole_d` is 27.65 mm, settled.** The bore coupons were printed and fitted to the prototype
+shaft. Ring 1 (27.75) barely went on; rings 2 and 3 went on decently, and both filament colours
+agreed. `pole_d = (smallest ring that goes on) − 0.10 = 27.65` — landing exactly on the dial
+caliper reading taken a day earlier by a completely unrelated method. Two independent
+measurements to 0.01 mm. The rival **28.75 is retired** in `hardware/mount/cane_mount.scad` and
+`test_coupons.scad` as well as the screwless folder.
+
+One honest limit: no ring *refused* to go on, so the shaft is bounded from above (≤ 27.75) but
+never hard-bounded from below. If the collet ever comes up short, reprint the rings from 27.15
+before blaming the collet.
+
+And one reading deliberately thrown away: an inside-jaw caliper measurement of a printed ring's
+bore came out 27.28 mm. That is physically impossible — a rigid 4.2 mm wall cannot stretch
+0.37 mm to pass a 27.65 shaft — and it is the classic chord/inside-jaw artifact. Printed bores get
+measured by which gauge ring fits, never with inside jaws.
+
+**The shaft is a broom handle.** Stated plainly because every fit number in this repo now depends
+on it: the mount is being prototyped on a broom handle, not a cane. Real long canes are 9.5–13 mm
+at the tip end (Ambutech's published 0.5 in / 3/8 in figures; Rodgers & Wall Emerson, *Materials
+Testing in Long Cane Design*, JVIB 99(11) 2005; the WHO APS24 procurement draft says "13mm or
+smaller"). Our 27.65 is roughly double anything published. Retargeting to a real cane is a 2x
+change, not a tweak.
+
+**The thread coupon jammed, and the coupon was the wrong shape to diagnose it.** The first pair
+went down two turns of four and then stopped. That symptom rules out both simple explanations: not
+radial clearance, because the first two turns were free; not elephant's foot on the stub, because
+that binds at the *last* turn against the flange. Binding that worsens as more teeth engage points
+at **axial** clearance — `thr_axial` was 0.25 mm, about one layer at 0.2.
+
+The coupon could not tell us which, because it carried exactly **one** thread sample where the bore
+row has five and the dovetail row three. A single sample can say "too tight" and never "by how
+much". It is now a four-nut bracket that steps the two axes *separately* — `[0.45,0.25]` radial
+only, `[0.35,0.45]` axial only, `[0.45,0.45]`, `[0.55,0.65]` — so the nut that frees it identifies
+the cause. `thr_clear`/`thr_axial` in `screwless_mount.scad` are marked **PLACEHOLDER**: leaving a
+value the bench has disproved sitting in the file as though it were settled is exactly what the
+no-invented-specs rule forbids.
+
+A geometric explanation was proposed and **disproved** rather than quietly dropped: the thread's
+twisted extrude is faceted at 15 degrees per slice, dipping the crest 0.156 mm below true radius,
+which looked like a strong candidate. Mating the two solids at eight phases through a full slice
+gives **zero interference at every one**. The model is clean; the jam is a printing artifact.
+
+**The arm can no longer be printed before the dovetail coupon.** `arm_tip_t = dt_narrow −
+2·dt_clear` — added earlier the same night when the fin was narrowed to pass the socket mouth —
+makes the arm's geometry depend on `dt_clear`: 42.865 / 42.656 / 42.448 cm3 at 0.15 / 0.25 / 0.35.
+`pole_d` genuinely does not reach it. Four places still say otherwise (`PRINTING.md`, this file's
+Step 18, `docs/todo.md`, `slice_gcode.ps1`); todo.md is corrected here, the rest are open.
+
+**The arm's first layer had regressed to 0.30 mm2.** Same `arm_tip_t` taper: it is symmetric about
+the build axis, so the fin came out a wedge balanced on a line, against 450–820 mm2 for every other
+part. `assert(arm_t >= dt_wide)` did not catch it because `arm_t` is still 20 — the taper moved to
+the far end. The fin now holds full width along the reach and narrows only over the last
+`arm_taper` = 16 mm: bed contact **0.30 → 814 mm2**, and the arm got 3.7 cm3 lighter. Interference
+with the cradle fell 2345 → 954 mm3 as a side effect.
+
+**Four fitter-facing tables were wrong**, which is the most dangerous class of defect here — someone
+reads them with parts in hand and a paint pen, and a wrong number poisons a parameter permanently.
+The bore table in `coupons.scad` still listed a superseded set (27.85/28.25/28.45/28.95/29.15
+against the real 27.75/28.05/28.35/28.65/28.95). The thread table described three nuts at
+0.35/0.45/0.55 after the code had become four paired clearances. `coupons.scad` carried a
+self-contradictory shrinkage instruction whose two halves move `pole_d` 0.36 mm in opposite
+directions. And the stated print time was "~25 minutes" against a measured 52 m 53 s for the bore
+row alone and 3 h 01 m for the full plate.
+
+**Also fixed, each measured before and after:**
+
+| | before | after |
+|---|---|---|
+| Collar dovetail socket axial play | 1.00 mm (void z −1→31 vs tenon z 0→30) | 0.00 |
+| Zero-volume helical sheets on collar+ring | 20 (ring exported as 21 solids) | 0, both 1 solid |
+| Cradle bottom wall over the charging port | 2382 mm3 solid, full 83.8 mm width | 34 mm window, 1786 mm3 |
+| Thread coupon plate width | 251.11 mm on a 260 mm bed | 149.07 mm, wrapped to two rows |
+| Coupon plate solids | 14 (two pairs had silently merged) | 16 |
+
+The merged-coupon one is worth naming: wrapping the thread row to fit the bed pushed its second row
+into the bore rings, and the plate rendered as 14 solids instead of 16 with no error of any kind.
+Component count is now the pass/fail on every plate.
+
+**Three bugs were introduced and caught by re-testing within the same session** — recorded because
+the catching matters more than the introducing: notches placed 13 degrees apart landed inside the
+nut's flutes where a thumb cannot read them (volume drop per notch 0.002/0.007/0.008 cm3 where a
+constant 0.007 was due; now 36 degrees apart, at flute midpoints, constant); the swivel-test coupon
+for the ball tip was geometrically impossible (a stem sized for a 27.65 shaft cannot enter a 25 mm
+ball); and the plate collision above.
+
+**Still open and blocking.** The mount cannot be assembled or trusted:
+
+1. The cradle **slides off the arm**. There is exactly one `pawl_spring()` in the file and it is at
+   the collar end; the cradle's socket is cut open at both ends and its slide axis is near-vertical
+   in the walking pose.
+2. The cradle's **top latch is a floating island** (0.275 cm3) — the phone has no top retention and
+   the cradle exports as 2 solids. The latch riser stands in the middle of the phone's footprint and
+   the phone-pocket cut severs it.
+3. The **arm still passes through the phone** (4702 mm3).
+4. The collar is a closed 71 mm bore and **cannot be fitted or removed without taking off the cane's
+   tip or handle**.
+
+**Reviews.** Four adversarial agents completed (CAD geometry, docs truth-audit, printability/safety,
+and a verifier re-checking the docs findings); a second round of four all stalled and returned
+nothing, so their ground is *not* covered. Every finding acted on above was re-verified here by
+measurement first — and one of the verifier's own findings was rejected with evidence: it claimed the
+"parts were printed" comments were unverifiable because five other files still say "never printed".
+The rings were printed; those five files are the stale ones, and they are listed for correction.
+
+Muse and Antigravity were **not** run — `muse`, `agy`, `make`, `xcodebuild` and `swift` are all
+absent on this Windows machine. Recorded as not-done, not as passed.
+
+test on device: nothing new on the phone. Print `coupons.scad what="next"` (11 solids, 149x178 mm,
+57.32 cm3) in PLA at 0.2 mm, 4 walls, 25% gyroid, no support; take the smallest thread nut that runs
+the full length freely and the dovetail that slides with thumb pressure and stays put when shaken,
+then put those three numbers in the parameter block. Do not print the collar, ring, arm or cradle —
+all four are blocked by the defects above.
+
 ## Step 19 — The collar had no thread on it (Sat Sep 12, overnight)
 
 Three adversarial sub-agent reviews were run over `hardware/mount_screwless/` before

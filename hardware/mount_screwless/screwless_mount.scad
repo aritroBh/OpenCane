@@ -68,11 +68,33 @@ world_view = true;  // ghost cane + phone in the assembly preview
 // clearance - far too big to absorb. A collar bored for 28.75 would just
 // spin on a 27.65 shaft.
 //
-// The bore coupons bracket ALL THREE candidates, so one 20-minute print
-// settles it against the real cane instead of against anyone's memory.
-// Print them before the collar. If the winning ring is not near 27.65,
-// change this number and tell the rest of the team.
-pole_d       = 27.65;  // mm, cane shaft diameter at the collar.
+// MEASURED, 2026-09-12, by the bore coupons against the real cane. This
+// is no longer a disputed number. Two sets of rings (yellow and white)
+// were slid onto the cane at the collar spot:
+//   1 notch  27.75  barely went on          <- the bound
+//   2 notches 28.05  went on decently
+//   3 notches 28.35  went on decently (both colours agreed)
+//   4,5             not needed, larger still
+// pole_d = (smallest ring that goes on at all) - 0.10 = 27.65, which is
+// exactly what the dial caliper read on Sep 11 by a completely different
+// method. Two independent measurements to 0.01 mm.
+//
+// The rival 28.75 figure is WRONG and is now retired. It survived in
+// hardware/mount/ for two days; a collar bored for it has 1.10 mm of
+// clearance on a 27.65 shaft and simply spins.
+//
+// Caveat, so nobody over-reads this: no ring REFUSED to go on, so the
+// cane is bounded from above (<= 27.75) but not hard-bounded from below.
+// "Barely" is a strong signal - a much smaller cane would have let ring 1
+// slide - but if the collet ever comes up short, reprint the coupons from
+// 27.15 in 0.20 steps before blaming the collet.
+//
+// One reading to ignore: an inside-jaw caliper measurement of a printed
+// ring bore came out 27.28. That is a chord/inside-jaw artifact, and it
+// is physically impossible besides - a rigid 4.2 mm PETG wall cannot
+// stretch 0.37 mm to pass a 27.65 shaft. Measure printed bores by which
+// gauge ring fits, never with inside jaws.
+pole_d       = 27.65;  // mm, cane shaft diameter at the collar. MEASURED.
 bore_clear   = 0.40;   // mm, ADDED TO DIAMETER. Set this from the coupons.
 collar_wall  = 4.20;   // mm, radial wall around the bore.
 // These are GROOVES, not ribs, whatever the name says. The cylinders are
@@ -100,7 +122,14 @@ slot_w       = 2.60;   // mm, slot width.
 slot_over    = 5.0;    // mm, how far each slot runs down past the cone.
 thr_pitch    = 3.00;   // mm, trapezoidal thread pitch. Coarse prints better.
 thr_depth    = 1.20;   // mm, thread radial depth.
-thr_clear    = 0.35;   // mm, radial clearance, ring thread vs collar thread.
+// UNRESOLVED, pending the four-nut coupon in coupons.scad.
+// [thr_clear, thr_axial] = [0.35, 0.25] is the pair the bench ran on
+// 2026-09-12, and it JAMMED - two turns of four and then solid. Leaving
+// the disproved value here as if it were settled is exactly what the
+// house rule against invented specs forbids, so: this is a placeholder,
+// not an answer. Print coupons.scad what="thread", take the smallest nut
+// that runs the full length, and put ITS two numbers here.
+thr_clear    = 0.35;   // mm, radial clearance. PLACEHOLDER - see above.
 // Tooth shape, as AXIAL half-widths in fractions of the pitch. Read the
 // comment on thread_profile() before touching these: they are converted
 // to ANGLES, because that is what a twisted extrude turns into height.
@@ -110,7 +139,16 @@ thr_clear    = 0.35;   // mm, radial clearance, ring thread vs collar thread.
 // crest larger and the flank gets shallower and starts drooping.
 thr_duty     = 0.25;   // tooth half-width at the ROOT / thr_pitch.
 thr_crest    = 0.10;   // tooth half-width at the CREST / thr_pitch.
-thr_axial    = 0.25;   // mm, axial slack between the two threads' flanks.
+thr_axial    = 0.25;   // mm, axial slack. PLACEHOLDER - see thr_clear.
+// How far the tooth polygon's root arc sits INSIDE the base circle it is
+// unioned with. circle(r) is drawn as an inscribed polygon, so its real
+// radius dips ~0.010 mm below r between facets; a root arc at minor-eps
+// (0.01) lands within 0.0004 mm of that dip and the union comes out
+// tangent, which OpenSCAD resolves into dozens of zero-volume helical
+// sheets in the exported STL (36 of them in the ring) while still
+// reporting NoError. 0.05 clears the dip by 5x and costs nothing: the
+// circle covers this arc completely either way.
+thr_sink     = 0.05;   // mm, root arc inset below the thread minor radius.
 // Radial interference between the ring's internal cone and the collar's
 // cone when the ring is fully down. This IS the clamp: the collet has to
 // close by bore_clear/2 just to touch the cane, so anything less than
@@ -137,6 +175,12 @@ pawl_w       = 10.0;   // mm, pawl width.
 pawl_t       = 1.6;    // mm, pawl spring thickness.
 pawl_len     = 16.0;   // mm, pawl cantilever length.
 pawl_catch   = 1.5;    // mm, how far the catch stands proud.
+// The catch's height along the slide, and the window in the collar that
+// receives it, are the SAME dimension in two different modules. It was
+// the literal 3 in both, plus a bare 1.5 (= half of it) positioning the
+// window, so moving one silently broke the other. A deleted earlier
+// version of the window used 4 for the same thing.
+pawl_catch_h = 3.0;    // mm, catch height along the slide.
 
 /* [Ball joint - only used when joint = "ball"] */
 ball_d       = 22.0;   // mm, ball diameter. Bigger = more grip area, more bulk.
@@ -182,6 +226,17 @@ arm_reach    = 58.0;   // mm, collar pad face -> the cradle's dovetail mouth.
 // and makes the arm stiffer on the axis that carries the phone. There is
 // an assert below.
 arm_t        = 20.0;   // mm, fin thickness ACROSS the cane (Y).  (was 10.0)
+// A straight boss on the cradle end, standing BEHIND the dovetail mouth
+// (away from the phone). It is not decoration and it is not stiffening:
+// it moves the point where the fin starts diving back toward the collar,
+// and the fin's dive is what drove the fin through the cradle's back
+// plate. Measured 2026-09-12: with a 4 mm boss the fin crossed the plate
+// at phone-y 34.7-36.8 mm and intersect(arm, cradle) was 2213 mm3 - the
+// two parts could not be assembled at all. Lengthening the boss walks
+// that crossing down into the lower vent window, which is already a hole.
+// If you shorten it, re-run the interference probe in PRINTING.md.
+arm_taper    = 16.0;   // mm, length over which the fin narrows to arm_tip_t.
+arm_boss     = 14.0;   // mm, straight boss behind the cradle dovetail mouth.
 arm_w        = 30.0;   // mm, fin depth ALONG the cane axis (Z), at the root.
 
 /* [Phone: iPhone 17 Pro Max - Apple drawings, do not edit] */
@@ -195,15 +250,47 @@ plateau_clear = 2.0;   // mm, gap plateau lower edge -> back plate.
 /* [Cradle] */
 clear        = 0.30;   // mm, gap phone <-> cradle on every side.
 back_t       = 3.20;   // mm, back plate thickness.
+// Opening in the BOTTOM edge wall for the charging cable and the bottom
+// speaker. Without it the cradle seals both: measured 2382 mm3 of solid
+// wall across the full 83.80 mm width, one piece, no opening anywhere.
+// That means the phone cannot be charged while mounted - on a route that
+// runs ARKit, LiDAR and GPS continuously - and it covers the speaker the
+// app falls back to when no headphones are connected. Found 2026-09-12.
+//
+// port_w is a WINDOW WIDTH, not a plug spec. The actual clearance a
+// right-angle USB-C plug body needs is unknown and must be measured
+// against the cable you will use; 34 mm is chosen to clear the port and
+// both speaker grilles on a phone this size, not from any datasheet.
+// The cut runs the full wall depth and full height, so it does not leave
+// a lip bridging the opening - the phone is still carried by the cups at
+// each end, which the assert below keeps wide enough to be real.
+port_w       = 34.0;   // mm, bottom-edge window width. MEASURE your plug.
 wall_t       = 2.60;   // mm, side wall thickness.
 lip_w        = 1.20;   // mm, front lip reach over the screen edge. Keep < 2.56.
 lip_t        = 1.60;   // mm, lip thickness.
 cup_len      = 13.0;   // mm, bottom corner cups reach this far in from each side.
+// WHERE ALONG THE PHONE THE ARM JOINS, measured from the phone's bottom
+// edge. This was hard-coded at plate_top/2 - the plate's mid-height - and
+// that is the one value it must not have. The arm is a straight web from
+// the collar out to this joint, and the collar is on the CANE side, which
+// is the same side the phone is on. With the joint at mid-height the
+// plate's lower half rakes back across that web: measured 2026-09-12,
+// intersect(arm, cradle) = 2213 mm3 and the arm reached 43.07 mm past the
+// back glass - straight through the phone. Nothing could be assembled.
+// Low enough and the web passes UNDER the plate's bottom edge instead.
+// The cost is a longer moment arm on the dovetail, which is why this is
+// as high as the interference probe allows rather than zero.
+block_y      = 26.0;   // mm, dovetail joint centre, up from the phone's bottom edge.
+// Height of the dovetail block ABOVE the plain dt_depth socket: a plain
+// standoff that pushes the whole cradle further out along the arm, away
+// from the web. Costs a longer lever on the joint, buys clearance.
+dt_stand     = 0.0;    // mm, extra standoff under the cradle's dovetail block.
 latch_w      = 24.0;   // mm, sprung top latch width.
 latch_t      = 2.20;   // mm, latch spring thickness.
 latch_rise   = 16.0;   // mm, how far the latch cantilevers past the back plate.
 latch_grab   = 2.60;   // mm, how far the latch hooks over the screen.
 vent         = true;   // open the back plate so the phone sheds heat.
+vent_min     = 14.0;   // mm, shortest vent window worth cutting.
 // Button windows measured from the TOP edge (Apple drawing).
 left_windows  = [[28, 71]];
 right_windows = [[44, 67], [97, 127]];
@@ -239,6 +326,9 @@ lock_or   = sock_or + thr_clear + ring_wall;
 // instead of being held by the pawl alone.
 dt_top    = dt_len;                 // z of the socket's closed end
 arm_z     = dt_top - dt_len / 2;    // z of the arm's own origin, in collar coords
+// Fin width where it passes through the cradle's dovetail MOUTH. Any
+// wider and the fin cannot enter the socket at all.
+arm_tip_t = dt_narrow - 2 * dt_clear;
 
 assert(base_len >= dt_len + 4,
        "base_len must exceed dt_len by at least 4 mm or the dovetail socket cuts through the pad top");
@@ -256,8 +346,8 @@ assert(arm_t >= dt_wide,
 // the cane. Pushed through the same two transforms assembly() uses, so if
 // you change those, change this.
 tip_x     = pad_x + arm_reach
-            - (phone_d + lip_t + back_t + dt_depth) * cos(arm_angle)
-            - (wall_t + plate_top / 2) * sin(arm_angle);
+            - (phone_d + lip_t + back_t + dt_depth + dt_stand) * cos(arm_angle)
+            - (wall_t + block_y) * sin(arm_angle);
 tip_clear = tip_x - pole_d / 2;
 assert(tip_clear >= 8,
        "the cradle's bottom corner fouls the cane - raise arm_reach");
@@ -285,25 +375,57 @@ function thr_ang(axial_mm) = axial_mm * 360 / thr_pitch;
 
 thr_arc = 16;   // polygon segments per arc. 16 is under 0.02 mm of chord.
 
+// THE FLANK MUST BE INTERPOLATED IN POLAR SPACE, not drawn as a straight
+// Cartesian chord from the crest corner to the root corner. A chord from
+// (minor+depth) angle ac to (minor) angle ar passes INSIDE circle(minor)
+// whenever ar is large: at the shipped defaults (ar = 90, ac = 36) its
+// closest approach to the axis is r = 15.65 against a minor of 17.03, so
+// union() with circle(minor) swallowed the whole outer half of the tooth
+// and the root came out 0.738 mm wide instead of the 1.500 mm thr_duty
+// asks for - measured, 2026-09-12, by a radial pin through the band.
+// The tooth was square, thr_duty was inert above ~0.155 and INVERTED
+// above it (raising it made the tooth narrower), and both asserts below
+// guarded a shape the geometry never produced. Walking angle and radius
+// together, as here, is what makes a trapezoid in (axial, radius) once
+// the twist turns angle into height.
 module thread_profile(minor, depth, grow = 0) {
     ar = thr_ang(thr_pitch * thr_duty  + grow);   // root half-angle, deg
     ac = thr_ang(thr_pitch * thr_crest + grow);   // crest half-angle, deg
+    rc = minor + depth;                            // crest radius
+    rr = minor - thr_sink;                         // root radius, see thr_sink
     union() {
         circle(r = minor);
         polygon(concat(
+            // crest arc, -ac -> +ac
             [ for (i = [0 : thr_arc]) let (a = -ac + 2 * ac * i / thr_arc)
-                [ (minor + depth) * cos(a), (minor + depth) * sin(a) ] ],
+                [ rc * cos(a), rc * sin(a) ] ],
+            // trailing flank, +ac -> +ar, radius rc -> rr
+            [ for (i = [1 : thr_arc]) let (u = i / thr_arc,
+                                           a = ac + (ar - ac) * u,
+                                           r = rc + (rr - rc) * u)
+                [ r * cos(a), r * sin(a) ] ],
+            // root arc, +ar -> -ar (passes under the crest; rr < rc, so
+            // the loop stays simple for any ar under 180)
             [ for (i = [0 : thr_arc]) let (a = ar - 2 * ar * i / thr_arc)
-                [ (minor - eps) * cos(a), (minor - eps) * sin(a) ] ]
+                [ rr * cos(a), rr * sin(a) ] ],
+            // leading flank, -ar -> -ac, radius rr -> rc
+            [ for (i = [1 : thr_arc - 1]) let (u = i / thr_arc,
+                                               a = -ar + (ar - ac) * u,
+                                               r = rr + (rc - rr) * u)
+                [ r * cos(a), r * sin(a) ] ]
         ));
     }
 }
 
-// A sector wider than a half-turn cannot be drawn as one polygon arc pair
-// without wrapping onto itself, and the female thread is the male grown
-// by thr_axial, so the male has to leave room for it.
+// thr_ang() is fed a HALF-width, so it returns a HALF-angle: the root arc
+// spans twice this. Past 180 the arc wraps onto itself and the polygon
+// self-intersects, so 175 is the guard. The old message said "more than
+// half a turn", which is a half-angle of 90 - at the shipped defaults the
+// expression is 105 and the female tooth is 210 of arc, so the message
+// described a limit the default already broke while the assert stayed
+// silent. 210 of arc is legal; what is not legal is 360.
 assert(thr_ang(thr_pitch * thr_duty + thr_axial / 2) < 175,
-       "thread tooth is more than half a turn wide - lower thr_duty or thr_axial");
+       "thread root arc wraps onto itself - lower thr_duty or thr_axial");
 assert(thr_duty > thr_crest,
        "thr_duty must exceed thr_crest or the thread flank inverts");
 assert(thr_pitch * (1 - 2 * thr_duty) - thr_axial > 0.6,
@@ -358,8 +480,8 @@ module dt_socket(len = dt_len + 1) {
 module pawl_spring() {
     union() {
         translate([0, -pawl_w / 2, -pawl_len / 2]) cube([pawl_t, pawl_w, pawl_len]);
-        translate([-pawl_catch, -pawl_w / 2, pawl_len / 2 - 3])
-            cube([pawl_catch + eps, pawl_w, 3]);
+        translate([-pawl_catch, -pawl_w / 2, pawl_len / 2 - pawl_catch_h])
+            cube([pawl_catch + eps, pawl_w, pawl_catch_h]);
     }
 }
 
@@ -402,7 +524,14 @@ module collar() {
         // and its depth on -X, so the mouth is the flat +X pad face and the
         // slide axis is Z = the cane axis. Open at the bottom (z < 0),
         // stopped at z = dt_top.
-        translate([pad_x, 0, dt_top - (dt_len + 2) / 2 + 1])
+        // The +2 of extra socket length all goes BELOW, at the open
+        // mouth. A trailing "+ 1" here used to split it, putting the
+        // closed face at z = 31 against a tenon that tops out at 30:
+        // measured, socket void z[-1.00, 31.00] vs tenon z[0.00, 30.00],
+        // so the joint had 1.00 mm of free axial play and the phone's
+        // weight hung off the 1.6 mm pawl leaf instead of landing on the
+        // stop this socket exists to provide. Fixed 2026-09-12.
+        translate([pad_x, 0, dt_top - (dt_len + 2) / 2])
             rotate([0, 0, 90]) dt_socket(dt_len + 2);
         // Window the arm's pawl catches in. Through the pad, so you can
         // see it seat and push it back out with a fingernail.
@@ -552,11 +681,52 @@ module arm() {
             // far face is dt_len deep for the same reason the collar pad is:
             // a dovetail needs material behind its whole slide length, or the
             // far half of the tenon hangs off the end of nothing.
+            // TWO hulls, not one, and the reason is the first layer.
+            //
+            // A single hull from arm_t (20) at the collar to arm_tip_t
+            // (13.5) at the tip tapers SYMMETRICALLY about Y, and the
+            // export rotates Y onto the build Z - so the fin came out a
+            // wedge balanced on one edge. Measured: bed-contact area
+            // 0.30 mm2 on a 42.66 cm3 part, against 672 / 810 / 506 mm2
+            // for the collar, cradle and ring. It would peel off the bed
+            // in the first minute. This is the same failure the comment
+            // at arm_t's declaration says was fixed by setting
+            // arm_t = dt_wide; that fix was undone the moment the tip
+            // was narrowed to clear the socket mouth on 2026-09-12, and
+            // assert(arm_t >= dt_wide) did not catch it because arm_t is
+            // still 20 - the taper happens at the far end.
+            //
+            // So: hold full arm_t along the reach (flat bottom, real
+            // first layer), and narrow to arm_tip_t only over the last
+            // arm_taper mm, which is all that has to pass through the
+            // dt_narrow mouth.
             hull() {
                 translate([-eps, -arm_t / 2, -arm_w / 2]) cube([eps, arm_t, arm_w]);
                 translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0])
-                    translate([-eps, -arm_t / 2, -dt_len / 2])
-                        cube([4, arm_t, dt_len]);
+                    translate([-(dt_depth + 2 + arm_taper), -arm_t / 2, -dt_len / 2])
+                        cube([eps, arm_t, dt_len]);
+            }
+            hull() {
+                translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0])
+                    translate([-(dt_depth + 2 + arm_taper), -arm_t / 2, -dt_len / 2])
+                        cube([eps, arm_t, dt_len]);
+                // ACROSS the cane this box is the socket MOUTH width, not
+                // arm_t. dt_wide (20) is the dovetail's BURIED width; the
+                // mouth is only dt_narrow (14). A fin of arm_t = dt_wide
+                // cannot pass through a dt_narrow mouth - its shoulders
+                // land on the cradle block's face, 544 mm3 deep. The hull
+                // tapers 20 -> 13.5 along the reach, which is the right
+                // shape anyway: widest where the bending moment is.
+                // Starts dt_depth + 2 INSIDE the socket, not at the mouth
+                // plane. A hull only holds its end width AT the end face;
+                // 1.7 mm back toward the collar it has already widened to
+                // 8.03 mm half-width against a 7.25 mm socket half-mouth,
+                // which is 11 mm3 of shoulder sitting on the block. The
+                // tenon unions over this box and supplies the real
+                // dovetail, so a narrow box here costs nothing.
+                translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0])
+                    translate([-(dt_depth + 2), -arm_tip_t / 2, -dt_len / 2])
+                        cube([arm_boss + dt_depth + 2, arm_tip_t, dt_len]);
             }
             // Far end. Both the tenon and the ball face back INBOARD, along
             // -X, because the phone hangs on the cane side of the cradle's
@@ -603,8 +773,13 @@ module back_plate() {
             linear_extrude(height = back_t)
                 offset(r = 4) offset(r = -4)
                     square([2 * outer_x, plate_top], center = true);
+        // Vents straddle the dovetail block, so they move with block_y.
+        // A window shorter than vent_min is dropped: at a low block_y the
+        // lower one would come out inside out (y1 < y0) and cut a hole
+        // where the bottom cups live.
         if (vent)
-            for (yc = [[6, 34], [80, plate_top - 8]])
+            for (yc = [[6, block_y - 22], [block_y + 22, plate_top - 8]])
+                if (yc[1] - yc[0] >= vent_min)
                 translate([0, (yc[0] + yc[1]) / 2, -back_t - 1])
                     linear_extrude(height = back_t + 2)
                         offset(r = 7) offset(r = -7)
@@ -646,14 +821,15 @@ module cradle() {
             // bed. The flare carries the plate for dt_depth in every
             // direction, which is as much as geometry can do here - the
             // rest of the plate still wants support. See the README.
-            translate([-(dt_len + 10) / 2, plate_top / 2 - 16, -back_t - dt_depth])
-                cube([dt_len + 10, 32, dt_depth + eps]);
+            translate([-(dt_len + 10) / 2, block_y - 16,
+                       -back_t - dt_depth - dt_stand])
+                cube([dt_len + 10, 32, dt_depth + dt_stand + eps]);
             hull() {
-                translate([-(dt_len + 10) / 2, plate_top / 2 - 16,
-                           -back_t - dt_depth])
+                translate([-(dt_len + 10) / 2, block_y - 16,
+                           -back_t - dt_depth - dt_stand])
                     cube([dt_len + 10, 32, eps]);
                 translate([-(dt_len + 10) / 2 - dt_depth,
-                           plate_top / 2 - 16 - dt_depth, -back_t - eps])
+                           block_y - 16 - dt_depth, -back_t - eps])
                     cube([dt_len + 10 + 2 * dt_depth, 32 + 2 * dt_depth, eps]);
             }
         }
@@ -671,6 +847,9 @@ module cradle() {
         for (w = right_windows)
             translate([inner_x - 1, phone_h - w[1], -eps])
                 cube([wall_t + 2, w[1] - w[0], phone_d + lip_t + 2]);
+        // Charging / speaker window through the bottom edge wall.
+        translate([-port_w / 2, -wall_t - 1, -eps])
+            cube([port_w, wall_t + 2, phone_d + lip_t + 2]);
         // Dovetail socket, sliding along Y (= the cane axis in use).
         // LENGTH MATTERS. The block it is cut into is 32 mm long and the
         // 45-degree flare around that block reaches dt_depth further at
@@ -678,7 +857,7 @@ module cradle() {
         // each end and then the flare seals it completely: a blind pocket
         // with 987 mm3 of material where the arm has to enter. Run it past
         // the flare at both ends so the joint is actually open.
-        translate([0, plate_top / 2, -back_t - dt_depth])
+        translate([0, block_y, -back_t - dt_depth - dt_stand])
             rotate([-90, 0, 0]) rotate([0, 0, 180])
                 dt_socket(dt_len + 4 * dt_depth);
     }
@@ -713,7 +892,7 @@ module assembly() {
                             rotate([0, 180, 0]) cradle_and_phone();
                     }
             } else {
-                translate([-(back_t + dt_depth), 0, -plate_top / 2])
+                translate([-(back_t + dt_depth + dt_stand), 0, -block_y])
                     rotate([90, 0, -90]) cradle_and_phone();
             }
         }

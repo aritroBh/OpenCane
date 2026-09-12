@@ -1,10 +1,16 @@
 // =====================================================================
 // OpenCane screwless mount - FIT COUPONS
 // =====================================================================
-// Print this FIRST. It is ~25 minutes and it decides three numbers that
-// every other part depends on. Printing the real parts before these is
-// how you burn three hours and a spool finding out the bore is 0.2 mm
-// tight.
+// Print this FIRST. It decides three numbers that every other part
+// depends on. Printing the real parts before these is how you burn three
+// hours and a spool finding out the bore is 0.2 mm tight.
+//
+// TIME, sliced 2026-09-12, 0.4 nozzle / 0.2 layer / 4 walls / 25% gyroid:
+//   what="bore"   52 m 53 s   the five rings alone
+//   what="all"     3 h 01 m   the whole plate
+// The header said "~25 minutes" until 2026-09-12. It is not 25 minutes
+// and never was; someone planning an evening around that number lost two
+// and a half hours. If you only need pole_d, print what="bore".
 //
 // Print settings: the same profile you will use for the real parts.
 // 0.4 nozzle, 0.2 layer, 4 walls, 25% gyroid, PETG. If you change the
@@ -13,9 +19,15 @@
 // WHAT TO DO WITH IT
 //
 // 1. BORE RINGS (row 1, NOTCHED 1..5 = absolute BORE DIAMETER, mm)
-//      1 notch  27.85     4 notches 28.95
-//      2 notches 28.25    5 notches 29.15
-//      3 notches 28.45
+//      1 notch  27.75     4 notches 28.65
+//      2 notches 28.05    5 notches 28.95
+//      3 notches 28.35
+//    This table is the ONE thing in this header a fitter reads with parts
+//    in hand, and it was wrong until 2026-09-12: it still listed the
+//    superseded 27.85/28.25/28.45/28.95/29.15 set while bore_tests below
+//    had already moved to the values above. Every ring would have been
+//    recorded as 0.10-0.20 mm larger than it is. If you edit bore_tests,
+//    edit this table in the same keystroke.
 //    These are bore diameters, not clearances, because the cane diameter
 //    itself is disputed: the dial caliper says 27.65 mm, the repo and the
 //    hardware brief say 28.75 mm, and 1.128 in (28.65) was quoted once.
@@ -37,13 +49,55 @@
 //    collar is a collet that closes. Set bore_clear as a design decision
 //    (0.40 today) and let collet_squeeze take it up.
 //
-//    Then tell the rest of the team, because hardware/mount/ is still
-//    modelled at 28.75 and one of the two folders is wrong.
+//    RESULT, 2026-09-12 - this test has been RUN and it is settled:
+//      1 notch  27.75  barely went on   <- the bound
+//      2 notches 28.05  decent
+//      3 notches 28.35  decent, yellow and white agreed
+//    pole_d = 27.75 - 0.10 = 27.65, matching the dial caliper exactly.
+//    hardware/mount/'s 28.75 was wrong by 1.10 mm and is retired.
+//    You do not need to reprint these rings unless the cane changes.
 //
-// 2. THREAD PAIR (row 2)
-//    Screw the small ring onto the threaded stub. It should turn by hand
-//    for its whole length with no tool and no slop you can feel at the
-//    top. Binds -> raise `thr_clear` by 0.1. Wobbles -> drop it by 0.1.
+// 2. THREAD ROW (row 2): ONE stub + FOUR fluted nuts.
+//      stub  = threads on the OUTSIDE, sits on a thin flange
+//      nut   = 10 scallops round the rim, thread hidden INSIDE
+//
+//    NOTCHES ON THE NUT'S TOP RIM -> [thr_clear, thr_axial], mm:
+//      1 notch   0.45  0.25     radial step only
+//      2 notches 0.35  0.45     AXIAL step only
+//      3 notches 0.45  0.45     both, modest
+//      4 notches 0.55  0.65     both, generous
+//    TWO numbers per nut, not one. This table was written for an earlier
+//    THREE-nut set stepping thr_clear 0.35/0.45/0.55 and was not updated
+//    when the set became four pairs on 2026-09-12 - it would have named
+//    the wrong clearance for every nut on the plate. Read it from
+//    thr_tests below, and if you edit thr_tests, edit this in the same
+//    keystroke. It is the same defect this file's bore table carried,
+//    and the reason that one now has a warning attached to it.
+//
+//    Screw each nut down the stub by hand, no tool. Take the SMALLEST
+//    nut that turns freely for the WHOLE length with no play you can
+//    feel by rocking it at the top. Put both its numbers in
+//    `thr_clear` / `thr_axial`.
+//
+//    WHY TWO AXES. The 2026-09-12 bench run had one nut, [0.35, 0.25],
+//    and it went down two turns of four and then jammed. That rules out
+//    both single-axis causes: not radial clearance, because the first
+//    two turns were free; not elephant's foot on the stub, because that
+//    binds at the LAST turn against the flange. Binding that worsens as
+//    more teeth engage is cumulative per-tooth error, and the clearance
+//    that absorbs it is axial - thr_axial was 0.25 mm, 1.25 layers at
+//    0.2 mm. Two teeth can wiggle into alignment; four cannot.
+//    So nut 1 tests the radial theory, nut 2 the axial one, and which
+//    of them frees the thread is the answer.
+//    If ONLY nut 4 works, stop and investigate - a loose thread is
+//    hiding a fault, not fixing one.
+//
+//    WHERE it binds, note it either way:
+//      tight from the first turn       -> radial. Nut 1 or 3.
+//      free, then jams part-way down   -> axial. Nut 2 or 3.
+//      free, then jams AT THE FLANGE   -> elephant's foot on the stub's
+//        first layers, not clearance at all. Chamfer the stub; do not
+//        open the thread to paper over it.
 //
 // 3. DOVETAIL PAIR (row 3, NOTCHED 1/2/3 = 0.15/0.25/0.35 clearance)
 //    Slide each tenon into its socket. You want it to slide with thumb
@@ -61,13 +115,11 @@
 // done, and tell the next person. They are cane- and printer-specific.
 // =====================================================================
 
-use <screwless_mount.scad>
-
 /* [What to print] */
-what = "all"; // [all, bore, thread, dovetail]
+what = "all"; // [all, next, bore, thread, dovetail]
 
 /* [Copied from screwless_mount.scad - keep in sync] */
-pole_d       = 27.65;   // dial caliper, Sep 11. Disputed - see above.
+pole_d       = 27.65;   // MEASURED by these very rings, 2026-09-12.
 collar_wall  = 4.20;
 grip_ribs    = 8;
 rib_h        = 0.50;
@@ -87,13 +139,57 @@ ring_h       = 10.0;   // mm, height of each bore ring.
 // started at 27.85, ABOVE the 27.65 caliper reading, so if the caliper was
 // right the smallest ring still fitted and the test had no lower bracket -
 // it could only contradict itself. It also put 28.65 and 28.75 inside one
-// 0.50 mm gap. This set brackets 27.65 from below and halves that gap.
+// 0.50 mm gap. This set halves that gap and moves the floor down 0.10.
+//
+// It does NOT bracket 27.65 from below - 27.75 is still above it. The
+// comment here claimed it did until 2026-09-12. If ring 1 goes on
+// LOOSELY the cane is below this set's floor and the test has failed to
+// bound it; cut a set from 27.15 in 0.20 steps and rerun. Only a ring
+// that REFUSES to go on gives a real lower bound.
 bore_tests   = [27.75, 28.05, 28.35, 28.65, 28.95];  // absolute BORE diameters
 dt_tests     = [0.15, 0.25, 0.35];         // dt_clear values to try
-thr_test     = 0.35;   // thr_clear to try on the thread pair
+// Thread fit tests: [thr_clear, thr_axial] per nut, NOTCHED 1..4.
+// One male stub serves all four - only the female cut varies.
+//
+// TWO axes, not one, and the reason is a measurement from the bench on
+// 2026-09-12: a single nut at [0.35, 0.25] went down two turns of four
+// and then jammed. That symptom rules out both single-axis causes. It
+// was not radial clearance - the first two turns were free. It was not
+// elephant's foot on the stub - that binds at the LAST turn, against the
+// flange, not in the middle. Binding that worsens as more teeth engage
+// is cumulative per-tooth error, and the clearance that absorbs it is
+// AXIAL: thr_axial was 0.25 mm, which is 1.25 layers at 0.2 mm. Two
+// teeth can wiggle into alignment, four cannot.
+//
+// So this set steps the two axes SEPARATELY before stepping both, which
+// is what makes the result diagnostic instead of merely better:
+//   1  radial only   - if this frees it, blame thr_clear after all
+//   2  axial only    - if this frees it, the diagnosis above is right
+//   3  both, modest  - the expected winner
+//   4  both, generous- if ONLY this frees it, something else is wrong
+//                      and a looser thread is hiding it, not fixing it
+// Take the SMALLEST nut that runs the full length freely. A thread that
+// needs nut 4 should be investigated, not shipped.
+thr_tests    = [[0.45, 0.25], [0.35, 0.45], [0.45, 0.45], [0.55, 0.65]];
+thr_len      = 12.0;   // mm, threaded length of the stub and each nut.
+// Bore clearance the THREAD PAIR is built around, so its core diameter
+// matches the real collar's. Was inlined as a bare 0.40 in thread_pair()
+// until 2026-09-12, against the house rule that every dimension lives in
+// this block. Keep it equal to bore_clear in screwless_mount.scad. It is
+// NOT an output of the bore-ring test - see note 1 above.
+bore_clear   = 0.40;   // mm, on diameter.
+// Root arc inset below the thread minor radius. circle(r) in OpenSCAD is
+// an INSCRIBED polygon: its true radius dips about 0.0104 mm below r
+// between facets at $fa=4. A root arc at minor-eps (0.01) therefore lands
+// within 0.0004 mm of that dip, tangent rather than buried, and the
+// extrude sheds zero-volume helical sheets that slicers choke on while
+// OpenSCAD still reports NoError. 0.05 clears the dip with margin.
+thr_sink     = 0.05;   // mm.
+thr_arc2     = 16;     // segments per arc and per flank in the tooth.
 notch_d      = 1.20;   // mm, identity notch depth.
 notch_w      = 2.00;   // mm, identity notch width.
 gap          = 8.0;    // mm, spacing between coupons on the plate.
+per_row      = 3;      // coupons per row before wrapping to the next row.
 
 $fa = 2;
 $fs = 0.5;
@@ -138,17 +234,43 @@ module bore_row() {
 // an angular SECTOR or this coupon measures nothing at all.
 function thr_ang2(axial_mm) = axial_mm * 360 / thr_pitch;
 
+// The flank is interpolated in POLAR space. A straight Cartesian chord
+// from the crest corner to the root corner - which is what the two-arc
+// polygon here used to be - passes INSIDE circle(minor) whenever the root
+// half-angle is large. At these defaults (ar = 90, ac = 36) its closest
+// approach is r = 15.65 against a minor of 17.03, so union() with
+// circle(minor) swallowed the outer half of every tooth: the coupon
+// printed a 0.738 mm root where thr_duty asks for 1.500, and measuring
+// its fit told you about a thread the collar does not have. Measured by
+// radial pin, 2026-09-12; 1.396 mm after this rewrite. Walking angle and
+// radius together is what makes a trapezoid once the twist turns angle
+// into height. This is a hand copy of thread_profile() in
+// screwless_mount.scad - if you change one, change both.
 module thread_profile2(minor, depth, grow = 0) {
-    ar = thr_ang2(thr_pitch * thr_duty  + grow);
-    ac = thr_ang2(thr_pitch * thr_crest + grow);
-    n  = 16;
+    ar = thr_ang2(thr_pitch * thr_duty  + grow);   // root half-angle, deg
+    ac = thr_ang2(thr_pitch * thr_crest + grow);   // crest half-angle, deg
+    rc = minor + depth;                            // crest radius
+    rr = minor - thr_sink;                         // root radius
+    n  = thr_arc2;
     union() {
         circle(r = minor);
         polygon(concat(
+            // crest arc, -ac -> +ac
             [ for (i = [0 : n]) let (a = -ac + 2 * ac * i / n)
-                [ (minor + depth) * cos(a), (minor + depth) * sin(a) ] ],
+                [ rc * cos(a), rc * sin(a) ] ],
+            // trailing flank, +ac -> +ar, radius rc -> rr
+            [ for (i = [1 : n]) let (u = i / n,
+                                     a = ac + (ar - ac) * u,
+                                     r = rc + (rr - rc) * u)
+                [ r * cos(a), r * sin(a) ] ],
+            // root arc, +ar -> -ar
             [ for (i = [0 : n]) let (a = ar - 2 * ar * i / n)
-                [ (minor - eps) * cos(a), (minor - eps) * sin(a) ] ]
+                [ rr * cos(a), rr * sin(a) ] ],
+            // leading flank, -ar -> -ac, radius rr -> rc
+            [ for (i = [1 : n - 1]) let (u = i / n,
+                                         a = -ar + (ar - ac) * u,
+                                         r = rr + (rc - rr) * u)
+                [ r * cos(a), r * sin(a) ] ]
         ));
     }
 }
@@ -160,30 +282,72 @@ module thread2(len, minor, depth, grow = 0) {
         thread_profile2(minor, depth, grow, $fs = 0.9, $fa = 4);
 }
 
-module thread_pair() {
-    br    = (pole_d + 0.40) / 2;
+module thread_stub() {
+    br    = (pole_d + bore_clear) / 2;
     core  = br + collar_wall;
     minor = core - thr_depth;
-    tl    = 12;
-    // male stub
     difference() {
         union() {
             cylinder(h = 3, r = core + 1);
-            translate([0, 0, 3]) thread2(tl, minor, thr_depth);
+            translate([0, 0, 3]) thread2(thr_len, minor, thr_depth);
         }
-        translate([0, 0, -eps]) cylinder(h = tl + 4, r = br);
+        translate([0, 0, -eps]) cylinder(h = thr_len + 4, r = br);
     }
-    // female ring
-    translate([2 * core + gap + 10, 0, 0])
-        difference() {
-            cylinder(h = tl, r = core + 4);
-            translate([0, 0, -eps])
-                thread2(tl + 2, minor + thr_test, thr_depth, thr_axial / 2);
-            for (i = [0 : 9])
-                rotate([0, 0, i * 36])
-                    translate([core + 4, 0, -eps])
-                        cylinder(h = tl + 2, r = 2.5, $fn = 20);
-        }
+}
+
+// One female nut. tc = [thr_clear, thr_axial]; notched by its index in
+// thr_tests. The axial clearance enters as grow on the cutting thread:
+// thr_ang2() turns an axial millimetre into an angle, so growing the cut
+// by axial/2 on each side opens the groove by `axial` in total along the
+// helix - which is the direction the jam happened in.
+module thread_nut(tc) {
+    br    = (pole_d + bore_clear) / 2;
+    core  = br + collar_wall;
+    minor = core - thr_depth;
+    orr   = core + 4;
+    idx   = [for (i = [0 : len(thr_tests) - 1]) if (thr_tests[i] == tc) i][0] + 1;
+    difference() {
+        cylinder(h = thr_len, r = orr);
+        translate([0, 0, -eps])
+            thread2(thr_len + 2, minor + tc[0], thr_depth, tc[1] / 2);
+        // flutes: finger grips, 10 of them at 36 deg spacing
+        for (i = [0 : 9])
+            rotate([0, 0, i * 36])
+                translate([orr, 0, -eps])
+                    cylinder(h = thr_len + 2, r = 2.5, $fn = 20);
+        // Identity notches in the top rim, one per FLUTE MIDPOINT.
+        //
+        // The 13 deg step the bore rings use is WRONG here and was in
+        // this file for about ten minutes on 2026-09-12. Flutes land on
+        // multiples of 36, so notches at 90, 103, 116, 129 put the third
+        // and fourth INSIDE the flute at 108. Measured: the notch-region
+        // volume fell 0.002, 0.007, 0.008 cm3 across the four nuts where
+        // a constant ~0.007 was due. A notch sunk in a scallop is also
+        // impossible to count by thumb, which is the whole point of
+        // notching instead of printing digits. 36 deg puts every notch
+        // exactly between two flutes, on the widest land available.
+        // (The bore rings are unaffected: their 8 grip grooves are on
+        // the INNER bore, at a different radius from the rim notches.)
+        for (k = [0 : idx - 1])
+            rotate([0, 0, 90 + k * 36])
+                translate([orr - 3.2, 0, thr_len - notch_d])
+                    cube([3, notch_w, notch_d + eps], center = false);
+    }
+}
+
+// Laid out in rows of `per_row`, not one long line. A single line of the
+// stub plus four nuts is 251.11 mm wide, which leaves 4.4 mm a side on a
+// 260 mm bed - less than a brim - and it grew past the bed the moment the
+// fourth nut was added on 2026-09-12. Wrapping keeps the plate square as
+// more clearances get added.
+module thread_row() {
+    br   = (pole_d + bore_clear) / 2;
+    core = br + collar_wall;
+    step = 2 * (core + 4) + gap;
+    for (i = [0 : len(thr_tests)])
+        translate([(i % per_row) * step, floor(i / per_row) * step, 0])
+            if (i == 0) thread_stub();
+            else        thread_nut(thr_tests[i - 1]);
 }
 
 // ------------------------------------------------------------ dovetail
@@ -225,12 +389,30 @@ module dt_row() {
 }
 
 // ----------------------------------------------------------------- lay
-if (what == "all") {
-    bore_row();
-    translate([0, 70, 0]) thread_pair();
-    translate([0, 130, 0]) dt_row();
-} else if (what == "bore")     bore_row();
-else if (what == "thread")     thread_pair();
+// Row origins. These are NOT round numbers chosen by eye: each is the
+// previous row's real extent plus `gap`. The thread row wraps to two
+// rows of three now, 96.90 mm tall instead of 44.45, and the old hand
+// -picked y=70/130 made it overlap the bore rings - the plate rendered
+// as 14 solids instead of 16 because two pairs of coupons had merged
+// into each other. Measured and fixed 2026-09-12. If you add a coupon,
+// re-render and CHECK THE COMPONENT COUNT; a merge is silent otherwise.
+row_bore = 0;                       // bore rings span y +-18.67
+row_thr  = 60;                      // two rows, y -22.23 .. +74.68 of here
+row_dt   = 170;                     // dovetail pairs span y 0 .. 49
+// "next" is the plate to print when the bore rings are already DONE and
+// pole_d is settled - which it is, as of 2026-09-12. It is the thread row
+// and the dovetail row together in one job, because those are the two
+// numbers still unknown and there is no reason to run the printer twice.
+// Skipping the bore row saves 21.33 cm3 and its 52 m 53 s.
+if (what == "next") {
+    translate([0, 0,      0]) thread_row();
+    translate([0, row_dt - row_thr, 0]) dt_row();
+} else if (what == "all") {
+    translate([0, row_bore, 0]) bore_row();
+    translate([0, row_thr,  0]) thread_row();
+    translate([0, row_dt,   0]) dt_row();
+} else if (what == "bore")       bore_row();
+else if (what == "thread")     thread_row();
 else if (what == "dovetail")   dt_row();
 
-echo(str("coupons: bore ", bore_tests, "  dt ", dt_tests, "  thr_clear ", thr_test));
+echo(str("coupons: bore ", bore_tests, "  dt ", dt_tests, "  thr_clear ", thr_tests));

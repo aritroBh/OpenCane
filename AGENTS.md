@@ -160,6 +160,66 @@ Simulator GPS replay: launch with `SIMCTL_CHILD_CANEKIT_DEMO_ROUTE=1` and feed
 `xcrun simctl location <udid> start --speed=4 --interval=1 <lat,lon> …`; read the JSONL trip log in the
 app container's Documents folder.
 
+## Hardware / OpenSCAD — traps that have already cost us a night
+
+Everything here was paid for with a real mistake on 2026-09-12. Read it before touching a `.scad`.
+
+**Never trust an exit code or `Status: NoError`.** OpenSCAD exits **non-zero for EMPTY geometry**,
+which at the shell is indistinguishable from a failed `assert()`. It also exits **zero, reporting
+`NoError`, while exporting disconnected floating solids**. A sweep script that reads exit codes will
+report empty results as failures and failures as successes — that happened twice in one evening, in
+opposite directions. Always: check the STL exists, has positive volume, and parse stdout for `ssert`.
+
+**Count connected components on every export.** A part that exports as N>1 solids has a floating
+piece that prints as loose debris. The cradle shipped for days as 2 components with its phone latch
+severed. `stl/` artefacts and slicer previews both hide this. Make component count a pass/fail on
+every part, not an occasional check.
+
+**`circle(r)` is an inscribed polygon.** Its true radius dips ~0.010 mm below `r` between facets
+(sagitta at `$fa=4`). Geometry placed inside that dip produces zero-volume sheets that still report
+`NoError` — the ring exported 20 of them until `thr_sink = 0.05` pushed the root arc clear.
+
+**`linear_extrude(twist=)` maps ANGLE to height, not distance.** A thread tooth must be drawn as an
+angular SECTOR. Related and separate: interpolate a thread flank in **polar** space. A straight
+Cartesian chord from the crest corner to the root corner passes *inside* `circle(minor)` whenever the
+root half-angle is large, and `union()` silently swallows the outer half of every tooth. Ours was
+0.738 mm where `thr_duty` asked for 1.500.
+
+**A twisted extrude's facet error is radial, not just axial.** At 24 slices/turn the twist is 15° per
+slice, so the crest's true radius dips `r·(1−cos 7.5°)` = **0.156 mm** — 78% of a layer, taken
+straight off the thread's engagement diameter. Reasoning only about axial error will miss this.
+
+**Sweep the parameter, do not trust the comment.** Several parameters here turned out to be *inert*
+or *inverted* — moving geometry opposite to what their comment claimed. `dt_stand` is documented as
+buying clearance and makes interference monotonically worse. If a comment states a measured number,
+re-measure it: a large fraction of ours were stale or from a different configuration.
+
+**An `assert()` must guard the feature that actually fails first.** `assert(pad_t > dt_depth)` guards
+the socket, but the pawl window breaches the bore 0.8 mm sooner. `assert(arm_t >= dt_wide)` guards the
+fin root, and did not notice when a taper at the *far end* cut bed contact to 0.30 mm. Assert on the
+measured quantity, and make the message describe the same limit the expression tests.
+
+**Print orientation is part of the model, not a slicer decision.** Lay every exported part flat on
+z = 0 in the orientation it must print in. Check **first-layer area** (volume of a 0.2 mm slab at
+z-min ÷ 0.2): a symmetric taper about the build axis rests on a *line*. Healthy parts here are
+450–820 mm²; the arm regressed to 0.30 mm² and nobody noticed because it still rendered fine.
+
+**Coupons must bracket, not sample.** A single-value fit coupon can only ever say "too tight" or
+"too loose", never how much — one nut at `[0.35, 0.25]` jammed and taught us nothing. Give every fit
+test at least three values, and when a symptom implicates two different axes (radial vs axial
+clearance), step them **separately** so the result is diagnostic.
+
+**The header table is the part of a coupon file a human actually reads**, with parts in hand and a
+paint pen. It has now been wrong twice — once for the bore rings, once for the thread nuts — both
+times because the array changed and the comment did not. If you edit a `*_tests` array, edit its table
+in the same keystroke. A fitter who records the wrong number poisons a parameter permanently.
+
+**Re-render and re-measure after every layout change.** Wrapping a coupon row to fit the bed pushed it
+into another row; the plate rendered as 14 solids instead of 16 and the merge was completely silent.
+
+**"Unknown, need to measure" is the correct answer** and outranks a plausible number. A value the
+bench has *disproved* must never sit in the file as though it were settled — mark it a placeholder.
+
 ## Things that look wrong but are deliberate
 
 - Fences fire up to `radius_m` before the corner. `TurnSettle` (Logic) holds the previous leg's bearing

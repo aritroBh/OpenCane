@@ -30,13 +30,19 @@
 .PARAMETER Part
     Render one part instead of all of them.
     collar | ring | arm | cradle | coupons | socket | lock
+    bore | thread | dovetail                  - one coupon ROW at a time, so a
+                                                fit test is a 20-minute print
+                                                instead of a 3-hour plate
+    swivel_test | ball_lower | ball_upper | ball_stem   - rolling ball tip
 
 .PARAMETER Png
     Also write a preview PNG next to each STL.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'collar', 'ring', 'arm', 'cradle', 'coupons', 'socket', 'lock')]
+    [ValidateSet('all', 'collar', 'ring', 'arm', 'cradle', 'coupons', 'socket', 'lock',
+                 'bore', 'thread', 'dovetail',
+                 'swivel_test', 'ball_lower', 'ball_upper', 'ball_stem')]
     [string]$Part = 'all',
     [switch]$Png
 )
@@ -47,6 +53,7 @@ $srcDir  = Join-Path $repo 'hardware\mount_screwless'
 $outDir  = Join-Path $srcDir 'stl'
 $mainScad    = Join-Path $srcDir 'screwless_mount.scad'
 $couponScad  = Join-Path $srcDir 'coupons.scad'
+$tipScad     = Join-Path $repo 'hardware/cane_tip/ball_tip.scad'
 
 # ---------------------------------------------------------------- locate
 function Find-OpenScad {
@@ -88,7 +95,19 @@ $targets = @(
     # Ball-joint parts. Only needed when joint = "ball" in the .scad;
     # harmless to render either way, and cheap.
     @{ Name = 'socket';  Scad = $mainScad;   Def = 'part=\"socket\"' },
-    @{ Name = 'lock';    Scad = $mainScad;   Def = 'part=\"lock\"'   }
+    @{ Name = 'lock';    Scad = $mainScad;   Def = 'part=\"lock\"'   },
+    # Coupon rows, individually. Printing one row answers one question in
+    # well under an hour; the full plate is 3 h 01 m and answers three.
+    # Print the row you actually need next - see PRINTING.md print order.
+    @{ Name = 'bore';     Scad = $couponScad; Def = 'what=\"bore\"'     },
+    @{ Name = 'thread';   Scad = $couponScad; Def = 'what=\"thread\"'   },
+    @{ Name = 'dovetail'; Scad = $couponScad; Def = 'what=\"dovetail\"' },
+    # Rolling ball tip. swivel_test FIRST - it is 9 cm3 and decides
+    # whether a printed swivel spins at all before any ball is printed.
+    @{ Name = 'swivel_test'; Scad = $tipScad; Def = 'part=\"swivel_test\"' },
+    @{ Name = 'ball_lower';  Scad = $tipScad; Def = 'part=\"lower\"'       },
+    @{ Name = 'ball_upper';  Scad = $tipScad; Def = 'part=\"upper\"'       },
+    @{ Name = 'ball_stem';   Scad = $tipScad; Def = 'part=\"stem\"'        }
 )
 if ($Part -ne 'all') { $targets = $targets | Where-Object { $_.Name -eq $Part } }
 

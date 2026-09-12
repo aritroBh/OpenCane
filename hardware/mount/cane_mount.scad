@@ -40,7 +40,12 @@ part = "assembly"; // [assembly, collar_a, collar_b, arm, cradle, cap, knob]
 world_view = true;
 
 /* [Cane] */
-pole_d       = 28.75;  // mm, stick diameter (1.132 in, measured Sep 10). MEASURE again at the collar spot.
+// MEASURED 27.65 by the bore coupons in hardware/mount_screwless/,
+// 2026-09-12, and independently by dial caliper on Sep 11. The 28.75
+// here was 1.132 in read off the wrong part of a tapered cane; a collar
+// bored for it has 1.10 mm of clearance and spins on the shaft. Changed
+// 2026-09-12. Do not put 28.75 back without a ring that proves it.
+pole_d       = 27.65;  // mm, stick diameter at the collar spot. MEASURED.
 bore_clear   = 0.3;    // mm, added to the bore DIAMETER. Retune from test_coupons.scad bore rings.
 collar_len   = 44;     // mm, collar length along the cane. Keep = 2 x ear_disc_r so it prints flat.
 collar_wall  = 5;      // mm, radial wall around the bore.

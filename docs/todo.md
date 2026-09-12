@@ -312,21 +312,31 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
       height; the tooth was drawn as a flat y-offset and came out 0.031 mm thick, so the collar's
       threaded band sliced as a smooth cylinder. Rewritten as an angular sector: 0.62–0.75 mm.
       Both copies had it — `screwless_mount.scad` and the hand-copied one in `coupons.scad`.
-- [ ] **Print the bore rings and set `pole_d` from them.** Everything else waits on this number.
+- [x] **Print the bore rings and set `pole_d` from them.** DONE 2026-09-12. Printed, and fitted to
+      the prototype shaft: 1 notch (27.75) barely went on, 2 and 3 went on decently, both colours
+      agreeing. `pole_d = 27.75 - 0.10 = 27.65`, which lands exactly on the dial-caliper reading by
+      a completely different method. The rival 28.75 is retired in all four .scad files. Caveat: no
+      ring REFUSED to go on, so the shaft is bounded from above but not hard-bounded from below.
       `pole_d = (smallest ring that goes on) − 0.10` — **not −0.35**, which is what `coupons.scad`
       said until 2026-09-12 and was wrong by ~0.25 mm. `bore_clear` is *not* an output of this
       test: the rings are rigid, the collar is a collet that closes, so clearance is a design
       decision and `collet_squeeze` takes it up.
-- [ ] Thread + dovetail coupons; set `thr_clear` and `dt_clear`. The thread coupon is the first
+- [ ] Thread + dovetail coupons; set `thr_clear` and `dt_clear`. Exported together as one plate
+      (`what="next"`, 11 solids, 149x178 mm, 57.32 cm3) on 2026-09-12. First thread pair printed
+      and JAMMED two turns of four at [0.35, 0.25], so the coupon is now a four-nut bracket
+      stepping radial and axial clearance separately. The thread coupon is the first
       physical proof the rewritten thread exists — **if the ring will not thread on, do not print
       the collar.**
 - [ ] Print the bore rings in PETG too. PLA rings need a shrinkage correction of ~0.06 mm (worst
       case 0.168 mm, which is larger than the clearance the collet has to work with); PETG rings
       need none, because the collar is PETG.
 - [ ] Print collar + ring; check the ring actually closes the collet on the real cane
-- [ ] Print arm + cradle; T0 fit with the phone in it. The **arm needs no measurement first** — its
-      tenons are drawn at `dt_section(0)` and the pawl is fixed geometry, so neither `pole_d` nor
-      `dt_clear` reaches it. It is the only real part printable before the coupons are read.
+- [ ] Print arm + cradle; T0 fit with the phone in it. **CORRECTION 2026-09-12: the arm now DOES
+      depend on `dt_clear`**, via `arm_tip_t = dt_narrow - 2*dt_clear`, added when the fin was
+      narrowed to pass the socket mouth. Measured: arm volume 42.865 / 42.656 / 42.448 cm3 at
+      dt_clear 0.15 / 0.25 / 0.35. `pole_d` genuinely does not reach it. So the dovetail coupon
+      must be read BEFORE the arm is printed — the old "printable first" advice would have wasted
+      it. The same wrong claim is in PRINTING.md, CHANGELOG Step 18 and slice_gcode.ps1.
 - [ ] **Pawl release window is ~79% blocked by the arm** — there may be no way to press the catch
       to release the joint. Confirm on the printed arm, then either move the window or add a
       cutaway.
@@ -334,9 +344,13 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
       the pawl catch; `socket_part()`'s "flare" is a flat 90° ledge, not a flare; the button
       windows overrun the top of both side walls; `dt_clear` gives 0.325 mm at the mouth and
       0.139 mm buried instead of a uniform 0.25; ball-socket fingers at ~7–9% strain will crack.
-- [!] **Cane diameter disputed: 27.65 (dial caliper) vs 28.75 (hardware/mount + brief) vs
-      28.65 (1.128 in).** 1.1 mm apart. `mount_screwless/` uses 27.65; `mount/` still uses
-      28.75. Bore coupons bracket all three — print them and settle it, then fix the loser.
+- [x] **Cane diameter SETTLED at 27.65 mm, 2026-09-12.** Was disputed three ways (27.65 dial
+      caliper / 28.75 repo+brief / 28.65 = 1.128 in). The bore rings decided it against the real
+      shaft and agreed with the caliper to 0.01 mm. `hardware/mount/cane_mount.scad` and
+      `test_coupons.scad` moved off 28.75 in the same commit. NOTE: the shaft is a BROOM HANDLE
+      standing in for a cane — real long canes are 9.5–13 mm at the tip end (Ambutech published
+      figures; Rodgers & Wall Emerson, JVIB 99(11) 2005), so every fit number here is a number for
+      the prototype shaft, not for a cane.
 - [ ] Ball joint (`joint = "ball"`): print socket + lock, check the clamp actually holds the
       phone through a sweep. Brief and mount/DESIGN.md rejected free ball joints; this one is
       clamped, which answers that but is untested.
