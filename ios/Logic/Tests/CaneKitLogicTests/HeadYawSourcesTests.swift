@@ -162,7 +162,7 @@ import Testing
 
 /// The hop rate `DepthEngine`'s anchor relay throttles to: the depth pipeline publishes at 30 Hz
 /// normally, but the beacon renders at 10 Hz, so a 15 Hz relay cap avoids needless main-actor work.
-@Test func faceYawPublishIntervalMatchesTheDepthRate() {
+@Test func faceYawPublishIntervalKeepsRelayBounded() {
     #expect(abs(FaceYawTracker.publishInterval - 1.0 / 15) < 1e-9)
 }
 
