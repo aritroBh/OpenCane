@@ -47,25 +47,37 @@ private let cif = Coordinate(latitude: 40.1125, longitude: -88.2283)
     #expect(GeoMath.bearingError(target: 350, heading: 10) == -20)
 }
 
-/// A sustained 30° drift says "Veer right" after 3 s, then stays quiet for the 10 s cooldown.
+/// A sustained 30° drift says "Veer right" after 3 s, then stays quiet for the 10 s cooldown and
+/// speaks again the moment it ends (13 s).
+/// The drift is fed at the real ~1 Hz fix cadence: `maxEvidenceGap` means moments further apart
+/// than 2 s are a GPS gap, not a sustained drift, and restart the hold (pinned separately by
+/// `onlyHolesLongerThanTwoSecondsForgetTheHold`).
 @Test func offCourseNeedsThreeSecondsThenCoolsDown() {
     let d = OffCourseDetector()
     #expect(d.update(error: 30, now: 0) == nil)
     #expect(d.update(error: 30, now: 1) == nil)
     #expect(d.update(error: 30, now: 2.9) == nil)
     #expect(d.update(error: 30, now: 3) == .right)
-    #expect(d.update(error: 30, now: 6) == nil)      // hold satisfied but inside cooldown
-    #expect(d.update(error: 30, now: 12.9) == nil)
-    #expect(d.update(error: 30, now: 13) == .right)
+    // The drift goes on at ~1 Hz, so the hold is satisfied from 6 s and only the 10 s cooldown
+    // keeps it quiet. (A sparse feed would instead restart the hold — see `maxEvidenceGap`.)
+    var spoke: [Double] = []
+    for t in stride(from: 4.0, through: 13.0, by: 1) where d.update(error: 30, now: t) != nil {
+        spoke.append(t)
+    }
+    #expect(spoke == [13])                           // silent until the cooldown ends, then once
 }
 
 /// Swinging back on bearing mid-drift restarts the 3 s hold, so a brief wobble never nags.
+/// Fed at the real ~1 Hz cadence (see `maxEvidenceGap`); the boundary asserted is the hold, not
+/// the sampling.
 @Test func offCourseResetsWhenBackOnBearing() {
     let d = OffCourseDetector()
     #expect(d.update(error: -40, now: 0) == nil)
-    #expect(d.update(error: 5, now: 2) == nil)
-    #expect(d.update(error: -40, now: 2.5) == nil)
-    #expect(d.update(error: -40, now: 5.4) == nil)
+    #expect(d.update(error: 5, now: 2) == nil)       // back on bearing: the drift is forgotten
+    #expect(d.update(error: -40, now: 2.5) == nil)   // a new episode starts here
+    #expect(d.update(error: -40, now: 3.5) == nil)
+    #expect(d.update(error: -40, now: 4.5) == nil)
+    #expect(d.update(error: -40, now: 5.4) == nil)   // 2.9 s of it: not yet
     #expect(d.update(error: -40, now: 5.5) == .left)
 }
 
@@ -262,16 +274,99 @@ private let line = [
     #expect(second == .reached(index: 1, waypoint: wps[1], isLast: true))
 }
 
+/// A walker genuinely off course whose moments are only *intermittently* judgeable (a jittery
+/// fix here and there is too poor / too slow / has no smoothed course yet) must still be warned:
+/// a hole shorter than `maxEvidenceGap` is GPS noise inside otherwise continuous tracking, not a
+/// reason to forget a hold. Before this rule every gated moment ended the episode, so the 3 s
+/// hold could never accumulate under jitter and the veer warning never fired at all
+/// (e2e `wrong_turn`: no "Veer right." after overshooting west at Goodwin).
+@Test func gatedMomentsInsideGoodTrackingKeepTheHold() {
+    let d = OffCourseDetector()
+    #expect(d.update(error: 40, now: 0) == nil)       // episode starts
+    d.gated(at: 1)                                    // one unjudgeable moment: jitter, not a gap
+    #expect(d.update(error: 40, now: 2) == nil)
+    d.gated(at: 3)
+    #expect(d.update(error: 40, now: 4) == .right)    // 4 s off course with 1 s holes → warned
+}
+
+/// The opposite half of the same rule: a real GPS gap must NOT fire a veer on the first fix back
+/// from pre-gap history (the bug commit a7a5fa6 fixed). Both shapes of gap count — gated moments
+/// arriving with a stale fix, and no moments at all — and after either one a full 3 s hold of
+/// fresh evidence is required.
+@Test func aGpsGapForgetsTheHoldSoThereIsNoInstantVeer() {
+    let gatedThrough = OffCourseDetector()
+    #expect(gatedThrough.update(error: 40, now: 0) == nil)
+    #expect(gatedThrough.update(error: 40, now: 2) == nil)
+    for t in stride(from: 3.0, through: 32.0, by: 1) { gatedThrough.gated(at: t) }
+    #expect(gatedThrough.update(error: 40, now: 33) == nil)   // first fix back: a new episode
+    #expect(gatedThrough.update(error: 40, now: 35) == nil)
+    #expect(gatedThrough.update(error: 40, now: 36) == .right) // only after a full fresh hold
+
+    let silentThrough = OffCourseDetector()                    // no headings at all during the gap
+    #expect(silentThrough.update(error: 40, now: 0) == nil)
+    #expect(silentThrough.update(error: 40, now: 2) == nil)
+    #expect(silentThrough.update(error: 40, now: 40) == nil)   // 38 s later: not 3 s of evidence
+    #expect(silentThrough.update(error: 40, now: 41) == nil)
+    #expect(silentThrough.update(error: 40, now: 42) == nil)
+    #expect(silentThrough.update(error: 40, now: 43) == .right)
+}
+
+/// A stop in the middle of a drift restarts the 3 s hold — it is NOT bridged like a GPS hole.
+///
+/// Standing still is the one state in which a walker can turn to face anywhere without any
+/// evidence recording it, and the course smoother's 15 m trail still describes the approach they
+/// walked *before* stopping. So `NavigationEngine` routes a standing fix to `endEpisode()` and a
+/// merely poor / stale / missing one to `gated(at:)`. Had the stop been bridged instead, the
+/// pre-stop drift would finish the hold at 3 s — announcing "Veer right." to a walker who stopped,
+/// corrected and set off again on the right bearing (adversarial review of this fix, finding 1).
+/// The `now: 3` expectation below is the one that fails if a stop is ever bridged.
+@Test func aStopMidDriftRestartsTheHold() {
+    let d = OffCourseDetector()
+    #expect(d.update(error: 40, now: 0) == nil)
+    #expect(d.update(error: 40, now: 1) == nil)
+    d.endEpisode()                                   // the walker stopped: a fact, not a hole
+    #expect(d.update(error: 40, now: 2) == nil)
+    #expect(d.update(error: 40, now: 3) == nil)      // bridged, this would have cued: 3 s since 0
+    #expect(d.update(error: 40, now: 4) == nil)
+    #expect(d.update(error: 40, now: 5) == .right)   // a full hold of evidence since the stop
+}
+
+/// Pins the number: a hole of exactly `maxEvidenceGap` (2 s — one missed beat of the ~1 Hz fix
+/// stream) keeps the hold; anything longer forgets it. Because 2 s is below the 3 s `hold`, a cue
+/// always rests on at least three judged moments, never on two with a hole between them.
+@Test func onlyHolesLongerThanTwoSecondsForgetTheHold() {
+    #expect(OffCourseDetector().maxEvidenceGap == 2)
+    let survives = OffCourseDetector()
+    #expect(survives.update(error: -40, now: 0) == nil)
+    #expect(survives.update(error: -40, now: 2) == nil)        // 2 s hole: still one episode
+    #expect(survives.update(error: -40, now: 3) == .left)      // hold met across it
+    let forgets = OffCourseDetector()
+    #expect(forgets.update(error: -40, now: 0) == nil)
+    #expect(forgets.update(error: -40, now: 2.5) == nil)       // 2.5 s hole: history dropped
+    #expect(forgets.update(error: -40, now: 4) == nil)         // only 1.5 s of fresh evidence
+    #expect(forgets.update(error: -40, now: 5.5) == .left)     // a full hold after the hole
+    let forgetsWhileGated = OffCourseDetector()                // the hole seen as gated moments
+    #expect(forgetsWhileGated.update(error: -40, now: 0) == nil)
+    forgetsWhileGated.gated(at: 1)
+    forgetsWhileGated.gated(at: 2.5)                           // the hole is already too long
+    #expect(forgetsWhileGated.update(error: -40, now: 3) == nil)
+    #expect(forgetsWhileGated.update(error: -40, now: 4) == nil)
+    #expect(forgetsWhileGated.update(error: -40, now: 5) == nil)
+    #expect(forgetsWhileGated.update(error: -40, now: 6) == .left)
+}
+
 /// After a cue and `endEpisode()`, a new off-course stretch needs the full 3 s hold again even
 /// once the cooldown has passed.
 @Test func endEpisodeRequiresAFullHoldAgain() {
     let d = OffCourseDetector()
-    _ = d.update(error: 40, now: 0)
+    for t in [0.0, 1, 2] { _ = d.update(error: 40, now: t) }   // ~1 Hz, as the app feeds it
     let first = d.update(error: 40, now: 3)
     #expect(first == .right)
     d.endEpisode()
     let tooSoon = d.update(error: 40, now: 15)      // cooldown over, but a new episode just began
     #expect(tooSoon == nil)
+    _ = d.update(error: 40, now: 16)
+    _ = d.update(error: 40, now: 17)
     let held = d.update(error: 40, now: 18)
     #expect(held == .right)
 }
