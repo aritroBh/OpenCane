@@ -615,3 +615,26 @@ for 60 s so a weak network can never stall a cue.
       path still requires Guided Access + keeping the screen on for a blindfolded walk), compass readings dropped while
       iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on frequently-updating
       pills, MapKit route build waits only 15 s for a first fix
+
+## Cue design v2 — Steps 35–44 (approved 2026-09-12 evening)
+
+Research: `docs/cue_design_v2.md` (74 source-checked findings + the field-log addendum). Owner chose
+"Full v2", default level **Detailed = today** until a *mounted* trip log tunes the numbers; speech
+calming ships on; every new haptic behaviour ships behind a level or a setting that defaults to today.
+Plan reviewed by Muse (17 findings, folded in: cell validity before the overhang signature, still =
+net displacement not path length, dropped lines stay available to Repeat, ground hazards pinned to
+`.safety`, indoor overrides, door names only on a route, steps split, AirPods-stem hush deferred).
+Safety floor for every step: head haptic at every onset; "Head height." spoken at a moving onset;
+ground hazards (when on) speak their first confirmation; hush never touches any of them.
+
+- [x] **35** `scripts/cue_audit.py` + `make audit` — mounted?, head band wall vs overhang, cues and lines per minute, replays
+- [ ] **36** `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
+- [ ] **37** Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
+- [ ] **38** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
+- [ ] **39** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
+- [ ] **40** Torso haptics by level: Standard onset taps (1.5 m closing, 0.6 m strong triple), Detailed = today + shoreline suppression, Quiet none; no torso taps during a crossing settle
+- [ ] **41** "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
+- [ ] **42** Hush: Watch double tap + app button + Siri, 60 s, non-safety speech and non-head haptics only, soft buzz on, "Cues back." off
+- [ ] **43** "What's ahead?": LiDAR lanes + ARKit mesh class + ground hazard, no vision model; ≤ 3 items (≤ 5 Detailed), nearest first, doors / drop-offs before furniture
+- [ ] **44** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
+- Deferred (not scheduled): gravity-corrected metric head band; speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).

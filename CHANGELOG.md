@@ -2,6 +2,52 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 35 — Cue design v2 research, plan, and the "measure first" audit script (Sat Sep 12)
+
+**Device report (owner):** the voice is choppy and it is overstimulating: "although it's describing
+everything it's seeing, I don't think it's the goal we want it to achieve."
+
+**Research** (`docs/cue_design_v2.md`): 4 researchers (O&M practice, blind users' reviews of travel
+aids, HCI studies, haptic/audio design) and 4 source fact-checkers produced 74 kept findings, with 10
+dropped as unsupported, then one synthesis. Core principles: don't repeat what the cane already
+finds; silence means clear; ears are the long-range sensor; the real gap is overhangs, which are
+rare. Owner approved "Full v2" with the default level Detailed (= today) until a mounted log tunes
+it. Muse's 17 plan findings are folded in (see docs/todo.md, "Cue design v2").
+
+**Measured, not assumed:** new `ios/scripts/cue_audit.py` (`make audit`). On the first field log:
+- 360 head-band cells under 1.5 m: 349 torso equally near (wall, furniture or person), 8 overhang
+  signature, 3 torso dropouts (missing data, not overhangs).
+- 34 head cues/min; 7.6 unsolicited spoken lines/min (6.7 excluding route lines); "Head height." ×10.
+- ⚠ That walk was handheld: tilt median 25.8°, only 14 % inside 3–8°. **Zero** head cells fell in
+  frames at mount tilt, so this log is no evidence either way for the mounted cane. The
+  wall-vs-overhang argument (v2 §2 V1) rests on the mechanism (the band has no gravity correction and
+  no torso check), not on these numbers. The script prints the mounted verdict and a mounted-frames-only
+  head band on every log.
+
+**New key:** ElevenLabs key rotated into the git-ignored Secrets.plist (main checkout + the 3 worktrees).
+`/v1/text-to-speech` returns HTTP 200 with a real mp3. The key lacks `user_read`, so
+`/v1/user/subscription` is 401; the app never calls it.
+
+**Review (Muse; Antigravity returned no output, retried on Step 36):** 11 findings, all verified.
+- Fixed: torso dropouts counted as overhangs (new `torso_dropout`); head band banked from handheld
+  frames (new `head_band_mounted_frames`); tilt taken only from depth frames; route lines counted as
+  unsolicited (new `unsolicited_non_route_per_min`); dispatch gaps unsorted, crashing on a record
+  without `t`, and counting negative gaps; `--pull` swallowing devicectl errors and missing
+  `DEVICE ?=`; no verdict when a log has no tilt; suppressed lines by reason only (now also by load);
+  path in this entry.
+- Folded into the plan: the Step 37 still-detector must not read cane swing as walking; Step 40
+  torso taps also hold at a crossing; Step 36's "Detailed = today" names its one delta (no wall
+  names).
+
+**Verification:** `ios/scripts/cue_audit.py --selftest` ok (fixture: wall-like, overhang and dropout
+cells, mounted tilt, one replay, a dispatch without `t`, one field collision). Run on the field log
+above. Step 34 installed and
+launched on the phone (`make run`: BUILD SUCCEEDED, Launched).
+
+test on device: walk 2 minutes with the phone ON THE MOUNT, then plug in and run `make audit`: it must
+say "ON THE MOUNT", and its head-band and per-minute numbers are the baseline Steps 36–41 are judged
+against.
+
 ## Step 34 — Flashlight switch, both-cameras "does nothing", face tracking mid-route (Sat Sep 12)
 
 **Device report (owner, trip log `canekit-2026-09-12T20-57-17Z`):** "the both cameras button don't
