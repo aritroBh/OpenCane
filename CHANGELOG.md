@@ -2,6 +2,43 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 22 — Three icon-only root tabs (Sat Sep 12)
+
+The phone UI was one long scroll. A sighted helper (and the XCUITests that scroll it) had to
+page past Guide, the grid, hazards, haptics, watch and mount to reach anything. Split into
+three pages under an icon-only bottom bar:
+
+| Tab | Icon | Cards |
+|---|---|---|
+| Guide | `figure.walk` | Guide + trip / arrival |
+| Sense | `square.grid.3x3.fill` | Depth status, Obstacles, Hazards |
+| Settings | `gearshape.fill` | Haptics, Watch, Mount, This phone |
+
+The bar is `CKTabBar` (`ios/CaneKit/UI/TabBar.swift`): ivory/ink sliding capsule
+(`matchedGeometryEffect`), 60 pt hit targets, VoiceOver words **Guide / Sense / Settings**
+(⚠ test contract). Page slide is a 0.32 s spring; Reduce Motion is an instant swap. Tab
+changes do not speak through `SpeechQueue` (VoiceOver already announces the selected button).
+Only the visible page is in the tree, so the 30 Hz depth isolation on Sense holds.
+
+XCUITests that used to find Head row / haptic buttons / Mount toggles on the same scroll now
+open the matching tab first. Existing Guide labels are unchanged.
+
+Two layout bugs found by looking at the screen, both fixed in this step:
+
+- **The bar filled the screen.** A `Capsule` is a flexible shape; as a `ZStack` sibling it accepted
+  the whole proposed height, so the bar took most of the page. The capsule is now the
+  `.background` of a fixed 62 × 36 box. The tappable frame stays 60 pt (design.md §3) — only the
+  drawn pill is smaller.
+- **Every page slid in from the right.** Going Settings → Sense looked like moving forward.
+  Direction tracking was tried first, then dropped: pages now **cross-fade** (`.transition(.opacity)`,
+  0.2 s) and never slide. A horizontal slide implies travel through an ordered set, which is not
+  what a tab change means here. The capsule still slides between icons.
+
+**test on device:** `make test`; `make sim`; `make uitest` on the iPhone 17 Pro Max / iOS 27
+simulator (set GPS at ISR before the route tests). Visual: tab pill slides, Reduce Motion
+kills the travel, VoiceOver rotor still hits card headers on the current page.
+
+
 > **Step numbers 15, 16, 17 and 21 each appear twice, and that is not a mistake to "fix".**
 > `feat/screwless-mount` (hardware, Windows) and `main` (iOS, Mac) numbered their steps
 > independently and in parallel, then met in a merge on 2026-09-12. The first of each

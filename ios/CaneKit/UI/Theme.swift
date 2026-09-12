@@ -6,15 +6,16 @@
 //  when the two disagree, fix this file.
 //
 //  Implements docs/design.md §1 (typography → CKFont), §2 (colour tokens → CKColor),
-//  §3 (spacing, radius, touch targets → CKSpacing / CKRadius / CKMetrics), §4 (the one owned
-//  animation: big-button press), §7 ("Do not" list) and §8 (implementation notes for the twin).
+//  §3 (spacing, radius, touch targets → CKSpacing / CKRadius / CKMetrics), §4 (owned
+//  animations: big-button press; tab switch lives in TabBar.swift), §7 ("Do not" list)
+//  and §8 (implementation notes for the twin).
 //
 //  Rules baked in here so views can't get them wrong:
 //    · every colour has light / dark / increased-contrast variants (UIKit trait providers)
 //    · text on any coloured fill is always `CKColor.ink`
 //    · numbers that change use tabular digits
 //    · big buttons are ≥ 72 pt tall, carry a word and a symbol, and take a VoiceOver hint
-//    · Reduce Motion is honoured by the only animation we own (button press)
+//    · Reduce Motion is honoured by the animations we own (button press, tab switch)
 //
 //  Accessibility contract:
 //    · `CKBigButton` exposes `accessibilityLabel(title)`. XCUITests query `app.buttons[title]`,
@@ -248,7 +249,7 @@ struct CKBigButton: View {
 ///
 /// Implements docs/design.md §4 "Big button press": scale 0.97 on a 120 ms spring, or opacity
 /// 0.85 only under Reduce Motion; the light impact haptic is kept either way (it fires on
-/// release). This is the only animation and the only non-cue haptic the app owns (§7).
+/// release). Tab-switch motion and its selection haptic live on `CKTabBar` (§4, §7).
 /// Disabled buttons drop to 40 % opacity; VoiceOver announces "dimmed" from `.disabled`.
 struct CKBigButtonStyle: ButtonStyle {
     /// Picks fill, foreground and border; shared with `CKBigButton.Role`.

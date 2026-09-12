@@ -504,6 +504,7 @@ for 60 s so a weak network can never stall a cue.
 - **test on device:** see CHANGELOG Step 22
 
 ## Cross-cutting
+- [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
 - [x] TripLogger JSONL (Documents folder; AirDrop from Files)

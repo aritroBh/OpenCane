@@ -14,7 +14,7 @@ project, targets, scheme, the `CaneKitLogic` module, the `ios/CaneKit/…` paths
 Only what a person sees or hears says OpenCane. See [`AGENTS.md`](AGENTS.md) → "The name split".
 
 Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026. Team: **Aritro** (software),
-**Sagar** (hardware, 3D printing, CAD), **Aarav**.
+**Sagar** (hardware, 3D printing, CAD), **Aarav**, **Tejas** (software)
 
 > **Teammates: after `git pull`, read [`docs/TEAM_BRIEF.md`](docs/TEAM_BRIEF.md) (2 minutes), then
 > [`docs/TEAM_HANDOFF.md`](docs/TEAM_HANDOFF.md).** It says
