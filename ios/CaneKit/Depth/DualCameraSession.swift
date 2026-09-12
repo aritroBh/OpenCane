@@ -171,6 +171,10 @@ final class DualCameraSession {
     /// log. When the front inset still looks tilted on the device, these two numbers say whether
     /// the coordinator or the fallback is to blame — no second guess-run needed.
     @ObservationIgnored private var appliedRotationAngles: [String: Double] = [:]
+    /// What the coordinator's horizon-level CAPTURE angle read per camera when it connected — not
+    /// applied (see `DualCameraRotation`), logged as `front_capture_angle` / `back_capture_angle` so a
+    /// phone that reads differently is visible in the trip log.
+    @ObservationIgnored private var coordinatorCaptureAngles: [String: Double] = [:]
     /// The `isVideoMirrored` actually in effect on the front connection, kept for the trip log
     /// beside the rotation angles. Read back from the connection after setting, so the log
     /// records what AVFoundation accepted, not what was asked.
@@ -209,6 +213,7 @@ final class DualCameraSession {
         frontOpened = false
         backOpened = false
         appliedRotationAngles.removeAll()
+        coordinatorCaptureAngles.removeAll()
         frontMirrored = false
 
         guard Self.isSupported else {
@@ -297,6 +302,7 @@ final class DualCameraSession {
         inputs.removeAll()
         rotationCoordinators.removeAll()
         appliedRotationAngles.removeAll()
+        coordinatorCaptureAngles.removeAll()
         frontMirrored = false
         relays.removeAll()
         backLayer.sampleBufferRenderer.flush()
@@ -349,6 +355,7 @@ final class DualCameraSession {
             session.removeInput(input)
             relays[name] = nil
             appliedRotationAngles[name] = nil
+            coordinatorCaptureAngles[name] = nil
             return false
         }
         guard let port = input.ports(for: .video, sourceDeviceType: type,
@@ -376,39 +383,26 @@ final class DualCameraSession {
         // The phone is clamped to a cane in portrait, and a preview layer would have handled the
         // rotation itself; a data output will not, so it is set explicitly.
         //
-        // NOT a hard-coded 90°. That is right for the back sensor and wrong for the front one,
-        // which is mounted the other way round — the front feed came out sideways on the device,
-        // and still tilted after the first coordinator fix.
-        // `AVCaptureDevice.RotationCoordinator` computes the correct angle for THIS device, which
-        // is why Apple added it; a table of per-camera magic numbers is wrong on the next model.
-        // The coordinator must be retained: it observes device orientation and a released one
-        // stops updating.
-        // Capture angle first, not preview: this connection feeds a video data output (a capture
-        // connection), and the preview angle follows the interface orientation while the capture
-        // angle follows the horizon — on a clamped phone those can disagree by exactly the 90°
-        // tilt seen on the front inset. Last resort is per-position, not a blind 90: the front
-        // sensor needs 270 in portrait where the back needs 90.
+        // PER CAMERA, via `DualCameraRotation.angle` (CaneKitLogic, pinned by LiveViewTests). One
+        // angle for both cameras failed three times on the owner's phone, each fix breaking the
+        // other feed: preview-for-both (1caff45) left the BACK feed sideways — trip log
+        // 2026-09-12T22-02-03Z `back_rotation: 0` plus the owner's screenshot — and capture-for-both
+        // (103d548) tilted the FRONT inset. The UI is portrait-only, so the back gets the fixed
+        // portrait-up 90 (the coordinator's capture angle follows the phone's physical orientation
+        // and would read 0 if Both cameras started with the phone sideways — Muse, Step 36), and the
+        // front gets the measured portrait-up 0, then 270 (the preview angle is sampled once here and
+        // reads wrong if the phone starts flat — Muse / Antigravity, Step 37 review). ⚠ Do not "unify"
+        // this again without a device screenshot of BOTH feeds and the logged `*_rotation` /
+        // `*_capture_angle` / `*_size` / `*_portrait`. The coordinator is still retained (it stops
+        // updating once released) so the trip log can record what it reads on another phone.
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         rotationCoordinators.append(coordinator)
-        let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
-        let previewAngle = coordinator.videoRotationAngleForHorizonLevelPreview
-        let fallbackAngle: CGFloat = position == .front ? 270 : 90
-        let applied: CGFloat
-        // PREVIEW first, not capture. Both feeds are DISPLAYED in an AVSampleBufferDisplayLayer;
-        // nothing here writes a file. `videoRotationAngleForHorizonLevelCapture` is the angle for
-        // the recorded asset and `…ForHorizonLevelPreview` the angle for what a viewer sees, and on
-        // a phone clamped to a cane the two disagree by exactly the 90° the front inset was tilted
-        // by. The back feed looked right either way because its two angles happen to coincide in
-        // portrait, which is why this only ever showed up on the front camera.
-        if connection.isVideoRotationAngleSupported(previewAngle) {
-            applied = previewAngle
-        } else if connection.isVideoRotationAngleSupported(captureAngle) {
-            applied = captureAngle
-        } else if connection.isVideoRotationAngleSupported(fallbackAngle) {
-            applied = fallbackAngle
-        } else {
-            applied = connection.videoRotationAngle
-        }
+        coordinatorCaptureAngles[name] = Double(coordinator.videoRotationAngleForHorizonLevelCapture)
+        let applied = DualCameraRotation.angle(
+            front: position == .front,
+            preview: Double(coordinator.videoRotationAngleForHorizonLevelPreview),
+            supports: { connection.isVideoRotationAngleSupported(CGFloat($0)) })
+            .map { CGFloat($0) } ?? connection.videoRotationAngle
         connection.videoRotationAngle = applied
         appliedRotationAngles[name] = Double(applied)
         // The front inset is NOT mirrored, on purpose. Selfie-mirror convention is for the
@@ -541,6 +535,13 @@ final class DualCameraSession {
             "front_opened": frontOpened,
             "back_opened": backOpened,
             "front_frames": relays["front"]?.frameCount ?? 0,
+            // Delivered buffer size after rotation ("1440x1920" is portrait, i.e. upright for this
+            // screen): evidence for `DualCameraRotation`, not a guess (owner report 2026-09-12).
+            "front_size": relays["front"]?.frameSize ?? "",
+            "back_size": relays["back"]?.frameSize ?? "",
+            // `DualCameraRotation.isPortrait` of the latest buffer (false before the first frame).
+            "front_portrait": relays["front"]?.isPortrait ?? false,
+            "back_portrait": relays["back"]?.isPortrait ?? false,
             "back_frames": relays["back"]?.frameCount ?? 0,
             // Frames that reached a renderer, and renderer resurrections. `enqueued` far below
             // `front_frames + back_frames` means frames arrived and were dropped before the
@@ -549,6 +550,8 @@ final class DualCameraSession {
             "renderer_flushes": rendererFlushes,
             "front_rotation": appliedRotationAngles["front"] ?? -1,
             "back_rotation": appliedRotationAngles["back"] ?? -1,
+            "front_capture_angle": coordinatorCaptureAngles["front"] ?? -1,
+            "back_capture_angle": coordinatorCaptureAngles["back"] ?? -1,
             "front_mirrored": frontMirrored,
             "hardware_cost": Double((hardwareCost * 100).rounded() / 100),
             "system_pressure_cost": Double((systemPressureCost * 100).rounded() / 100),
@@ -600,6 +603,10 @@ private nonisolated final class DualCameraFrameRelay: NSObject,
     private struct State {
         var frames = 0
         var inFlight = false
+        /// Pixel size of the latest delivered buffer, after the connection's rotation — the
+        /// orientation evidence (`DualCameraRotation.isPortrait`); (0, 0) before the first frame.
+        var width = 0
+        var height = 0
     }
 
     private let state = Mutex(State())
@@ -617,12 +624,25 @@ private nonisolated final class DualCameraFrameRelay: NSObject,
     /// actually produce frames?".
     var frameCount: Int { state.withLock { $0.frames } }
 
+    /// "WxH" of the latest delivered buffer (after rotation), or "" before the first frame; logged
+    /// as `front_size` / `back_size` so a sideways feed is visible in the trip log.
+    var frameSize: String { state.withLock { $0.width > 0 ? "\($0.width)x\($0.height)" : "" } }
+
+    /// Whether the latest delivered buffer is portrait (`DualCameraRotation.isPortrait`); false before
+    /// the first frame. Logged as `front_portrait` / `back_portrait`.
+    var isPortrait: Bool { state.withLock { DualCameraRotation.isPortrait(width: $0.width, height: $0.height) } }
+
     /// Capture queue. Marks the buffer for immediate display and hops it to main, unless a hop is
     /// already outstanding.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        let pixels = CMSampleBufferGetImageBuffer(sampleBuffer)
+        let w = pixels.map(CVPixelBufferGetWidth) ?? 0
+        let h = pixels.map(CVPixelBufferGetHeight) ?? 0
         let busy = state.withLock { state -> Bool in
             state.frames += 1
+            state.width = w
+            state.height = h
             if state.inFlight { return true }
             state.inFlight = true
             return false

@@ -2,6 +2,47 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Fix — Both cameras: the back feed was sideways again; rotation is now chosen per camera (Sat Sep 12)
+
+**Why:** the owner's screenshot showed the back picture rotated 90° while the front inset was upright,
+"idk why u keep messing it up". Trip log 2026-09-12T22-02-03Z had `back_rotation: 0`. Three earlier fixes
+each used ONE `RotationCoordinator` angle for both cameras, and each fixed one feed by breaking the other.
+Preview-for-both (0f32282, 1caff45) left the back sideways. Capture-for-both (103d548) tilted the front.
+
+**What changed**
+- CaneKitLogic `DualCameraRotation` (`LiveView.swift`):
+  - The back camera gets the fixed portrait-up 90. The UI is portrait-only, and the coordinator's
+    capture angle follows the phone's physical orientation. Muse caught that it reads 0 if Both
+    cameras starts with the phone held sideways.
+  - The front camera gets the measured upright 0, then 270. It never gets a coordinator angle: the
+    preview angle is read once at connect and is wrong if Both cameras starts with the phone flat
+    (Muse and Antigravity, round 2), and the capture angle is the one that tilted it.
+- `DualCameraSession` logs `front_size` / `back_size` (delivered buffer WxH after rotation),
+  `front_portrait` / `back_portrait` (`DualCameraRotation.isPortrait`), and `front_capture_angle` /
+  `back_capture_angle`, so the next report is evidence.
+
+**Review:** Muse round 1 (capture-for-back version); Muse, Antigravity and a 4-lens agent workflow,
+round 2.
+- **Fixed:**
+  - Its fallback order could land back on the sideways preview angle.
+  - A capture angle read while the phone is sideways would rotate the feed.
+  - The tests passed for any "take the first angle" rule. They are rewritten to pin each camera's
+    angle and the forbidden fallback.
+  - Round 2: the front still trusted a one-shot preview angle, so it is now fixed at 0 as well.
+  - Round 2: `isPortrait` was documented as a diagnostics check but nothing called it. It is now
+    logged.
+- **Rejected:** "re-apply the angle on every orientation change". The UI never rotates
+  (`UISupportedInterfaceOrientations` = portrait), so a fixed display angle is correct.
+- **Open question, unverified:** whether buffer dimensions swap under `videoRotationAngle`.
+  `front_size` is logged as evidence only, and nothing reads it.
+
+**Verification:** `make test` and `make sim` pass; UI and review results are in the commit message.
+Device evidence from the installed build (trip log 2026-09-12T22-20-53Z): `back_rotation` 90,
+`front_rotation` 0, `front_size` 1080x1920.
+
+test on device: Sense → Both cameras with the phone upright, then again after starting it with the phone
+held sideways: the back picture and the front inset are both upright each time.
+
 ## Step 36 — Cue detail (Quiet / Standard / Detailed) × Place (Outdoors / Indoors); names off by default (Sat Sep 12)
 
 **Why:** cue design v2 §3.3 / §3.5 and the owner's "overstimulating" report. The walker picks how

@@ -150,3 +150,47 @@ import Testing
 @Test func faceTrackingRouteRefusalTakesPrecedence() {
     #expect(FaceTrackingChange.decide(navigating: true, routeStartWaiting: true) == .refusedRoute)
 }
+
+// MARK: - Both cameras: rotation per camera
+
+/// ⚠ Measured on the owner's iPhone 17 Pro Max, clamped portrait, three times — each time one rule
+/// for both cameras fixed one feed and broke the other:
+///   · 0f32282 preview angle for both → front inset tilted, back upright;
+///   · 103d548 capture angle for both → front inset tilted 90°, back upright (report in 1caff45);
+///   · 1caff45 preview angle for both → trip log 2026-09-12T22-02-03Z `front_rotation: 0,
+///     back_rotation: 0`: front upright, **back sideways** (owner screenshot, laptop text vertical).
+/// The back feed has been upright every time it got the capture angle; the front inset is upright
+/// with the preview angle. So the rule is per camera, not one angle for both.
+/// The UI is portrait-only, so the back feed is upright at 90 whatever the phone's physical
+/// orientation made the coordinator read when Both cameras started (Muse, Step 36: a capture angle
+/// of 0 from a phone held sideways would be the sideways feed again).
+@Test func backCameraIsPortraitUpWhateverThePhoneReads() {
+    for preview in [0.0, 90, 180, 270] {
+        #expect(DualCameraRotation.angle(front: false, preview: preview, supports: { _ in true }) == 90)
+    }
+}
+
+/// Front: the measured portrait-up 0 (trip log 2026-09-12T22-20-53Z, upright) whatever the
+/// coordinator's preview angle reads — sampled once at connect, it is wrong if Both cameras starts with
+/// the phone flat or sideways (Muse, Step 37 review).
+@Test func frontCameraIsPortraitUpWhateverThePhoneReads() {
+    for reading in [0.0, 90, 180, 270] {
+        #expect(DualCameraRotation.angle(front: true, preview: reading, supports: { _ in true }) == 0)
+    }
+}
+
+/// An unsupported 0 falls back to the front sensor's 270 — never to a coordinator angle (the capture
+/// angle tilted the inset in 103d548). An unsupported 90 on the back leaves the connection alone.
+@Test func unsupportedAnglesFallBackWithoutTheTiltingAngle() {
+    #expect(DualCameraRotation.angle(front: true, preview: 90, supports: { $0 == 270 || $0 == 90 }) == 270)
+    #expect(DualCameraRotation.angle(front: true, preview: 30, supports: { _ in false }) == nil)
+    #expect(DualCameraRotation.angle(front: false, preview: 0, supports: { $0 == 0 }) == nil)
+}
+
+/// A portrait display needs a portrait buffer: the trip log records each feed's delivered size, and
+/// this is the check a log reader (and the diagnostics line) applies.
+@Test func deliveredBufferIsPortraitWhenTallerThanWide() {
+    #expect(DualCameraRotation.isPortrait(width: 1080, height: 1920))
+    #expect(!DualCameraRotation.isPortrait(width: 1920, height: 1080))
+    #expect(!DualCameraRotation.isPortrait(width: 0, height: 0))
+}
