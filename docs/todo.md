@@ -621,6 +621,28 @@ for 60 s so a weak network can never stall a cue.
       first; `ios/README.md §4.1` documents both plus a curl example
 - [x] Verified: `make test` **383/383**, `make sim` green, webhook answered HTTP 200
       `{"success":true,"runUuid":…}` to the curl sample
+- [x] `AlertContext.swift` (Logic): the phone's state → `extra` fields, omitting unknowns and −1
+      sentinels; `AlertContextPrompt` with the safety bans (no false reassurance, no invented
+      places, no instructions to family), pinned by tests
+- [x] `AlertSummarizer.swift`: cheapest model of whichever provider has a key; own session, 6 s
+      timeout, every failure → nil so the alert still goes with its facts
+- [x] Measured, not guessed: `max_completion_tokens` 4096 (200 and 1024 both returned
+      `content: null` silently) and `reasoning_effort` "minimal" (2.1 s vs 7.1 s for "low")
+- [x] Settings → Family alerts → "Add AI context" (default on) + the model name
+- [x] Verified end to end: facts + `ai_context` POSTed to the live routine, HTTP 200
+- [ ] ⚠ No Anthropic key in Secrets.plist — `ai_context` currently comes from the Muse custom
+      endpoint. Add `ANTHROPIC_API_KEY` to use Haiku instead (cheaper and faster for this job)
+- [x] `FamilyContacts.swift` (Logic): validation, normalise (trim / lowercase / dedupe / cap 10,
+      idempotent), `rejected` for the UI, and the `family_contacts` registration event
+- [x] Schema: `emails` + `send_test` for that event only; a test pins that a `fall` carries neither
+- [x] `FamilyAlerts.registerContacts` — ignores `enabled`, no rate limit, and skips the enrichment
+      path so addresses never reach the summarizer model
+- [x] Settings → Family emails: add / remove / Save, refusal reasons, "Remove <address>" labels
+- [x] `send_test` only on the first accepted Save; flag set on acceptance, so a failed first Save
+      still tests next time
+- [x] Fired live: registration `runUuid d1b76d16`, then a `fall` `runUuid f5e7f43a`, both HTTP 200
+- [ ] Confirm with Aritro that the list stuck and the Gmail alert arrived (bot side)
+- [ ] XCUITest for the contacts editor (add / refuse / remove); not written yet
 - [ ] **No fall detector.** `FamilyAlerts.fall(…)` is written and tested but nothing calls it. Needs
       CoreMotion + a numeric threshold from real data, in `ios/Logic` with its own tests (hard rule 3)
 - [ ] **No SOS control.** `FamilyAlerts.sos(…)` likewise — wants a watch button / Action Button /

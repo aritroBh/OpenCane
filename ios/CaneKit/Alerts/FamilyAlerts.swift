@@ -50,13 +50,33 @@ final class FamilyAlerts {
     var user: String?
     var caneID: String? = "opencane-01"
 
+    /// Let a cheap model add one family-facing sentence (`extra.ai_context`). Default on, but it
+    /// is a switch because the summary costs a request per alert and adds up to
+    /// `AlertSummarizer.requestTimeout` to how long an alert takes to leave the phone; on a flaky
+    /// network a walker may prefer the facts immediately.
+    var aiContextEnabled = true
+
+    /// True when a text model is configured at all (Anthropic / custom / OpenAI key).
+    var canSummarize: Bool { summarizer != nil }
+
+    /// Name of the model writing `ai_context`, for the Settings row.
+    var summarizerName: String? { summarizer?.provider.name }
+
+    /// What the phone knew when the event fired. Set by `AppModel` in `start()`; without it the
+    /// events still go, carrying only what the detection itself knew.
+    @ObservationIgnored var contextProvider: (@MainActor () -> AlertContext)?
+
     /// Every number lives here (CaneKitLogic).
     @ObservationIgnored private var policy = FamilyAlertPolicy()
     /// nil when unconfigured; resolved once at init.
     @ObservationIgnored private let client: GrokBotClient?
+    /// nil when no text-model key is present; then alerts carry facts and no `ai_context`.
+    @ObservationIgnored private let summarizer: AlertSummarizer?
 
-    init(client: GrokBotClient? = GrokBotClient.fromSecrets()) {
+    init(client: GrokBotClient? = GrokBotClient.fromSecrets(),
+         summarizer: AlertSummarizer? = AlertSummarizer.fromSecrets()) {
         self.client = client
+        self.summarizer = summarizer
     }
 
     /// Route start / stop: forget the rate limits so the first fix of a new walk goes out.
@@ -117,6 +137,35 @@ final class FamilyAlerts {
         send(FamilyAlertPolicy.status(note, lat: lat, lng: lng))
     }
 
+    // MARK: Family contacts
+
+    /// Registers the family email list with the bot (`type: "family_contacts"`). The bot stores it
+    /// and Gmails whoever is on it when a later `fall` / `sos` / `warn` event arrives.
+    ///
+    /// ⚠ Three deliberate differences from every other send here, each worth keeping:
+    ///   1. **It ignores `enabled`.** Registering is setup: the walker fills in the list *before*
+    ///      switching alerts on, and a Save that silently did nothing would be the worst outcome.
+    ///   2. **No context, and no summarizer.** `prepare(_:)` and `deliver(…)` are skipped entirely.
+    ///      A registration is bookkeeping, not an alert, so there is nothing to summarise — and it
+    ///      means a family's email addresses are never put in front of a language model.
+    ///   3. **No rate limit.** The walker pressed Save; the list has to leave the phone.
+    ///
+    /// - Parameter sendTest: asks the bot to email each address a short confirmation. The app
+    ///   itself sends no email, ever.
+    /// - Returns: a line for the UI to show and speak.
+    @discardableResult
+    func registerContacts(_ emails: [String], sendTest: Bool) async -> GrokBotResult {
+        guard let client else {
+            lastStatus = GrokBotResult.notConfigured.summary
+            return .notConfigured
+        }
+        let event = FamilyContacts.registration(emails: emails, sendTest: sendTest)
+            .taggedWith(user: user, caneID: caneID)
+        let result = await client.send(event)
+        lastStatus = result.summary
+        return result
+    }
+
     // MARK: Debug
 
     /// Posts the sample `fall` event from the README's curl, bypassing `enabled` and every rate
@@ -131,26 +180,57 @@ final class FamilyAlerts {
             lastStatus = line
             return line
         }
-        let event = FamilyAlertPolicy.fall(lat: lat, lng: lng, note: "Test event from OpenCane")
-            .taggedWith(user: user, caneID: caneID)
-        let line = await client.send(event).summary
+        let (event, prompt) = prepare(FamilyAlertPolicy.fall(lat: lat, lng: lng,
+                                                             note: "Test event from OpenCane"))
+        let line = await deliver(event, prompt: prompt, client: client).summary
         lastStatus = line
         return line
     }
 
     // MARK: Sending
 
-    /// Fire-and-forget: a cue must never wait on a POST. The result only updates `lastStatus`.
+    /// Fire-and-forget: a cue must never wait on a POST, nor on the summary. The result only
+    /// updates `lastStatus`.
     private func send(_ event: OpenCaneEvent) {
         guard let client else {
             lastStatus = GrokBotResult.notConfigured.summary
             return
         }
-        let tagged = event.taggedWith(user: user, caneID: caneID)
+        // Context is read here, synchronously on the main actor, so it describes the moment the
+        // event fired rather than whenever the Task happens to run.
+        let (enriched, prompt) = prepare(event)
         Task { [weak self] in
-            let result = await client.send(tagged)
-            self?.lastStatus = result.summary
+            let result = await self?.deliver(enriched, prompt: prompt, client: client)
+            self?.lastStatus = result?.summary
         }
+    }
+
+    /// Attaches who / which cane and everything the phone knew, and builds the model's prompt.
+    /// Main-actor and synchronous on purpose (see `send`).
+    private func prepare(_ event: OpenCaneEvent) -> (OpenCaneEvent, String) {
+        let context = contextProvider?() ?? AlertContext()
+        var out = event.taggedWith(user: user, caneID: caneID)
+        // Caller-set keys win: a detector that already described something knows better than the
+        // generic snapshot.
+        var extra = context.extraFields()
+        for (key, value) in out.extra ?? [:] { extra[key] = value }
+        out.extra = extra
+        let prompt = AlertContextPrompt.text(eventType: out.type.rawValue,
+                                             severity: out.severity?.rawValue,
+                                             note: out.note, lat: out.lat, lng: out.lng,
+                                             context: context)
+        return (out, prompt)
+    }
+
+    /// Summarise (best effort, bounded) then POST. A failed or slow summary costs the event its
+    /// `ai_context` and nothing else — it is never a reason not to send.
+    private func deliver(_ event: OpenCaneEvent, prompt: String,
+                         client: GrokBotClient) async -> GrokBotResult {
+        var toSend = event
+        if aiContextEnabled, let summarizer, let line = await summarizer.summarize(prompt: prompt) {
+            toSend.extra?["ai_context"] = .string(line)
+        }
+        return await client.send(toSend)
     }
 }
 

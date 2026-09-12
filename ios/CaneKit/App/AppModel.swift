@@ -350,6 +350,32 @@ final class AppModel {
     var familyAlertsEnabled: Bool = Settings.bool("familyAlertsEnabled", default: false) {
         didSet { Settings.set(familyAlertsEnabled, "familyAlertsEnabled"); family.enabled = familyAlertsEnabled }
     }
+    /// Family email addresses the bot should alert. Stored normalised (`FamilyContacts.normalize`),
+    /// so what is on disk is what gets posted.
+    ///
+    /// ⚠ Editing this list does NOT register it — `saveFamilyContacts()` does. Kept apart on
+    /// purpose: typing half an address should not fire a webhook, and the bot emails a
+    /// confirmation to every address on the first accepted Save.
+    private(set) var familyEmails: [String] = FamilyContacts.normalize(
+        Settings.strings("familyContactEmails", default: []))
+
+    /// True once the bot has accepted a contact list. Drives `send_test`: the confirmation email
+    /// goes out on the first successful registration only, not every time the walker edits.
+    private(set) var familyContactsRegistered = Settings.bool("familyContactsRegistered", default: false)
+
+    /// True when the stored list has not been registered since it last changed — the Settings
+    /// card uses it to show that Save is still needed.
+    private(set) var familyContactsNeedSave = false
+
+    /// Let a cheap model add one sentence of context to each family alert (`extra.ai_context`).
+    ///
+    /// Default **on**, unlike the alert switch itself: by the time this matters the walker has
+    /// already opted into sending events, and context is the difference between "obstacle" and
+    /// "stopped 40 m from CIF with 12 % battery". It is still a switch because it costs a model
+    /// request per alert and can delay one by up to `AlertSummarizer.requestTimeout`.
+    var familyAlertsAIContext: Bool = Settings.bool("familyAlertsAIContext", default: true) {
+        didSet { Settings.set(familyAlertsAIContext, "familyAlertsAIContext"); family.aiContextEnabled = familyAlertsAIContext }
+    }
     /// Name people (and dogs / cats) in "Where am I" (Hazards card).
     ///
     /// Default **ON**, unlike the drop-off and hazard-watch switches: this runs nowhere near the
@@ -685,6 +711,8 @@ final class AppModel {
         beacon.enabled = beaconEnabled
         // didSet does not fire during init: push the stored opt-in through once.
         family.enabled = familyAlertsEnabled
+        family.contextProvider = { [weak self] in self?.familyContext ?? AlertContext() }
+        family.aiContextEnabled = familyAlertsAIContext
         AppModel.shared = self
         self.conversation = ConversationCoordinator(appModel: self, client: client)
         self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
@@ -1998,6 +2026,9 @@ final class AppModel {
     /// A `NavCue.rawValue` ("turnLeft" / "turnRight" / "crossing" / "arrived"); reset to
     /// "straight" at `startRouteNow`. A passed-by advance sends no cue, so the kind is kept.
     /// Any new value must also be handled by the widget's glyph switch (NavLiveActivity.swift).
+    /// Name of the route being walked ("ISR to CIF"), or nil when idle. Only the family-alert
+    /// context reads it; `nav` itself keeps no name.
+    private(set) var activeRouteName: String?
     @ObservationIgnored private var lastNavKind = "straight"
 
     /// The user is facing the way to walk: zero the head yaw there.
@@ -2243,6 +2274,7 @@ final class AppModel {
         cancelRouteBuild()
         cancelPendingRouteStart()
         nav.stop()
+        activeRouteName = nil
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
         // with no fix.
@@ -2534,6 +2566,7 @@ final class AppModel {
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
         nav.start(route)
+        activeRouteName = route.name
         // New walk: forget the breadcrumb / obstacle rate limits so the first fix goes out
         // promptly. Battery arming deliberately survives (FamilyAlertPolicy.reset).
         family.reset()
@@ -2672,6 +2705,91 @@ final class AppModel {
         wasHot = hot
     }
 
+    /// Adds one address to the family list.
+    /// - Returns: nil on success, or a spoken-style reason the entry was refused. The reason is
+    ///   returned rather than swallowed because a typo here costs a real alert later.
+    @discardableResult
+    func addFamilyEmail(_ raw: String) -> String? {
+        let address = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !address.isEmpty else { return "Type an email address first." }
+        guard FamilyContacts.isValid(address) else { return "That does not look like an email address." }
+        guard !familyEmails.contains(address) else { return "That address is already on the list." }
+        guard familyEmails.count < FamilyContacts.maxContacts else {
+            return "The list is full at \(FamilyContacts.maxContacts) addresses."
+        }
+        setFamilyEmails(familyEmails + [address])
+        return nil
+    }
+
+    /// Removes one address. Leaving the list empty is allowed: an empty registration is how a
+    /// walker tells the bot to stop emailing anyone.
+    func removeFamilyEmail(_ address: String) {
+        setFamilyEmails(familyEmails.filter { $0 != address })
+    }
+
+    /// Stores the normalised list and marks it as needing a Save.
+    private func setFamilyEmails(_ list: [String]) {
+        let normalized = FamilyContacts.normalize(list)
+        guard normalized != familyEmails else { return }
+        familyEmails = normalized
+        Settings.set(familyEmails, "familyContactEmails")
+        familyContactsNeedSave = true
+    }
+
+    /// Registers the current list with the Grok Bot routine and speaks the answer.
+    ///
+    /// `send_test` is set only while `familyContactsRegistered` is false, so the bot emails its
+    /// confirmation once, on the first list that it accepts — not on every later edit.
+    /// The flag is set only on acceptance, so a failed first Save still tests next time.
+    ///
+    /// ⚠ Says the bot **accepted** the list. It never says an email was sent: the bot sends it,
+    /// afterwards, and the app has no way to know that it worked.
+    func saveFamilyContacts() async {
+        let sendTest = !familyContactsRegistered
+        let result = await family.registerContacts(familyEmails, sendTest: sendTest)
+        let line: String
+        switch result {
+        case .accepted:
+            familyContactsNeedSave = false
+            if sendTest {
+                familyContactsRegistered = true
+                Settings.set(true, "familyContactsRegistered")
+            }
+            let count = familyEmails.count
+            line = count == 0
+                ? "Family list cleared. Grok Bot accepted it."
+                : "Grok Bot accepted \(count) address\(count == 1 ? "" : "es")."
+                  + (sendTest ? " Each one gets a confirmation email." : "")
+        default:
+            line = result.summary
+        }
+        speech.say(line, .nav, ttl: 10)
+        logger.event("family_contacts", ["count": familyEmails.count, "send_test": sendTest,
+                                         "result": result.summary])
+    }
+
+    /// Everything the phone knows that a family member would want with an alert: where the walker
+    /// was going, what they were being told, how fast, how much battery, how hot, what the cane
+    /// had just found.
+    ///
+    /// Read synchronously at the moment an event fires (`FamilyAlerts.prepare`), never later, so
+    /// it describes the detection rather than whenever the network got around to it.
+    var familyContext: AlertContext {
+        var context = AlertContext()
+        context.navigating = nav.isNavigating
+        context.destination = activeRouteName
+        context.instruction = nav.isNavigating ? nav.instruction : nil
+        context.distanceToNextM = nav.distanceToNext.map(Double.init)
+        context.batteryPct = batteryPercent
+        context.thermalState = thermalName
+        context.speedMps = location.fix.map { Double($0.speed) }
+        context.headingDeg = location.heading
+        context.activeCue = activeCue.rawValue
+        context.lastGroundHazard = lastGroundHazard
+        context.hasFix = location.fix != nil
+        return context
+    }
+
     /// Debug "Send test event": posts one sample `fall` event to the Grok Bot routine and speaks
     /// what came back, so the chain can be checked before a walk without looking at the screen.
     ///
@@ -2792,6 +2910,17 @@ enum Settings {
     }
     /// Persists `value` under `key` in `UserDefaults.standard`.
     static func set(_ value: String, _ key: String) {
+        UserDefaults.standard.set(value, forKey: key)
+    }
+
+    /// String list for `key`, or `d`. Anything that is not a `[String]` (a key written by an
+    /// older build, or hand-edited) reads as the default rather than crashing the launch.
+    static func strings(_ key: String, default d: [String]) -> [String] {
+        _ = launchMode              // ⚠ same ordering rule as `bool`
+        return UserDefaults.standard.object(forKey: key) as? [String] ?? d
+    }
+    /// Persists a string list under `key`.
+    static func set(_ value: [String], _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }
 }

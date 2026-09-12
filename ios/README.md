@@ -173,6 +173,7 @@ display name, not the target name).
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`, `GEMINI_API_KEY` / `GEMINI_MODEL`, `OPENAI_API_KEY` / `OPENAI_MODEL` | The other "Where am I" providers |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | Natural voice. The defaults are a warm premade voice and `eleven_flash_v2_5`. |
 | `OPENCANE_GROKBOT_WEBHOOK_URL`, `OPENCANE_GROKBOT_WEBHOOK_KEY` | Family alerts (§4.1). Copied from the Grok Bot routine's webhook-trigger panel. Empty = the feature is off and says so in Settings. |
+| `ALERT_MODEL`, `ALERT_REASONING_EFFORT` | Optional. Which cheap model writes `extra.ai_context` on a family alert, and how hard it thinks. Empty model = cheapest of whichever provider has a key (Anthropic → custom → OpenAI). |
 
 With no ElevenLabs key the app uses the system voice. With no VLM key (or `VLM_PROVIDER` =
 `ondevice`), "Where am I" answers on the phone: Apple Vision plus Apple's on-device model, or a
@@ -216,6 +217,57 @@ What each detection becomes — thresholds in `FamilyAlertPolicy` (CaneKitLogic,
 | Phone battery ≤ 20 % | `low_battery` | `warn` | once per discharge (re-arms above 30 %) |
 | Fall | `fall` | `critical` | never limited |
 | SOS | `sos` | `critical` | never limited |
+
+#### Who gets alerted
+
+The bot emails a saved list of addresses; the **app never sends mail**. Register the list in
+**Settings → Family alerts → Family emails**: add addresses, then press **Save family emails**.
+Saving POSTs one event to the same webhook:
+
+```json
+{
+  "type": "family_contacts",
+  "emails": ["mom@example.com", "dad@example.com"],
+  "cane_id": "opencane-01",
+  "user": "Tejas",
+  "timestamp": "2026-09-12T23:20:00Z",
+  "send_test": true
+}
+```
+
+`send_test` is sent **only on the first list the bot accepts**, so each address gets one "you are on
+the OpenCane alert list" email rather than one per edit. Cane events (`fall`, `sos`, `obstacle`, …)
+are posted separately and unchanged afterwards — they never carry `emails`, because the bot already
+has the list and every copy is one more place it could leak.
+
+Addresses are trimmed, lowercased, de-duplicated and capped at 10 (`FamilyContacts`); an invalid
+entry is refused in the UI with the reason, never silently dropped. An empty list is a valid Save —
+it tells the bot to stop emailing anyone.
+
+⚠ Registering ignores the "Send cane events to family" switch (you fill the list in before turning
+alerts on) and never goes near the summarizer — a family's addresses are not context for a sentence.
+
+Every event also carries what the phone knew at that moment, in `extra`:
+
+| Field | Example |
+|---|---|
+| `navigating`, `has_fix` | `true`, `true` |
+| `destination`, `instruction`, `distance_to_next_m` | `"ISR to CIF"`, `"Cross Springfield Avenue"`, `42.4` |
+| `speed_mps`, `heading_deg` | `0.0`, `272` |
+| `battery_pct`, `thermal_state` | `18`, `"fair"` |
+| `active_cue`, `last_ground_hazard` | `"clear"`, `"Two meters ahead, drop-off."` |
+| `ai_context` | one sentence written by a cheap model from the fields above |
+
+`ai_context` is what makes an alert readable — "Possible fall detected on the route from ISR to CIF
+at Cross Springfield Avenue, 42 metres to the next waypoint … battery 18%" instead of bare
+coordinates. It is **best effort**: no key, a timeout or an HTTP error costs the event its sentence
+and nothing else, and the facts above are sent either way. Switch it off in Settings → Family alerts
+→ **Add AI context**.
+
+⚠ **The model never writes `note`.** A language model is not allowed to be the only factual line in
+a safety alert, so its sentence sits in `extra.ai_context` beside the facts it was given and can
+always be checked against them. The prompt also forbids the failure a small model reaches for
+unprompted: never say the walker is safe or that help is coming, never invent a street or an injury.
 
 ⚠ **No fall detector and no SOS control exist yet.** `FamilyAlerts.fall(…)` / `.sos(…)` are written
 and tested, but nothing calls them except the test button — see `docs/todo.md`.
