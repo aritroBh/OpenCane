@@ -2,7 +2,7 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-## Step 17 — App icon (Sat Sep 12, needs install)
+## Step 17 — App icon (Sat Sep 12, on phone and launched)
 
 Both `AppIcon` sets were empty — the app shipped with no icon. v1 ("Folded Signal", from
 `/tmp/icon.py`) was abstract bars; v2 ("White Cane") is a real mobility cane on the navy
@@ -26,6 +26,10 @@ squircle at small sizes (check a folder view too).
 Installed 2026-09-12 ~01:25 via `make run` (build + `actool` icon compile + devicectl install
 all green, incl. the 10 Siri phrases training under the OpenCane name). Auto-launch refused:
 phone was locked — unlock and tap the icon by hand.
+
+Re-installed ~01:45 with the v3 icon (`AppIcon60x60@2x.png` emplaced in the build log):
+**BUILD SUCCEEDED**, devicectl install green, and `device process launch` succeeded (phone
+unlocked). White Cane icon live on the Home Screen.
 
 ## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
 
