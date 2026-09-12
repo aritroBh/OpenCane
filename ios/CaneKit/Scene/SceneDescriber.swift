@@ -194,7 +194,13 @@ final class SceneDescriber {
                     self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                     let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg)
                     self.lastDescription = text
-                    self.speech.say(text, .scene, ttl: 20)
+                    // ttl 10, not 20 like a plain description: the frame is already one cloud
+                    // round-trip old when this line is spoken, and the walker may have kept
+                    // walking (1.2 m/s × 10 s of cloud wait ≈ 12 m). A stale answer about where
+                    // something was is worse than no answer; the wait itself is unavoidable and
+                    // auditable (`ms` + `frame` in `describe_result`). Plain "Where am I" keeps
+                    // 20 — that walker asked and stood still.
+                    self.speech.say(text, .scene, ttl: 10)
                     self.onResult?(text, nil, self.lastLatencyMs, frameName, gate, raw)
                     return
                 }

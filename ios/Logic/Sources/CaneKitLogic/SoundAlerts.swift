@@ -211,14 +211,21 @@ public enum DangerSound: String, Sendable, CaseIterable {
     /// Seconds the line may sit in the speech queue before it is dropped as stale
     /// (`SpeechQueue.say(_:_:ttl:)`).
     ///
-    /// Shorter than the 6 s every sound alert used to get, and shortest for the siren, because a
-    /// siren line is only worth speaking while it can still change a decision: at `.nav` it queues
-    /// behind at most the route line already playing, and 5 s covers that with margin while
-    /// guaranteeing the walker is never told to hold at a kerb about a vehicle that went past ten
-    /// seconds ago. A stale instruction is a false positive with a delay on it.
+    /// The siren gets its full repeat interval (15 s), not the 5 s first written here. 5 s assumed
+    /// a siren queues behind "at most the route line already playing" — wrong: at `.nav` it queues
+    /// behind ANY `.nav` line already playing or queued (crossing instructions run 4–8 s, the
+    /// screen-lock warning 10 s, location-denied 20 s), and `SpeechQueue` purges expired lines when
+    /// a line ends. A 5 s siren arriving mid-crossing-instruction expired unheard: the walker was
+    /// told to cross and never told about the siren. 15 s survives every `.nav` line but the 20 s
+    /// location-denied edge, and it cannot go stale past usefulness: an emergency vehicle is
+    /// audible for tens of seconds, so a line up to one interval old is at most one reminder early,
+    /// never news about a gone vehicle — the next interval re-announces anyway. A late hold at a
+    /// kerb is a false restriction, bounded and self-correcting; a dropped siren is a missed
+    /// crossing decision. Horn keeps 4 s (a honk is momentary; a longer TTL would announce it after
+    /// it passed) and vehicle 6 s.
     public var speechTTL: Double {
         switch self {
-        case .siren: return 5
+        case .siren: return 15
         case .horn: return 4
         case .vehicle: return 6
         }

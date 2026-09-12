@@ -54,20 +54,23 @@ import Testing
     #expect(DangerSound.allCases.filter { $0.urgency == .emergency } == [.siren])
 }
 
-/// A sound alert must never sit in the queue long enough to be spoken about a vehicle that has
-/// gone — a stale instruction is a false positive with a delay on it.
+/// A sound alert's TTL is bounded on both sides: long enough to survive the queue ahead of it,
+/// short enough never to be news about a gone vehicle.
 ///
-/// 5 s for the siren: at `.nav` it queues behind at most the route line already playing, and 5 s
-/// covers that with margin while guaranteeing nobody is told to hold at a kerb about an ambulance
-/// that passed ten seconds ago. 4 s for the horn, which is the most momentary of the three. Every
-/// TTL is shorter than its own repeat interval, so a line that expired can never be overtaken by
-/// the next announcement of the same kind.
-@Test func speechTTLsAreShortEnoughThatNoLineIsSpokenLate() {
-    #expect(DangerSound.siren.speechTTL == 5)
+/// The siren gets its full repeat interval (15 s). A shorter TTL expires unheard behind an
+/// ordinary `.nav` line — `SpeechQueue` only pre-empts on strictly higher priority and purges
+/// expired lines when a line ends, while crossing instructions run 4–8 s and warnings up to 20 s —
+/// so 5 s dropped sirens arriving mid-instruction. 15 s cannot go stale past usefulness (an
+/// emergency vehicle is audible for tens of seconds; the next interval re-announces anyway) and
+/// can never overlap the next reminder of the same kind. Horn keeps 4 s (momentary) and vehicle
+/// 6 s, each below its own repeat interval for the same no-overlap reason.
+@Test func speechTTLsSurviveTheQueueButNeverOverlapARepeat() {
+    #expect(DangerSound.siren.speechTTL == 15)
+    #expect(DangerSound.siren.speechTTL == DangerSound.siren.repeatInterval)
     #expect(DangerSound.horn.speechTTL == 4)
+    #expect(DangerSound.vehicle.speechTTL == 6)
     for sound in DangerSound.allCases {
-        #expect(sound.speechTTL <= 6)
-        #expect(sound.speechTTL < sound.repeatInterval)
+        #expect(sound.speechTTL <= sound.repeatInterval)
     }
 }
 

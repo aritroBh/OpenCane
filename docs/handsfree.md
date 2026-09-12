@@ -29,7 +29,7 @@ shortcuts, not ours. Several wordings work for each command; the first one liste
 | **"Repeat in OpenCane"** — or "OpenCane say that again" | Says the current instruction again. |
 | **"Next waypoint in OpenCane"** | Skips to the next instruction. |
 | **"Stop the route in OpenCane"** — or "Stop navigating in OpenCane" | Ends guidance, and cancels a destination search still running. |
-| **"Silence the cane in OpenCane"** — or "Silence haptics in OpenCane" | Stops the cane buzzing, and tells you where obstacle cues go instead (the watch, or spoken). |
+| **"Silence the cane in OpenCane"** — or "Silence haptics in OpenCane" | Stops the cane buzzing, and tells you where obstacle cues go instead (the watch, or spoken). Stand still for a few seconds after: the confirmation speaks first and spoken obstacle cues queue behind it. |
 | **"Turn cane haptics on in OpenCane"** | Buzzing back on. |
 
 Before the route starts the app already says out loud which channels are live, and it speaks when

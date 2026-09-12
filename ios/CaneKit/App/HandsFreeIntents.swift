@@ -151,8 +151,12 @@ extension AppModel {
         }
         // Say the state, not "done": the walker cannot see the switch move. `dangerSoundsEnabled`
         // can refuse itself (a denied microphone, a degraded audio route), so the line is read back
-        // from the property rather than from the request — a refused feature must not be announced
-        // as on (AGENTS.md rule 1: evidence before claims).
+        // from the property rather than from the request. ⚠ That read is synchronous: an ASYNC
+        // refusal (the 0.25 s input-format settle in `SoundWatcher.startEngine`) lands after this
+        // line is spoken, so the walker hears "on" followed within ~a second by the watcher's own
+        // failure line switching it back off. Announcing the request is still right — most
+        // failures are synchronous and the async correction arrives immediately — but never claim
+        // here that a refused feature cannot be announced as on first (AGENTS.md rule 1).
         //
         // ⚠ Turning one of these OFF also says what stops, and is spoken at `.nav`, not `.scene`
         // (review round 1: "voice can silence warning subsets mid-walk"). Four of the seven are

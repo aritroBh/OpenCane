@@ -177,6 +177,13 @@ final class SoundWatcher {
     /// which would otherwise orphan this task *and* re-baseline `SpeechQueue`'s route guard to
     /// whatever the route had already become.
     @ObservationIgnored private var formatRetry: Task<Void, Never>?
+    /// Observes `AVAudioSession.interruptionNotification` while the microphone is on, **log only**.
+    /// A Siri invocation (or call) that seizes the input kills the analyser, which lands in
+    /// `analysisFailed` and switches the feature off with no record of WHY it died — rinse that
+    /// correlation out of the trip log (`sound_watch` action `interruption_began/ended`) before
+    /// touching the lifecycle. Never restarts or stops anything from here: an observer that acts
+    /// is a second owner of the engine.
+    @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     /// The classify request built by the current `start()`, held across the input-format retry so
     /// the retry does not rebuild the label table or re-log it. Nil whenever nothing is starting.
     @ObservationIgnored private var pendingRequest: SNClassifySoundRequest?
@@ -254,6 +261,19 @@ final class SoundWatcher {
             // already walking.
             speech.onMicrophoneRouteChanged = { [weak self] before, after in
                 self?.outputRouteChanged(from: before, to: after)
+            }
+            // Log-only interruption watch (see the property doc): Siri / calls vs real death.
+            interruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                // Same read as `SpeechQueue`'s own observer: unknown type → ignore, never log.
+                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+                guard let type else { return }
+                MainActor.assumeIsolated {
+                    self?.onDiagnostic?("sound_watch", ["action": type == .began
+                                                        ? "interruption_began" : "interruption_ended"])
+                }
             }
         case .revertedRouteChanged(let before, let after):
             onDiagnostic?("sound_watch", ["action": "session_reverted", "before": before, "after": after])
@@ -388,6 +408,10 @@ final class SoundWatcher {
         formatRetry = nil
         pendingRequest = nil
         speech.onMicrophoneRouteChanged = nil
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
         // `sessionHeld` is in the guard on purpose: a start that got the session and is still
         // waiting for the input format has no analyser to tear down but very much has a
         // microphone to give back.
@@ -485,6 +509,10 @@ final class SoundWatcher {
         // A start that got as far as the session but no further has already left a route hook on
         // `SpeechQueue`; nothing must be able to call back into a watcher that has given up.
         speech.onMicrophoneRouteChanged = nil
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
         // Structural, not conventional: every current caller releases the session before it fails,
         // but the file header promises that *every* way this feature dies ends on `.playback`, and
         // a promise kept by six call sites agreeing is one bad merge from being broken.

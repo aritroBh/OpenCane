@@ -30,6 +30,34 @@ test on device: siren needs ~1.5 s of continuous siren before "Siren. Do not sta
 horns stay passive; "How is OpenCane doing" answers in the fixed six-clause order; "Ask OpenCane
 about the scene" answers the question asked, never a generic description.
 
+### Antigravity review of Step 16 (7 findings — 4 fixed, 1 instrumented, 2 rejected with evidence)
+
+1. **Siren expired unheard behind crossing lines — FIXED, real.** 5 s assumed a siren queues
+   behind "at most the route line already playing". Wrong: `.nav` queues FIFO behind any `.nav`
+   line (crossing 4–8 s, lock warning 10 s, location-denied 20 s) and the queue purges expired
+   lines on line end (`SpeechQueue` header). Siren `speechTTL` 5 → 15 (= repeat interval) with
+   the test rewritten to pin both bounds.
+2. **Siren blocked by long `.nav` lines — same fix; pre-empting obstacle NAMES — REJECTED.**
+   Haptic warnings never pass through speech: the cane keeps buzzing under any announcement, so
+   nothing safety-critical is delayed. Names resume (interrupted lines re-queue).
+3. **Siri invocation may kill the mic permanently — INSTRUMENTED, unproven.** `SoundWatcher` had
+   no interruption observer (confirmed by reading the file). No lifecycle change without device
+   proof; added a log-only `interruption_began/ended` observer so the trip log can correlate the
+   next death. Repro: sirens on → "Ask OpenCane about the scene" → check switch + log.
+4. **"SetOption announces on before async validation" — FIXED the overclaim, real.** The
+   read-back is synchronous; the 0.25 s format settle can refuse after. Comment now states that;
+   behavior kept (the failure line corrects within ~a second).
+5. **Silence confirmation delays spoken cues 3–4 s — ACCEPTED as residual, overstated.**
+   `SpeechQueue` queues (not suppresses); only a cue arriving in that window AND expiring (4 s
+   TTL) is lost, and only when the user just silenced haptics with no watch. `handsfree.md` now
+   says to stand still for a few seconds after.
+6. **Ask answers go stale while walking — ACCEPTED, bounded.** Question-path answer TTL 20 →
+   10 (plain Where-Am-I keeps 20: that walker stands still). Cloud-wait staleness remains;
+   bounded by the 18/25 s session budget and auditable via `ms` + `frame` in `describe_result`.
+7. **No-cloud downgrade "violates" the ask contract — REJECTED.** The downgrade is announced out
+   loud ("needs the cloud model... Describing instead.") and the original question is preserved
+   in `lastQuestion` + the trip log. No silent substitution; the contract bans silent ones.
+
 ## Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
 
 The front inset of the both-cameras view still came out tilted with the back feed fine, after the
