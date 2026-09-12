@@ -199,7 +199,7 @@ final class AppModel {
         let context = SceneContext()
         sceneContext = context
         let client = VLMClientFactory.resolved(context: context)
-        describer = SceneDescriber(processor: depth.processor, speech: speech, client: client)
+        describer = SceneDescriber(processor: depth.processor, speech: speech, client: client, context: context)
         hazards = HazardScanner(processor: depth.processor, watchClient: client)
         hazards.signsEnabled = signsEnabled
         hazards.watchEnabled = hazardWatchEnabled
@@ -226,10 +226,15 @@ final class AppModel {
 
     /// Logs every "Where am I" outcome (sentence or error, latency, replay frame) as
     /// `describe_result`, so a walk log shows what was actually said. Wired once in `start()`.
+    /// `gate` is the `CloudSceneGate` verdict ("spoken", "edited: dropped count …", "refused: …",
+    /// "on-device") and `cloud_text` the cloud model's raw reply, so a refusal can be read back
+    /// against what the model wanted to say. Neither field may be called `kind` or `t`
+    /// (`TripLogRecord` owns those).
     private func wireDescriber() {
-        describer.onResult = { [weak self] text, error, ms, frame in
+        describer.onResult = { [weak self] text, error, ms, frame, gate, cloudText in
             self?.logger.event("describe_result", [
                 "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
+                "gate": gate, "cloud_text": cloudText,
                 "provider": self?.describer.providerName ?? "none",
                 "frame": frame,
                 "labels": OnDeviceVision.lastClassify.withLock { $0.labels },

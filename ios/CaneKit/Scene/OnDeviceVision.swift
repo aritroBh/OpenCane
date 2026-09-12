@@ -177,6 +177,10 @@ nonisolated final class SceneContext: Sendable {
 /// The on-device "vision language model": Vision sees, Foundation Models (or a template) speaks.
 nonisolated struct OnDeviceVLMClient: VLMClient {
     let name = "On-device"
+    /// Its sentences already passed `SceneVocabulary.isFaithful`, so `SceneDescriber` speaks them
+    /// as they are; running them through `CloudSceneGate` would cap the template's LiDAR-plus-scene
+    /// pair back to the LiDAR line alone.
+    let isOnDevice = true
     let context: SceneContext
 
     func describe(jpeg: Data, prompt: String) async throws -> String {

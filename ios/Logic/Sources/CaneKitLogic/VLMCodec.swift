@@ -13,8 +13,8 @@
 //
 //  Key invariants:
 //    · No networking, no keys, no headers here; headers are noted in comments only.
-//    · The prompt is fixed by spec (`ScenePrompt.text`): one sentence, < 20 words, clock-face
-//      directions, metres, hazards first.
+//    · The prompt is fixed (`ScenePrompt.text`): one sentence, < 20 words, hazards first, left /
+//      center / right, and no numbers — the LiDAR fact supplies the only distance a walker hears.
 //    · Parsers never return an empty string: empty → `.emptyResponse(reason)`; undecodable →
 //      `.malformed`; provider refusal → `.refused`; non-2xx → `.http` (via `checkStatus`).
 //    · Anthropic `max_tokens` 1024 covers thinking + answer (256 starved the answer).
@@ -58,11 +58,27 @@ public enum VLMError: Error, Equatable, LocalizedError {
     }
 }
 
-/// The fixed prompt (spec). Under 20 words, clock-face directions, metres, hazards first.
+/// The fixed prompt. One sentence, under 20 words, hazards first, sides not clock faces, and no
+/// numbers at all — the app supplies the distance from LiDAR.
 public enum ScenePrompt {
     /// The exact prompt sent with every image. Pinned by `geminiRequestCarriesImageAndPrompt`,
-    /// `anthropicRequestShape`.
-    public static let text = "You are describing a scene to a blind pedestrian. One sentence, under 20 words, use clock-face directions and distances in meters. Mention hazards first."
+    /// `anthropicRequestShape`, `scenePromptAsksForSidesNotNumbers`.
+    ///
+    /// It used to ask for "clock-face directions and distances in meters". Both were measured
+    /// mistakes:
+    ///   · clock face — VLMs read the clock off the image frame, not the walker's body (GuideDog,
+    ///     ACL 2026), so "10 o'clock" points somewhere the walker is not facing. Left / center /
+    ///     right survives a rotated cane mount;
+    ///   · metres — the same benchmark has small VLMs judging distance BELOW chance (22.2 % against
+    ///     a 25 % baseline) while naming objects at 80–87 %, and counting is the worst measured
+    ///     task of all (52.7 % for Gemini 3.5 Flash-Lite). Asking for a number asks the model to
+    ///     invent the one thing it is worst at, so the prompt forbids numbers entirely and
+    ///     `SceneDescriber` puts the measured LiDAR distance in front of the sentence, exactly as
+    ///     `OnDeviceVLMClient` does.
+    /// The last line exists because a solid white frame produced "The path ahead is clear and
+    /// unobstructed" 4 times out of 4. `CloudSceneGate` enforces all of this on the reply; the
+    /// prompt is what makes enforcement rare.
+    public static let text = "You are describing what a cane-mounted camera sees, for a blind pedestrian. One sentence, under 20 words. Name what is actually there, hazards first, and say whether each thing is on the left, in the center or on the right. Never give a number, a distance or a count. Never say the way is clear, empty or safe. No preamble."
 }
 
 // MARK: - Requests
@@ -92,12 +108,39 @@ public enum VLMRequest {
         return try JSONEncoder().encode(body)
     }
 
+    /// Output-token budget for a *reasoning* model on the OpenAI-compatible path.
+    ///
+    /// 1024, not the 120 a one-sentence answer needs, because on this endpoint `max_tokens` caps
+    /// **reasoning plus visible output together**. Measured on the phone: Muse Spark 1.3 with
+    /// `max_tokens` 120 spent the whole budget thinking and returned `finish_reason: "length"` with
+    /// `content: null`, which the app could only read as a failure — so it waited 11 s and then
+    /// spoke the on-device template instead. The walker heard nothing the cloud model saw. 1024 is
+    /// the same figure the Anthropic path already uses for the same reason (see the file header).
+    public static let openAIMaxTokens = 1024
+
+    /// Reasoning depth asked of a reasoning model for scene description: the lowest the endpoint
+    /// allows.
+    ///
+    /// Naming what a camera sees is a direct-answer task, and Meta's own guidance is to use "low"
+    /// for those — higher effort buys nothing here and costs the one thing a blind walker cannot
+    /// spare, latency. `"none"` is documented to return HTTP 400 on Muse Spark, so "low" is the
+    /// floor, not a compromise.
+    public static let lowReasoningEffort = "low"
+
     /// OpenAI-compatible chat/completions (OpenAI itself and the `custom` provider).
-    /// Body: one user message `[text, image_url(data:image/jpeg;base64,…)]`, `max_tokens` 120,
-    /// temperature 0.2.
-    /// - Parameter model: model id sent verbatim (e.g. "muse-1.3").
-    /// Pinned by `openAIRequestUsesDataURI`.
-    public static func openAICompatible(model: String, jpegBase64: String, prompt: String = ScenePrompt.text) throws -> Data {
+    /// Body: one user message `[text, image_url(data:image/jpeg;base64,…)]`,
+    /// `max_tokens` `openAIMaxTokens`, temperature 0.2.
+    /// - Parameters:
+    ///   - model: model id sent verbatim (e.g. "muse-spark-1.3-contributor").
+    ///   - reasoningEffort: value for the top-level `reasoning_effort` field, or nil to omit it.
+    ///     Omitted by default because a plain OpenAI chat model rejects the field outright; the
+    ///     `custom` provider passes `lowReasoningEffort` because Muse Spark always reasons and, left
+    ///     to itself, reasons for longer than a walking pace allows.
+    /// Pinned by `openAIRequestUsesDataURI`, `openAIRequestBudgetsForReasoningTokens`,
+    /// `openAIRequestOmitsReasoningEffortUnlessAsked`.
+    public static func openAICompatible(model: String, jpegBase64: String,
+                                        prompt: String = ScenePrompt.text,
+                                        reasoningEffort: String? = nil) throws -> Data {
         struct Body: Encodable {
             struct ImageURL: Encodable { var url: String }
             struct Part: Encodable {
@@ -108,13 +151,17 @@ public enum VLMRequest {
             struct Message: Encodable { var role = "user"; var content: [Part] }
             var model: String
             var messages: [Message]
-            var max_tokens = 120
+            // Qualified: a nested struct cannot default a property from the enclosing scope.
+            var max_tokens = VLMRequest.openAIMaxTokens
             var temperature = 0.2
+            /// nil is encoded as absent, not null: an endpoint that does not know the field must
+            /// not see it at all.
+            var reasoning_effort: String?
         }
         let body = Body(model: model, messages: [.init(content: [
             .init(type: "text", text: prompt),
             .init(type: "image_url", image_url: .init(url: "data:image/jpeg;base64,\(jpegBase64)")),
-        ])])
+        ])], reasoning_effort: reasoningEffort)
         return try JSONEncoder().encode(body)
     }
 

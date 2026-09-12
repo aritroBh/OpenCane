@@ -156,7 +156,19 @@ public enum SceneVocabulary {
         guard !invented else { return false }
         // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
         // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
-        return numbers(in: sentence).isSubset(of: numbers(in: facts))
+        return numbersAreGrounded(sentence, in: facts)
+    }
+
+    /// Does every number in `sentence` also appear in `facts`? Digits and number words are the same
+    /// number ("two meters" in the facts allows "2 meters"), decimals stay whole so an invented "4"
+    /// cannot hide inside "1.4". Empty facts ground nothing, so any number is invented.
+    ///
+    /// The one place this rule lives: `isFaithful` uses it for the on-device sentence and
+    /// `CloudSceneGate` for the cloud sentence, so a distance can never be legal on one path and
+    /// illegal on the other. Pinned by `groundedNumbersPredicateIsShared`,
+    /// `distancesMustBeTheLidarNumber`.
+    public static func numbersAreGrounded(_ sentence: String, in facts: String) -> Bool {
+        numbers(in: sentence).isSubset(of: numbers(in: facts))
     }
 
     /// True when `sentence` states a distance that `lidar` (the depth fact) gives — by number, not

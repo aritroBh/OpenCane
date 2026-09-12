@@ -22,20 +22,55 @@
 import CaneKitLogic
 import Foundation
 
+/// Which kind of model wrote a scene sentence. `SceneDescriber` must know, because a cloud
+/// sentence has to pass `CloudSceneGate` while an on-device sentence was already vetted by
+/// `SceneVocabulary.isFaithful` and is two sentences by design ("Obstacle ahead at 1.4 meters.
+/// Ahead: a crosswalk …"), which the gate's one-sentence cap would chop in half.
+nonisolated enum VLMAnswerSource: Sendable {
+    /// A cloud provider (Gemini / Anthropic / OpenAI / custom) wrote it: gate it.
+    case cloud
+    /// `OnDeviceVLMClient` wrote it: speak it as it is.
+    case onDevice
+}
+
+/// One scene sentence and who wrote it.
+nonisolated struct VLMAnswer: Sendable {
+    let text: String
+    let source: VLMAnswerSource
+}
+
 /// A vision-language provider that turns one JPEG into one short spoken sentence.
 nonisolated protocol VLMClient: Sendable {
     /// Display name for the UI ("Muse", "Anthropic", "Gemini", "OpenAI", "On-device").
     var name: String { get }
+    /// True only for `OnDeviceVLMClient`: its answers are already gated and must not be re-gated.
+    var isOnDevice: Bool { get }
+    /// The on-device client this one falls back to, or nil when there is none (only
+    /// `FallbackVLMClient` has one). `SceneDescriber` speaks it when the gate refuses the cloud
+    /// sentence, so a refusal still answers the walker.
+    var onDeviceFallback: (any VLMClient)? { get }
     /// One image + a prompt → text. `prompt` is `ScenePrompt.text` for "Where am I" and
     /// `HazardPrompt.text` for the hazard watch. Throws `VLMError` (HTTP status, malformed body)
     /// or `URLError` (transport, 8 s request / 12 s total timeout).
     func describe(jpeg: Data, prompt: String) async throws -> String
+    /// "Where am I", with the provenance the gate needs. Caller: `SceneDescriber.describe()`.
+    func describeScene(jpeg: Data) async throws -> VLMAnswer
 }
 
 nonisolated extension VLMClient {
-    /// "Where am I": the scene prompt. Caller: `SceneDescriber.describe()`.
+    /// Cloud providers are the default: only `OnDeviceVLMClient` overrides this.
+    var isOnDevice: Bool { false }
+    /// Only `FallbackVLMClient` has a fallback.
+    var onDeviceFallback: (any VLMClient)? { nil }
+
+    /// "Where am I": the scene prompt. Caller: `HazardScanner`-free paths and tests.
     func describe(jpeg: Data) async throws -> String {
         try await describe(jpeg: jpeg, prompt: ScenePrompt.text)
+    }
+
+    /// Default: this client answered for itself, so the source is its own kind.
+    func describeScene(jpeg: Data) async throws -> VLMAnswer {
+        VLMAnswer(text: try await describe(jpeg: jpeg), source: isOnDevice ? .onDevice : .cloud)
     }
 }
 
@@ -45,6 +80,8 @@ nonisolated struct FallbackVLMClient: VLMClient {
     let primary: any VLMClient
     let fallback: any VLMClient
     var name: String { "\(primary.name) + \(fallback.name)" }
+    /// What `SceneDescriber` speaks when `CloudSceneGate` refuses the cloud sentence.
+    var onDeviceFallback: (any VLMClient)? { fallback }
 
     /// The hazard watch cannot wait for the cloud's full 8–12 s timeout: a reply that late is about
     /// a place the walker has left. For `HazardPrompt.text` the cloud gets this long, then the
@@ -66,6 +103,15 @@ nonisolated struct FallbackVLMClient: VLMClient {
         do { return try await primary.describe(jpeg: jpeg, prompt: prompt) }
         catch is CancellationError { throw CancellationError() }
         catch { return try await fallback.describe(jpeg: jpeg, prompt: prompt) }
+    }
+
+    /// Same fallback order as `describe`, but the answer carries who wrote it: when the cloud
+    /// failed (no network, bad key, quota) the on-device sentence comes back marked `.onDevice`,
+    /// so `SceneDescriber` speaks it whole instead of running it through the cloud gate.
+    func describeScene(jpeg: Data) async throws -> VLMAnswer {
+        do { return try await primary.describeScene(jpeg: jpeg) }
+        catch is CancellationError { throw CancellationError() }
+        catch { return try await fallback.describeScene(jpeg: jpeg) }
     }
 
     /// Runs `op`, but gives up after `limit` (throws `URLError(.timedOut)` and cancels `op`).
@@ -121,8 +167,14 @@ nonisolated enum VLMClientFactory {
         switch provider {
         case .custom:
             guard let base = Secrets.string("CUSTOM_BASE_URL"), let key = Secrets.string("CUSTOM_API_KEY") else { return nil }
+            // Muse Spark reasons before it answers, and `max_tokens` covers the thinking as well as
+            // the sentence. Left at the model's own default the phone measured 11 s and an empty
+            // reply. "low" is the documented floor ("none" is a 400) and the right depth for
+            // naming what a camera sees; `CUSTOM_REASONING_EFFORT: ""` opts a different endpoint out.
             return OpenAICompatibleClient(name: "Muse", baseURL: base, apiKey: key,
-                                          model: Secrets.string("CUSTOM_MODEL") ?? "muse-1.3")
+                                          model: Secrets.string("CUSTOM_MODEL") ?? "muse-1.3",
+                                          reasoningEffort: Secrets.string("CUSTOM_REASONING_EFFORT")
+                                              ?? VLMRequest.lowReasoningEffort)
         case .openai:
             guard let key = Secrets.string("OPENAI_API_KEY") else { return nil }
             return OpenAICompatibleClient(name: "OpenAI", baseURL: "https://api.openai.com/v1", apiKey: key,
@@ -179,6 +231,14 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
     let apiKey: String
     /// `model` field of the chat request.
     let model: String
+    /// Value for the request's top-level `reasoning_effort`, or nil to omit the field.
+    ///
+    /// nil for plain OpenAI — a non-reasoning chat model rejects the field outright. "low" for the
+    /// `custom` provider, which is Muse Spark: a reasoning model that, left to choose for itself,
+    /// thinks for longer than a walking pace allows and can spend the entire token budget doing it.
+    /// Overridable from `Secrets.plist` (`CUSTOM_REASONING_EFFORT`) so a different endpoint can opt
+    /// out without a rebuild.
+    var reasoningEffort: String? = nil
 
     /// POST `<base>/chat/completions` with the image as a base64 data-URL message part.
     func describe(jpeg: Data, prompt: String) async throws -> String {
@@ -187,7 +247,8 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
         while base.hasSuffix("/") { base.removeLast() }
         if !base.hasSuffix("/chat/completions") { base += "/chat/completions" }
         guard let url = URL(string: base), url.scheme != nil else { throw VLMError.malformed("bad base URL") }
-        let body = try VLMRequest.openAICompatible(model: model, jpegBase64: jpeg.base64EncodedString(), prompt: prompt)
+        let body = try VLMRequest.openAICompatible(model: model, jpegBase64: jpeg.base64EncodedString(),
+                                                   prompt: prompt, reasoningEffort: reasoningEffort)
         let data = try await post(url, headers: ["Authorization": "Bearer \(apiKey)"], body: body)
         return try VLMResponse.openAICompatible(data)
     }
