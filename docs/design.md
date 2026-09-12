@@ -28,7 +28,7 @@ of it below says so.
 
 | Viewer | Situation | What it forces |
 |---|---|---|
-| **The blind user** | Never looks. Phone is clamped to the cane; they use speech, the cane's buzz, the watch, or the Action button ("Where am I"). | Every state has words: speech via `SpeechQueue`, and a VoiceOver label / value on screen. The page is one linear VoiceOver list in visual order. Our own buttons are ≥ 60 pt (big buttons 72 pt). Nothing is colour-only. |
+| **The blind user** | Never looks. Phone is clamped to the cane; they use speech, the cane's buzz, the watch, or the Action button ("Where am I"). | Every state has words: speech via `SpeechQueue`, and a VoiceOver label / value on screen. VoiceOver order is the selected tab's cards, then the tab bar (Guide / Sense / Settings). Our own buttons are ≥ 60 pt (big buttons 72 pt). Nothing is colour-only. |
 | **The sighted judge / teammate** | Glances at the phone on the cane from ~1 m, in a dark room (demo) or in sunlight (walk). | The Guide instruction, the distance and the depth tiles must be readable at arm's length: tile numerals 28 pt bold, hero distance 64 pt, fills ≥ 6.5:1 against their `ink` text, no thin type, no mid-grey. Dark surfaces for the demo (a bright screen in a dark room blinds the room). |
 | **The developer** | Reads engine health, speech backend, watch link and the hazard detections while walking behind. | The debug cards below the Guide (Haptics, Hazards, Watch, This phone). There is no debug footer any more (removed): fps is not shown anywhere, and thermal and battery are only in the trip log's `lanes` records. |
 
@@ -179,20 +179,23 @@ when the screen is a gauge.
 
 ## 4. Motion
 
-Motion never carries information. The app owns exactly one animation, and it honours Reduce Motion
+Motion never carries information. The app owns two animations, and both honour Reduce Motion
 (`accessibilityReduceMotion`):
 
 | Event | Normal | Reduce Motion |
 |---|---|---|
 | Depth grid update (30 Hz) | **None.** Fill, word and number change instantly. | Same |
 | Big button press (`CKBigButtonStyle`, also Go and the test buttons) | Scale 0.97 on a 0.12 s spring; `.sensoryFeedback(.impact(weight: .light))` on release | Opacity 0.85 only; haptic kept |
+| Root tab switch (`CKTabBar` + `ContentView` page) | Page **cross-fades** over 0.2 s (`.transition(.opacity)`); the accent capsule slides between icons (`matchedGeometryEffect`, 0.32 s spring); `.sensoryFeedback(.selection)` | Instant page swap; capsule jumps; selection haptic kept |
 | Everything else (pills, distance, instruction, cards appearing) | Instant | Instant |
 
 Never animate layout of the grid. Never animate colour of a lane tile (a fade through orange
-lies about the distance for 150 ms).
+lies about the distance for 150 ms). Tab motion is chrome only: it does not encode a distance
+or a hazard. **Pages never slide sideways** — a horizontal slide implies travel through an
+ordered set, and it read as "going forward" even when moving back left. Cross-fade only.
 
 **Not built** (original spec, deliberately dropped): urgent-tile 2 Hz pulse and 4 pt border, 150 ms pill
-cross-fade, `.numericText()` distance transition, sliding obstacle banner, arrival sheet, tab switches.
+cross-fade, `.numericText()` distance transition, sliding obstacle banner, arrival sheet.
 
 ---
 
@@ -325,28 +328,31 @@ carry `.updatesFrequently` so touching them reads the current state.
 
 ## 6. Screens
 
-The phone app is **one scrolling page** (`ContentView`: `NavigationStack` > `ScrollView`, large title
-"OpenCane", `gutter` padding, `xl` between cards). There is no tab bar. Card order is the VoiceOver order:
+The phone app is **three icon-only pages** (`ContentView`: `NavigationStack` titled "OpenCane" >
+selected page `ScrollView` + `CKTabBar`). Tabs are Guide · Sense · Settings. Card order *inside
+the selected page* is the VoiceOver order; the tab bar is last on every page.
 
 ```
 OpenCane                                  ← large navigation title
-┌ Guide ──────────────────────────────┐   §6.1 / §6.3  GuideCard
-┌ This trip  |  Arrived ──────────────┐   §6.4  ArrivalCardView (only while navigating or after arrival)
-┌ ✓ Depth OK ─────────────────────────┐   §6.2  status card (untitled)
-┌ Obstacles ──────────────── (TRUSTED)┐   §6.2  LaneGridView
-┌ Haptics ────────────────────────────┐   §6.5  HapticsCard
-┌ Hazards ────────────────────────────┐   §6.5  HazardsCard
-┌ Watch ──────────────────────────────┐   §6.5  WatchCard
-┌ Mount ──────────────────────────────┐   §6.5  Mount toggles
-┌ This phone ─────────────────────────┐   §6.5  capability rows (last; the debug footer was removed)
+Guide page                                Sense page                         Settings page
+┌ Guide ──────────────────────────────┐   ┌ ✓ Depth OK ─────────────────┐   ┌ Haptics ────────────┐
+┌ This trip  |  Arrived ──────────────┐   ┌ Obstacles ──────── (TRUSTED)┐   ┌ Watch ──────────────┐
+  (§6.1 / §6.3 / §6.4; trip only while    ┌ Hazards ────────────────────┐   ┌ Mount ──────────────┐
+   navigating or after arrival)             (§6.2 / §6.5)                     ┌ This phone ─────────┐
+                                                                              (§6.5)
+[ walk ]  [ 3×3 grid ]  [ gear ]          ← CKTabBar, icon-only; VoiceOver "Guide" / "Sense" / "Settings"
 ```
 
-Card titles are `.isHeader`, so the headings rotor jumps Guide → This trip / Arrived → Obstacles →
-Haptics → Hazards → Watch → Mount → This phone. Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
+Card titles are `.isHeader`, so the headings rotor jumps the cards of the *current* page (Guide →
+This trip / Arrived on Guide; Obstacles → Hazards on Sense; Haptics → Watch → Mount → This phone
+on Settings). Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
 
-**Not built** (original spec): the four-tab bar (Guide · Depth · Route · Settings), a separate Depth
-screen with Mirror / Export buttons, the route picker screen, the Settings screen with a provider picker
-and a "Show debug footer" toggle, the obstacle banner on Guide, the arrival sheet.
+The tab bar is the one icon-only control: the word is the VoiceOver label and the XCUITest key
+(§9), never the only cue for a hazard. Hit target ≥ 60 pt.
+
+**Not built** (original spec): a fourth Route tab, a separate Depth screen with Mirror / Export
+buttons, the route picker screen, a Settings provider picker and a "Show debug footer" toggle, the
+obstacle banner on Guide, the arrival sheet.
 
 ### 6.1 Guide
 
@@ -611,9 +617,14 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 - No side-stripe borders on cards. A card is a fill and a hairline.
 - No animation on the depth grid. No colour cross-fades on lane tiles.
 - No shadows. Elevation is a fill change and a hairline.
-- No icon-only buttons. Every button has a visible word; the SF Symbol is a companion (the watch's half-width buttons put the word under the symbol).
+- No icon-only **action** buttons. Guide / route / haptic controls still carry a visible word; the
+  SF Symbol is a companion (the watch's half-width buttons put the word under the symbol). The
+  **root tab bar is the exception**: three icons, words only in VoiceOver (`Guide` / `Sense` /
+  `Settings`). A tab never encodes a hazard.
 - No custom fonts. SF Pro / SF Rounded / SF Mono only.
-- No haptics for decoration. The Taptic Engine is a safety channel; the big-button press confirm, the watch's `.click` send confirm and the system crown detents are the only non-cue haptics.
+- No haptics for decoration. The Taptic Engine is a safety channel; the big-button press confirm,
+  the tab-bar `.selection` tick, the watch's `.click` send confirm and the system crown detents
+  are the only non-cue haptics.
 - No sounds except speech and the beacon. No earcons. The beacon never plays through the phone speaker.
 - No `CKBigButton` under 72 pt and no other phone button under 60 pt; no watch button under 44 pt.
 - No double-speak: cue speech comes from `SpeechQueue`, never also from a VoiceOver announcement.
@@ -633,7 +644,7 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 - `CKStatusPill(text:tone:systemImage:spoken:updatesFrequently:)` is the only pill: one VoiceOver element, label `spoken ?? text` (use `spoken` when the visible text is terse: "±6 M" → "GPS: ±6 m").
 - `CKCard(title:) { }` is a `.contain` container labelled by its title; untitled cards set their own label.
 - Watch: `WKBigButton`, `WKFont`, `WKColor`, `WKSpacing` in `WatchTheme.swift`; the watch is always dark.
-- Demo checklist: Dark Mode on, Increase Contrast off (the normal ladder is calibrated), Bold Text off, Guided Access on, brightness 60 % in the dark room / 100 % outdoors, AirPods Spatial Audio off (`docs/devices_setup.md`), Reduce Motion irrelevant (nothing meaningful moves).
+- Demo checklist: Dark Mode on, Increase Contrast off (the normal ladder is calibrated), Bold Text off, Guided Access on, brightness 60 % in the dark room / 100 % outdoors, AirPods Spatial Audio off (`docs/devices_setup.md`). Reduce Motion only changes tab-switch chrome and the button-press scale — never a distance or a hazard.
 
 ---
 
@@ -645,6 +656,7 @@ Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
 
 | Query | Exact string | Where it comes from | Used by |
 |---|---|---|---|
+| `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (all three); haptics / mount tests open Settings; tour |
 | `buttons[…]` | "Start route to CIF" | `GuideCard`, idle | every test waits for it first; tour |
 | `buttons[…]` | "Cancel route start" | `GuideCard`, while depth is warming | cancels the queued interlock request |
 | `buttons[…]` | "Stop route" | `GuideCard`, navigating | route test, tour |
