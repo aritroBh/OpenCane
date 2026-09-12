@@ -9,14 +9,31 @@
 //
 //  Speech: everything here is `.scene`, the lowest priority — a description never interrupts an
 //  obstacle name, a route line or "Head height.", and waits behind them (result TTL 20 s so it
-//  survives a crossing line; "Describing." TTL 3 s so a late progress line is dropped).
+//  survives a crossing line; an answer to a question 10 s). There is no spoken progress line any
+//  more: "Describing." (3 s TTL) was removed in Steps 29–33 — the button's "Describing…" state
+//  and the Action button's own tick carry progress instead.
+//
+//  Also "Ask OpenCane" (Step 16, `ask(_:)`): one question about the same frame, answered by the
+//  cloud model directly (never by the on-device fallback, which ignores prompts).
+//
+//  Owner: `AppModel.describer`, built in `AppModel.init` with `depth.processor`, `speech`, the
+//  shared `VLMClientFactory.resolved(context:)` client and `AppModel.sceneContext`. Callers:
+//  `AppModel.describeScene()` (button, watch, Action button, Camera Control) and
+//  `AppModel.askAboutScene(_:)` (Siri / Shortcuts, `ConversationCoordinator` scene questions).
+//  UI: `GuideCard` ("Where am I" / "Describing…", `lastDescription`, `lastError`).
+//  Tests: `CloudSceneGateTests`, `QuestionPromptTests`, `PeopleAheadTests`, `SceneVocabularyTests`
+//  (CaneKitLogic, the rules this class applies); `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully`
+//  (no frame in the simulator → "Camera warming up", button comes back) and
+//  `testWhereAmIDescribesAStreetViewFrame` (`make uitest-streetview`).
 //
 //  Threading / isolation: `@MainActor`. `describe()` spawns one main-actor `Task`; the three
 //  slow steps leave main as follows:
 //    · first-frame wait — `Task.sleep` polling of `hasCameraFrame` (lock-guarded, cheap);
 //    · JPEG encode — `snapshot` is `@concurrent`, so it runs on the global executor (without
 //      it, a static method of this main-actor class would run on main);
-//    · network — `client.describe(jpeg:)` is a nonisolated async call; under
+//    · Vision for the gate / people line — `OnDeviceVision.detect` and `withPeople` are
+//      `@concurrent` (global executor);
+//    · network — `client.describeScene(jpeg:)` / `cloud.describe(jpeg:prompt:)` are nonisolated async calls; under
 //      NonisolatedNonsendingByDefault it starts on main (base64 + JSON body build) and suspends
 //      for the URLSession round trip.
 //  Only Sendable values (`Data`, `String`) cross; `DepthFrameProcessor` is Sendable by design.
@@ -48,16 +65,20 @@ final class SceneDescriber {
     private(set) var isDescribing = false
     /// Last successful description (shown under the "Where am I" button).
     private(set) var lastDescription = ""
-    /// Last failure (missing key, no camera frame, provider/network error); nil on success.
+    /// Last failure: "No camera frame", or the error's `localizedDescription` when the client
+    /// threw (for "Where am I" only after the on-device fallback also failed; for a question, any
+    /// cloud failure). Cleared when a run starts, not on success. A missing key is not a failure
+    /// any more (the on-device client answers). Shown in red under the button on `GuideCard`.
     private(set) var lastError: String?
     /// The question the last run was answering, or "" when it was a plain "Where am I".
     /// `AppModel` reads it inside `onResult`, so the trip log records which question an answer
     /// belonged to — an answer logged without its question cannot be read back afterwards.
     private(set) var lastQuestion = ""
-    /// Wall-clock milliseconds of the last successful `client.describe` call (request build +
-    /// network round trip + parse; excludes the frame wait and JPEG encode).
+    /// Wall-clock milliseconds of the last successful client call (request build + network round
+    /// trip + parse; excludes the frame wait, the JPEG encode and the gate's Vision pass).
     private(set) var lastLatencyMs = 0
-    /// Provider name for the UI ("On-device", "Muse + On-device", …); never nil in practice.
+    /// Provider name for the UI and logs ("On-device", "Muse + On-device", …) = `client.name`.
+    /// Still declared optional for its callers' `?? "none"`, but never nil in practice.
     let providerName: String?
 
     /// The client, injected by AppModel from `VLMClientFactory.resolved(context:)`; never nil.
@@ -66,8 +87,8 @@ final class SceneDescriber {
     @ObservationIgnored private let processor: DepthFrameProcessor
     /// Where progress, result and error lines are spoken (all `.scene`).
     @ObservationIgnored private let speech: SpeechQueue
-    /// The client's side channel, shared with `AppModel` and the depth engine. It carries the
-    /// LiDAR line the depth engine keeps up to date ("1.4 meters ahead, obstacle.") — the gate's
+    /// The client's side channel, shared with `AppModel` and the on-device client. It carries the
+    /// LiDAR line `AppModel.handle` rewrites from every depth report ("1.4 meters ahead, obstacle.") — the gate's
     /// only source of a legitimate distance, and the prefix spoken in front of a cloud sentence,
     /// which is forbidden to give numbers — and, written from here, the depth grid of the very
     /// frame being described, so a person found in the image can be given a real distance.
@@ -79,7 +100,8 @@ final class SceneDescriber {
     ///   - processor: source of camera frames and their depth grids (shared with `DepthEngine`).
     ///   - speech: where every line is spoken, at `.scene` priority.
     ///   - client: the resolved vision client; never nil.
-    ///   - context: `AppModel.sceneContext`, the same instance the depth engine writes to.
+    ///   - context: `AppModel.sceneContext`, the same instance `AppModel.handle` writes the LiDAR
+    ///     line into and `OnDeviceVLMClient` reads.
     init(processor: DepthFrameProcessor, speech: SpeechQueue, client: any VLMClient,
          context: SceneContext) {
         self.processor = processor
@@ -89,21 +111,27 @@ final class SceneDescriber {
         providerName = client.name
     }
 
-    /// One description at a time. Speaks the result (or a spoken error); the Action Button tick and
-    /// the disabled UI state provide progress without adding another spoken line.
-    ///
-    /// Flow: wait ≤ 3 s for a fresh camera frame (the paused frame is dropped on background), encode
-    /// a ≤ 1024 px JPEG off main, send it to the client (cloud with on-device fallback, or on-device
-    /// only; never nil), speak the sentence (20 s TTL).
-    /// Failures speak "Camera warming up. Try again." or "Scene description failed.".
-    /// Caller: `AppModel.describeScene()` (button, watch, Action button, Camera Control).
     /// Every outcome, for the trip log (AppModel → `describe_result`): the sentence spoken, or the
     /// error, the round trip in ms, the replay frame, the `CloudSceneGate` verdict (`gate`) and the
     /// cloud model's raw reply (`cloud_text`) so a walk log shows what was stripped or refused and
-    /// what the model had actually said. Called on the main actor.
+    /// what the model had actually said. Called on the main actor, exactly once per accepted run
+    /// (no frame → `gate` "no frame"; throw → "error"; on-device answer → "on-device"). Not called
+    /// for a run refused up front ("Still describing…", "I did not catch a question.").
+    /// Set by `AppModel.wireDescriber`.
     @ObservationIgnored var onResult: ((_ text: String?, _ error: String?, _ ms: Int?, _ frame: String,
                                         _ gate: String, _ cloudText: String) -> Void)?
 
+    /// "Where am I". One description at a time. Speaks the result (or a spoken error); the Action
+    /// Button tick and the disabled UI state provide progress without adding another spoken line.
+    ///
+    /// Flow: wait ≤ 3 s for a fresh camera frame (the paused frame is dropped on background), encode
+    /// a ≤ 1024 px JPEG + its depth grid off main, send it to the client (cloud with on-device
+    /// fallback, or on-device only; never nil), gate a cloud sentence (`grounded`), add the people
+    /// line when the cloud answered, speak it (20 s TTL).
+    /// Failures speak "Camera warming up. Try again." or "Scene description failed."; a press while
+    /// one is running speaks "Still describing the previous scene." and is dropped.
+    /// Caller: `AppModel.describeScene()` (button, watch, Action button, Camera Control).
+    /// - Returns: true when a run was started, false when one was already in flight.
     @discardableResult
     func describe() -> Bool {
         run(question: nil)
@@ -123,7 +151,11 @@ final class SceneDescriber {
     /// "the way is clear" past the gate.
     /// - Parameter question: what the walker said. Empty or wordless input is refused out loud
     ///   rather than sent to the model as a blank question.
-    /// Caller: `AppModel.askAboutScene(_:)` (Siri / Shortcuts / the Action button).
+    /// Caller: `AppModel.askAboutScene(_:)` (Siri / Shortcuts / the Action button, and
+    /// `ConversationCoordinator` for anything `FastPathIntentClassifier.isSceneQuestion` matches).
+    /// With no cloud client it says so and runs a plain description instead (`lastQuestion` still
+    /// records what was asked).
+    /// - Returns: true when a run was started; false for an empty question or a run in flight.
     @discardableResult
     func ask(_ question: String) -> Bool {
         guard let cleaned = QuestionPrompt.clean(question) else {
@@ -139,6 +171,7 @@ final class SceneDescriber {
     /// question fired while a description is in flight is dropped, exactly as a double press on the
     /// watch already was.
     /// - Parameter question: the cleaned question, or nil for a plain scene description.
+    /// - Returns: true when the run's Task was started (`isDescribing` is then true until it ends).
     @discardableResult
     private func run(question: String?) -> Bool {
         guard !isDescribing else {
@@ -256,6 +289,10 @@ final class SceneDescriber {
     ///     `OnDeviceVLMClient` does with its own sentence;
     ///   · a refused sentence is replaced by the on-device description (the client's own fallback),
     ///     so "Where am I" still answers; with no fallback client the deterministic template does.
+    /// - Parameters:
+    ///   - cloud: the cloud model's raw sentence.
+    ///   - jpeg: the frame it described (re-used for the Vision evidence and the fallback).
+    ///   - lidar: the LiDAR line captured beside that frame ("" = none), the only legal distance.
     /// - Returns: what to speak, and the gate note for the trip log.
     private func grounded(_ cloud: String, jpeg: Data, lidar: String) async -> (String, String) {
         let seen = await OnDeviceVision.detect(jpeg: jpeg)
@@ -289,6 +326,7 @@ final class SceneDescriber {
     /// - Parameters:
     ///   - cloud: the model's raw answer.
     ///   - jpeg: the frame it answered about, re-used for the gate's Vision evidence.
+    ///   - lidar: the LiDAR line captured beside that frame ("" = none).
     /// - Returns: what to speak, and the gate note for the trip log.
     private func groundedAnswer(_ cloud: String, jpeg: Data, lidar: String) async -> (String, String) {
         let seen = await OnDeviceVision.detect(jpeg: jpeg)

@@ -22,10 +22,17 @@
 //      `debounceIsAQuarterOfASecond`); never write the number here.
 //    · A completer reply is accepted only while its `queryFragment` is still what the walker has
 //      typed, so a slow reply for "gra" cannot repopulate the list under "grainger".
-//    · Region: the live GPS fix when there is one, else `CampusPlaces.center` — GPS only runs
-//      during a route (design.md §6.1), so the idle field usually has no fix. The campus centre
-//      biases the search; it is never used as a distance origin (that would be a made-up number).
+//    · Region: the fix passed with the keystroke when there is one, else `CampusPlaces.center`.
+//      (This used to say GPS only runs during a route; since bf03253 GPS runs for the whole
+//      foreground session, so the idle field normally has a fix. The centre now covers the
+//      seconds before a first fix, a denied permission, and indoors.) The campus centre biases
+//      the search; it is never used as a distance origin (that would be a made-up number).
 //    · The search radius is `RouteSource.searchRadiusM`, the same 3 km the route builder accepts.
+//
+//  Tests: the ranking, debounce and minimum length are pure and pinned in CaneKitLogic
+//  (`DestinationSuggestionsTests`); this class (completer, relay, stale-reply fence) has no unit
+//  test — `CaneKitUITests.testTypingOffersCampusSuggestionsAndClearsTheError` types "Grainger"
+//  and asserts the campus row is offered above every map row.
 //
 
 import CaneKitLogic
@@ -40,13 +47,15 @@ import Observation
 @Observable
 final class DestinationSearch {
 
-    /// The list to draw, campus places first. Empty for a query shorter than
-    /// `DestinationSuggestions.minimumQueryLength` and after `clear()`.
+    /// The list to draw, campus places first (≤ `DestinationSuggestions.maxSuggestions` = 6, of which
+    /// ≤ 3 campus). Empty for a query shorter than `DestinationSuggestions.minimumQueryLength` (2)
+    /// and after `clear()`. Drawn by `DestinationField`; a tapped row calls `AppModel.navigate`.
     private(set) var suggestions: [DestinationSuggestion] = []
 
     /// Set when MapKit's completer failed (usually no network) and there is nothing else to show;
     /// nil otherwise. Shown as a quiet secondary line, never as an error block: the campus
-    /// gazetteer still works offline.
+    /// gazetteer still works offline. `DestinationField` also announces it instead of the row
+    /// count when the list is empty. Cleared by every keystroke and by any accepted reply.
     private(set) var lastError: String?
 
     /// Bumped by every *answer that changed the list*, never by `clear()`.
@@ -62,7 +71,8 @@ final class DestinationSearch {
     @ObservationIgnored private var relay: CompleterRelay?
     /// What the walker has typed (untrimmed), used to check a reply is still relevant.
     @ObservationIgnored private var query = ""
-    /// The fix the current list was built from; nil means no distances are shown.
+    /// The fix the current list was built from; nil means no distances are shown and the completer
+    /// region falls back to `CampusPlaces.center`.
     @ObservationIgnored private var origin: Coordinate?
     /// The last completer rows accepted for `query`, kept so a fix or a re-rank does not need a
     /// new network round trip.
@@ -94,9 +104,12 @@ final class DestinationSearch {
     /// `DestinationSuggestions.debounceSeconds`.
     /// - Parameters:
     ///   - text: exactly what is in the field.
-    ///   - fix: the fix as of this keystroke, or nil. Used for the region bias and, when present,
-    ///     for the distance shown on campus rows. Nothing re-ranks on a *new* fix: GPS does not
-    ///     run while the idle card is on screen (design.md §6.1), so there is nothing to re-rank.
+    ///   - fix: the fix as of this keystroke (`DestinationField` passes `model.location.fix`), or
+    ///     nil. Used for the region bias and, when present, for the distance shown on campus rows.
+    ///     Nothing re-ranks on a *new* fix between keystrokes: the next keystroke picks it up. (The
+    ///     old reason — "GPS does not run while the idle card is on screen" — stopped being true in
+    ///     bf03253; re-ranking on every fix would also re-announce the row count, see `revision`.)
+    ///     The fix's accuracy is not checked: a poor fix still biases and measures.
     func update(text: String, fix: GeoFix?) {
         query = text
         origin = fix?.coordinate
@@ -126,6 +139,8 @@ final class DestinationSearch {
 
     /// Drops the list and any in-flight query (the field was cleared, submitted, or a route
     /// started). Leaves the completer configured for the next time the field is used.
+    /// ⚠ Must not bump `revision` (Muse review, Step 14): it runs the moment a route starts, and an
+    /// announcement then would say "No matching places" over "Walking to …".
     func clear() {
         debounce?.cancel()
         debounce = nil
@@ -151,6 +166,9 @@ final class DestinationSearch {
     }
 
     /// A completer reply. Ignored unless its fragment is still what the walker typed.
+    /// Reached through a `Task { @MainActor }` hop, not `MainActor.assumeIsolated`: MapKit does not
+    /// promise the delivery thread, and a trap there is worse than one momentarily stale list for
+    /// the same query (Step 14 review proposal, rejected — see docs/CODE_REFERENCE.md).
     private func accept(_ lines: [CompletionLine], for fragment: String) {
         guard fragment == query else { return }
         completions = lines
@@ -185,7 +203,8 @@ final class DestinationSearch {
 
 /// `MKLocalSearchCompleterDelegate` off the main actor (hard rule 1): it copies the two strings
 /// out of each non-Sendable `MKLocalSearchCompletion` together with the fragment they answer, and
-/// hands them to the closures, which hop to the main actor themselves.
+/// hands them to the closures, which hop to the main actor themselves. Holds no mutable state
+/// (two `let` closures), so no `@unchecked Sendable` is needed or declared.
 private nonisolated final class CompleterRelay: NSObject, MKLocalSearchCompleterDelegate {
 
     /// Called with (queryFragment, rows) on every update.

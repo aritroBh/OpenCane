@@ -29,6 +29,14 @@
 //    · The spoken line says what is off *and* that guidance still works (AGENTS.md rule 6: a
 //      refused feature warns loudly but still guides).
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/LaunchRecovery.swift` (`LaunchMode`,
+//  `LaunchRecovery.mode(previousLaunchCompleted:)`, `healthySeconds`, `optionalFeatureKeys`,
+//  `spokenLine(for:)`). Caller: `AppModel.swift` — `Settings.launchMode` checks the on-disk marker
+//  file (`LaunchRecovery.markerName`, a file rather than a UserDefaults key) and removes every
+//  `optionalFeatureKeys` default on `.recovered`; `AppModel.start()` speaks the recovery line and
+//  marks the launch healthy after `healthySeconds`. ⚠ Every new persisted optional feature `AppModel` touches at launch must be
+//  added to `optionalFeatureKeys` and to `recoveryClearsEveryPersistedOptionalFeature`.
+//
 
 import Testing
 @testable import CaneKitLogic

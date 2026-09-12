@@ -7,9 +7,15 @@
 //  folder (visible in the Files app; AirDrop it after a test). Buffered on the main actor and
 //  flushed every 2 s so it never touches the depth queue.
 //
-//  Owner: `AppModel.logger` (one instance); `start()` once from `AppModel.start()`, events from
-//  AppModel's cue router, navigation wiring, route start/stop and watch commands. Module
-//  `navigation-trip` in docs/CODE_REFERENCE.md (record kinds and fields are tabled there).
+//  Owner: `AppModel.logger` (one instance); `start()` once from `AppModel.start()`, `flush()` on
+//  `scenePhaseChanged(.background)`, events from almost every AppModel wiring (cue router,
+//  navigation, route start/stop, watch commands, speech queue callbacks, describer, hazards,
+//  sound watcher, torch, both cameras) and, through `onEvent` closures, from `VoiceInputEngine`
+//  and `ConversationCoordinator`. Module `navigation-trip` in docs/CODE_REFERENCE.md (record
+//  kinds and fields are tabled there). Readers: `ios/scripts/e2e.py` (asserts on it, and fails a
+//  run that contains `field_kind`) and `ios/scripts/cue_audit.py` (Step 35 cue-load audit).
+//  `stop()` has no caller today: the file stays open for the life of the process, and the 2 s
+//  loop plus the background flush are what get lines onto disk.
 //
 //  Threading / isolation: `@MainActor @Observable`. All writes happen on main; file I/O is a
 //  small buffered append every 2 s (or at 16 K characters, or on background / disable).
@@ -21,9 +27,10 @@
 //      nav records via `t`.
 //    · JSON has no NaN/infinity: numbers go through `num`, and invalid objects are dropped.
 //    · `lanes` records stay throttled (`laneRate`); the depth pipeline reports at ~30 Hz normal / up to 60 Hz high-rate.
-//  ⚠ Do not rename `kind` values or fields without updating any log-analysis tooling
-//  (ios/scripts/e2e.py reads them); only the record assembly is unit-tested — verify the file
-//  itself by AirDropping it after a device walk.
+//  Tests: ⚠ only the record assembly is unit-tested (`TripLogRecordTests`,
+//  `fieldsNeverOverwriteTheRecordTimeOrKind`). Do not rename `kind` values or fields without
+//  updating the log-analysis tooling (`ios/scripts/e2e.py`, `ios/scripts/cue_audit.py`) — verify the
+//  file itself by AirDropping it after a device walk.
 //
 
 import CaneKitLogic
@@ -35,29 +42,37 @@ import Observation
 @Observable
 final class TripLogger {
 
-    /// Master switch (settings). Off by default outdoors to save battery? No — logs are cheap;
-    /// default on so no test walk is ever lost.
-    /// Mirrors `AppModel.loggingEnabled`; turning it off flushes what is buffered.
+    /// Master switch (settings "Write trip log"). Default on even though it costs a little
+    /// battery: logs are cheap, and a test walk with no log cannot be analysed afterwards.
+    /// Mirrors `AppModel.loggingEnabled` (set in `AppModel.init` and on every toggle); turning it
+    /// off flushes what is buffered. While off, `event` and `lanes` drop records (not buffered).
     var enabled = true {
         didSet { if !enabled { flush() } }
     }
-    /// `canekit-<ISO 8601, ':' → '-'>.jsonl` in Documents; empty until `start()`.
+    /// `canekit-<ISO 8601, ':' → '-'>.jsonl` in Documents; empty until `start()`. Written into the
+    /// `session` record; no view reads it today.
     private(set) var fileName = ""
-    /// Lines appended this session (buffered or written), for the debug UI.
+    /// Lines appended this session (buffered or written; counted even if the handle never opened).
+    /// No view reads it today (the on-screen debug footer that showed it is gone).
     private(set) var linesWritten = 0
 
     /// Open write handle; nil before `start()` / after `stop()` (events then only buffer).
     @ObservationIgnored private var handle: FileHandle?
-    /// Pending JSONL text not yet written to disk.
+    /// Pending JSONL text not yet written to disk (one `\n`-terminated line per record). Lost if the
+    /// process is killed between flushes — at most ~2 s of records.
     @ObservationIgnored private var buffer = ""
-    /// The 2 s periodic flush loop.
+    /// The 2 s periodic flush loop (main-actor Task); cancelled by `stop()`.
     @ObservationIgnored private var flushTask: Task<Void, Never>?
-    /// AR-clock timestamp of the last `lanes` record (throttle baseline).
+    /// AR-clock timestamp of the last `lanes` record (throttle baseline). Starts at 0, so the first
+    /// report after launch is always logged. Assumes a monotonic report clock: a timestamp lower
+    /// than this value would silence `lanes` until the clock passes it again.
     @ObservationIgnored private var lastLaneLog: TimeInterval = 0
-    /// Logger creation time; every record's `t` is seconds since this.
+    /// Logger creation time (`AppModel` init, i.e. app launch); every record's `t` is seconds since this.
     @ObservationIgnored private let t0 = Date()
 
     /// Lane reports are logged at most this often (Hz); cues and events are always logged.
+    /// The throttle is `1 / laneRate` seconds (0.5 s), so 0 would stop `lanes` records entirely.
+    /// No caller changes it.
     var laneRate: Double = 2
 
     /// Opens nothing; the file is created in `start()`.
@@ -65,9 +80,10 @@ final class TripLogger {
 
     // MARK: Session
 
-    /// Creates this session's file, writes a `session` record and starts the 2 s flush loop.
-    /// Idempotent (`guard handle == nil`). If the file cannot be opened, events still buffer but
-    /// are never written.
+    /// Creates this session's file, writes a `session` record (`file`, `os`) and starts the 2 s
+    /// flush loop. Idempotent (`guard handle == nil`) — but only once the handle opened: if the file
+    /// cannot be opened, events still buffer (and grow) but are never written, and a second call
+    /// would make a new file name and a second flush loop. Called once, from `AppModel.start()`.
     func start() {
         guard handle == nil else { return }
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
@@ -85,7 +101,8 @@ final class TripLogger {
         }
     }
 
-    /// Stops the flush loop, writes what is buffered and closes the file.
+    /// Stops the flush loop, writes what is buffered and closes the file. No caller today (see the
+    /// file header); after it, events buffer in memory and a new `start()` opens a new file.
     func stop() {
         flushTask?.cancel()
         flush()
@@ -98,6 +115,12 @@ final class TripLogger {
     /// Throttled lane snapshot.
     /// Called for every depth report by `AppModel.handle(_:)`; writes at most `laneRate` per second
     /// of AR clock. Depths in metres (2 dp, −1 = invalid), `omega` in rad/s, `cue` = active kind.
+    /// - Parameters:
+    ///   - r: the report (`timestamp` is the ARKit clock, logged as `ar_t`).
+    ///   - cue: `AppModel.activeCue`.
+    ///   - thermal: `ProcessInfo.ThermalState` name.
+    ///   - battery: percent, −1 unknown.
+    ///   - fps: `DepthEngine.fps`, the published depth rate.
     func lanes(_ r: LaneReport, cue: CueKind, thermal: String, battery: Int, fps: Double = 0) {
         guard enabled, r.timestamp - lastLaneLog >= 1.0 / laneRate else { return }
         lastLaneLog = r.timestamp

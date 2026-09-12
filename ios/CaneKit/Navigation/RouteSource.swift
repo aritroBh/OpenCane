@@ -8,9 +8,14 @@
 //  engine never knows the difference.
 //
 //  Owner: module `navigation-trip` (docs/CODE_REFERENCE.md). Stateless; called only by
-//  `AppModel.startDemoRoute()`, `AppModel.navigateToCIFFromHere()` (bundled route's last
-//  waypoint) and `AppModel.buildRoute(to:searchLine:)` (the typed field, Siri "Take me to …",
-//  "Navigate to CIF from here").
+//  `AppModel.startDemoRoute()` (`bundled()`), `AppModel.navigateToCIFFromHere()` (`bundled()` for
+//  the route's last waypoint) and `AppModel.buildRoute(to:searchLine:)` (`walking(to:from:)` for
+//  the typed field, a tapped suggestion, Siri "Take me to …", the conversational fast path /
+//  `navigate_to` tool, and "Navigate to CIF from here"). `DestinationSearch` reads `searchRadiusM`.
+//
+//  Tests: `RouteTests` (`mapKitStepsBecomeWaypoints`, `shippedRouteFileIsConsistent`),
+//  `CampusPlacesTests` (`searchPicksTheNearestReasonableResult`,
+//  `gazetteerEndpointsAreTheRouteFileEntrances`). The MapKit calls themselves are untested (network).
 //
 //  Threading / isolation: static functions, main actor by the target default. The MapKit calls
 //  are async (MKLocalSearch / MKDirections suspend; results return on the main actor).
@@ -45,7 +50,8 @@ enum RouteDestination: Sendable, Equatable {
 }
 
 /// A MapKit walking route plus what to say before it starts.
-/// Returned by `RouteSource.walking(to:from:)`; consumed by `AppModel.buildRoute`.
+/// Returned by `RouteSource.walking(to:from:)`; consumed by `AppModel.buildRoute`, which logs a
+/// `destination` record (`name`, `meters`, `waypoints`) and speaks `WalkingIntro.line` from it.
 struct PlannedRoute {
     /// The waypoints to guide along (name "To <place>").
     let route: Route
@@ -62,8 +68,9 @@ enum RouteSource {
     /// side; results outside `DestinationPicker.maxDistanceM` (the same 3 km) are rejected anyway.
     static let searchRadiusM: Double = 3000
 
-    /// The bundled ISR → CIF route. Throws if the file is missing or malformed.
+    /// The bundled ISR → CIF route (`Resources/route_isr_cif.json`, decoded by `Route.load(from:)`).
     /// Throws `RouteError.missingBundledRoute` when absent, or the decoder's error when malformed.
+    /// Reads the file on every call (no cache); synchronous, main actor.
     static func bundled() throws -> Route {
         guard let url = Bundle.main.url(forResource: "route_isr_cif", withExtension: "json") else {
             throw RouteError.missingBundledRoute
@@ -72,8 +79,10 @@ enum RouteSource {
     }
 
     /// Walking directions from `origin` to `destination` (a search text or a known entrance).
-    /// Called by `AppModel.buildRoute` once a GPS fix exists. Needs network.
-    /// Throws `RouteError.destinationNotFound` / `.noRoute`, or MapKit's own errors.
+    /// Called by `AppModel.buildRoute` once a GPS fix exists (any accuracy). Needs network.
+    /// Throws `RouteError.destinationNotFound` / `.noRoute`, or MapKit's own errors (their
+    /// `localizedDescription` is shown and spoken). `buildRoute`'s generation check discards a
+    /// result that arrives after Stop or after a newer request.
     static func walking(to destination: RouteDestination, from origin: CLLocationCoordinate2D) async throws -> PlannedRoute {
         switch destination {
         case .query(let text):
@@ -89,8 +98,10 @@ enum RouteSource {
     /// 2. Otherwise MKLocalSearch restricted to a 3 km radius around `origin` (points of interest
     ///    and addresses) and `DestinationPicker.pick` — the nearest result in range, preferring
     ///    names that contain every word typed. MapKit's "no results" becomes
-    ///    `RouteError.destinationNotFound`.
-    /// Then `directions(to:name:from:)`.
+    ///    `RouteError.destinationNotFound`. Why never MapKit's first answer: it ranks famous
+    ///    matches anywhere ("Grainger" → an industrial supply store), and the walker cannot see it
+    ///    (Step 13, `DestinationPicker`).
+    /// Then `directions(to:name:from:)`. A result with no `name` is spoken as the typed text.
     static func mapKit(to destination: String, from origin: CLLocationCoordinate2D) async throws -> PlannedRoute {
         if let place = CampusPlaces.match(destination) {
             return try await directions(to: mapItem(at: place.coordinate), name: place.name, from: origin)
@@ -121,8 +132,10 @@ enum RouteSource {
     }
 
     /// MKDirections `.walking` from `origin` to `item`; the first route's steps become waypoints
-    /// through `RouteBuilder` (arrival line "Arrived at <name>."). Throws `RouteError.noRoute`
-    /// when MapKit returns no route or a route with no usable step (already there).
+    /// through `RouteBuilder` (arrival line "Arrived at <name>."; 15 m fences, 20 m arrival;
+    /// `crossing` when the next instruction says "cross"; never `curved`). Throws `RouteError.noRoute`
+    /// when MapKit returns no route or a route with no usable step (already there). The route is
+    /// named "To <name>" (spoken in the "Route started. …" intro).
     private static func directions(to item: MKMapItem, name: String, from origin: CLLocationCoordinate2D) async throws -> PlannedRoute {
         let request = MKDirections.Request()
         request.source = MKMapItem(location: CLLocation(latitude: origin.latitude, longitude: origin.longitude), address: nil)
@@ -149,7 +162,9 @@ enum RouteSource {
     }
 }
 
-/// Route-building failures. `errorDescription` is shown as `AppModel.routeError` and spoken.
+/// Route-building failures. `errorDescription` is shown as `AppModel.routeError` and spoken
+/// ("Could not build a route. <description>" from `buildRoute`; "Route file missing." for
+/// `.missingBundledRoute` from `startDemoRoute` / `navigateToCIFFromHere`).
 enum RouteError: LocalizedError {
     /// `route_isr_cif.json` is not in the app bundle.
     case missingBundledRoute
@@ -168,8 +183,10 @@ enum RouteError: LocalizedError {
     }
 }
 
+/// File-private MapKit helper for `RouteSource.directions`.
 private extension MKPolyline {
-    /// All vertices of the polyline, in order (copied out with `getCoordinates`).
+    /// All vertices of the polyline, in order (copied out with `getCoordinates`). An empty
+    /// polyline gives `[]`, which `RouteBuilder` drops as an unusable step.
     var coordinates: [CLLocationCoordinate2D] {
         var out = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: pointCount)
         getCoordinates(&out, range: NSRange(location: 0, length: pointCount))

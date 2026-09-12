@@ -15,6 +15,15 @@
 //    · AirPods beat the camera; with neither, the beacon gets 0 (compass only) — the behaviour
 //      that shipped before either source existed.
 //
+//  Types pinned: `FaceYawGeometry` (forward axis → world yaw; nil below
+//  `minimumHorizontalMagnitude` 0.15), `FaceYawTracker` (reference, `smoothing` 0.35, `maxAge`
+//  0.7 s, `maxJump` 45° with 3 consecutive rejections, `publishInterval` 1/15 s) and
+//  `HeadYawSelector`. Callers: `FaceHeadPose` (app, owns the tracker, fed by `DepthEngine`'s face
+//  anchor relay) and `AppModel` (`HeadYawSelector.choose` → `BeaconEngine.setHeadYaw`).
+//  Breaks these catch: a flipped sign (beacon pans the wrong way), a yaw published before any
+//  recenter, a stale face steering the beacon, a single anchor glitch jerking it, a NaN silencing
+//  the audio graph, and the head yaw double-counting a body turn while a recenter is pending.
+//
 
 import Testing
 @testable import CaneKitLogic

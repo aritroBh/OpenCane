@@ -3,20 +3,29 @@
 //  CaneKit Watch
 //
 //  Watch side of the link: receives cues from the phone and plays them on the wrist, sends
-//  Next / Describe / Recenter back, and keeps itself alive with a walking workout session so
-//  `WKInterfaceDevice.play` keeps working with the wrist down (it no-ops when the app is not
-//  frontmost). If HealthKit is refused or the workout fails, falls back to an extended runtime
-//  session (`WKBackgroundModes: mindfulness`).
+//  Repeat / Next / Describe / Recenter back, and keeps itself alive with a walking workout session
+//  so `WKInterfaceDevice.play` keeps working with the wrist down (it no-ops when the app is not
+//  frontmost). If HealthKit is unavailable or refused, or the workout fails, falls back to an
+//  extended runtime session (`WKBackgroundModes: mindfulness`).
 //
-//  Haptic map (spec): turnLeft → .directionUp, turnRight → .directionDown, crossing →
-//  .notification, arrived → .success, obstacle → .failure. Mirrored obstacle cues: left → .start,
-//  right → .stop, center → .click, head → .failure.
+//  Haptic map: turnLeft (and "Veer left.") → .directionUp, turnRight (and "Veer right.") →
+//  .directionDown, crossing → .notification, arrived → .success, nav `.obstacle` → .failure (the
+//  case exists in `NavCue` but the phone never sends it). Mirrored obstacle cues: left → .start,
+//  right → .stop, center (also a LiDAR ground hazard) → .click, head → .failure. Button presses:
+//  .click when sent, .retry when they could not be sent or the phone is older than the watch.
 //
-//  Implements the "Shown (watch)" column of docs/design.md §5 and the crown rule of §6.6.
-//  Deviation from §5: each cue is one pattern (no ×2 / ×3 repeats, no leading `.stop` on a
-//  crossing) and turnRight is `.directionDown` rather than `.directionUp` ×3.
-//  AGENTS.md: `.failure` means head height (and the phone's generic obstacle cue); send failures
-//  use `.retry`, never `.failure`.
+//  Implements the wrist columns of docs/design.md §5.2–§5.4 and the §6.6 haptic table and crown
+//  rule; design.md now matches this map (each cue is one system pattern, played once).
+//  AGENTS.md "deliberate": `.failure` is reserved for head height; send failure and "phone app
+//  too old" use `.retry`, never `.failure`.
+//
+//  Owner / callers: one instance, created by `WatchApp`, started by `WatchContentView`'s `.task`.
+//  Phone counterpart: `ios/CaneKit/Watch/PhoneWatchLink.swift` (wire contract: CaneKitLogic
+//  `WatchMessage.swift`). Module `watch-widget-shared` in docs/CODE_REFERENCE.md.
+//  Tests: the envelope is pinned by CaneKitLogic `WatchMessageTests`, the crown gesture by the
+//  `crown…` tests in `NavSupportTests`. The haptic map, reply handling and keep-alive have no
+//  automated test (no watch test bundle): CHANGELOG "Step 5 — Watch" device test ("lower the wrist
+//  for 30 s → cues still arrive") and docs/devices_setup.md.
 //
 //  Accessibility contract: no UI of its own. The strings it publishes (`instruction`,
 //  `lastError`) are shown and read by WatchContentView.
@@ -40,41 +49,58 @@ final class WatchModel {
 
     // MARK: Published
 
-    /// Current instruction text from the phone.
+    /// Current instruction text from the phone's `.status` (`NavigationEngine.instruction`: the
+    /// waypoint line, "Arrived: <say>" on arrival, "No route" when idle). The prefixes "Arrived"
+    /// and "No route" also drive `updateKeepAlive`.
     var instruction = "Waiting for the phone"
-    /// Distance to the next waypoint in metres, if known.
+    /// Whole metres to the next waypoint; nil until the first status and whenever the phone sends
+    /// its -1 "unknown" sentinel. Shown as the navigation title.
     var distanceM: Int?
-    /// Whether the phone app is reachable over WatchConnectivity.
+    /// `WCSession.isReachable` as last reported by the relay (live messaging to the phone is
+    /// possible right now). Drives the phone-link glyph; `send` re-checks the live session itself
+    /// rather than trusting this copy.
     var phoneReachable = false
-    /// Last cue played (for the small status line).
+    /// Last cue played: `NavCue.rawValue` or "obstacle <kind>". Debug state only — no view shows
+    /// it since the watch footer was removed.
     private(set) var lastCue = "—"
-    /// "workout" / "runtime" / "none" — how we stay frontmost, only set once the session is running.
+    /// How the app stays frontmost: "workout" / "runtime" / "runtime (expiring)" / "none". Set to a
+    /// running value only once the session reports running. Debug state only — not rendered; the
+    /// code compares it as a string, so keep the literals in step with `updateKeepAlive`.
     private(set) var keepAlive = "none"
-    /// Last user-visible problem ("Phone not reachable", "Update the phone app", a HealthKit or
-    /// session error); nil after a successful send. Shown in red under the buttons.
+    /// Last user-visible problem ("Phone not reachable", "Update the phone app", a transport error,
+    /// "HealthKit refused", "Workout: …", "Runtime session: …"); cleared when a send is attempted
+    /// on a reachable link and when the workout reports running. Shown in red under the buttons.
     private(set) var lastError: String?
 
     // MARK: Private
 
     /// Guards `start()` against SwiftUI running `.task` more than once.
     @ObservationIgnored private var started = false
-    /// WCSession delegate relay (off-main callbacks → main actor).
+    /// WCSession delegate relay (off-main callbacks → main actor). Held strongly here because
+    /// `WCSession.delegate` does not keep it alive on its own.
     @ObservationIgnored private let relay = WatchSessionRelay()
-    /// HealthKit store used only to authorise and run the walking workout.
+    /// HealthKit store used only to authorise and run the walking workout (the `stepCount` read
+    /// grant it asks for serves the phone's arrival summary; nothing here reads steps).
     @ObservationIgnored private let healthStore = HKHealthStore()
-    /// The running walking workout, if the preferred keep-alive succeeded.
+    /// The walking workout that was started, from `startActivity` until it ends, fails or is
+    /// stopped. Non-nil before it reports `.running`, so it also blocks a duplicate start; the
+    /// relay's stale-callback guard compares against its identity.
     @ObservationIgnored private var workout: HKWorkoutSession?
     /// Strong reference to the workout delegate relay (the session holds it weakly).
     @ObservationIgnored private var workoutRelay: WorkoutRelay?
-    /// The fallback extended runtime session, if the workout path failed.
+    /// The fallback extended runtime session, from `startRuntimeSession` until it invalidates or
+    /// is stopped; non-nil means "never start a second one".
     @ObservationIgnored private var runtime: WKExtendedRuntimeSession?
-    /// Strong reference to the runtime-session delegate relay.
+    /// Strong reference to the runtime-session delegate relay (the session holds it weakly).
     @ObservationIgnored private var runtimeRelay: RuntimeRelay?
-    /// CaneKitLogic.CrownAccumulator (unit-tested): 3 detents within 1 s of the first, 0.8 s debounce.
+    /// CaneKitLogic.CrownAccumulator (unit-tested): 3 detents within 1 s of the first, 0.8 s
+    /// debounce. A value type: `move` mutates it in place through this `var`.
     @ObservationIgnored private var crown = CrownAccumulator()
-    /// Pending delayed keep-alive stop (see `updateKeepAlive`).
+    /// Pending delayed keep-alive stop, scheduled 60 s after an "Arrived…" status and cancelled
+    /// by any later status (see `updateKeepAlive`).
     @ObservationIgnored private var stopTask: Task<Void, Never>?
-    /// True while HealthKit authorization for a keep-alive start is pending.
+    /// True while HealthKit authorization for a keep-alive start is pending, so a status arriving
+    /// meanwhile cannot start a second workout.
     @ObservationIgnored private var keepAliveStarting = false
 
     /// Creates an idle model; nothing is activated until `start()`.
@@ -85,8 +111,11 @@ final class WatchModel {
     /// Idempotent: SwiftUI's `.task` can run more than once per app lifetime.
     ///
     /// Wires the relay callbacks, activates `WCSession` and starts the keep-alive. On every
-    /// reachability change it also replays the latest application context, so a status sent
-    /// while the watch was asleep still updates the screen.
+    /// reachability callback (activation completing, then each change) it also replays the latest
+    /// application context, so a status sent while the watch was asleep still updates the screen.
+    /// Replaying is harmless: a `.status` only sets text, and the context never carries a haptic
+    /// cue (the phone sends cues live only). Does nothing — not even the keep-alive — where
+    /// `WCSession` is unsupported. Called from `WatchContentView`'s `.task` on the main actor.
     func start() {
         guard !started, WCSession.isSupported() else { return }
         started = true
@@ -112,7 +141,9 @@ final class WatchModel {
     // MARK: Incoming
 
     /// Applies one decoded phone message: plays the wrist haptic for a nav / obstacle cue, or
-    /// updates `instruction` / `distanceM` for a status (distance -1 from the phone = unknown).
+    /// updates `instruction` / `distanceM` for a status (distance -1 from the phone = unknown) and
+    /// lets `updateKeepAlive` start or schedule the stop of the keep-alive. Main actor only (the
+    /// relay closures hop here).
     private func handle(_ msg: PhoneToWatch) {
         switch msg {
         case .nav(let cue):
@@ -128,7 +159,9 @@ final class WatchModel {
         }
     }
 
-    /// Wrist pattern for a navigation cue (see the haptic map in the file header).
+    /// Wrist pattern for a navigation cue (see the haptic map in the file header). ⚠ Changing a
+    /// pattern needs the CHANGELOG Step 5 device test (four distinguishable wrist taps) and the
+    /// design.md §6.6 table in the same commit; `.failure` stays reserved for head height.
     private static func haptic(for cue: NavCue) -> WKHapticType {
         switch cue {
         case .turnLeft: return .directionUp
@@ -139,7 +172,9 @@ final class WatchModel {
         }
     }
 
-    /// Wrist pattern for a mirrored obstacle cue; nil for `.clear` (nothing to play).
+    /// Wrist pattern for a mirrored obstacle cue; nil for `.clear` (nothing to play). The phone
+    /// sends these only when it cannot buzz (engine down or "Silence haptics") or "Mirror obstacle
+    /// cues to the watch" is on, at most one per kind per second (`PhoneWatchLink`).
     private static func haptic(forObstacle kind: CueKind) -> WKHapticType? {
         switch kind {
         case .left: return .start
@@ -159,9 +194,14 @@ final class WatchModel {
 
     /// Sends a command; the wrist clicks only when the phone can actually receive it.
     ///
-    /// Unreachable → `lastError = "Phone not reachable"` + `.retry`. Reachable → `.click` at once;
-    /// if the phone later replies `ok == false` (an older phone build) → "Update the phone app"
-    /// + `.retry`; a transport error sets `lastError` to its description.
+    /// Not activated / unreachable / unencodable → `lastError = "Phone not reachable"` + `.retry`.
+    /// Reachable → `lastError = nil`, `sendMessage` with a reply handler, and `.click` at once (the
+    /// confirm does not wait for the reply). The phone answers `["ok": Bool]` immediately on its
+    /// WatchConnectivity queue: `ok == false` (the phone build does not know this command, e.g.
+    /// Repeat on an older phone) → "Update the phone app" + `.retry`; a missing `ok` key counts as
+    /// ok. A transport error → `lastError` = its description + `.retry` (Muse M8: the wrist already
+    /// clicked "sent", so a late failure must be felt too). No retry or queueing: a command is
+    /// only meaningful now.
     /// - Parameter cmd: Next / Describe / Recenter / Repeat, from the buttons or the crown.
     func send(_ cmd: WatchToPhone) {
         let session = WCSession.default
@@ -195,6 +235,9 @@ final class WatchModel {
     /// - Parameters:
     ///   - delta: crown change since the last callback (detents; sign = direction).
     ///   - now: wall-clock seconds (`Date().timeIntervalSinceReferenceDate` from the view).
+    /// ⚠ The numbers live in `CrownAccumulator` and are pinned by
+    /// `crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve` and
+    /// `crownDebouncesBackToBackGestures`; device test "crown three clicks → phone says 'Next.'".
     func crownMoved(delta: Double, now: TimeInterval) {
         if crown.move(delta: delta, now: now) { send(.nextWaypoint) }
     }
@@ -203,6 +246,13 @@ final class WatchModel {
 
     /// Prefer a walking workout (high-priority background, haptics play wrist-down); fall back to
     /// an extended runtime session if HealthKit is unavailable, refused, or the workout fails.
+    ///
+    /// Asks to share workouts and read step count (the phone's arrival summary merges the
+    /// watch's steps). Note HealthKit's `ok` only says the request was processed, not that the
+    /// walker granted it; a denied grant is expected to surface as a workout failure, which falls
+    /// back through the relay like any other failure (not verified on a device). Called by
+    /// `start()` at launch and by
+    /// `updateKeepAlive` when a route's status arrives with nothing running.
     private func startKeepAlive() {
         // One start at a time: HealthKit authorization is async, and a second call while it is
         // pending would start two workout sessions (review).
@@ -225,6 +275,12 @@ final class WatchModel {
 
     /// Starts an outdoor walking `HKWorkoutSession`. `keepAlive` becomes "workout" when it
     /// reports running; if it ends or fails underneath us, falls back to the runtime session.
+    ///
+    /// Only `startActivity` is called — no `HKLiveWorkoutBuilder`, so nothing is collected or
+    /// saved; the session exists for its background priority. Intermediate states before the
+    /// first `.running` (e.g. `.prepared`) do not trigger the fallback. Each relay callback is
+    /// checked against this session's `ObjectIdentifier` so a stale session cannot clear a newer
+    /// one (review round 5). A throwing init → `lastError = "Workout: …"` + runtime session.
     private func startWorkout() {
         let config = HKWorkoutConfiguration()
         config.activityType = .walking
@@ -258,7 +314,10 @@ final class WatchModel {
     }
 
     /// Starts the fallback `WKExtendedRuntimeSession` (once; no-op if one already exists).
-    /// `keepAlive` becomes "runtime" while it runs and "none" when it expires or invalidates.
+    /// `keepAlive` becomes "runtime" while it runs, "runtime (expiring)" when the system warns it
+    /// will expire (still running), and "none" when it invalidates. There is no automatic re-arm
+    /// after invalidation: the next route's status restarts the chain via `updateKeepAlive`.
+    /// The session type comes from `WKBackgroundModes` (`mindfulness`) in the watch Info.plist.
     private func startRuntimeSession() {
         guard runtime == nil else { return }
         let session = WKExtendedRuntimeSession()
@@ -284,10 +343,17 @@ final class WatchModel {
         session.start()
     }
 
-    /// Ends whichever keep-alive session is running and resets `keepAlive` to "none".
-    /// The workout keep-alive only while a route runs (Muse M7: it never stopped, draining the
-    /// watch all demo day). "No route" / "Arrived…" → stop (after 60 s on arrival, so the arrival
-    /// tap and summary still land); any other instruction → (re)start.
+    /// Starts or schedules the end of the keep-alive from a status line, so the workout runs only
+    /// around a route (Muse M7: it never stopped, draining the watch all demo day).
+    ///
+    /// Every status first cancels a pending stop. Then: "Arrived…" (the phone sends
+    /// "Arrived: <say>") → if anything is running, `stopKeepAlive()` 60 s later, so the arrival tap
+    /// and summary still land (a replayed "Arrived…" context restarts that countdown); "No route…"
+    /// → nothing, deliberately (see the inline note; Step 12 rejected stopping here, Step 20 added
+    /// the guard so an idle "No route" does not start one); any other text with nothing running
+    /// or starting → `startKeepAlive()`.
+    /// ⚠ Device test: "arrive → the workout ends about a minute later; start another route → wrist
+    /// cues work again".
     private func updateKeepAlive(forInstruction text: String) {
         // Only arrival ends the keep-alive (after 60 s, so the arrival tap and summary land).
         // "No route" does NOT: a suspended watch could never restart it for the next route
@@ -305,6 +371,12 @@ final class WatchModel {
         }
     }
 
+    /// Ends whichever keep-alive session exists (workout `end()`, runtime `invalidate()`), clears
+    /// both references first-hand and resets `keepAlive` to "none". The sessions' own end
+    /// callbacks then fail the identity guard and are ignored, so a deliberate stop never shows
+    /// an error or triggers the fallback. Internal access, but the only caller today is
+    /// `updateKeepAlive`'s delayed arrival stop. Does not cancel `stopTask` or a pending
+    /// HealthKit authorization.
     func stopKeepAlive() {
         workout?.end()
         workout = nil
@@ -318,24 +390,29 @@ final class WatchModel {
 
 /// `WCSessionDelegate` relay: forwards decoded phone messages and reachability changes through
 /// `@Sendable` closures; `WatchModel` hops them onto the main actor. `@unchecked Sendable` is
-/// safe here because the closures are set once in `start()` before the session activates.
+/// safe here because the closures are set once in `start()` before the session activates, and
+/// the relay itself never touches main-actor state. Undecodable payloads (a newer phone's case)
+/// are dropped silently — the watch has nothing useful to do with them. No
+/// `sessionDidBecomeInactive` / `sessionDidDeactivate`: those are iOS-only delegate methods.
 nonisolated private final class WatchSessionRelay: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// Called with every decodable message or application context from the phone.
     var onMessage: (@Sendable (PhoneToWatch) -> Void)?
     /// Called with `isReachable` after activation and on every reachability change.
     var onReachability: (@Sendable (Bool) -> Void)?
 
-    /// Activation finished: report the initial reachability.
+    /// Activation finished: report the initial reachability (which also makes `WatchModel` replay
+    /// the stored application context). The activation error is not surfaced.
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         onReachability?(session.isReachable)
     }
 
-    /// The phone app came or went.
+    /// Live messaging to the phone became possible or stopped being possible.
     func sessionReachabilityDidChange(_ session: WCSession) {
         onReachability?(session.isReachable)
     }
 
-    /// Live message (sent while reachable): cues and status updates.
+    /// Live message (sent while reachable): cues and status updates. The phone sends these with
+    /// no reply handler, so this variant is the only one needed.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         if let msg = WatchEnvelope.decodePhoneToWatch(message) { onMessage?(msg) }
     }
@@ -346,7 +423,9 @@ nonisolated private final class WatchSessionRelay: NSObject, WCSessionDelegate, 
     }
 }
 
-/// Reports whether the workout session is running; `error` is a description on failure.
+/// Reports whether the workout session is running; `error` is a description on failure. Every
+/// non-running state (`.prepared`, `.paused`, `.stopped`, `.ended`) reports `false`; `WatchModel`
+/// decides whether that means "fell over" (it was running, or there is an error).
 nonisolated private final class WorkoutRelay: NSObject, HKWorkoutSessionDelegate, @unchecked Sendable {
     /// `(running, error)` callback; immutable after init.
     private let onChange: @Sendable (_ running: Bool, _ error: String?) -> Void
@@ -365,8 +444,10 @@ nonisolated private final class WorkoutRelay: NSObject, HKWorkoutSessionDelegate
     }
 }
 
-/// What happened to the extended runtime session.
+/// What happened to the extended runtime session — a Sendable summary so no framework object
+/// crosses into the main actor.
 nonisolated private enum RuntimeEvent: Sendable {
+    /// The session is running (`extendedRuntimeSessionDidStart`).
     case started
     /// About to expire, but still running (the session is not gone yet).
     case expiring

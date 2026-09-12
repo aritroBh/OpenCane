@@ -33,7 +33,15 @@
 //      `spokenPhrasesStayInsideTheCharacterBudget` fails the build if it grows past it. Each line
 //      is cached on disk forever after its first synthesis, so the spend is one-time.
 //
-//  Tests: SpokenPhrasesTests.swift — completeness is proven by sweeping the *production*
+//  Owner / callers: `AppModel.start()` sets `SpeechQueue.backgroundLines = warningLines` (74 lines,
+//  1,718 characters today), which `SpeechQueue.prefetch` appends to every batch after the route
+//  lines, and `ElevenLabsVoice.prefetch` synthesizes what `VoicePrefetch.queue` says is missing.
+//  `ObstacleNamer` reads `obstacleMaxDistance` / `wallMaxDistance` and calls `obstacleLine`;
+//  `CueSpeechPolicy` calls `approachLine`. Fixed cue lines ("Head height.", "Left.", "Right.") are
+//  in `AppModel.commonLines`, not here.
+//  Isolation: nonisolated; the sets are lazily initialised `static let`s, safe from any task.
+//
+//  Tests: SpokenPhrasesTests.swift (12) — completeness is proven by sweeping the *production*
 //  functions over the production ranges and asserting every result is a member of these sets.
 //
 
@@ -42,14 +50,17 @@ import Foundation
 /// The complete set of spoken warning lines the app can generate from a template, plus the line
 /// templates themselves.
 ///
-/// Used by `SpeechQueue.prefetch` (through `AppModel`) to warm the natural-voice cache at launch so
-/// that warnings — which must never wait for the network — still come out in the natural voice.
+/// Used as `SpeechQueue.backgroundLines` (set by `AppModel.start()`, appended to every prefetch
+/// batch) to warm the natural-voice cache so that warnings — which must never wait for the
+/// network — still come out in the natural voice. A standing tail rather than one launch batch,
+/// because the first warning that misses the cache starts its own batch and would cancel it.
 /// Everything here is a pure function of the logic package's own tuning constants.
 public enum SpokenPhrases {
 
     // MARK: Distance limits (the reachable range of each warning kind)
 
-    /// How far ahead a classified mesh face is still named ("table ahead, two meters"), metres.
+    /// How far ahead a classified mesh face is still named ("Two meters ahead, table"), metres.
+    /// Exclusive: the namer speaks only when `distance < obstacleMaxDistance`.
     /// The default of `ObstacleNamer.maxDistance` (the app) lives here so the enumeration below
     /// covers exactly the distances the namer can speak — AGENTS.md hard rule 3 (a number with a
     /// metre on it belongs in CaneKitLogic with a test).
@@ -127,21 +138,23 @@ public enum SpokenPhrases {
     // MARK: Line sets
 
     /// Every obstacle name the mesh classifier can speak, at every distance phrase it can reach:
-    /// "window ahead, one and a half meters" and 31 siblings.
+    /// "One and a half meters ahead, window" and 31 siblings (four nouns × 7 phrases below 3 m,
+    /// plus "wall" × 4 phrases below 1.5 m).
     ///
     /// `ObstacleClass.spokenName` supplies the nouns (nil-named classes — none, floor, ceiling —
     /// are never announced) and `bucketSamples` the distances, with walls cut off at
     /// `wallMaxDistance` because `ObstacleNamer` only names a wall when it is close. Since Step 36
     /// names are off by default and `CueRules` never lets a wall through, so the wall lines here are
     /// prefetched but unreachable; kept so a future level that names walls needs no prefetch change
-    /// (a few kB of cache). Prefetched first because, when names are on, they are the most frequent.
+    /// (a few kB of cache). Prefetched first because, when names are on, they are the most frequent
+    /// warning line.
     public static let obstacleNameLines: [String] = ObstacleClass.allCases.flatMap { cls -> [String] in
         guard let name = cls.spokenName else { return [] }
         let limit = cls == .wall ? wallMaxDistance : obstacleMaxDistance
         return bucketSamples(from: 0, below: limit).map { obstacleLine(name: name, distance: $0) }
     }
 
-    /// The centre-approach cue lines ("Ahead, half a meter." … "Ahead, two meters.").
+    /// The centre-approach cue lines ("Half a meter ahead." … "Two meters ahead." — four lines).
     ///
     /// `CueDecider` fires `.centerApproach` with a distance clamped into
     /// `[centerNear, center + hysteresis)` — it enters the centre zone below `center` and only
@@ -155,7 +168,8 @@ public enum SpokenPhrases {
             .map { approachLine(distance: $0) }
     }()
 
-    /// Every ground-hazard line ("Drop-off ahead, two meters." … "Low obstacle ahead, 3.5 meters.").
+    /// Every ground-hazard line ("One and a half meters ahead, drop-off." … "3.5 meters ahead, low
+    /// obstacle." — 4 kinds × 5 phrases = 20 lines).
     ///
     /// Built with `GroundHazard.spokenLine` itself, at the distances `GroundHazardDetector` can
     /// actually report: it only looks past `Config.nearMax`, bins the scan in `Config.binSize`
@@ -188,7 +202,8 @@ public enum SpokenPhrases {
     /// `SignPolicy.phrases` is a closed table of 18 safety and wayfinding phrases and the line is
     /// always `"Sign: " + phrase.lowercased() + "."`, so the whole set is 18 lines. Sign reading is
     /// **on** by default and the lines are spoken at `.obstacle` priority, so without this they
-    /// are exactly the kind of line that arrives in the system voice mid-walk.
+    /// are exactly the kind of line that arrives in the system voice mid-walk. All 18 stay here
+    /// even when `CueRules.allowedSignPhrases` (Quiet / Indoors) narrows what may be read.
     public static let signLines: [String] = SignPolicy.phrases.map { "Sign: \($0.lowercased())." }
 
     /// Everything above, in the order it should be synthesized: the lines the walker hears
@@ -196,9 +211,11 @@ public enum SpokenPhrases {
     ///
     /// `VoicePrefetch.queue` preserves this order, drops repeats and drops anything already
     /// cached, and only `VoicePrefetch.maxConcurrent` (2) requests are in flight, so order decides
-    /// which lines are warm first on a slow network. Obstacle names (on by default, every few
-    /// seconds indoors) come before the approach cues (only spoken when the phone cannot buzz),
-    /// then signs (on by default, at most one a minute), then ground hazards (off by default).
+    /// which lines are warm first on a slow network. Obstacle names (the most frequent line when on;
+    /// since Step 36 off by default, and Quiet / Indoors never name anything) come before the
+    /// approach cues (only spoken when the phone cannot buzz), then signs (on by default, each
+    /// phrase at most once a minute), then ground hazards (off by default). The order predates the
+    /// Step 36 default flip and is pinned by `warningLinesAreOrderedByHowOftenTheyAreHeard`.
     public static let warningLines: [String] =
         obstacleNameLines + approachLines + signLines + groundHazardLines
 

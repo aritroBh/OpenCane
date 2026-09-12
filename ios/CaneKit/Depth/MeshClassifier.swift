@@ -4,9 +4,18 @@
 //
 //  Names what is straight ahead: takes the centre-window depth, projects it into world space
 //  along the camera's forward axis, then finds the nearest classified face across the
-//  ARMeshAnchors within reach. Runs on the depth queue, throttled to ~4 Hz by the processor.
+//  ARMeshAnchors within reach. Runs on the depth queue, throttled by the processor to every 8th
+//  published report (`ProcessorSettings.meshEveryNthFrame`: ≈ 3.75 Hz at 30 Hz, 7.5 Hz at 60 Hz).
 //
-//  Step 2 ships the geometry; step 4 wires the result into speech ("Two meters ahead, door").
+//  Step 2 shipped the geometry; step 4 wired the result into speech ("Two meters ahead, door")
+//  through `LaneReport.centerHit` → `ObstacleNamer` (trusted frames only). Since Step 36 the spoken
+//  names are **off by default** (`AppModel.obstacleNamesEnabled`), but the lookup still runs while
+//  mesh classification is on: the hit also feeds the on-device describer's LiDAR context line
+//  ("The obstacle ahead looks like a door."). The thermal watchdog turns mesh (and this lookup)
+//  off at `.serious` or worse.
+//
+//  Tests: none can build an `ARMeshAnchor`; `mappingVerified` asserts the class table in debug
+//  builds, and the rest is verified on the phone with mesh on.
 //
 //  Threading / isolation: a `nonisolated` caseless enum of static, stateless functions. The only
 //  caller is `DepthFrameProcessor.session(_:didUpdate:)` on the depth queue, so the `ARFrame` and
@@ -54,7 +63,10 @@ nonisolated enum MeshClassifier {
     /// `maxFaceDistance`, with `distance = centerDepth`.
     ///
     /// Returns nil when the depth is out of the 0.1–5 m window, no classified mesh anchor is near,
-    /// or no sampled face centroid is within 25 cm. The camera's forward axis is
+    /// or no sampled face centroid is within 25 cm. The winning face's class byte is read at
+    /// `f * classification.stride`; an unknown raw value is skipped, and an `ObstacleClass` with no
+    /// matching case becomes `.none`. Anchors are visited in `frame.anchors` order, so once
+    /// `faceBudget` runs out the remaining anchors are not scanned at all. The camera's forward axis is
     /// used even in portrait (the lens axis does not rotate with the device). Runs on the depth
     /// queue; called every `meshEveryNthFrame`th published frame.
     /// - Parameters:

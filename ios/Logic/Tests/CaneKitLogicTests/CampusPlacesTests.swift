@@ -7,6 +7,15 @@
 //  MapKit's first match", and the confirmation line spoken before a MapKit route starts
 //  ("Walking to Grainger Engineering Library, 750 meters.").
 //
+//  Breaks these catch: a fuzzy or partial alias match that routes "Grainger Street" to the library
+//  (partial names must fall through to MapKit); a gazetteer entrance that drifts from the route
+//  file's own first / last waypoint; a renamed place id that silently breaks the Siri
+//  `CampusDestination` AppEnum; MapKit's first result winning again (the phone bug: a Grainger
+//  supply store across town); a 40 km "nearest" result instead of "not found"; a confirmation
+//  line that says "0 meters" or drops the weak-GPS exit-first clause (Step 31).
+//  Callers of the pinned code: `RouteSource` (`CampusPlaces.match`, `DestinationPicker.pick`),
+//  `AppModel` (`WalkingIntro.line`). Pure Foundation, runs on Linux CI too.
+//
 //  Key invariants / fixtures:
 //    · `cif` is the CIF east entrance (last waypoint of route_isr_cif.json); `north(m)` / `east(m)`
 //      move a point by metres, so picker distances are exact rather than hand-computed.
@@ -20,6 +29,8 @@ import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// The CIF east entrance (gazetteer id "cif", last waypoint of route_isr_cif.json): the origin
+/// every picker distance below is measured from.
 private let cif = Coordinate(latitude: 40.11242, longitude: -88.22788)
 
 /// `cif` moved `m` metres north (negative = south).

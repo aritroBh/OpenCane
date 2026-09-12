@@ -4,8 +4,22 @@
 # Targets
 #   CaneKit        iPhone app (iOS 26+)          bundle id com.aritro.canekit
 #   CaneKitWatch   watchOS companion (26+)       bundle id com.aritro.canekit.watchkitapp
-#   CaneKitWidget  Live Activity extension       bundle id com.aritro.canekit.widget   [added in step 9]
-# All three share the pure-logic SwiftPM package in ./Logic.
+#   CaneKitWidget  Live Activity extension       bundle id com.aritro.canekit.widget   [added in steps 8–9]
+#   CaneKitUITests XCUITests + screenshot tour   bundle id com.aritro.canekit.uitests  (simulator only)
+# CaneKit and CaneKitWatch link the pure-logic SwiftPM package in ./Logic; the widget does not.
+# `Shared/LiveActivity` (NavActivityAttributes) is compiled into CaneKit and CaneKitWidget.
+#
+# Callers: `scripts/gen.sh` (`make gen`, `make run`) and CI's sim-build job (`WATCH=0`). XcodeGen
+# writes `CaneKit.xcodeproj`; regenerate only when this file or the source file list changed
+# (AGENTS.md hard rule 5). Tests: none of its own — `make sim` (and `make uitest` for UI) proves a
+# change; for the watch / widget embed, check `CaneKit.app` on the phone contains
+# `Watch/CaneKitWatch.app` and `PlugIns/CaneKitWidget.appex` (gen.sh asserts the phases).
+#
+# ⚠ Formatting is load-bearing: `WATCH=0 scripts/gen.sh` strips the watch with awk patterns that
+#   match this file's exact indentation — `  CaneKitWatch:` (2 spaces) for the target and the
+#   scheme, `      - target: CaneKitWatch` (6) and the `        embed: true` (8) on the next line.
+#   Keep 2-space indentation, never put a comment or anything else on those lines or between
+#   that dependency's two lines, and re-run `WATCH=0 scripts/gen.sh` after reformatting.
 #
 # The name split (deliberate — see AGENTS.md → "The name split"):
 #   What a HUMAN sees/hears  = OpenCane. That is `CFBundleDisplayName` on all three targets (home
@@ -23,11 +37,21 @@
 # (see Makefile / local.mk) so this file never carries a team id.
 #
 # Concurrency: Swift 6 language mode with Xcode 26 "approachable concurrency" defaults
-# (everything is MainActor unless it opts out with `nonisolated`). Only the ARKit frame
-# processor and the network clients opt out.
+# (everything is MainActor unless it opts out with `nonisolated`). What opts out: the depth /
+# camera pipeline (`DepthFrameProcessor`, `GroundSampler`, `MeshClassifier`, `FrameReplay`,
+# `DualCameraSession`'s relays), every framework-delegate relay class (ARKit, WatchConnectivity,
+# AVSpeechSynthesizer, AVAudioPlayer, SoundAnalysis, CMHeadphoneMotion, HealthKit and
+# WKExtendedRuntimeSession on the watch, MKLocalSearchCompleter), the vision and network clients
+# (`VLMClient` implementations, `OnDeviceVision`, `ElevenLabsVoice`, `Secrets`) and the Live
+# Activity payload `NavActivityAttributes` (AGENTS.md hard rule 1). The UI test target overrides
+# the default to `nonisolated` (below). The CaneKitLogic package is not governed by these settings:
+# it sets only Swift 6 language mode, so its types are nonisolated.
 
 name: CaneKit
 
+# Project-wide XcodeGen options. Deployment targets are 26.0 even though the demo phone runs
+# iOS 27: no iOS 27-only API is allowed (AGENTS.md hard rule 2). `xcodeVersion` only stamps the
+# generated project's compatibility; the build Mac uses Xcode 27.
 options:
   bundleIdPrefix: com.aritro
   deploymentTarget:
@@ -37,22 +61,31 @@ options:
   generateEmptyDirectories: true
   xcodeVersion: "26.0"
 
+# The local SwiftPM package (ios/Logic/Package.swift). No remote packages, ever (hard rule 2).
 packages:
   CaneKitLogic:
     path: Logic
 
+# Build settings shared by every target (a target's own `settings.base` overrides a key).
 settings:
   base:
+    # Swift 6 language mode with complete, compile-time data-race checking.
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    # Main-actor by default; opt out per type with `nonisolated` (see the header). The UI test
+    # target overrides this to nonisolated.
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    # A nonisolated async function runs on its caller's actor instead of hopping to the global
+    # executor.
     SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT: "YES"
+    # Personal team; DEVELOPMENT_TEAM comes from `make` (ios/local.mk), never from this file.
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: "YES"
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "NO"
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     WATCHOS_DEPLOYMENT_TARGET: "26.0"
+    # Feed CFBundleVersion / CFBundleShortVersionString in every target's Info.plist below.
     CURRENT_PROJECT_VERSION: "1"
     MARKETING_VERSION: "0.1"
 

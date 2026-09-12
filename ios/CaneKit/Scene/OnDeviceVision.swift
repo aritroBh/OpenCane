@@ -21,8 +21,20 @@
 //  (`vision_error: "no labels (1303 raw)"`, iPhone trip log 2026-09-11), while the body detector
 //  still finds the people in the frame. That is why this file no longer relies on one model.
 //
-//  Threading / isolation: everything here is `nonisolated` and Sendable; work runs in the caller's
-//  task (the describer / hazard scanner call it off the main actor). Vision requests are created
+//  Owners / callers: `OnDeviceVLMClient` is built once by `VLMClientFactory.resolved(context:)` and
+//  shared by `SceneDescriber` ("Where am I") and `HazardScanner` (hazard watch). `OnDeviceVision.detect`
+//  is also called directly by `HazardScanner.scanSigns` (text only, every 3 s) and by
+//  `SceneDescriber.grounded` / `groundedAnswer` / `withPeople` (evidence for the cloud gate and
+//  the people line). `SceneContext` is `AppModel.sceneContext`.
+//  Tests: none in this file can run in the simulator's Vision (see `classifyPass`); the pure
+//  rules it feeds are pinned in CaneKitLogic — `SceneVocabularyTests` (words, `isFaithful`),
+//  `PeopleAheadTests`, `DepthSnapshotTests`, `HazardTests` (`SignPolicy`). `OnDeviceHazards.map`
+//  is checked on the Mac with `swift ios/scripts/vision_probe.swift ios/scripts/streetview`, and
+//  the whole path by `make uitest-streetview`; the device check is "Where am I" in airplane mode.
+//
+//  Threading / isolation: everything here is `nonisolated` and Sendable. `detect` and its passes
+//  are `@concurrent`, so they run on the global executor whoever calls them; the rest of
+//  `OnDeviceVLMClient.describe` runs on the caller's executor. Vision requests are created
 //  per call (they are value types); a `LanguageModelSession` is created per call too, so no state
 //  is shared across concurrent requests. The three image passes are independent, so `detect` runs
 //  them with `async let` on the global executor: the wall clock is the **slowest** of them, not
@@ -63,6 +75,8 @@ nonisolated struct VisionDetections: Sendable, Equatable {
         }
     }
 
+    /// Hand-written because the tuple arrays are not `Equatable`: compares label names, text
+    /// strings and sightings only — confidences, heights and boxes are ignored.
     static func == (a: VisionDetections, b: VisionDetections) -> Bool {
         a.labels.map(\.name) == b.labels.map(\.name) && a.texts.map(\.text) == b.texts.map(\.text)
             && a.sightings == b.sightings
@@ -79,6 +93,8 @@ nonisolated struct TextDetections: Sendable {
     var boxes: [SignPolicy.SeenText.Box?] = []
 }
 
+/// Namespace for the Vision passes (`detect`) and the two trip-log side channels
+/// (`lastClassify`, `lastPeople`) that `AppModel.wireDescriber` reads into `describe_result`.
 nonisolated enum OnDeviceVision {
 
     /// Last scene-classification outcome (labels kept, or the error), for the trip log
@@ -88,7 +104,8 @@ nonisolated enum OnDeviceVision {
 
     /// Labels below this confidence are noise for our purposes.
     static let labelThreshold: Float = 0.25
-    /// Labels too generic to be worth saying.
+    /// Labels too generic to be worth saying. "people" / "adult" used to be here and were removed
+    /// on purpose: people are said, via `SceneVocabulary` and the body detector.
     static let boringLabels: Set<String> = ["outdoor", "structure", "material", "blue_sky", "sky",
                                             "daytime", "night_sky", "land"]
 
@@ -118,6 +135,12 @@ nonisolated enum OnDeviceVision {
     ///   - detectPeople: run the body + animal detectors. Off for the hazard watch (which runs
     ///     every 8 s while walking); on for "Where am I" (user-initiated, a few times a walk).
     /// `@concurrent`: runs on the global executor, never on the caller's actor (main).
+    /// Never throws: a failed pass yields its empty result (and, for classification, an error in
+    /// `lastClassify`). Callers: `OnDeviceVLMClient.describe`, `HazardScanner.scanSigns`
+    /// (`classify: false`, `minTextHeight: 1/128`), `SceneDescriber.grounded` / `groundedAnswer`
+    /// (defaults) and `SceneDescriber.withPeople` (people only).
+    /// - Parameter jpeg: an upright JPEG from `DepthFrameProcessor.jpegSnapshot*`.
+    /// - Returns: the detections; `sightings` carry no distance yet (`withDistances` adds it).
     @concurrent
     static func detect(jpeg: Data, readText: Bool = true, classify: Bool = true,
                        minTextHeight: Float? = nil, detectPeople: Bool = false) async -> VisionDetections {
@@ -171,6 +194,10 @@ nonisolated enum OnDeviceVision {
     }
 
     /// Sign / OCR text with its line boxes, or an empty result when `run` is false.
+    /// `.fast` recognition with language correction, top candidate per line; a Vision error is
+    /// swallowed (`try?`) into an empty result. Heights and boxes come from the same observation,
+    /// so the three arrays stay index-aligned.
+    /// - Parameter minTextHeight: `minimumTextHeightFraction`, or nil for Vision's 1/32 default.
     @concurrent
     private static func textPass(jpeg: Data, run: Bool, minTextHeight: Float?) async -> TextDetections {
         guard run else { return TextDetections() }
@@ -247,6 +274,9 @@ nonisolated enum OnDeviceVision {
 
 // MARK: - Path hazards from labels (on-device hazard watch)
 
+/// The on-device half of the hazard watch: turns classification labels into a reply in the same
+/// shape a cloud model gives (`"<word> ahead"` or `"NONE"`), which `HazardWatchPolicy` then
+/// words as a caution. Used by `OnDeviceVLMClient.describe` in hazard mode only.
 nonisolated enum OnDeviceHazards {
     /// EXACT Vision classification identifiers that mean "something that can be in the walking
     /// path" → the word to say. Exact, not substring: substring matching turned `license_plate`
@@ -255,6 +285,7 @@ nonisolated enum OnDeviceHazards {
     /// `road_safety_equipment`, is unmapped until a probe on a real cone photo shows it fires; the
     /// cloud model covers road-work gear). Cars, trucks and water are left out: they are always
     /// on a street and a whole-frame label says nothing about where.
+    /// ⚠ `ios/scripts/vision_probe.swift` keeps a copy (`hazardMap`): change both together.
     static let map: [String: String] = [
         "fence": "a fence", "stairs": "stairs", "staircase": "stairs", "scooter": "a scooter",
         "bicycle": "a bicycle", "motorcycle": "a motorcycle", "pole": "a pole",
@@ -263,7 +294,14 @@ nonisolated enum OnDeviceHazards {
     ]
 
     /// A hazard reply only when the depth sensor already sees something ahead (`lidarAhead`):
-    /// the camera names what LiDAR confirmed, so a parked bike across the street stays silent.
+    /// the camera names what LiDAR confirmed, so a parked bike across the street stays silent, and
+    /// railings that score "fence" 44–62 % all along the route (ios/scripts/streetview/README.md)
+    /// do not chatter. The first label, in confidence order, that is ≥ 0.35 and in `map` wins.
+    /// - Parameters:
+    ///   - d: detections of the hazard-watch frame (labels only; text is not read in hazard mode).
+    ///   - lidarAhead: true when `SceneContext.get()` is non-empty, i.e. `AppModel.contextLine`
+    ///     saw something in the centre lane < 3 m, at head height, a ground hazard or a mesh hit.
+    /// - Returns: `"<word> ahead"` (e.g. "a bench ahead") or `"NONE"`.
     static func reply(for d: VisionDetections, lidarAhead: Bool) -> String {
         guard lidarAhead else { return "NONE" }
         for (label, conf) in d.labels where conf >= 0.35 {
@@ -279,7 +317,14 @@ nonisolated enum OnDeviceHazards {
 /// drop-off."), written by AppModel on the main actor, read by the on-device client off-main.
 /// Also the channel for the two settings and the one grid the describer needs but the
 /// `VLMClient` protocol (jpeg in, sentence out) has nowhere to carry.
+///
+/// Every field is its own `Mutex`, so the class is Sendable without `@unchecked`: the main actor
+/// writes, the on-device client (off main) reads. Owner: `AppModel.sceneContext`, created in
+/// `AppModel.init` and passed to `VLMClientFactory.resolved` and `SceneDescriber`.
 nonisolated final class SceneContext: Sendable {
+    /// The LiDAR context line (`AppModel.contextLine(report)`), rewritten on every depth report
+    /// by `AppModel.handle`; "" when nothing is noteworthy and cleared to "" on background and when
+    /// "Both cameras" pauses ARKit (stale facts must not reach a description).
     private let text = Mutex("")
     /// LiDAR depths of the frame being described, in scene space. Written by `SceneDescriber`
     /// from `DepthFrameProcessor.jpegSnapshotWithDepth`, which takes the image and the grid in one
@@ -294,7 +339,11 @@ nonisolated final class SceneContext: Sendable {
     /// Did the on-device client already handle the people facts for this description?
     private let peopleDone = Mutex(false)
 
+    /// Replaces the LiDAR context line. Caller: `AppModel` (main actor), ~30 Hz.
     func set(_ s: String) { text.withLock { $0 = s } }
+    /// The current LiDAR context line ("" = LiDAR sees nothing noteworthy). Read by
+    /// `OnDeviceVLMClient.describe` (facts, hazard gate) and `SceneDescriber.run` (captured once
+    /// beside the JPEG, so the answer is paired with that frame's distance).
     func get() -> String { text.withLock { $0 } }
 
     /// Replaces the depth grid for the next description (`DepthSnapshot.empty` = no depth).
@@ -330,14 +379,28 @@ nonisolated final class SceneContext: Sendable {
 // MARK: - VLMClient conformance
 
 /// The on-device "vision language model": Vision sees, Foundation Models (or a template) speaks.
+/// Never throws in practice (every step degrades to a template or "NONE"), so it is the floor of
+/// the fallback chain. It ignores any prompt other than `HazardPrompt.text` — which is why
+/// `cloudPrimary` is nil for it and "Ask OpenCane" never reaches it.
 nonisolated struct OnDeviceVLMClient: VLMClient {
+    /// Display / log name; the fallback client shows "<cloud> + On-device".
     let name = "On-device"
     /// Its sentences already passed `SceneVocabulary.isFaithful`, so `SceneDescriber` speaks them
     /// as they are; running them through `CloudSceneGate` would cap the template's LiDAR-plus-scene
     /// pair back to the LiDAR line alone.
     let isOnDevice = true
+    /// The app's shared side channel (LiDAR line, depth grid, people / mirror switches).
     let context: SceneContext
 
+    /// Two modes, chosen by the prompt:
+    ///   · hazard mode (`prompt == HazardPrompt.text`): labels only, no text, no people →
+    ///     `OnDeviceHazards.reply` gated on the LiDAR line;
+    ///   · anything else ("Where am I"; any other prompt is treated the same): labels + text +
+    ///     people (when enabled) → facts → Apple's on-device model, spoken only if
+    ///     `SceneVocabulary.isFaithful`, with the people line and the LiDAR line prefixed when the
+    ///     model left them out; otherwise the deterministic `template`.
+    /// Side effects: writes `OnDeviceVision.lastPeople` and, when people are enabled, sets
+    /// `context.setPeopleHandled(true)` so `SceneDescriber` does not detect them twice.
     func describe(jpeg: Data, prompt: String) async throws -> String {
         let hazardMode = prompt == HazardPrompt.text
         // One LiDAR snapshot, taken as close to the frame as possible, for the facts, the prefix

@@ -5,6 +5,19 @@ and every sound OpenCane makes competes with that. Collected 2026-09-12 after a 
 report ("it keeps giving me instructions as I'm talking"). Read it before adding any new
 automatic (unprompted) sound.
 
+> **Status (Sat 2026-09-12, after Step 37).** This is the short Step 30 note; the table below
+> describes the app as of Step 30. The fuller, source-checked research is
+> [`cue_design_v2.md`](cue_design_v2.md) (Step 35), and its step plan is `docs/todo.md` →
+> "Cue design v2 — Steps 35–45". Since this note was written:
+> - **Step 36**: the walker picks the cue level (Quiet / Standard / Detailed) and place
+>   (Outdoors / Indoors) in Settings → Cues (`CueRules` in `CueProfile.swift`), and spoken obstacle
+>   names are **off by default**.
+> - **Step 37** (talk floor): a direction cut by a safety warning resumes from the clause it was
+>   cut in instead of replaying from the start, with a 0.35 s pause between lines of different
+>   priority bands; `.safety` never waits (`SpeechResume.swift`).
+> - `make audit` (`ios/scripts/cue_audit.py`) measures cues and spoken lines per minute from a trip
+>   log; use it before answering the open questions below.
+
 ## What the literature says
 
 - **Emit discontinuously, only on critical events.** A real-time visual–auditory

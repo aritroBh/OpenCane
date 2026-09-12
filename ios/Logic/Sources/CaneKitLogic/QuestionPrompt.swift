@@ -2,7 +2,7 @@
 //  QuestionPrompt.swift
 //  CaneKitLogic
 //
-//  "Ask CaneKit": one spoken question about the frame the camera is looking at, one short spoken
+//  "Ask OpenCane" (Siri: "Ask OpenCane about the scene"): one spoken question about the frame the camera is looking at, one short spoken
 //  answer. The sibling of `ScenePrompt` ("Where am I", which asks nothing) and `HazardPrompt`
 //  (the automatic watch, which asks a fixed question every 8 s).
 //
@@ -32,13 +32,20 @@
 //    · The model is told to say it cannot tell, rather than guess. The phrase it is given
 //      (`cannotTell`) is chosen to survive the gate, which is pinned by a test — a refusal that
 //      the gate itself threw away would be replaced by a scene description and read as an answer.
-//    · The question is cleaned before it is interpolated (`clean`): whitespace collapsed, quotes
-//      and newlines removed so the prompt stays well formed, and capped at
+//    · The question is cleaned before it is interpolated (`clean`): double quotes removed so the
+//      prompt stays well formed, every whitespace run (newlines included) collapsed to one space,
+//      and capped at
 //      `maxQuestionCharacters` so a Siri mis-transcription of a whole sentence cannot become the
 //      prompt.
 //
-//  Owner: `AppModel.askAboutScene(_:)` (app) → `SceneDescriber.ask(_:)`.
-//  Tests: QuestionPromptTests.swift.
+//  Owner: `AskSceneIntent` → `AppModel.askAboutScene(_:)` (HandsFreeIntents.swift, logs `ask`) →
+//  `SceneDescriber.ask(_:)`, which calls `clean` (nil → "I did not catch a question.") and sends
+//  `text(for:)` to the cloud provider only (a fallback description would answer a different
+//  question; with no cloud key it says so and describes instead), then gates the reply with
+//  `CloudSceneGate` (a refused answer is said as "I can't answer that." before any description)
+//  and speaks it at `.scene`, TTL 10 s.
+//  Isolation: stateless, nonisolated, pure string building.
+//  Tests: QuestionPromptTests.swift (6).
 //
 
 import Foundation
@@ -60,8 +67,11 @@ public enum QuestionPrompt {
 
     /// Trims a spoken question into something safe to interpolate.
     /// - Parameter question: the raw text (Siri's transcription, or the App Intent parameter).
-    /// - Returns: the cleaned question, or nil when there is no question in it (empty, or
-    ///   punctuation only) — the caller then says so instead of asking the model nothing.
+    /// - Returns: the cleaned question, or nil when there is no question in it (no letter at all:
+    ///   empty, punctuation or digits only) — the caller then says so instead of asking the model
+    ///   nothing. A question over `maxQuestionCharacters` is cut to that many characters and
+    ///   right-trimmed. Pinned by `cleanCollapsesWhitespaceAndRemovesQuotes`,
+    ///   `aQuestionWithNoLettersIsNotAQuestion`, `anOverlongQuestionIsCapped`.
     public static func clean(_ question: String) -> String? {
         // Quotes would break out of the quoted slot in `text(for:)`; everything else the walker
         // said is kept, including question marks. Newlines need no special case — they are
@@ -80,7 +90,8 @@ public enum QuestionPrompt {
     /// `CloudSceneGate`, and a prompt that allowed what the gate refuses would turn every answer
     /// into a refusal and a fallback description.
     /// - Parameter question: a question already through `clean(_:)`.
-    /// - Returns: the full prompt text. Pinned by `questionPromptCarriesTheQuestionAndTheBans`.
+    /// - Returns: the full prompt text. Pinned by `questionPromptCarriesTheQuestionAndTheBans`,
+    ///   `askingForNumbersOrReassuranceIsStillRefused` (the gate, not the prompt, is the guarantee).
     public static func text(for question: String) -> String {
         "You are the eyes of a blind pedestrian. A camera clamped to their white cane took this "
         + "picture. Answer this question about the picture: \"\(question)\". "

@@ -1,5 +1,8 @@
 /*
  * tof.cpp — VL53L1X in short-distance mode, 50 ms timing budget, continuous ranging.
+ *
+ * Implements tof.h (see there for callers and units). Uses the Pololu VL53L1X library over the
+ * Arduino Wire bus at 400 kHz, sensor address 0x29. Stretch / history only; no automated tests.
  */
 #include "tof.h"
 
@@ -7,11 +10,17 @@
 #include <Wire.h>
 #include <VL53L1X.h>
 
+// Driver instance; valid only when `present`.
 static VL53L1X  sensor;
+// Set once by tofBegin(): the sensor ACKed and was configured.
 static bool     present  = false;
+// Last RangeValid distance in mm (kept through invalid samples; staleness is judged by lastOkMs).
 static int      lastMm   = -1;
+// millis() of that reading.
 static uint32_t lastOkMs = 0;
 
+// Start I2C on the given GPIOs and configure continuous ranging. Returns false (and the sketch runs
+// without ToF) when no sensor answers within the 100 ms I2C timeout.
 bool tofBegin(int sdaPin, int sclPin) {
   Wire.begin(sdaPin, sclPin);
   Wire.setClock(400000);
@@ -24,8 +33,11 @@ bool tofBegin(int sdaPin, int sclPin) {
   return true;
 }
 
+// Whether tofBegin() found the sensor; never changes after boot (a sensor unplugged later is
+// reported through tofDistanceMm() going stale, not here).
 bool tofPresent() { return present; }
 
+// Non-blocking poll: take a sample only when one is ready; keep it only if RangeValid.
 void tofUpdate() {
   if (!present || !sensor.dataReady()) return;
   sensor.read(false);                                       // data is ready: non-blocking read
@@ -35,6 +47,8 @@ void tofUpdate() {
   }
 }
 
+// Latest valid distance in mm, or -1 when absent or when no valid sample for 500 ms. Note that
+// before the first valid sample lastMm is -1, so the result is -1 as well.
 int tofDistanceMm() {
   if (!present || millis() - lastOkMs > 500) return -1;     // stale (>10 missed samples)
   return lastMm;

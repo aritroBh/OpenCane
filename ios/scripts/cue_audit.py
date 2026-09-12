@@ -27,6 +27,17 @@ The numbers it compares against (1.5 m head, 0.5 m signature gap, 3–8° tilt) 
 constants and the research hypotheses; if those move in CaneKitLogic, move them here too.
 Read-only: never writes into the log or the repo.
 """
+# Owner / callers: `make audit` in ios/Makefile (runs `--selftest`, then this script on LOG=path or
+# `--pull`); by hand from ios/. Nothing in the app or the build imports it. Python 3, stdlib only.
+# Why it exists: Step 35's device report ("choppy", "overstimulating") had no numbers behind it; the
+# cue design v2 plan (docs/cue_design_v2.md, docs/todo.md) is judged against this script's output
+# on a mounted walk (CHANGELOG.md Step 35). Step 37 added the resume / cross-band pause metrics.
+# Tests: `selftest()` below (fixture asserts, no device). It is NOT part of `make test` or CI.
+# Inputs it depends on (renaming any of these in the app silently zeroes a section): record kinds
+# `lanes` (`head`, `torso`, `depth`, `tilt` from TripLogger.lanes), `cue` (field `cue`), `speech`
+# (`text`, `priority`), `speech_suppressed` (`reason`, `load`), `speech_dispatch` (`text`,
+# `priority`, `replays`, `resume_from`) and `speech_end` (`priority`), all written by AppModel /
+# TripLogger; `t` is seconds since the TripLogger was created (wall clock) on every record.
 
 from __future__ import annotations
 
@@ -40,13 +51,27 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
+# ⚠ Mirrors of app constants — keep in step with the Swift (nothing checks this automatically):
+# metres; the head band's enter distance, `CueThresholds.head` (ios/Logic/.../CueDecider.swift).
 HEAD_ENTER_M = 1.5            # CueThresholds.head
+# metres; torso at least this much farther than head = overhang. A research hypothesis ([H]), not
+# an app constant: no Swift code uses it yet.
 SIGNATURE_GAP_M = 0.5         # cue design v2 §3.2 overhang signature [H]
+# degrees below the horizon (inclusive); `MountTilt.aim` = 3...8 (LaneReport.swift).
 MOUNT_AIM_DEG = (3.0, 8.0)    # MountTilt.aim
+# seconds, dispatch start to dispatch start; a heuristic for "choppy", not an app constant.
 CHOPPY_GAP_S = 1.0            # two dispatches closer than this read as a stutter
+# Case-sensitive `str.startswith` prefixes of lines the walker asked for. ⚠ Heuristic, and weaker
+# than it looks: in the current app `speech` records are written only by AppModel for cue / obstacle
+# lines, NavigationEngine lines (a Repeat is logged with `repeat: true` and the REPEATED text, so it
+# does not start with "Repeat"), sound alerts, the arrival summary and the "Walking to …" announce.
+# Flashlight confirmations and SceneDescriber lines are said directly and appear only as
+# `speech_dispatch`, so these prefixes rarely match and a Repeat counts as unsolicited.
 ASKED_FOR = ("describe", "Where am I", "Flashlight", "Repeat")  # prefixes of lines the walker requested
 
 
+# Parse a trip log file into records, in file order. Errors are replaced on decode (a log cut
+# mid-character still loads). Caller: `main`. Not sorted: `audit` sorts where order matters.
 def load(path: Path) -> list[dict]:
     """Every JSON line of the log; unparseable lines are skipped (a crash can truncate the last)."""
     out = []
@@ -58,6 +83,12 @@ def load(path: Path) -> list[dict]:
     return out
 
 
+# Step 37 talk-floor check. Returns a count (int), or a string explaining why it cannot be measured
+# (so `human` prints the reason instead of a misleading 0). Threshold 0.3 s, just under the app's
+# `SpeechResume.crossBandGap` (0.35 s), so timer jitter on a kept pause is not counted. Only
+# ADJACENT records after sorting by `t` are compared: an `end` followed by another `end` (or a
+# dispatch whose previous record is a dispatch) is never counted. Caller: `audit` (dispatch section);
+# pinned by the `pauses` fixture in `selftest`.
 def cross_band_short_pauses(records: list[dict]) -> int | str:
     """Lines that started < 0.3 s after a DIFFERENT-priority line ended naturally (`speech_end`), not
     counting `.safety` starts; "no speech_end records" on logs before Step 37."""
@@ -74,12 +105,18 @@ def cross_band_short_pauses(records: list[dict]) -> int | str:
     return count
 
 
+# The measurement itself: pure over the parsed records (no I/O), so `selftest` can drive it.
+# Rates divide by `minutes` = span of every numeric `t` in the log, floored at 1e-9 so a log with a
+# single timestamp does not divide by zero (its per-minute numbers are then meaningless).
+# Returns a JSON-serialisable dict; `human` renders it, `--json` prints it raw.
 def audit(records: list[dict]) -> dict:
     """The whole report as a dict (see the module docstring for what each part means)."""
     times = [r["t"] for r in records if isinstance(r.get("t"), (int, float))]
     minutes = max((max(times) - min(times)) / 60.0, 1e-9) if times else 1e-9
     rep: dict = {"records": len(records), "minutes": round(minutes, 2)}
 
+    # `lanes` records are throttled to TripLogger.laneRate (2 per second), so cell counts are samples
+    # of the ~30 Hz depth stream, not every frame. The head band uses only records with LiDAR depth.
     all_lanes = [r for r in records if r.get("kind") == "lanes"]
     lanes = [r for r in all_lanes if r.get("depth")]
     # Tilt over every lanes record that carries one, depth or not (no selection bias — Muse, Step 35).
@@ -97,10 +134,14 @@ def audit(records: list[dict]) -> dict:
     else:
         rep["tilt"] = None
 
+    # True when this record's `tilt` is a number inside the mount window (a JSON null tilt — no
+    # gravity yet — is outside).
     def in_aim(r: dict) -> bool:
         t = r.get("tilt")
         return isinstance(t, (int, float)) and MOUNT_AIM_DEG[0] <= t <= MOUNT_AIM_DEG[1]
 
+    # Cells are indexed 0 left, 1 centre, 2 right (LaneReport.head / torso); depths in metres, −1 =
+    # no valid depth in that cell (TripLogger writes invalid as −1).
     def head_band(frames: list[dict]) -> dict:
         """Classify every head cell under the enter distance. A frame whose whole torso row has no
         data (−1 ×3) is a dropout, not evidence of an overhang: its cells go to `no_data`
@@ -179,6 +220,8 @@ def audit(records: list[dict]) -> dict:
     return rep
 
 
+# Plain-text rendering for a person at the bench. Caller: `main` when `--json` is absent. It
+# prints `dispatch` as a raw dict (or the "no speech_dispatch records" string on old builds).
 def human(rep: dict) -> str:
     """A short readable summary of `audit`'s dict."""
     lines = [f"{rep['records']} records over {rep['minutes']} min"]
@@ -206,6 +249,10 @@ def human(rep: dict) -> str:
     return "\n".join(lines)
 
 
+# `--pull`: needs the phone plugged in, unlocked and trusted, and Xcode's `devicectl`. Reads the
+# first `DEVICE =`, `DEVICE :=`, `DEVICE ?=` or `DEVICE +=` line of ios/local.mk (the same file the
+# Makefile includes); exits with a message on any failure rather than auditing nothing. The copy
+# goes to a fresh temp dir (never into the repo) and its path is printed to stderr.
 def pull_latest() -> Path:
     """Copy the newest canekit-*.jsonl off the phone named by DEVICE in ios/local.mk."""
     mk = Path(__file__).resolve().parent.parent / "local.mk"
@@ -214,6 +261,7 @@ def pull_latest() -> Path:
         sys.exit("no DEVICE in ios/local.mk")
     device = m.group(1)
 
+    # One devicectl call; stdout on success, otherwise exit with its stderr (first 400 chars).
     def run(cmd: list[str]) -> str:
         try:
             return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
@@ -239,6 +287,11 @@ def pull_latest() -> Path:
     return dest
 
 
+# `--selftest` (run first by `make audit`): fixture records that pin each section — wall-like,
+# overhang and dropout head cells, the mounted-tilt verdict, a replay without `resume_from`, a
+# dispatch record without `t` (skipped, no KeyError), a `field_kind` collision, suppressed-by-load,
+# the route-line exclusion, and the Step 37 end → next-start pause cases. Prints "ok" or raises
+# AssertionError with the report.
 def selftest() -> None:
     """Fixture checks: a wall-like frame, an overhang frame, a mounted tilt, a replay, a collision."""
     recs = [
@@ -294,6 +347,7 @@ def selftest() -> None:
     print("cue_audit selftest: ok")
 
 
+# CLI entry: `log` path, `--pull`, `--json`, `--selftest` (selftest wins and ignores the rest).
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("log", nargs="?", type=Path)
