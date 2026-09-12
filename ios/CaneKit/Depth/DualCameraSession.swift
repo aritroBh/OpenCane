@@ -394,10 +394,16 @@ final class DualCameraSession {
         let previewAngle = coordinator.videoRotationAngleForHorizonLevelPreview
         let fallbackAngle: CGFloat = position == .front ? 270 : 90
         let applied: CGFloat
-        if connection.isVideoRotationAngleSupported(captureAngle) {
-            applied = captureAngle
-        } else if connection.isVideoRotationAngleSupported(previewAngle) {
+        // PREVIEW first, not capture. Both feeds are DISPLAYED in an AVSampleBufferDisplayLayer;
+        // nothing here writes a file. `videoRotationAngleForHorizonLevelCapture` is the angle for
+        // the recorded asset and `…ForHorizonLevelPreview` the angle for what a viewer sees, and on
+        // a phone clamped to a cane the two disagree by exactly the 90° the front inset was tilted
+        // by. The back feed looked right either way because its two angles happen to coincide in
+        // portrait, which is why this only ever showed up on the front camera.
+        if connection.isVideoRotationAngleSupported(previewAngle) {
             applied = previewAngle
+        } else if connection.isVideoRotationAngleSupported(captureAngle) {
+            applied = captureAngle
         } else if connection.isVideoRotationAngleSupported(fallbackAngle) {
             applied = fallbackAngle
         } else {
