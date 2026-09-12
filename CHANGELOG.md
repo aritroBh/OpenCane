@@ -2,6 +2,16 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 17 — App icon (Sat Sep 12, needs install)
+
+Both `AppIcon` sets were empty — the app shipped with no icon. New "Folded Signal" mark:
+black field, white cane-shaft bar, gray fold bar, one red tip quoting a real white cane's red
+section (InsForge-like geometry, cane soul, no words). One 1024 PNG generated from
+`/tmp/icon.py`, added to the iPhone + Watch sets.
+
+test on device: OpenCane icon on the Home Screen after install; no white bars clipped by the
+squircle at small sizes (check a folder view too).
+
 ## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
 
 Both worktrees are now in the main checkout, hand-merged so nothing the renames and fixes
