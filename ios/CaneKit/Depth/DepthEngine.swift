@@ -71,6 +71,11 @@ final class DepthEngine {
     /// "limited (features)", "initializing", "relocalizing", "limited".
     private(set) var tracking = "—"
 
+    /// The pure route-start freshness gate. `AppModel` observes this while a route request is
+    /// queued; after a route starts it is reset to idle and ordinary depth interruptions continue
+    /// to be represented by `status` / `report` as before.
+    private(set) var readinessState: DepthReadinessState = .idle
+
     /// Fired on the main actor for every report; the cue router hangs off this.
     /// Set once by `AppModel.start()` to `AppModel.handle(_:)` (haptics, watch mirror, speech).
     @ObservationIgnored var onReport: ((LaneReport) -> Void)?
@@ -81,6 +86,9 @@ final class DepthEngine {
     /// runs alongside the back camera's LiDAR. Set once by `AppModel.start()` to
     /// `AppModel.faceHead.ingest(worldYawDeg:now:)`.
     @ObservationIgnored var onFaceYaw: ((Double, TimeInterval) -> Void)?
+
+    /// Main-actor callback for route-start interlock transitions.
+    @ObservationIgnored var onReadinessChanged: ((DepthReadinessState) -> Void)?
 
     /// True while an `ARFaceAnchor` has been seen at all this session (any age). Only for the
     /// Hazards card's "the front camera is live" line; freshness is `FaceHeadPose.isTracking`.
@@ -116,6 +124,17 @@ final class DepthEngine {
     @ObservationIgnored private var fpsWindow: [TimeInterval] = []
     /// Strong reference to the session delegate (ARSession holds its delegate weakly).
     @ObservationIgnored private var sessionObserver: SessionObserver?
+    /// Timestamp of the last report seen before a readiness window began. A report buffered before
+    /// a two-camera stop must never count as one of the fresh post-reconfiguration frames.
+    @ObservationIgnored private var readinessBaselineFrameTime: TimeInterval?
+    /// Sequence boundary captured from the processor queue at the transition. This is stronger
+    /// than the consumed report timestamp because `reports` buffers one pre-transition value.
+    @ObservationIgnored private var readinessBaselineFrameSequence: Int?
+    /// Last report sequence accepted by the readiness gate; a gap means the newest-only stream
+    /// dropped at least one published frame, so the consecutive run must restart conservatively.
+    @ObservationIgnored private var readinessLastFrameSequence: Int?
+    /// Pure state machine; all mutations happen on the main actor.
+    @ObservationIgnored private var readiness = DepthReadiness()
 
     init() {}
 
@@ -132,6 +151,50 @@ final class DepthEngine {
             $0.lane.mirrorLeftRight = mirror
             $0.groundHazardsEnabled = groundHazards
         }
+    }
+
+    // MARK: Route-start readiness
+
+    /// Begin the bounded freshness window used by `AppModel` before a route starts. The caller
+    /// supplies wall-clock uptime for the timeout; frame timestamps remain ARKit's own clock.
+    /// Baseline timestamp and processor sequence are retained so a buffered pre-transition report
+    /// cannot satisfy the gate after two-camera teardown or another AR session reconfiguration.
+    func beginReadiness(at now: TimeInterval) {
+        readinessBaselineFrameTime = report.depthAvailable ? report.timestamp : nil
+        readinessBaselineFrameSequence = processor.latestPublishedSequence()
+        readinessLastFrameSequence = nil
+        publishReadiness(readiness.begin(at: now))
+    }
+
+    /// Poll the readiness timeout when no frame has arrived.
+    func pollReadiness(at now: TimeInterval) {
+        publishReadiness(readiness.poll(at: now))
+    }
+
+    /// Cancel a queued route request and return the gate to idle.
+    func cancelReadiness() {
+        readinessBaselineFrameTime = nil
+        readinessBaselineFrameSequence = nil
+        readinessLastFrameSequence = nil
+        publishReadiness(readiness.cancel())
+    }
+
+    /// Invalidate the current freshness window after an AR interruption, pause/resume or session
+    /// reconfiguration. This is a no-op when no route-start request is waiting.
+    private func invalidateReadiness(at now: TimeInterval) {
+        guard readiness.state != .idle else { return }
+        readinessBaselineFrameTime = report.depthAvailable ? report.timestamp : nil
+        readinessBaselineFrameSequence = processor.latestPublishedSequence()
+        readinessLastFrameSequence = nil
+        publishReadiness(readiness.invalidate(at: now))
+    }
+
+    /// Publish only actual state changes; the route-start adapter does not need a callback for each
+    /// warming frame, while the observable state remains useful to the UI and diagnostics.
+    private func publishReadiness(_ state: DepthReadinessState) {
+        guard readinessState != state else { return }
+        readinessState = state
+        onReadinessChanged?(state)
     }
 
     // MARK: Lifecycle
@@ -181,6 +244,7 @@ final class DepthEngine {
         fps = 0
         fpsWindow.removeAll(keepingCapacity: true)
         status = "Depth paused"
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
     }
 
     /// Re-run the configuration *without* resetting tracking (keeps anchors / mesh), restart the
@@ -203,6 +267,7 @@ final class DepthEngine {
     func resume() {
         guard !isRunning else { return }
         guard configuration != nil else { start(); return }
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
         processor.startMotion()
@@ -228,6 +293,7 @@ final class DepthEngine {
         guard on != highFrameRate else { return }
         highFrameRate = on
         guard isRunning else { return }
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
         session.run(config)
@@ -254,6 +320,7 @@ final class DepthEngine {
         faceTrackingEnabled = wanted
         if !wanted { faceAnchorSeen = false }
         guard isRunning else { return }
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
         session.run(config)
@@ -264,6 +331,7 @@ final class DepthEngine {
         meshEnabled = on
         processor.settings.withLock { $0.meshLookupEnabled = on }
         guard isRunning else { return }
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: on)
         configuration = config
         session.run(config)
@@ -362,6 +430,33 @@ final class DepthEngine {
         if r.depthAvailable, status == "Waiting for depth…" || status == "Depth resuming…" {
             status = "Depth OK"
         }
+        if readiness.state == .warming,
+           readinessBaselineFrameTime.map({ r.timestamp > $0 }) ?? true,
+           readinessBaselineFrameSequence.map({ r.frameSequence > $0 }) ?? true {
+            let now = ProcessInfo.processInfo.systemUptime
+            var skipCurrentFrame = false
+            if let previous = readinessLastFrameSequence,
+               r.frameSequence != (previous &+ 1) {
+                // `reports` intentionally buffers only the newest value. If delivery skipped any
+                // published report, one of those unseen frames may have been limited or missing
+                // depth; never call the values on either side consecutive evidence.
+                publishReadiness(readiness.invalidate(at: now))
+                skipCurrentFrame = true
+            } else if let baseline = readinessBaselineFrameSequence,
+                      r.frameSequence != (baseline &+ 1) {
+                // The first post-boundary report can also arrive after an unseen buffered report;
+                // discard this one as evidence and require a wholly contiguous run from here.
+                publishReadiness(readiness.invalidate(at: now))
+                skipCurrentFrame = true
+            }
+            readinessLastFrameSequence = r.frameSequence
+            if !skipCurrentFrame {
+                publishReadiness(readiness.frame(at: now,
+                                                 trackingNormal: r.trackingNormal,
+                                                 sceneDepthAvailable: r.depthAvailable,
+                                                 reportTrusted: r.isTrusted))
+            }
+        }
         onReport?(r)
     }
 
@@ -381,6 +476,7 @@ final class DepthEngine {
         }
         status = "AR error: \(hint)"
         isRunning = false
+        invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
     }
 
     /// One throttled face-yaw sample from the front camera, already reduced to a world yaw by
@@ -398,6 +494,7 @@ final class DepthEngine {
     /// ARKit resumes the session by itself; `isRunning` is left unchanged.
     fileprivate func sessionInterrupted(_ interrupted: Bool) {
         status = interrupted ? "AR interrupted" : "AR resumed"
+        if interrupted { invalidateReadiness(at: ProcessInfo.processInfo.systemUptime) }
     }
 
     /// Map `ARCamera.TrackingState` (a Sendable enum, passed by value across the hop) to the short

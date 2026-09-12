@@ -69,7 +69,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
     press that can't reach the phone plays `.retry`. Every route cue (and veer) is also felt on the
     cane as soft continuous buzzes: left one 0.45 s buzz, right two 0.35 s, crossing three 0.3 s,
     arrived long-short-long. A ground hazard is 4 heavy taps.
-12. **Voice cache.** Prefetch covers exactly 25 lines: 15 `commonLines`, 9 waypoint `say` lines and
+12. **Voice cache.** Prefetch covers exactly 29 lines: 19 `commonLines`, 9 waypoint `say` lines and
     the intro. Any line built at runtime is a cache miss: Repeat (it includes a distance), "Passed X.
     Y in N meters.", the arrival summary, "\<AirPods\> connected.", channel warnings, "Describing.".
     A route or Repeat line that misses waits up to **2.5 s** for ElevenLabs, then falls back to the

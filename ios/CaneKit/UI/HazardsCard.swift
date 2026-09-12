@@ -105,7 +105,7 @@ struct HazardsCard: View {
 
             Toggle("Both cameras (pauses obstacle detection)", isOn: $model.bothCamerasEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .disabled(!DualCameraSession.isSupported)
+                .disabled(!DualCameraSession.isSupported || model.routeStartWaiting)
                 .accessibilityHint("Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you.")
             bothCameras
             if AppModel.selfTestControlsVisible { selfTests }
@@ -127,12 +127,12 @@ struct HazardsCard: View {
                         hint: "Debug. Turns both cameras on for 12 seconds, which pauses obstacle detection, then turns them off and writes what happened to the trip log") {
                 model.startBothCamerasSelfTest()
             }
-            .disabled(model.selfTestRunning || model.nav.isNavigating)
+            .disabled(model.selfTestRunning || model.nav.isNavigating || model.routeStartWaiting)
             CKBigButton(title: "Front camera self test", systemImage: "faceid", role: .secondary,
                         hint: "Debug. Runs the front camera head tracking for 15 seconds and writes what it saw to the trip log. Obstacle detection keeps running") {
                 model.startFaceTrackingSelfTest()
             }
-            .disabled(model.selfTestRunning)
+            .disabled(model.selfTestRunning || model.routeStartWaiting)
             if !model.selfTestStatus.isEmpty {
                 Text(model.selfTestStatus)
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)

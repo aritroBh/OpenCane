@@ -27,10 +27,10 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–11 have landed and are verified on the simulator: 146 logic tests, 7
-XCUITests (one needs the local Street View frames), the screenshot tour, and `make e2e` (GPS replay
-of the route through the real app, four scenarios, plus an opt-in Street View camera scenario).
-Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
+**Status.** Steps 0–22 have landed. The Logic target contains 353 tests; the earlier simulator,
+XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while Step 22's full run needs
+the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the
+open work. [`docs/todo.md`](../docs/todo.md) and
 [`CHANGELOG.md`](../CHANGELOG.md) are the source of truth.
 
 ## Layout
@@ -118,7 +118,7 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 146 `CaneKitLogic` tests (Swift Testing). Works with the Command Line Tools alone. |
+| `make test` | `scripts/test.sh`: the 353 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools. |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -179,11 +179,12 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 146 Swift Testing tests. They cover lane extraction on
+- **Unit tests (`Logic/`, no device):** 353 Swift Testing tests. They cover lane extraction on
   synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
   math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
-  VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy and the crown
-  gesture.
+  VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy, the crown gesture,
+  and the bounded ARKit/LiDAR route-start freshness gate (cold start, interruption/recovery,
+  timeout, fast warm-up and stale report gaps).
 - **UI (`make uitest`):** 7 XCUITests (one skipped unless `make uitest-streetview`) drive the real screens: start, Next, Repeat, Recenter and
   Stop on the demo route; Where am I without a key; the haptic test buttons and the Silence toggle;
   a mount toggle; VoiceOver labels; and the empty-destination error. Accessibility labels are a
@@ -217,6 +218,8 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
   - Repeat on the watch re-speaks the last line.
   - Arrival fires at CIF east within 20 m.
   - Battery is > 40 % and thermal is nominal or fair.
+  - A route start speaks the warm-up state and waits for trusted LiDAR depth; on a fast healthy
+    session, the three-frame bar clears in well under a quarter second after the first good reports.
   - A spotter is assigned and the kill-word ("stop") is rehearsed.
 
 ## 6. Gotchas

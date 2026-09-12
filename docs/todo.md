@@ -158,10 +158,12 @@ obstacle detection; "Obstacle detection is back" was spoken before it was true; 
 setting persisted across launches). **Every one below is in a feature that is OFF by default**, so
 none blocks the demo — but they are real, and several need the phone to judge.
 
-- [ ] **A route can start while the cameras are still being released.** `beginRoute` turns the
-      two-camera switch off and then calls `nav.start(route)` without waiting for the serialised
-      stop + ARKit warm-up (~1–3 s), so guidance begins with LiDAR still down. Either await the
-      chain or refuse Go while a switch operation is in flight.
+- [x] **Camera-transition route-start interlock (Step 22).** `beginRoute` now waits for the
+      serialized two-camera teardown, then requires three consecutive same-frame reports with
+      `.normal` tracking, valid scene depth and the existing sweep trust bit. `DepthReadiness`
+      resets on interruption/pause/resume/reconfiguration and times out after 5 s; queued starts
+      resume automatically when ready and fail loudly otherwise. The intentional no-LiDAR and
+      camera-denied degraded paths still guide with an explicit obstacle-warning notice.
 - [ ] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
       output route immediately after `setActive(true)`, but iOS settles the route ~0.5 s later — so
       an AirPods flip to HFP would pass the check. Subscribe to route-change notifications for the

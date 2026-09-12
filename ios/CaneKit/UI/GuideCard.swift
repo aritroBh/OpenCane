@@ -135,13 +135,21 @@ struct GuideCard: View {
                 // ⚠ test contract: "Start demo route" is the first thing every UI test waits for.
                 CKBigButton(title: "Start demo route", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
+                    .disabled(model.routeStartWaiting)
                 // Apple Maps walking directions from the live GPS fix to the CIF east entrance,
                 // for when the walker is not at ISR. Label = its text (CKBigButton).
                 CKBigButton(title: "Navigate to CIF from here", systemImage: "location.north.circle",
                             role: .secondary,
                             hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
                             value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
-                    .disabled(model.isBuildingRoute)
+                    .disabled(model.isBuildingRoute || model.routeStartWaiting)
+                if let status = model.routeStartStatus {
+                    Text(status)
+                        .font(CKFont.secondary)
+                        .foregroundStyle(CKColor.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(status)
+                }
                 // Search box + live suggestions + "Go" (⚠ test contract: the "Go" button and the
                 // "Destination" field live in DestinationField now).
                 DestinationField(scroller: scroller)

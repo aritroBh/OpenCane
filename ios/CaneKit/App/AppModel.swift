@@ -110,6 +110,26 @@ final class AppModel {
     /// True while a MapKit build (`buildRoute`: typed field, Siri, "Navigate to CIF from here")
     /// waits for a fix and MapKit directions (UI shows progress, Go / CIF buttons disabled).
     private(set) var isBuildingRoute = false
+    /// Visible state while a route request waits for post-camera-transition depth evidence.
+    /// This is deliberately separate from `routeError`: the request is still alive and will
+    /// continue automatically when the interlock clears.
+    private(set) var routeStartStatus: String?
+    /// True only while a route request is queued. A timed-out status remains visible but does not
+    /// disable a retry, so the walker can try Start again after checking the camera.
+    var routeStartWaiting: Bool { pendingRouteStart != nil }
+
+    /// A route that has been requested but cannot start until the depth interlock is ready.
+    private struct PendingRouteStart: Sendable {
+        let route: Route
+        let announce: String?
+    }
+
+    /// Pending route-start state is app-owned; the pure consecutive-frame / timeout decisions live
+    /// in `DepthReadiness` and are owned by `DepthEngine`.
+    @ObservationIgnored private var pendingRouteStart: PendingRouteStart?
+    @ObservationIgnored private var routeReadinessTask: Task<Void, Never>?
+    @ObservationIgnored private var routeReadinessTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var routeStartGeneration = 0
 
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     /// ⚠ Its timing contract is the AR clock; see `handle(_:)`.
@@ -469,6 +489,9 @@ final class AppModel {
         }
         depth.onReport = { [weak self] report in
             self?.handle(report)
+        }
+        depth.onReadinessChanged = { [weak self] state in
+            self?.depthReadinessChanged(state)
         }
         // Front-camera head yaw (no AirPods needed). Only ever fires while
         // `depth.faceTrackingEnabled`; `FaceHeadPose` drops samples while it is stopped.
@@ -920,13 +943,19 @@ final class AppModel {
     /// Everything is logged as `both_cameras` with the session's `hardwareCost`, so a trip log
     /// proves whether both cameras really ran and whether depth came back afterwards.
     private func setBothCameras(_ on: Bool) {
-        if on, nav.isNavigating {
+        if on, nav.isNavigating || routeStartWaiting {
             // `applyingBothCameras` is set by the `didSet` that called us, so this write only puts
             // the switch back on screen — it does not run the off path.
             bothCamerasEnabled = false
-            routeError = "Stop the route before using both cameras"
-            speech.say("Both cameras cannot run while a route is guiding you. Stop the route first.", .nav, ttl: 10)
-            logger.event("both_cameras", ["action": "refused_route"])
+            if nav.isNavigating {
+                routeError = "Stop the route before using both cameras"
+                speech.say("Both cameras cannot run while a route is guiding you. Stop the route first.", .nav, ttl: 10)
+                logger.event("both_cameras", ["action": "refused_route"])
+            } else {
+                routeError = "Wait for obstacle detection before using both cameras"
+                speech.say("Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready.", .nav, ttl: 10)
+                logger.event("both_cameras", ["action": "refused_route_start"])
+            }
             return
         }
         if on {
@@ -1085,6 +1114,10 @@ final class AppModel {
     /// Caller: the Hazards card's "Both cameras self test" button.
     func startBothCamerasSelfTest() {
         guard !selfTestRunning else { return }
+        guard !routeStartWaiting else {
+            selfTestStatus = "Not while obstacle detection is warming up"
+            return
+        }
         guard !nav.isNavigating else {
             selfTestStatus = "Not while a route is guiding you"
             return
@@ -1495,6 +1528,7 @@ final class AppModel {
     /// onto the searched route mid-walk.
     func startDemoRoute() {
         cancelRouteBuild()
+        cancelPendingRouteStart()
         do {
             let route = try RouteSource.bundled()
             beginRoute(route)
@@ -1515,6 +1549,7 @@ final class AppModel {
     /// must not sit under a box the walker is already retyping (it reads as a permanent state).
     func clearRouteError() {
         routeError = nil
+        if pendingRouteStart == nil { routeStartStatus = nil }
     }
 
     /// Walking route from the current fix to a spoken or typed place: the campus gazetteer
@@ -1573,6 +1608,7 @@ final class AppModel {
     /// N meters." (`WalkingIntro`) so a wrong pick can be stopped. Errors are shown
     /// (`routeError`) and spoken. `isBuildingRoute` is cleared on every exit of the current build.
     private func buildRoute(to destination: RouteDestination, searchLine: String) {
+        cancelPendingRouteStart()
         guard !announceLocationDenied() else { return }
         cancelRouteBuild()
         let generation = routeBuildGeneration
@@ -1634,6 +1670,7 @@ final class AppModel {
     /// cannot play after Stop, and says "Route stopped."
     func stopRoute() {
         cancelRouteBuild()
+        cancelPendingRouteStart()
         nav.stop()
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
@@ -1667,6 +1704,7 @@ final class AppModel {
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
+        "Obstacle detection warming up. Route will start when it is ready.",
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
@@ -1693,6 +1731,133 @@ final class AppModel {
             bothCamerasEnabled = false
             logger.event("both_cameras", ["action": "off_for_route"])
         }
+        // On a LiDAR phone with camera access, route guidance must not begin in the short window
+        // where ARKit is still warming or recovering from the two-camera transition. Camera denial
+        // is the one deliberate degraded path: AGENTS.md requires GPS guidance to continue while
+        // loudly admitting that obstacle warnings cannot work.
+        let cameraDenied = announceCameraDenied()
+        if lidarSupported, !cameraDenied {
+            queueRouteStart(route, announce: announce)
+            return
+        }
+        startRouteNow(route, announce: announce)
+    }
+
+    /// Queue a route until `DepthEngine` reports the pure freshness bar as ready. Waiting is
+    /// bounded and observable; the request is resumed automatically on the first ready transition.
+    private func queueRouteStart(_ route: Route, announce: String?) {
+        routeReadinessTask?.cancel()
+        routeReadinessTimeoutTask?.cancel()
+        routeStartGeneration &+= 1
+        let generation = routeStartGeneration
+        pendingRouteStart = PendingRouteStart(route: route, announce: announce)
+        routeStartStatus = "Obstacle detection warming up. Route will start when it is ready."
+        routeError = nil
+        speech.say("Obstacle detection warming up. Route will start when it is ready.", .nav, ttl: 8)
+        watch.send(status: "Obstacle detection warming up", distanceM: -1)
+        logger.event("route_readiness", ["state": "warming", "timeout_s": DepthReadiness.standardConfiguration.timeout,
+                                           "required_frames": DepthReadiness.standardConfiguration.requiredFrames])
+
+        // Turning two-camera mode off is serialized. Begin the frame clock only after that chain
+        // drains so pre-transition reports cannot be mistaken for recovery evidence. This separate
+        // request timer also bounds a camera operation that never drains; the route must not wait
+        // forever before the pure gate has even received its first frame.
+        let cameraWork = bothCamerasWork
+        routeReadinessTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(DepthReadiness.standardConfiguration.timeout))
+            guard !Task.isCancelled,
+                  let self,
+                  self.routeStartGeneration == generation,
+                  self.pendingRouteStart != nil else { return }
+            // If the camera chain has not started the gate yet, poll is a no-op; the shared
+            // failure path still reports the bounded request timeout explicitly.
+            self.depth.pollReadiness(at: ProcessInfo.processInfo.systemUptime)
+            if self.pendingRouteStart != nil { self.failQueuedRouteStart() }
+        }
+        routeReadinessTask = Task { @MainActor [weak self] in
+            if let cameraWork { await cameraWork.value }
+            guard let self,
+                  self.routeStartGeneration == generation,
+                  self.pendingRouteStart != nil else { return }
+            self.depth.beginReadiness(at: ProcessInfo.processInfo.systemUptime)
+            // Poll rather than sleeping until one fixed deadline. An interruption, pause, or
+            // session reconfiguration resets only the consecutive-frame run; polling lets the
+            // pure gate retain one bounded five-second deadline while the camera recovers. The
+            // 100 ms cadence is only a main-actor clock check and adds no delay to the frame-driven
+            // ready transition.
+            while !Task.isCancelled,
+                  self.routeStartGeneration == generation,
+                  self.pendingRouteStart != nil {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled,
+                      self.routeStartGeneration == generation,
+                      self.pendingRouteStart != nil else { return }
+                self.depth.pollReadiness(at: ProcessInfo.processInfo.systemUptime)
+                if self.depth.readinessState != .warming { return }
+            }
+        }
+    }
+
+    /// Respond to a readiness transition from the depth adapter.
+    private func depthReadinessChanged(_ state: DepthReadinessState) {
+        guard pendingRouteStart != nil else { return }
+        switch state {
+        case .ready:
+            guard let pending = pendingRouteStart else { return }
+            pendingRouteStart = nil
+            routeReadinessTask?.cancel()
+            routeReadinessTask = nil
+            routeReadinessTimeoutTask?.cancel()
+            routeReadinessTimeoutTask = nil
+            routeStartStatus = nil
+            depth.cancelReadiness()
+            logger.event("route_readiness", ["state": "ready"])
+            startRouteNow(pending.route, announce: pending.announce)
+        case .timedOut:
+            failQueuedRouteStart()
+        case .idle, .warming:
+            break
+        }
+    }
+
+    /// Fail a queued request exactly once, whether the pure gate timed out or the serialized
+    /// camera transition never drained before the shared request deadline.
+    private func failQueuedRouteStart() {
+        guard pendingRouteStart != nil else { return }
+        routeStartGeneration &+= 1
+        pendingRouteStart = nil
+        routeReadinessTask?.cancel()
+        routeReadinessTask = nil
+        routeReadinessTimeoutTask?.cancel()
+        routeReadinessTimeoutTask = nil
+        depth.cancelReadiness()
+        routeStartStatus = "Obstacle detection is not ready. Route did not start."
+        routeError = "Obstacle detection is not ready"
+        speech.say("Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane.",
+                   .safety, ttl: 30)
+        watch.send(status: "Obstacle detection not ready", distanceM: -1)
+        logger.event("route_readiness", ["state": "timed_out"])
+    }
+
+    /// Cancel a queued route-start request. Called by Stop and by a newer MapKit/destination
+    /// request so an older route can never auto-start after the user has changed their mind.
+    private func cancelPendingRouteStart() {
+        guard pendingRouteStart != nil || routeReadinessTask != nil else { return }
+        routeStartGeneration &+= 1
+        pendingRouteStart = nil
+        routeReadinessTask?.cancel()
+        routeReadinessTask = nil
+        routeReadinessTimeoutTask?.cancel()
+        routeReadinessTimeoutTask = nil
+        routeStartStatus = nil
+        depth.cancelReadiness()
+        logger.event("route_readiness", ["state": "cancelled"])
+    }
+
+    /// The existing route-start effects, reached only after the interlock has cleared (or through
+    /// the intentional no-LiDAR / camera-denied degraded path).
+    private func startRouteNow(_ route: Route, announce: String? = nil) {
+        routeStartStatus = nil
         routeError = nil
         if let announce {
             // 20 s: it queues behind "Finding a route…" and must not expire before it plays.
