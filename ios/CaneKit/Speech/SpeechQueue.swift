@@ -24,7 +24,10 @@
 //  not only the one it can see synchronously: iOS settles a route asynchronously, so for the whole
 //  time the microphone is on a `routeChangeNotification` observer holds the session to the output
 //  route it started with and puts it back to `.playback` (and tells `SoundWatcher`, which stops)
-//  the moment that route moves. Nothing else in the app may call `setCategory`.
+//  the moment that route moves. No shipping code path may call `setCategory` anywhere else; the
+//  one other call in the app is `SensorProbe.caseEAudioSession()`, the debug audio probe, which
+//  runs only under `SensorProbe.isEnabled` (a launch argument) and finishes before
+//  `SoundWatcher.start()` is ever reached.
 //  Both backends use the app session so speech and the beacon share one route. Interruptions
 //  (phone call, Siri) re-activate the session when they end.
 //
@@ -247,8 +250,9 @@ final class SpeechQueue {
     /// Call once before the AR session starts (ARKit does not touch audio, but the beacon does).
     ///
     /// This is the app's `setCategory` call for every normal launch (AGENTS.md hard rule 7); the
-    /// only other one is `setMicrophoneEnabled(_:)`, which the walker has to switch on and which
-    /// reverts here on any output-route change, for as long as it is on. `.playback` so speech
+    /// only other one on a shipping path is `setMicrophoneEnabled(_:)`, which the walker has to
+    /// switch on and which reverts here on any output-route change, for as long as it is on. (The
+    /// debug `SensorProbe` has one more, behind a launch argument.) `.playback` so speech
     /// and the beacon play with the ring/silent switch on, mode `.default`, options
     /// `[.duckOthers]` so a podcast dips under guidance. Deliberately *no* `.allowBluetooth` /
     /// `.allowBluetoothHFP`: HFP would drop AirPods to mono call quality (no HRTF beacon) and

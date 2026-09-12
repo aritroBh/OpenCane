@@ -45,7 +45,9 @@
 //  SoundAnalysis on its own queue, and the microphone tap is called on an AVAudioEngine render
 //  thread, so both go through `nonisolated` relays that carry only Sendable values (`String`,
 //  `Double`) and hop with `Task { @MainActor in … }` (AGENTS.md hard rule 1). The analyser itself
-//  runs on a dedicated serial queue, as Apple's article requires — and **every** call into it
+//  runs on a dedicated serial queue, as Apple's article requires. It is built and its request is
+//  added on the main actor, before the tap exists — nothing is analysing yet, and the first
+//  `queue.async` is the barrier that publishes it — and from that moment on **every** call into it
 //  (`analyze`, `removeAllRequests`) goes through `SoundAnalysisPump` onto that one queue, because
 //  Apple requires the analyser to be used from a single queue and a `removeAllRequests` racing a
 //  buffer also makes the analyser report a failure on what was a perfectly clean stop.
@@ -136,7 +138,10 @@ final class SoundWatcher {
     /// unconditionally and `stop()` had returned early with nothing to tear down.
     @ObservationIgnored private var generation = 0
     /// The pending input-format re-read (see `startEngine(attempt:)`); cancelled by `stop()` and
-    /// `fail(_:)` so a dead start cannot wake up later.
+    /// `fail(_:speak:)` so a dead start cannot wake up later. There is never more than one: while
+    /// it is pending, `pendingRequest` is non-nil and `start()` refuses to begin a second attempt,
+    /// which would otherwise orphan this task *and* re-baseline `SpeechQueue`'s route guard to
+    /// whatever the route had already become.
     @ObservationIgnored private var formatRetry: Task<Void, Never>?
     /// The classify request built by the current `start()`, held across the input-format retry so
     /// the retry does not rebuild the label table or re-log it. Nil whenever nothing is starting.
@@ -171,7 +176,13 @@ final class SoundWatcher {
     /// Caller: `AppModel.dangerSoundsEnabled`'s `didSet`, `AppModel.start()` and
     /// `AppModel.scenePhaseChanged(.active)` when the setting was already on.
     func start() {
-        guard !isRunning else { return }
+        // Three states mean "already dealt with": running, holding the session, or waiting for the
+        // input format. `AppModel` starts the watcher from three places (`start()`,
+        // `scenePhaseChanged(.active)`, the switch) and two of them can land in the same launch —
+        // without `sessionHeld` / `pendingRequest` a second call inside the 0.25 s format-retry
+        // window would take the session again and orphan the first retry task, which shares this
+        // one's `generation` and so would not be fenced by it.
+        guard !isRunning, !sessionHeld, pendingRequest == nil else { return }
         lastError = nil
         // Permission first: `.playAndRecord` on a phone that has refused the microphone would
         // succeed and then deliver silence, which looks exactly like "no sirens today".
@@ -212,11 +223,13 @@ final class SoundWatcher {
             }
         case .revertedRouteChanged(let before, let after):
             onDiagnostic?("sound_watch", ["action": "session_reverted", "before": before, "after": after])
-            fail("Sound alerts would change the audio route from \(before) to \(after), so they stayed off.")
+            fail("Sound alerts would change the audio route from \(before) to \(after), so they stayed off.",
+                 speak: "Sound alerts stayed off: they would have changed your headphone sound.")
             return
         case .failed(let message):
             onDiagnostic?("sound_watch", ["action": "session_failed", "error": message])
-            fail("Sound alerts could not use the microphone: \(message)")
+            fail("Sound alerts could not use the microphone: \(message)",
+                 speak: "Sound alerts could not use the microphone.")
             return
         }
 
@@ -283,7 +296,8 @@ final class SoundWatcher {
         } catch {
             pendingRequest = nil
             releaseSession()
-            fail("Sound analysis refused the request: \(error.localizedDescription)")
+            fail("Sound analysis refused the request: \(error.localizedDescription)",
+                 speak: "Sound alerts could not start.")
             return
         }
         self.analyzer = analyzer
@@ -312,7 +326,8 @@ final class SoundWatcher {
             self.pump = nil
             pendingRequest = nil
             releaseSession()
-            fail("The audio engine could not start: \(error.localizedDescription)")
+            fail("The audio engine could not start: \(error.localizedDescription)",
+                 speak: "Sound alerts could not start the microphone.")
             return
         }
         pendingRequest = nil
@@ -360,9 +375,11 @@ final class SoundWatcher {
 
     /// Give the audio session back to `.playback`, once, if this object took it.
     ///
-    /// Every exit from a start, and `stop()` itself, ends here. Guarding on `sessionHeld` keeps a
-    /// double call (a failure path that stops first and then fails) from bouncing the category
-    /// twice, which on a real route is two more chances for iOS to move the output.
+    /// Every exit from a start, `fail(_:speak:)` and `stop()` itself end here. Guarding on
+    /// `sessionHeld` keeps a double call (a failure path that stops first and then fails) from
+    /// bouncing the category twice, which on a real route is two more chances for iOS to move the
+    /// output and two more blocking `setActive` calls on the main actor. The route-change path
+    /// clears `sessionHeld` itself, because there `SpeechQueue` has already done the restore.
     private func releaseSession() {
         guard sessionHeld else { return }
         sessionHeld = false
@@ -384,6 +401,11 @@ final class SoundWatcher {
     private func outputRouteChanged(from before: String, to after: String) {
         onDiagnostic?("sound_watch", ["action": "route_changed_stopped",
                                       "before": before, "after": after])
+        // `SpeechQueue` restored `.playback` before calling us, so the session is no longer ours.
+        // Clearing this first keeps `stop()` from setting the category and re-activating the
+        // session a second time — a blocking main-actor call, made exactly while a Bluetooth route
+        // is renegotiating and the walker is still being guided.
+        sessionHeld = false
         stop()
         fail("Sound alerts stopped: the microphone was changing your headphone sound.")
     }
@@ -401,7 +423,7 @@ final class SoundWatcher {
         guard isRunning || analyzer != nil else { return }   // a late failure after a clean stop
         onDiagnostic?("sound_watch", ["action": "analysis_failed", "error": message])
         stop()
-        fail(message)
+        fail(message, speak: "Sound alerts stopped listening.")
     }
 
     /// Record a reason the watcher is not running, make sure the flag agrees with it, cancel
@@ -410,8 +432,18 @@ final class SoundWatcher {
     /// Every failure in this file goes through here, so there is exactly one place that decides
     /// what a failure means: no pending work, `isRunning` false, `lastError` set for the Hazards
     /// card, and `onFailure` so `AppModel` turns the switch off and speaks it once.
-    /// - Parameter message: a sentence a blind walker can act on; also shown on the card.
-    private func fail(_ message: String) {
+    ///
+    /// The two strings are deliberately separate. `message` is for the card and the trip log and
+    /// may carry the detail a developer needs — an `NSError` description, the audio port names.
+    /// `spoken` is what a blind walker hears mid-walk, and reading
+    /// "com.apple.SoundAnalysis error 2" or "BluetoothA2DP to BluetoothHFP" out loud over a route
+    /// is noise at best. These used to be one string that only ever reached the card; the moment a
+    /// failure became something the app *says*, they had to part company.
+    /// - Parameters:
+    ///   - message: shown on the Hazards card and logged; may be technical.
+    ///   - spoken: what is said aloud. Defaults to `message`, which is right only when the message
+    ///     is already a plain sentence.
+    private func fail(_ message: String, speak spoken: String? = nil) {
         generation &+= 1
         formatRetry?.cancel()
         formatRetry = nil
@@ -419,9 +451,14 @@ final class SoundWatcher {
         // A start that got as far as the session but no further has already left a route hook on
         // `SpeechQueue`; nothing must be able to call back into a watcher that has given up.
         speech.onMicrophoneRouteChanged = nil
+        // Structural, not conventional: every current caller releases the session before it fails,
+        // but the file header promises that *every* way this feature dies ends on `.playback`, and
+        // a promise kept by six call sites agreeing is one bad merge from being broken.
+        // `releaseSession()` is idempotent, so the duplicate costs nothing.
+        releaseSession()
         lastError = message
         isRunning = false
-        onFailure?(message)
+        onFailure?(spoken ?? message)
     }
 
     // MARK: Classification
@@ -469,8 +506,10 @@ final class SoundWatcher {
 ///
 /// It exists to make that hop legal under Swift 6 strict concurrency: neither
 /// `SNAudioStreamAnalyzer` nor `AVAudioPCMBuffer` is `Sendable`, and the tap block escapes the
-/// audio thread. `@unchecked Sendable` is sound here — the analyser is touched **only** from
-/// `queue` (a serial queue), each buffer is handed over exactly once and never read again by the
+/// audio thread. `@unchecked Sendable` is sound here — once this object exists the analyser is
+/// touched **only** from `queue` (a serial queue); it was built and given its request on the main
+/// actor before that, with no tap installed and therefore nothing analysing, and the first
+/// `queue.async` publishes it. Each buffer is handed over exactly once and never read again by the
 /// tap, and the pump is dropped (with the tap removed first) in `SoundWatcher.stop()`. It is not
 /// used to silence a real data race (AGENTS.md hard rule 1).
 ///

@@ -930,6 +930,12 @@ final class AppModel {
     /// a horn is not announced after it has passed.
     /// There is no haptic for sound alerts on purpose: the cane's taps mean "something is in your
     /// path", and borrowing them for something heard would make the safety channel ambiguous.
+    ///
+    /// It also wires `onFailure`, which is the *other* thing this feature can say. That line shares
+    /// the `.obstacle` band with the alerts, and for the same reason: a microphone that stopped
+    /// working is never more urgent than an obstacle in the path or a crossing instruction. The
+    /// watcher hands over a short hand-written sentence for speech and keeps the technical detail
+    /// (`NSError` descriptions, audio port names) for `lastError` and the trip log.
     private func wireSounds() {
         sounds.onDiagnostic = { [weak self] kind, fields in self?.logger.event(kind, fields) }
         sounds.onAlert = { [weak self] sound in
