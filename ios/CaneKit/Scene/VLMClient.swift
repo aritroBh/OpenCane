@@ -191,16 +191,28 @@ nonisolated enum VLMClientFactory {
 
 // MARK: - Shared transport
 
-/// One session for all providers: no waiting for connectivity, 8 s idle / 12 s total per request,
-/// so a dead network falls through to the on-device client quickly and "Where am I" always
-/// answers. The hazard watch cuts the cloud off even sooner (FallbackVLMClient.hazardDeadline).
+/// One session for all providers: no waiting for connectivity, 18 s idle / 25 s total per request,
+/// so a dead network falls through to the on-device client rather than hanging, while a model that
+/// is merely slow is allowed to finish. The hazard watch cuts the cloud off far sooner
+/// (`FallbackVLMClient.hazardDeadline`, 2.5 s) because nobody is waiting for that one.
+///
+/// ⚠ Measured on the phone, which is why these are not 8 and 12 any more: a "Where am I" through
+/// Muse Spark took **10,748 ms** end to end and the 8 s request timeout cancelled it every single
+/// time, so the walker always heard the on-device template and the cloud model may as well not
+/// have been configured. Muse Spark is a *reasoning* model — it thinks before it answers, and a
+/// JPEG has to be uploaded first — so ten seconds is its normal cost, not a fault.
+///
+/// The budget is only spendable by "Where am I", which the walker asked for and waits for standing
+/// still; every safety path has its own much shorter deadline and none of them waits on this.
+/// A dead network still fails in seconds, because `waitsForConnectivity = false` means an
+/// unreachable host errors immediately rather than burning the budget.
 /// A lazily initialised global `let` — thread-safe one-time init.
 nonisolated private let vlmSession: URLSession = {
     let c = URLSessionConfiguration.default
-    // Fail fast on a dead network: the on-device fallback answers instead of 20 s of silence.
+    // Fail fast on a dead network: the on-device fallback answers instead of a long silence.
     c.waitsForConnectivity = false
-    c.timeoutIntervalForRequest = 8
-    c.timeoutIntervalForResource = 12
+    c.timeoutIntervalForRequest = 18
+    c.timeoutIntervalForResource = 25
     return URLSession(configuration: c)
 }()
 
