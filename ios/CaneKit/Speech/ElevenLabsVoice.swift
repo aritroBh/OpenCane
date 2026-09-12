@@ -26,6 +26,7 @@
 //  stale voice. The cache lives in Caches/, which iOS may purge; a purge only costs latency.
 //
 
+import CaneKitLogic
 import CryptoKit
 import Foundation
 
@@ -54,12 +55,13 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     /// nil when no key is configured.
     /// Reads `ELEVENLABS_API_KEY` (required), `ELEVENLABS_VOICE_ID` (default
-    /// "21m00Tcm4TlvDq8ikWAM", a premade voice) and `ELEVENLABS_MODEL` (default
-    /// "eleven_flash_v2_5", the low-latency model). Empty values count as missing (`Secrets`).
+    /// "EXAVITQu4vr4xnSDxMaL", Bella — the voice Aritro chose for the demo) and
+    /// `ELEVENLABS_MODEL` (default "eleven_flash_v2_5", the low-latency model). Empty values
+    /// count as missing (`Secrets`), so the defaults here are what a fresh clone gets.
     static func fromSecrets() -> ElevenLabsVoice? {
         guard let key = Secrets.string("ELEVENLABS_API_KEY") else { return nil }
         return ElevenLabsVoice(apiKey: key,
-                               voiceID: Secrets.string("ELEVENLABS_VOICE_ID") ?? "21m00Tcm4TlvDq8ikWAM",
+                               voiceID: Secrets.string("ELEVENLABS_VOICE_ID") ?? "EXAVITQu4vr4xnSDxMaL",
                                model: Secrets.string("ELEVENLABS_MODEL") ?? "eleven_flash_v2_5")
     }
 
@@ -73,13 +75,18 @@ nonisolated struct ElevenLabsVoice: Sendable {
 
     // MARK: Cache
 
-    /// `Library/Caches/elevenlabs/`, created on demand (every access re-checks; creation errors
-    /// are ignored and surface later as a failed write, i.e. a cache miss).
-    private static var cacheDir: URL {
+    /// `Library/Caches/elevenlabs/`, created once on first use.
+    ///
+    /// A `let`, not a computed `var`: `cached(_:)` is called on the main actor for *every* spoken
+    /// line to choose between instant playback and a fetch, and a computed property would run
+    /// `createDirectory` synchronously on the main thread inside the obstacle- and navigation-cue
+    /// path. Creation errors are ignored here and surface later as a failed write, i.e. a cache
+    /// miss, which the system voice already covers.
+    private static let cacheDir: URL = {
         let dir = URL.cachesDirectory.appendingPathComponent("elevenlabs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
     /// Deterministic file for (voice, model, text): the first 12 bytes of
     /// SHA-256("voiceID|model|text") as 24 hex characters + ".mp3". Text must match exactly
@@ -113,22 +120,25 @@ nonisolated struct ElevenLabsVoice: Sendable {
         return url
     }
 
-    /// Pre-synthesize a batch (route lines, common phrases), at most 3 requests in flight so a
-    /// long route never bursts into rate limits, each with `prefetchTimeout` rather than the
-    /// walking-pace live timeout.
-    /// Duplicates and already-cached lines are skipped up front. Returns when every request has
-    /// finished or failed. Caller: `SpeechQueue.prefetch`, on a detached `.utility` task.
+    /// Pre-synthesize a batch (route lines, common phrases), at most
+    /// `VoicePrefetch.maxConcurrent` in flight, each with `prefetchTimeout` rather than the
+    /// walking-pace live timeout. What to request and in what order is `VoicePrefetch.queue`
+    /// (CaneKitLogic, pinned by VoicePrefetchTests) — speaking order, no repeats, nothing cached.
+    /// Returns when every request has finished or failed. Caller: `SpeechQueue.prefetch`.
     ///
     /// - Returns: the description of the first failure, or nil if every line was fetched (or there
     ///   was nothing to fetch). A prefetch is the app's *first* call to ElevenLabs, seconds after
     ///   launch, so this is how a wrong key ("HTTP 401") reaches the Haptics card before anyone
     ///   has spoken a word — silently swallowing it left the demo looking merely voice-less.
+    ///   ⚠ With every line already cached nothing is requested, so a key that went bad since the
+    ///   last run stays unreported until the next miss. Prefetch reports failures; it does not
+    ///   validate the key.
     func prefetch(_ lines: [String]) async -> String? {
-        let missing = Array(Set(lines)).filter { cached($0) == nil }
+        let missing = VoicePrefetch.queue(lines) { cached($0) != nil }
         // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based
         // isolation a mutable local in this region cannot be sent into a concurrent closure.
         let slow = withTimeout(prefetchTimeout)
-        return await withTaskGroup(of: String?.self) { group in
+        return await withTaskGroup(of: Failure?.self) { group in
             var iterator = missing.makeIterator()
             var firstError: String?
             func addNext() {
@@ -138,16 +148,32 @@ nonisolated struct ElevenLabsVoice: Sendable {
                     // Cancellation is the app tearing down, not a voice problem: never report it.
                     catch is CancellationError { return nil }
                     catch let error as URLError where error.code == .cancelled { return nil }
-                    catch { return error.localizedDescription }
+                    catch let error as VoiceError {
+                        return Failure(message: error.localizedDescription, fatal: error.isFatal)
+                    }
+                    catch { return Failure(message: error.localizedDescription, fatal: false) }
                 }
             }
-            for _ in 0..<min(3, missing.count) { addNext() }
+            for _ in 0..<min(VoicePrefetch.maxConcurrent, missing.count) { addNext() }
             while let result = await group.next() {
-                if firstError == nil, let result { firstError = result }
+                if firstError == nil, let result { firstError = result.message }
+                // A wrong key fails every remaining line identically. Carrying on would turn one
+                // mistake in Secrets.plist into twenty rejected requests, which is how an account
+                // gets rate-limited an hour before a demo.
+                if result?.fatal == true {
+                    group.cancelAll()
+                    break
+                }
                 addNext()
             }
             return firstError
         }
+    }
+
+    /// One failed line: what to show, and whether the rest of the batch is worth attempting.
+    private struct Failure: Sendable {
+        let message: String
+        let fatal: Bool
     }
 
     /// One POST to `/v1/text-to-speech/{voiceID}` requesting 22.05 kHz / 32 kbps mp3 (small
@@ -170,8 +196,13 @@ nonisolated struct ElevenLabsVoice: Sendable {
         let body: [String: Any] = [
             "text": text,
             "model_id": model,
-            // Calm, confident delivery; slight style for warmth.
-            "voice_settings": ["stability": 0.5, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": true],
+            // Exactly the two settings Aritro's reference payload for this voice and model sends.
+            // `style` and `use_speaker_boost` were here before and are now deliberately absent:
+            // `style` is a v2-only setting and `eleven_flash_v2_5` can reject the request with a
+            // 422 for it, which on the first run with a real key looks identical to a bad key.
+            // Two settings that are certain to be accepted beat four that might not be, for a
+            // voice whose only job is to be understood on a street corner.
+            "voice_settings": ["stability": 0.4, "similarity_boost": 0.75],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -190,6 +221,12 @@ nonisolated struct ElevenLabsVoice: Sendable {
         case badResponse
         /// Non-2xx: status code and the first ≤ 200 bytes of the response body.
         case http(Int, String)
+        /// True when retrying other lines is pointless — a bad key, or a voice/model this account
+        /// cannot use. Decided by `VoicePrefetch.isFatal` (CaneKitLogic, pinned by its tests).
+        var isFatal: Bool {
+            if case .http(let code, _) = self { return VoicePrefetch.isFatal(status: code) }
+            return false
+        }
         var errorDescription: String? {
             switch self {
             case .badResponse: return "ElevenLabs: empty response"

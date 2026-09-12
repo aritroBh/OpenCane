@@ -30,6 +30,10 @@ Scenarios (see SCENARIOS below):
 
 Exit status 0 only if every requested scenario passes. Reports + copied logs: build/e2e/.
 Requires a simulator build first (`make sim`); the Makefile's e2e target does that.
+
+Run it **alone**: the scenarios are real-time GPS replays, so another xcodebuild / simulator job
+on the same device starves the app and the assertions then describe a walk that never happened
+(`gps_median_dt` in the report, and the "GPS replay starved" warning, say when that happened).
 """
 
 from __future__ import annotations
@@ -258,10 +262,34 @@ def reserved_collisions(events: list[dict]) -> list[dict]:
     return [e for e in events if "field_kind" in e or "field_t" in e]
 
 
+def fix_cadence(events: list[dict]) -> tuple[int, float, float, float]:
+    """GPS fixes the app logged: count, median gap, largest gap, and the span they cover (seconds).
+
+    The replay feeds one fix per second (`--interval=1`), so anything else means the app or the
+    simulator was starved — almost always a second xcodebuild / simulator job on the same device.
+    Every assertion below then describes a walk that never really happened (seen on 2026-09-11:
+    `wrong_turn` reported "no arrival (last waypoint index 3)" and no veer cue while a UI-test run
+    shared the simulator; alone it arrives in 296 s with the veer).
+
+    Three numbers, because one is not enough. A run starved *in the middle* keeps a healthy median
+    — the same 2026-09-11 session produced a `clean` run whose median was 1.01 s and which still
+    failed with "no arrival (last waypoint index 5)", because its 141 fixes covered only 141 s of
+    a 340 s run: the app was starved in long stretches, not uniformly slowed. So `check` also
+    compares the **span** against the scenario's wall-clock seconds, and watches the largest gap.
+    Healthy reference (four scenarios, 2026-09-11, machine idle): median 1.01 s, max 6.5-6.9 s
+    (simctl pauses an interval at every path vertex), span within 4% of the run.
+    """
+    ts = [e["t"] for e in events if e.get("kind") == "gps" and isinstance(e.get("t"), (int, float))]
+    if len(ts) < 3:
+        return len(ts), 0.0, 0.0, 0.0
+    gaps = sorted(b - a for a, b in zip(ts, ts[1:]))
+    return len(ts), round(gaps[len(gaps) // 2], 2), round(gaps[-1], 2), round(ts[-1] - ts[0], 1)
+
+
 warnings: list[str] = []   # non-failing notes for the report (reset per scenario in main)
 
 
-def check(name: str, events: list[dict]) -> list[str]:
+def check(name: str, events: list[dict], seconds: float = 0.0) -> list[str]:
     """Return a list of failures (empty = pass). Non-failing notes go to `warnings`."""
     fails: list[str] = []
     said = speech(events)
@@ -275,6 +303,21 @@ def check(name: str, events: list[dict]) -> list[str]:
         fails.append("route never started (CANEKIT_DEMO_ROUTE hook?)")
     if not arrived:
         fails.append(f"no arrival (last waypoint index {wp_idx[-1] if wp_idx else None})")
+    # Say out loud when the run itself was starved — whatever it did or did not assert, so a
+    # contended simulator is never read as a navigation bug (see fix_cadence). A starved run can
+    # also arrive and merely lose a cue, so this is not inside the `not arrived` branch.
+    fixes, median_dt, max_dt, span = fix_cadence(events)
+    # Uniformly slow (median), stalled for a stretch (max gap), or simply absent for most of the
+    # run (span vs elapsed) — a run can be starved in any of the three ways and only the last one
+    # caught the 2026-09-11 `clean` failure. `seconds` includes launch and the post-arrival wait,
+    # so a healthy span is ~96% of it; 60% is comfortably clear of that and of any simctl pause.
+    starved = (median_dt > 1.5 or fixes < 30 or max_dt > 15
+               or (seconds > 0 and span < 0.6 * seconds))
+    if starved:
+        warnings.append(f"GPS replay starved: {fixes} fixes, median {median_dt} s apart, largest "
+                        f"gap {max_dt} s, covering {span} s of a {seconds} s run (the replay feeds "
+                        "1/s) — was another xcodebuild / simulator job using this device? Re-run "
+                        "the scenario alone before believing anything above")
     if wp_idx != sorted(wp_idx):
         fails.append(f"waypoints out of order: {wp_idx}")
     if arrived and not any("kilometers" in s or "meters," in s for s in said):
@@ -366,7 +409,7 @@ def main() -> int:
         try:
             res = run_scenario(udid, name, paths[name], args.speed)
             warnings.clear()
-            fails = check(name, res["events"])
+            fails = check(name, res["events"], res["seconds"])
         except Exception as e:                   # one bad launch must not abort the other scenarios
             res = {"events": [], "seconds": 0, "path_m": round(path_length(paths[name]))}
             fails = [f"harness error: {e}"]
@@ -374,9 +417,14 @@ def main() -> int:
             sh("xcrun", "simctl", "location", udid, "clear", check=False)
             sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
         ok &= not fails
+        fixes, median_dt, max_dt, span = fix_cadence(res["events"])
         report["scenarios"][name] = {
             "pass": not fails, "failures": fails, "warnings": list(warnings),
             "seconds": res["seconds"], "path_m": res["path_m"],
+            # Cadence of the replay as the app saw it: ~1 fix/s covering the whole run is
+            # healthy; see fix_cadence for what each number catches.
+            "gps_fixes": fixes, "gps_median_dt": median_dt,
+            "gps_max_dt": max_dt, "gps_span_s": span,
             "waypoints": [e.get("index") for e in res["events"] if e.get("kind") == "waypoint"],
             "navcues": navcues(res["events"]),
             "speech": speech(res["events"]),

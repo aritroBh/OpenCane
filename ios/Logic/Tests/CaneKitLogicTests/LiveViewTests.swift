@@ -56,3 +56,61 @@ import Testing
     #expect(LiveView.state(enabled: true, hot: false, cameraRunning: true, highFrameRate: false,
                            foreground: false) == .cameraOff)
 }
+
+// MARK: - Both cameras (front + back at once)
+
+/// Off by default in every combination: the mode that pauses obstacle detection must never be
+/// reachable without the switch.
+@Test func bothCamerasOffWithTheSwitchOff() {
+    for supported in [false, true] {
+        for navigating in [false, true] {
+            #expect(BothCameras.state(enabled: false, supported: supported,
+                                      navigating: navigating) == .off)
+        }
+    }
+}
+
+/// A route beats the picture. A walking blind user does not lose obstacle warnings so a spotter
+/// can see a selfie feed. ⚠ Do not relax this without the owner's explicit decision.
+@Test func bothCamerasAreRefusedWhileARouteIsGuiding() {
+    #expect(BothCameras.state(enabled: true, supported: true, navigating: true) == .blockedByRoute)
+}
+
+/// Backgrounded or locked beats everything: the capture session is stopped then, so showing a
+/// frozen pair of frames would be a lie (the same rule `LiveView` follows).
+@Test func bothCamerasAreOffInTheBackground() {
+    #expect(BothCameras.state(enabled: true, supported: true, navigating: false,
+                              foreground: false) == .off)
+    #expect(BothCameras.state(enabled: true, supported: true, navigating: true,
+                              foreground: false) == .off)
+}
+
+/// A phone without `AVCaptureMultiCamSession` gets an honest refusal and no picture — it never
+/// shows one feed as though it were two, and it never promises a back-camera fallback that the
+/// app does not implement (`DualCameraSession.start()` opens no camera on this path).
+@Test func bothCamerasRefuseWithoutMultiCamSupport() {
+    #expect(BothCameras.state(enabled: true, supported: false, navigating: false) == .unsupported)
+}
+
+/// The normal case: switch on, multi-cam available, no route → both pictures.
+@Test func bothCamerasGoLiveWhenNothingIsWalking() {
+    #expect(BothCameras.state(enabled: true, supported: true, navigating: false) == .live)
+}
+
+/// The inset is a third of the width, in the camera's portrait shape, tucked into the
+/// bottom-trailing corner with a 10 pt margin.
+@Test func bothCamerasInsetSitsInTheBottomTrailingCorner() {
+    let r = BothCamerasLayout.insetRect(width: 300, height: 400)
+    #expect(abs(r.width - 99) < 0.001)                       // 300 × 0.33
+    #expect(abs(r.height - 132) < 0.001)                     // 99 ÷ (3/4)
+    #expect(abs(r.x - (300 - 99 - 10)) < 0.001)
+    #expect(abs(r.y - (400 - 132 - 10)) < 0.001)
+}
+
+/// A short preview box clamps the inset instead of pushing it off the top edge.
+@Test func bothCamerasInsetIsClampedInAShortBox() {
+    let r = BothCamerasLayout.insetRect(width: 300, height: 60)
+    #expect(r.height <= 60 - 2 * BothCamerasLayout.insetMargin + 0.001)
+    #expect(r.y >= BothCamerasLayout.insetMargin - 0.001)
+    #expect(abs(r.width / r.height - BothCamerasLayout.insetAspectWidthOverHeight) < 0.001)
+}

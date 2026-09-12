@@ -1,6 +1,178 @@
 # CaneKit — strict build checklist
 
-Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no Xcode on the Mac yet) · `[!]` blocked
+Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested · `[!]` blocked on a person
+
+---
+
+## WHERE WE ARE — Fri 2026-09-11, 19:45 (read this first)
+
+Demo: Sat 2026-09-12. The app runs untethered on Aritro's iPhone 17 Pro Max (iOS 27), clamped to a
+cane, with AirPods Pro. **This block is rewritten on every push; if it contradicts an older section
+lower down, this block is right.**
+
+### What is proven ON THE PHONE (measured, from trip logs in `Documents/`)
+
+| Thing | Evidence |
+| --- | --- |
+| LiDAR depth, mesh names, haptics, head-height cue | `start` record: `lidar: true, mesh: true, haptics: true`; speech records "window ahead, one and a half meters", "table ahead, half a meter", "Head height." |
+| Depth at 30 reports/s | `lanes.fps` median **29.988** (was exactly 10.0 before the `PublishGate` timing fix) |
+| Both cameras at once — ⚠ **superseded evidence** | The `both_cameras` records (`supported: true, front: true, back: true, error: ""`, `hardware_cost: 0.26`, and after stopping `depth_running: true, depth_fps: 30, status: "Depth OK"`) were measured against the **preview-layer** version, which no longer exists: the feeds now render from `AVCaptureVideoDataOutput` into `AVSampleBufferDisplayLayer` because a preview layer makes LiDAR depth unreliable (Apple forums 742501). What still carries over is that multi-cam is supported and that ARKit resumes cleanly after the mode stops. **Whether the two feeds actually draw has never been seen on hardware.** |
+| Trip-log field collision fixed | zero rows carry `field_kind` / `field_t` |
+| ElevenLabs (Bella) reachable | key verified `HTTP 200`, free tier 0/10 000 chars; a real 9 kB mono mp3 at 22.05 kHz came back for the app's exact payload |
+| Muse Spark 1.3 reachable + multimodal | key verified `HTTP 200` from `muse-spark-1.3-contributor`; docs confirm `/v1/chat/completions` and image understanding |
+
+### MEASURED ON THE PHONE: both cameras AND depth is possible, without ARKit
+
+The `multicam_depth` probe ran on Aritro's iPhone 17 Pro Max (iOS 27) on 2026-09-12 and answered the
+question Apple's documentation could not:
+
+```
+multicam_supported:    True
+front_plus_depth_sets: 12
+device_sets:           front:BuiltInWideAngleCamera + back:BuiltInLiDARDepthCamera  depth 320x240
+                       front:BuiltInTrueDepthCamera depth 640x480 + back:BuiltInLiDARDepthCamera
+depth_multicam_formats: 33
+best_format:           video 640x480, depth 320x240
+arkit_depth_size:      256x192
+keeps_depth:           True
+verdict:               depthAboveARKitResolution
+```
+
+**Twelve multi-cam device sets pair the front camera with a depth-capable back camera**, including
+the wide-angle front camera with the LiDAR depth camera. Apple's own sources only ever name the rear
+Telephoto and Ultra Wide as the second camera (WWDC22 110429; DTS forum 702875), so this had to be
+measured. AVFoundation's streaming LiDAR depth is **320×240 — higher than ARKit's 256×192**.
+
+**What this means:** the current design pauses ARKit to show both cameras, because ARKit itself can
+never hand over two images (Apple DTS, forum 677731). But a future version could run
+`AVCaptureMultiCamSession` with `builtInLiDARDepthCamera` + the front camera, take depth from
+`AVCaptureDepthDataOutput`, and have **both feeds and working obstacle detection at once.**
+
+**What it would cost — a real rewrite, not a switch:** no ARKit means no world tracking, no
+classified mesh (the source of "door" / "wall" / "table"), no per-pixel `confidenceMap`, and no
+gravity-aligned world — gravity would come from `CMDeviceMotion.gravity` instead, and the depth map
+would need rectifying with `AVDepthData.cameraCalibrationData` (it is non-rectilinear, unlike
+ARKit's). Also: no `AVCaptureVideoPreviewLayer` anywhere near it (forums 742501), and
+`systemPressureCost` must stay under 1.0 to run indefinitely.
+
+- [ ] **Post-demo:** prototype the AVFoundation depth pipeline behind a setting and compare it with
+      ARKit on the same walk — obstacle-cue parity first, then whether the extra depth resolution
+      buys anything a cane user can feel.
+
+### What is NOT proven on the phone yet
+
+- People/animal detection (Vision's neural models cannot run in the simulator — phone-only).
+- **That the two camera feeds actually appear.** The render path was rewritten after the only device
+  run, so it is unproven; if it shows black, the fallback is Metal or `CIContext`, never a preview
+  layer.
+- The `.playAndRecord` microphone switch **with AirPods connected**. It was measured only with no
+  headphones (output stayed `Speaker`, restore worked). The revert-on-route-change guard exists
+  precisely because the AirPods case is unmeasured.
+- The `multicam_depth` probe's answer — whether a future version could show both cameras *and* keep
+  depth through AVFoundation instead of ARKit. The probe is in the build and has never run.
+- The Muse scene sentence end to end after tonight's reasoning-token fix.
+- Ground hazards (drop-offs, potholes) on real pavement; still **off by default**.
+- Sound recognition (sirens, horns) and front-camera head tracking; both **off by default**.
+- The outdoor ISR → CIF walk.
+
+### Honest capability table — what the demo can and cannot claim
+
+| Hazard | Mechanism | Status |
+| --- | --- | --- |
+| Poles, signs, branches, open doors (waist-to-head) | LiDAR geometry, no model | **Works, verified on device.** The strongest claim we have |
+| Drop-offs, potholes, curbs, steps | LiDAR ground geometry | Built + tested, tilt-gated against the false "Hole ahead"; off by default, untested on real pavement |
+| People, dogs, cats + direction + measured distance | Apple `DetectHumanRectanglesRequest` / `RecognizeAnimalsRequest` + LiDAR box depth | Built, 206 Logic tests, **never run on hardware** |
+| Signs, crosswalk push-buttons | Vision OCR, measured to ≈ 7 m for 7.5 cm letters | Works |
+| **Cars, bikes, ice, puddles, construction** | **No Apple detector exists.** Only the 1 303-label classifier — which returned *zero* usable labels on the phone — or a vision-language model | **Needs the Muse key, which is now wired.** Verify on device before claiming it |
+| Route guidance, veer, crossings | GPS + MapKit + compass | Works; the veer regression below is being fixed |
+
+**The line to say out loud at the demo:** *the model names things; LiDAR measures them. No number the
+sensors did not see is ever spoken.*
+
+### Keys (git-ignored `ios/CaneKit/Resources/Secrets.plist`, never committed)
+
+- `ELEVENLABS_API_KEY` — set. Voice `EXAVITQu4vr4xnSDxMaL` (Bella), model `eleven_flash_v2_5`,
+  settings stability 0.4 / similarity 0.75.
+- `CUSTOM_*` — set to Meta Model API: `https://api.meta.ai/v1`, `muse-spark-1.3-contributor`,
+  `VLM_PROVIDER = custom`. Key format is **pipe**-delimited (`LLM|<digits>|<chars>`).
+- ⚠ **Rotate both keys after the event** — they were pasted into a chat transcript.
+- ⚠ A build made in a git worktree gets an **empty** Secrets.plist (the file is git-ignored), so an
+  agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
+  do the same for any new one, or install only from the main checkout.
+
+### Branch state (updated 2026-09-11 ~20:15)
+
+**Merged into main and verified (243 Logic tests, simulator build clean, `make uitest` green):**
+- the destination-search rework + its accessibility fix
+- `fix/cloud-scene-gate` — the cloud sentence is gated, and Muse Spark can actually answer
+  (`max_tokens` 120 → 1024 and `reasoning_effort: "low"`; it was spending the whole budget
+  reasoning and returning nothing after 11 s)
+- `feat/detect-people` — people and animals named with direction and a LiDAR-measured distance
+- the widget-embed fix: **the Live Activity had never been in any installed build**
+
+**Committed on a branch, not yet merged:**
+- `fix/voice-consistency` — 74 warning lines (1,722 characters, 17.2 % of the monthly free tier)
+  prefetched so warnings stop alternating between Bella and Apple's voice. It also fixes a bug the
+  first attempt introduced: the launch batch was cancelled by the first warning the walker heard,
+  so most of the set was never synthesized.
+- `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
+  **Deliberately held**: it conflicts with the people-detection work in the same files and buys
+  nothing for the demo.
+
+**Uncommitted work in worktrees — these are the only copies:**
+- `/Users/aritro/Downloads/cane-wt-veer` — the veer safety fix
+- `/Users/aritro/Downloads/cane-wt-all-sensors` — both-cameras mode, front-camera head tracking,
+  microphone sound recognition (~800 lines). ⚠ **Do not merge all-sensors without care**: it adds
+  to `AppModel`'s safety path, touches `Info.plist` and `project.yml`, and its sound watcher wants
+  `.playAndRecord`, which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
+
+### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
+
+Twelve findings; three were fixed on the spot (a failed both-cameras start left the walker with no
+obstacle detection; "Obstacle detection is back" was spoken before it was true; the microphone
+setting persisted across launches). **Every one below is in a feature that is OFF by default**, so
+none blocks the demo — but they are real, and several need the phone to judge.
+
+- [ ] **A route can start while the cameras are still being released.** `beginRoute` turns the
+      two-camera switch off and then calls `nav.start(route)` without waiting for the serialised
+      stop + ARKit warm-up (~1–3 s), so guidance begins with LiDAR still down. Either await the
+      chain or refuse Go while a switch operation is in flight.
+- [ ] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
+      output route immediately after `setActive(true)`, but iOS settles the route ~0.5 s later — so
+      an AirPods flip to HFP would pass the check. Subscribe to route-change notifications for the
+      whole time the mic is on and revert on any change. (The AirPods case is still unmeasured; this
+      is the finding most likely to bite when it is.)
+- [ ] **Analyzer death keeps the microphone session open.** `SoundWatcher`'s failure path sets
+      `lastError` only: `isRunning` stays true, the session stays `.playAndRecord` (orange dot,
+      degraded beacon), and no alert ever fires again. It should `stop()` and revert.
+- [ ] **Permission race can start the mic after the user turned it off.** The `.undetermined` branch
+      restarts unconditionally in the permission callback, so toggling on → off → "Allow" records
+      with the switch showing off. Check a generation counter or the live toggle first.
+- [ ] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
+      The two-camera mode correctly refuses during a route; this path does not.
+- [ ] **The mic input format is read synchronously before the route settles**, so the first-ever
+      enable with AirPods can fail spuriously with "No microphone input available". Re-read after
+      the engine starts, with one short retry.
+- [ ] **"Degrades to the back camera alone" is documented but not implemented** — on a phone without
+      multi-cam the mode shows no picture. Implement the single-session fallback or correct the
+      header and the card copy.
+- [ ] **Backgrounding enqueues the camera teardown**, so if the system suspends first the app can
+      hold both cameras in the background. Tear down best-effort with a timeout before pausing depth.
+- [ ] **Debug-only:** launching with both the sensor-probe and demo-route flags guides a route for
+      ~40 s with no depth, and the probe's 40 s announcement queues ahead of route lines with a 20 s
+      TTL.
+
+### The merge gate (nothing lands on main that fails any step)
+
+1. `cd ios/Logic && swift test` · 2. `make sim` · 3. `make uitest` (muted) · 4. `make e2e` (4 scenarios)
+· 5. Muse + Antigravity over the **merged whole**, every finding verified by hand before acting
+· 6. install on the phone and confirm from the trip log.
+
+⚠ Never run two simulator jobs at once — concurrent `make uitest` and `make e2e` produced a bogus
+"harness error: No such file or directory" that looks like a real failure. Use
+`make uitest SIM="iPhone 18 Pro"` to work alongside someone else's run.
+
+---
 
 ## Step 0 — phone-only reset
 - [x] Push 3 commits to origin/main

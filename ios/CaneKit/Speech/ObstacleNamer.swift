@@ -26,10 +26,12 @@ final class ObstacleNamer {
     var minInterval: TimeInterval = 2.5
     /// Name anything classified closer than this…
     /// Metres, measured along the camera axis (`MeshHit.distance` = centre-window depth).
-    var maxDistance: Float = 3.0
+    /// The default lives in `SpokenPhrases` (CaneKitLogic) because the launch prefetch enumerates
+    /// every line this limit makes reachable; changing it there widens both together.
+    var maxDistance: Float = SpokenPhrases.obstacleMaxDistance
     /// …except walls, which are everywhere; only name them when close.
-    /// Metres.
-    var wallMaxDistance: Float = 1.5
+    /// Metres; default from `SpokenPhrases.wallMaxDistance` for the same reason.
+    var wallMaxDistance: Float = SpokenPhrases.wallMaxDistance
     /// Forget the last announcement after this long without a hit, so re-approaching re-announces.
     /// Seconds of report time.
     var forgetAfter: TimeInterval = 2.0
@@ -84,7 +86,9 @@ final class ObstacleNamer {
         lastClass = hit.classification
         lastBucket = bucket
         lastSpoken = now
-        let dist = SpokenDistance.phrase(hit.distance)
-        return dist.isEmpty ? "\(name) ahead" : "\(name) ahead, \(dist)"
+        // Wording lives in `SpokenPhrases.obstacleLine` (CaneKitLogic), which is also what the
+        // launch prefetch enumerates: the line is byte-identical to the cached mp3, so it plays in
+        // the natural voice rather than falling back to the system voice mid-walk.
+        return SpokenPhrases.obstacleLine(name: name, distance: hit.distance)
     }
 }

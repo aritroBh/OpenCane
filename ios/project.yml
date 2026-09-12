@@ -7,6 +7,18 @@
 #   CaneKitWidget  Live Activity extension       bundle id com.aritro.canekit.widget   [added in step 9]
 # All three share the pure-logic SwiftPM package in ./Logic.
 #
+# The name split (deliberate — see AGENTS.md → "The name split"):
+#   What a HUMAN sees/hears  = OpenCane. That is `CFBundleDisplayName` on all three targets (home
+#     screen, Settings, the Files app folder, and the word Siri matches in an App Shortcut phrase,
+#     because `\(.applicationName)` resolves to the display name).
+#   What the CODE is called  = CaneKit. Project name, target names, `PRODUCT_NAME`, the SwiftPM
+#     module `CaneKitLogic`, the scheme, every `ios/CaneKit/…` path and the Makefile all stay
+#     CaneKit, and the bundle ids stay `com.aritro.canekit*` (frozen — hard rule 6: a new id makes
+#     iOS treat this as a different app and orphans the installed build, its settings and the
+#     ElevenLabs voice cache).
+#   Do NOT "fix" the mismatch by renaming targets or `PRODUCT_NAME`: `PRODUCT_NAME` names the
+#   built `CaneKit.app`, which the Makefile, gen.sh and scripts/e2e.py all reference by path.
+#
 # Signing: automatic, personal team. DEVELOPMENT_TEAM is passed on the xcodebuild command line
 # (see Makefile / local.mk) so this file never carries a team id.
 #
@@ -77,7 +89,7 @@ targets:
     info:
       path: CaneKit/Info.plist
       properties:
-        CFBundleDisplayName: CaneKit
+        CFBundleDisplayName: OpenCane
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -85,19 +97,23 @@ targets:
         UIRequiredDeviceCapabilities: [arkit, arm64]
         UIBackgroundModes: [audio, location]
         # Trip logs (JSONL) and the hazard map (GeoJSON + photos) in Documents show up in the
-        # Files app → On My iPhone → CaneKit (review: they were unreachable on the phone).
+        # Files app → On My iPhone → OpenCane (the display name, not the target name; review:
+        # they were unreachable on the phone).
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
         # Purpose strings — the system shows these on first use.
-        NSCameraUsageDescription: "CaneKit uses the camera and LiDAR to detect obstacles between your waist and head."
-        NSLocationWhenInUseUsageDescription: "CaneKit uses your location and heading to guide you along the route."
-        NSMotionUsageDescription: "CaneKit uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps."
-        NSSpeechRecognitionUsageDescription: "CaneKit can take spoken commands."
-        NSMicrophoneUsageDescription: "CaneKit uses the microphone for spoken commands."
-        NSHealthShareUsageDescription: "CaneKit reads your step count for the arrival summary."
-        NSHealthUpdateUsageDescription: "CaneKit records the guided walk as a workout so the watch can keep giving cues."
+        NSCameraUsageDescription: "OpenCane uses the camera and LiDAR to detect obstacles between your waist and head."
+        NSLocationWhenInUseUsageDescription: "OpenCane uses your location and heading to guide you along the route."
+        NSMotionUsageDescription: "OpenCane uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps."
+        NSSpeechRecognitionUsageDescription: "OpenCane can take spoken commands."
+        # Sound recognition (SoundAnalysis) is the real microphone user: sirens, horns and vehicle
+        # sounds a blind pedestrian cannot see coming. Off by default (Hazards card switch), and it
+        # is the one feature that moves the audio session to .playAndRecord — see SoundWatcher.
+        NSMicrophoneUsageDescription: "OpenCane can listen for sirens, car horns and vehicle sounds to warn you about traffic you cannot see, and for spoken commands."
+        NSHealthShareUsageDescription: "OpenCane reads your step count for the arrival summary."
+        NSHealthUpdateUsageDescription: "OpenCane records the guided walk as a workout so the watch can keep giving cues."
 
   # ───────────────────────────── Watch app ─────────────────────────────
   CaneKitWatch:
@@ -118,16 +134,16 @@ targets:
     info:
       path: CaneKitWatch/Info.plist
       properties:
-        CFBundleDisplayName: CaneKit
+        CFBundleDisplayName: OpenCane
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.aritro.canekit
         WKRunsIndependentlyOfCompanionApp: false
         WKBackgroundModes: [workout-processing, mindfulness]   # workout keep-alive + runtime-session fallback
-        NSMotionUsageDescription: "CaneKit counts steps for the arrival summary."
-        NSHealthShareUsageDescription: "CaneKit reads your step count for the arrival summary."
-        NSHealthUpdateUsageDescription: "CaneKit records the guided walk as a workout so wrist cues keep working."
+        NSMotionUsageDescription: "OpenCane counts steps for the arrival summary."
+        NSHealthShareUsageDescription: "OpenCane reads your step count for the arrival summary."
+        NSHealthUpdateUsageDescription: "OpenCane records the guided walk as a workout so wrist cues keep working."
 
   # ───────────────────────────── Live Activity widget ─────────────────────────────
   CaneKitWidget:
@@ -145,7 +161,7 @@ targets:
     info:
       path: CaneKitWidget/Info.plist
       properties:
-        CFBundleDisplayName: CaneKit
+        CFBundleDisplayName: OpenCane
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

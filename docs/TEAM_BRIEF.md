@@ -5,7 +5,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Status right now (Fri 2026-09-11, ~15:30 CT) — read this first
 
-- **Main branch is tested and pushed.** 146 logic tests pass; the app builds, installs and runs on
+- **Main branch is tested and pushed.** 243 logic tests pass; the app builds, installs and runs on
   Aritro's iPhone 17 Pro Max (iOS 27).
 - **Proven on the real phone (desk test):**
   - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
@@ -16,7 +16,7 @@ The short version for Sagar and Aarav. The full picture is in
   - a 10 Hz timing bug;
   - "Where am I" mixing two moments.
 - **In progress on branches (not merged yet; merged to main only after tests + reviews pass):**
-  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in CaneKit",
+  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in OpenCane",
     "where am I", "repeat", "next", "stop"), a "Navigate to CIF from here" button, better
     destination search (campus place list + nearest result), a trip-log fix;
   - `feat/live-view-gpu`: smooth live camera view;
@@ -27,7 +27,7 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Setup checklist for tonight (do these in order)
 
-1. **Pull:** `git pull`, then `cd ios && make test` (146 tests).
+1. **Pull:** `git pull`, then `cd ios && make test` (243 tests).
 2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
    `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
    `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
@@ -37,16 +37,16 @@ The short version for Sagar and Aarav. The full picture is in
    own lines; a comment after a value broke the first build.
 4. **AirPods Pro:**
    - pair them;
-   - Settings → Bluetooth → ⓘ → **Spatial Audio Off**, **Head Tracking Off** (CaneKit does its own);
+   - Settings → Bluetooth → ⓘ → **Spatial Audio Off**, **Head Tracking Off** (OpenCane does its own);
    - allow Motion & Fitness when asked.
    - Full steps: `docs/devices_setup.md` → AirPods.
 5. **Apple Watch:**
    - it must be paired with the same iPhone;
    - turn on Developer Mode on the watch (Settings → Privacy & Security; if it is missing, open
      Xcode → Window → Devices and Simulators with the iPhone plugged in until the watch appears);
-   - in the iPhone's Watch app: General → **Automatic App Install**, or Available Apps → CaneKit →
+   - in the iPhone's Watch app: General → **Automatic App Install**, or Available Apps → OpenCane →
      Install;
-   - open CaneKit on the watch.
+   - open OpenCane on the watch.
    - Full steps: `docs/devices_setup.md` → Apple Watch.
 
 ## State of things

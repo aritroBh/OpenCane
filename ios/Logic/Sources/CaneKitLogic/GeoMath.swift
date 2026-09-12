@@ -20,7 +20,11 @@
 //      (MainActor in the app) owns and drives each instance.
 //    · Arrival is irreversible (it stops the beacon and the Live Activity), so the last
 //      waypoint needs `distance + accuracy/2 ≤ radius` on `arrivalHits` consecutive fixes.
-//  Tests: GeoMathTests.swift (20 tests).
+//    · An `OffCourseDetector` episode is evidence, not samples: moments with nothing to judge
+//      are reported as `gated(at:)` and only a hole longer than `maxEvidenceGap` (2 s) drops the
+//      episode — jitter must not silence a veer warning, a GPS gap must not fire one. A moment
+//      muted because the *situation* changed (a corner, a curved leg) ends the episode instead.
+//  Tests: GeoMathTests.swift (25 tests).
 //
 
 import Foundation
@@ -132,7 +136,21 @@ public enum Turn: String, Sendable, Codable, Equatable {
 ///
 /// Not Sendable on purpose: owned and driven by `NavigationEngine` on the main actor. After a
 /// cue fires, `offSince` restarts, so a further full `hold` is needed before the next one.
-/// Pinned by `offCourseNeedsThreeSecondsThenCoolsDown`, `offCourseResetsWhenBackOnBearing`.
+///
+/// "Continuously" is about the *evidence*, not the samples: the caller cannot judge every moment
+/// (a poor or stale fix, no smoothed course yet, no target bearing) and reports those as
+/// `gated(at:)`.
+/// A hole up to `maxEvidenceGap` long is GPS jitter and the hold survives it — otherwise a walker
+/// drifting off course under intermittent GPS could never reach `hold` and would never be warned.
+/// A longer hole is a GPS *gap*: the history is dropped, so the first fix back cannot fire a veer
+/// from what the walker was doing before the gap. A moment muted because the walking *situation*
+/// changed (a turn settling, a curved leg, the zone beside a waypoint, or the walker standing
+/// still — a measurement, not a missing one) is not a hole at all: the caller ends the episode
+/// for those.
+/// Pinned by `offCourseNeedsThreeSecondsThenCoolsDown`, `offCourseResetsWhenBackOnBearing`,
+/// `gatedMomentsInsideGoodTrackingKeepTheHold`, `aGpsGapForgetsTheHoldSoThereIsNoInstantVeer`,
+/// `onlyHolesLongerThanTwoSecondsForgetTheHold`, `aStopMidDriftRestartsTheHold`,
+/// `endEpisodeRequiresAFullHoldAgain`.
 public final class OffCourseDetector {
     /// Degrees of |bearing error| above which the user counts as off course (default 25°).
     public var threshold: Double = 25
@@ -140,11 +158,54 @@ public final class OffCourseDetector {
     public var hold: TimeInterval = 3
     /// Minimum seconds between two veer cues (default 10 s).
     public var cooldown: TimeInterval = 10
+    /// Longest hole in the evidence an episode survives (default 2 s).
+    ///
+    /// An episode is `hold` seconds of *continuous* off-course evidence, but the moments that
+    /// carry it come from GPS and some cannot be judged at all (see `gated(at:)`). This is where
+    /// the line between "jitter" and "gap" sits: judged moments up to `maxEvidenceGap` apart are
+    /// one episode; a longer hole drops the history, so the first judged moment after it starts a
+    /// fresh `hold`.
+    ///
+    /// 2 s. The two hard constraints only bound it to the open range (1 s, 3 s):
+    ///   · **above one beat.** Judgeable moments arrive with the GPS fixes — while walking the
+    ///     heading *is* the GPS course (`LocationService`), so the two share a cadence of about
+    ///     one a second: measured on the e2e `wrong_turn` replay, 280 fixes, median 1.0 s apart,
+    ///     278 of the 279 gaps at or under 1.2 s. A tolerance at or below 1 s bridges nothing.
+    ///   · **below `hold`.** At 3 s or more a cue could rest on two judged moments `hold` apart
+    ///     with nothing in between, and "3 s continuously off course" would stop being true.
+    ///     Any value under 3 s forces every cue onto at least three judged moments.
+    /// 2 s is the low end of that range: exactly one missed beat. The low end is the right end
+    /// here because the recurring harm on this route has always been the *false* veer — a blind
+    /// walker told to change direction when they should not — which is why TurnSettle, the
+    /// `CourseSmoother` and the corner-fence reset all exist. A wider tolerance buys jitter
+    /// immunity by letting more of a "continuous" episode go unobserved (at 2 s a cue is at worst
+    /// 2 s of its 3 s episode unobserved; at 2.5 s, 2.5 s of 3 s). The two failure costs are also
+    /// not symmetric: too strict merely *delays* a warning — the hold restarts and the next 3 s
+    /// of evidence earns the cue — while the behaviour this replaces (ending the episode on every
+    /// unjudgeable moment) *silenced* it outright.
+    /// Considered and rejected:
+    ///   · **5 s**, the age at which the engine stops judging a fix at all: far above `hold`, and
+    ///     a judged fix may itself be nearly 5 s stale, so 5 + 5 s of position uncertainty could
+    ///     sit inside one "continuous" 3 s episode.
+    ///   · **2.5 s** (Muse review of this fix: one missed beat *plus* scheduling jitter can
+    ///     measure 2.1–2.3 s, and 2.5 s still keeps the three-moment guarantee). The reasoning is
+    ///     sound but its premise is unmeasured: the only cadence evidence available is the
+    ///     simulator replay, whose gaps are bimodal (278 at ≤ 1.2 s, one at 6.7 s) with nothing
+    ///     in the 2–2.5 s band, and `simctl` is metronomic in a way CoreLocation is not.
+    ///     Widening on a guess, in the direction this route's history says is dangerous, is not a
+    ///     trade to make blind. ⚠ Device follow-up: log real fix gaps on a walk; if
+    ///     one-missed-beat holes really land above 2 s, raise this (never to 3 s or more) and put
+    ///     the measurement in the commit.
+    public var maxEvidenceGap: TimeInterval = 2
 
     /// Start of the current off-course episode (seconds), nil while on bearing.
     private var offSince: TimeInterval?
     /// Time of the last emitted cue (seconds); −∞ so the first cue is never blocked.
     private var lastCue: TimeInterval = -.infinity
+    /// Time of the last *judged* moment (`update(error:now:)`), nil before the first one.
+    /// Only judged moments count: a gap is measured between two pieces of real evidence,
+    /// whether the caller kept reporting gated moments through it or went silent.
+    private var lastJudged: TimeInterval?
 
     /// Creates a detector with the default 25° / 3 s / 10 s tuning.
     public init() {}
@@ -153,19 +214,62 @@ public final class OffCourseDetector {
     public func reset() {
         offSince = nil
         lastCue = -.infinity
+        lastJudged = nil
     }
 
     /// End the current episode but keep the cooldown: the next off-course stretch needs a full
     /// `hold` again. Called when the course history is reset after a cue (Claude review workflow:
-    /// otherwise the first smoothed course after the refill could fire at once).
+    /// otherwise the first smoothed course after the refill could fire at once), and by the caller
+    /// whenever the walking *situation* changes rather than the evidence running out.
+    ///
+    /// Deliberately leaves `lastJudged` alone: it is the timestamp of the last real evidence, and
+    /// ending an episode does not make that evidence not have happened. Clearing it would change
+    /// nothing either way — with `offSince` already nil, the next judged moment starts a fresh
+    /// episode whether or not `forgetEpisodeIfEvidenceIsStale` fires first — so the field keeps
+    /// its single meaning (raised as a fragility in the Muse review; kept, with this note).
     public func endEpisode() {
         offSince = nil
     }
 
+    /// A moment with no *evidence* about the leg being walked — the fix is poor or stale, its
+    /// speed is unknown, or there is no smoothed course or target bearing yet: the episode keeps
+    /// running unless the hole is already longer than `maxEvidenceGap`, in which case its history
+    /// is dropped.
+    ///
+    /// A fix that positively reports the walker *standing* is not one of these: that is a
+    /// measurement, and it ends the episode (see `aStopMidDriftRestartsTheHold`).
+    ///
+    /// Why not simply end the episode: intermittent GPS produces single unjudgeable moments all
+    /// the time, and ending the episode on the first one meant a walker who was genuinely off
+    /// course under jittery GPS could never accumulate `hold` seconds and was never warned —
+    /// silence at exactly the moment the warning matters most.
+    ///
+    /// Only for holes in the evidence about *the same situation*. When the situation itself
+    /// changes — a turn is still settling, the leg is curved, the walker is in the zone beside
+    /// the current waypoint — the earlier error was about a different leg, so the caller must use
+    /// `endEpisode()` (or `reset()`) instead and let nothing bridge it — otherwise a pre-turn
+    /// drift plus a post-turn drift could add up to one cue. The same goes for a moment whose fix
+    /// is too poor to locate the walker: the caller must not conclude "beside the waypoint" from
+    /// it and end the episode, it must report the hole here (`NavigationEngine.update(heading:)`
+    /// guard order).
+    /// - Parameter now: seconds, the caller's clock — the same one it passes to
+    ///   `update(error:now:)`, or the comparison is meaningless.
+    public func gated(at now: TimeInterval) {
+        forgetEpisodeIfEvidenceIsStale(now)
+    }
+
     /// - Parameter error: signed bearing error (target − heading), degrees.
-    /// - Parameter now: seconds (the app passes the latest fix's timestamp).
+    /// - Parameter now: seconds; any clock, as long as `gated(at:)` gets the same one (the app
+    ///   passes wall clock — `NavigationEngine` keeps fix timestamps on that clock too). A clock
+    ///   that jumps backwards can only delay a cue, never bring one forward.
     /// - Returns: the direction to veer, once per episode.
     public func update(error: Double, now: TimeInterval) -> Turn? {
+        // A hole longer than `maxEvidenceGap` since the last judged moment — the caller went
+        // silent, or reported only gated moments — is a GPS gap, not jitter: the pre-gap history
+        // says nothing about where the walker is pointing now, so it must not fire on this first
+        // moment back (commit a7a5fa6: "no instant veer after a GPS gap").
+        forgetEpisodeIfEvidenceIsStale(now)
+        lastJudged = now
         guard abs(error) > threshold else {
             offSince = nil
             return nil
@@ -175,6 +279,21 @@ public final class OffCourseDetector {
         lastCue = now
         offSince = now          // require another full hold before the next cue
         return error > 0 ? .right : .left
+    }
+
+    /// Drops the episode when the last judged moment is more than `maxEvidenceGap` old.
+    ///
+    /// Called from both entry points. Note what that does and does not buy: `gated(at:)` never
+    /// moves `lastJudged`, and `update(error:now:)` runs this same check before it reads
+    /// `offSince`, so on a forward-moving clock the call from `gated(at:)` changes no output —
+    /// whatever it would drop, the next judged moment drops anyway. It is kept because it makes
+    /// the rule hold on the state itself rather than only at the moment it is read (a clock that
+    /// steps backwards, or a future caller that inspects the detector between fixes). The
+    /// behaviour that is actually observable — and pinned by the tests — is the caller's choice
+    /// of `gated(at:)` over `endEpisode()`, not this call (adversarial review, finding 4).
+    private func forgetEpisodeIfEvidenceIsStale(_ now: TimeInterval) {
+        guard let last = lastJudged, now - last > maxEvidenceGap else { return }
+        offSince = nil
     }
 }
 

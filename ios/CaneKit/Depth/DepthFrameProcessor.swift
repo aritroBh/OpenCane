@@ -99,6 +99,24 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Most recent camera frame (YCbCr, full video-format resolution) for `jpegSnapshot`.
     /// Exactly one buffer is retained; each frame replaces it.
     private var latestImage: CVPixelBuffer?            // guarded by imageLock
+    /// `frame.timestamp` (ARKit's monotonic clock) of `latestImage`, guarded by imageLock. Used
+    /// to prove the depth grid below belongs to the *same* frame — `systemUptime` cannot, because
+    /// the image is retained on every frame and the grid only on published frames with depth.
+    private var latestImageFrameTime: TimeInterval = 0
+    /// Coarse scene-space depth grid of the most recent *published* frame, so "Where am I" can put
+    /// a distance on anything Vision finds in `latestImage` (`DepthSnapshot`). Guarded by
+    /// `imageLock` so a reader sees it paired with the image it belongs to. 19.3 us (measured) and
+    /// one 1.5 kB array per published frame; empty on a frame without depth.
+    private var latestDepth = DepthSnapshot.empty   // guarded by imageLock
+    /// `frame.timestamp` of `latestDepth` (guarded by imageLock); 0 = no grid yet.
+    private var latestDepthFrameTime: TimeInterval = 0
+    /// How far apart (s, ARKit clock) the image and the depth grid may be and still describe the
+    /// same moment. Three frames at the 30 Hz publish cap, ≈ 12 cm at 1.2 m/s. Beyond it the grid
+    /// is discarded and the walker hears a direction with no distance: depth can drop out
+    /// (relocalisation, `.limited` tracking) while camera frames keep flowing, and pairing a
+    /// fresh image with a two-second-old grid would put a confident wrong number on a person
+    /// (adversarial review of this change — `systemUptime` freshness alone did not catch it).
+    static let maxDepthPairingSkew: TimeInterval = 0.1
     /// `ProcessInfo.systemUptime` when `latestImage` arrived (guarded by imageLock). A frame older
     /// than `maxFrameAge` is treated as absent: after an ARKit stall or interruption the last
     /// frame shows a corner the walker has left (Muse camera review).
@@ -179,6 +197,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         imageLock.lock()
         latestImage = frame.capturedImage
         latestImageAt = ProcessInfo.processInfo.systemUptime
+        latestImageFrameTime = frame.timestamp
         imageLock.unlock()
 
         let s = settings.withLock { $0 }
@@ -194,12 +213,20 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         let trusted = ω < s.sweepThreshold
         trackTilt(frame)   // every frame: the pose is gravity-aligned even mid-sweep (Muse); the EMA smooths the sweep
 
-        guard let grid = computeGrid(frame: frame, config: s.lane) else {
+        guard let (grid, snapshot) = computeGrid(frame: frame, config: s.lane) else {
             continuation.yield(LaneReport(grid: .empty, isTrusted: trusted, rotationRate: ω,
                                           timestamp: now, depthAvailable: false, centerHit: nil,
                                           cameraTiltDownDeg: tiltDownDeg))
             return
         }
+
+        // Keep the depth grid next to the retained image, stamped with the same ARKit frame time
+        // (`now` *is* `frame.timestamp`, above), so "Where am I" can prove the pair came from one
+        // moment — see `takeLatest`. A Muse pass read these as two different clocks; they are not.
+        imageLock.lock()
+        latestDepth = snapshot
+        latestDepthFrameTime = now
+        imageLock.unlock()
 
         // Mesh classification at the image centre (step 4 fills `MeshClassifier`); throttled.
         if s.meshLookupEnabled, publishedCount % max(1, s.meshEveryNthFrame) == 0 {
@@ -273,7 +300,11 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// unit-tested), which fills head / torso lane distances (m) and `centerDepth`.
     /// Returns nil when the frame has no depth or an unexpected pixel format (not Float32).
     /// On `queue` only (uses `scratch`).
-    private func computeGrid(frame: ARFrame, config: LaneConfig) -> LaneGrid? {
+    /// - Returns: the lane grid the cue path needs **and** the coarse `DepthSnapshot` the scene
+    ///   describer needs, both read from the same locked buffers so they can never disagree.
+    ///   Measured on the same 256x192 buffers: the snapshot adds 19.3 us to the lane pass's
+    ///   47.0 us, i.e. 0.06 % of a 33 ms frame at the 30 Hz publish cap (DepthSnapshot header).
+    private func computeGrid(frame: ARFrame, config: LaneConfig) -> (LaneGrid, DepthSnapshot)? {
         guard let depth = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
         let depthMap = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else { return nil }
@@ -287,15 +318,33 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         guard let depthBase = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
         let confBase = confMap.flatMap { CVPixelBufferGetBaseAddress($0) }
 
-        return LaneMath.computeLanes(
+        let depthStride = CVPixelBufferGetBytesPerRow(depthMap)
+        let confStride = confMap.map { CVPixelBufferGetBytesPerRow($0) } ?? 0
+        let w = CVPixelBufferGetWidth(depthMap)
+        let h = CVPixelBufferGetHeight(depthMap)
+
+        let grid = LaneMath.computeLanes(
             depth: depthBase,
-            depthBytesPerRow: CVPixelBufferGetBytesPerRow(depthMap),
+            depthBytesPerRow: depthStride,
             confidence: confBase,
-            confidenceBytesPerRow: confMap.map { CVPixelBufferGetBytesPerRow($0) } ?? 0,
-            width: CVPixelBufferGetWidth(depthMap),
-            height: CVPixelBufferGetHeight(depthMap),
+            confidenceBytesPerRow: confStride,
+            width: w,
+            height: h,
             config: config,
             scratch: &scratch)
+        // Unmirrored on purpose: the camera image the describer sends to Vision is only rotated
+        // (`jpegSnapshot`), never mirrored, so the grid must line up with Vision's boxes.
+        // `mirrorLeftRight` is applied to the spoken word instead (`PeopleAhead.bearing`).
+        let snapshot = DepthSnapshot.make(
+            depth: depthBase,
+            depthBytesPerRow: depthStride,
+            confidence: confBase,
+            confidenceBytesPerRow: confStride,
+            width: w,
+            height: h,
+            rotateForPortrait: config.rotateForPortrait,
+            minConfidence: config.minConfidence)
+        return (grid, snapshot)
     }
 
     // MARK: Snapshot for the scene describer
@@ -315,12 +364,55 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     func jpegSnapshot(maxDimension: CGFloat = 1024, quality: CGFloat = 0.7) -> Data? {
         // Simulator e2e: Street View frames stand in for the camera (FrameReplay; inert on device).
         if FrameReplay.shared.isActive { return FrameReplay.shared.jpeg() }
-        imageLock.lock()
-        let fresh = ProcessInfo.processInfo.systemUptime - latestImageAt <= Self.maxFrameAge
-        let buffer = fresh ? latestImage : nil
-        imageLock.unlock()
-        guard let buffer else { return nil }
+        guard let latest = takeLatest() else { return nil }
+        return encode(latest.buffer, maxDimension: maxDimension, quality: quality)
+    }
 
+    /// The same JPEG **and** the depth grid of the same ARKit frame, or nil when there is no fresh
+    /// camera frame. The grid is `.empty` unless it provably belongs to that frame
+    /// (`maxDepthPairingSkew`), so a person can never be given a distance measured elsewhere.
+    /// Safe from any thread; the encode happens outside the lock.
+    /// Caller: `SceneDescriber.snapshot` (off main, via `@concurrent`).
+    /// - Parameters:
+    ///   - maxDimension: long-edge cap in pixels (downscale only).
+    ///   - quality: JPEG lossy quality 0…1.
+    func jpegSnapshotWithDepth(maxDimension: CGFloat = 1024,
+                               quality: CGFloat = 0.7) -> (jpeg: Data, depth: DepthSnapshot)? {
+        // Replay frames (simulator e2e) have no LiDAR behind them: direction, never a distance.
+        if FrameReplay.shared.isActive {
+            guard let jpeg = FrameReplay.shared.jpeg() else { return nil }
+            return (jpeg, .empty)
+        }
+        guard let latest = takeLatest(),
+              let jpeg = encode(latest.buffer, maxDimension: maxDimension, quality: quality) else { return nil }
+        return (jpeg, latest.depth)
+    }
+
+    /// The retained camera frame and the depth grid that belongs to it, in **one** critical
+    /// section. nil before the first frame or when it is older than `maxFrameAge`.
+    ///
+    /// Two separate lock-guarded reads did not make a pair: the image is retained on every ARKit
+    /// frame while the grid is written only on published frames *that have depth*, so a depth
+    /// dropout (relocalisation, `.limited` tracking — exactly when the walker is turning) could
+    /// hand out a fresh image with a grid up to `maxFrameAge` = 2 s old and speak a confident
+    /// wrong distance. ARKit frame timestamps are compared instead (adversarial review).
+    private func takeLatest() -> (buffer: CVPixelBuffer, depth: DepthSnapshot)? {
+        imageLock.lock(); defer { imageLock.unlock() }
+        guard let buffer = latestImage,
+              ProcessInfo.processInfo.systemUptime - latestImageAt <= Self.maxFrameAge else { return nil }
+        // `abs`: in practice the image is always stamped first in the same callback, so the skew
+        // is 0 or positive — but a signed test that silently accepts every negative value is the
+        // kind of thing a reorder turns into a wrong spoken distance (Muse).
+        let skew = abs(latestImageFrameTime - latestDepthFrameTime)
+        let paired = latestDepthFrameTime > 0 && skew <= Self.maxDepthPairingSkew
+        return (buffer, paired ? latestDepth : .empty)
+    }
+
+    /// One camera buffer → an upright JPEG, long edge ≤ `maxDimension`. Never called with
+    /// `imageLock` held, so the frame queue is not blocked by encoding. Portrait rotation follows
+    /// `settings.lane.rotateForPortrait` (the same flag the lanes use) and applies **no** mirror,
+    /// which is why `DepthSnapshot` is built unmirrored too.
+    private func encode(_ buffer: CVPixelBuffer, maxDimension: CGFloat, quality: CGFloat) -> Data? {
         let rotate = settings.withLock { $0.lane.rotateForPortrait }
         var image = CIImage(cvPixelBuffer: buffer)
         if rotate { image = image.oriented(.right) }
@@ -342,6 +434,9 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     func dropLatestImage() {
         imageLock.lock()
         latestImage = nil
+        latestImageFrameTime = 0
+        latestDepth = .empty
+        latestDepthFrameTime = 0
         imageLock.unlock()
     }
 

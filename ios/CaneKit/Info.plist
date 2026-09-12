@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>CaneKit</string>
+	<string>OpenCane</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,19 +25,19 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>CaneKit uses the camera and LiDAR to detect obstacles between your waist and head.</string>
+	<string>OpenCane uses the camera and LiDAR to detect obstacles between your waist and head.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>CaneKit reads your step count for the arrival summary.</string>
+	<string>OpenCane reads your step count for the arrival summary.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>CaneKit records the guided walk as a workout so the watch can keep giving cues.</string>
+	<string>OpenCane records the guided walk as a workout so the watch can keep giving cues.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>CaneKit uses your location and heading to guide you along the route.</string>
+	<string>OpenCane uses your location and heading to guide you along the route.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>CaneKit uses the microphone for spoken commands.</string>
+	<string>OpenCane can listen for sirens, car horns and vehicle sounds to warn you about traffic you cannot see, and for spoken commands.</string>
 	<key>NSMotionUsageDescription</key>
-	<string>CaneKit uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps.</string>
+	<string>OpenCane uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>CaneKit can take spoken commands.</string>
+	<string>OpenCane can take spoken commands.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>

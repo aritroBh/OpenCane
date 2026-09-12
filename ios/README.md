@@ -1,4 +1,11 @@
-# CaneKit: the iOS app for the phone-only smart cane
+# OpenCane: the iOS app for the phone-only smart cane
+
+> **The name split.** The product a person sees, hears and says to Siri is **OpenCane** (that is
+> `CFBundleDisplayName` in `project.yml`). Everything in the build is still called **CaneKit**: the
+> Xcode project, the targets and scheme, `PRODUCT_NAME`, the `CaneKitLogic` module, the
+> `ios/CaneKit/…` paths, the Makefile and the frozen bundle ids `com.aritro.canekit*`. That is
+> deliberate (AGENTS.md → "The name split"), so every command and path in this file still matches
+> the files on disk. Do not rename the code.
 
 This is a native SwiftUI app in Swift 6 with strict concurrency (main-actor default isolation). It
 builds against iOS 26 / watchOS 26 and uses Apple frameworks only, with no third-party packages.
@@ -8,7 +15,7 @@ non-metal 28.75 mm cane, plus AirPods Pro and an Apple Watch. For the demo every
 
 | Target / package | What it is | Bundle ID (frozen) |
 |---|---|---|
-| **CaneKit** | The iPhone app, and the only computer in the kit | `com.aritro.canekit` |
+| **CaneKit** (shown as **OpenCane**) | The iPhone app, and the only computer in the kit | `com.aritro.canekit` |
 | **CaneKitWatch** | watchOS companion: wrist taps, Repeat / Next / Describe / Recenter | `com.aritro.canekit.watchkitapp` |
 | **CaneKitWidget** | Live Activity (Dynamic Island + lock screen) | `com.aritro.canekit.widget` |
 | **CaneKitUITests** | XCUITests + the screenshot tour | `com.aritro.canekit.uitests` |
@@ -127,7 +134,8 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 
 The simulator targets use `SIM ?= iPhone 17 Pro Max`. You can override it per call or in `local.mk`.
 The watch app rides inside the phone app and installs through the Watch app on the phone
-(Automatic App Install on, or Available Apps → CaneKit → Install).
+(Automatic App Install on, or Available Apps → **OpenCane** → Install — the Watch app lists the
+display name, not the target name).
 
 ## 4. Secrets and permissions
 
@@ -157,6 +165,10 @@ Permissions are declared in `project.yml` and prompted on first use:
 - **Health** is requested again on the watch.
 - **Camera + LiDAR** are used for obstacles.
 - **Speech recognition + microphone** are reserved.
+
+Every purpose string names the app **OpenCane**, because that is the name the system shows next to
+it in the prompt and in Settings ("Turn on Camera for OpenCane"). They live in `project.yml`; edit
+them there and re-run `make gen`.
 
 Background modes are `audio` and `location` on the phone and `workout-processing` and `mindfulness`
 on the watch. `NSSupportsLiveActivities` is on for the Dynamic Island.

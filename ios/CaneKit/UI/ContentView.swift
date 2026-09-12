@@ -20,8 +20,9 @@
 
 import CaneKitLogic
 import SwiftUI
+import UIKit
 
-/// The app's only screen: a `NavigationStack` titled "CaneKit" around a vertical stack of cards.
+/// The app's only screen: a `NavigationStack` titled "OpenCane" around a vertical stack of cards.
 ///
 /// Reads everything from the shared `AppModel` (injected by the app entry); owns no state of its
 /// own. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume press is
@@ -33,30 +34,48 @@ struct ContentView: View {
     var body: some View {
         @Bindable var model = model
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: CKSpacing.xl) {
-                    GuideCard()
-                    if model.nav.isNavigating || model.nav.arrived {
-                        ArrivalCardView()
+            // The proxy goes to the Guide card so focusing the destination field can scroll it
+            // above the keyboard (DestinationField.anchorID).
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: CKSpacing.xl) {
+                        GuideCard(scroller: proxy)
+                        if model.nav.isNavigating || model.nav.arrived {
+                            ArrivalCardView()
+                        }
+                        statusCard
+                        LaneGridView(report: model.depth.report)
+                        HapticsCard()
+                        HazardsCard()
+                        WatchCard()
+                        mountSettings($model)
+                        capabilityCard
                     }
-                    statusCard
-                    LaneGridView(report: model.depth.report)
-                    HapticsCard()
-                    HazardsCard()
-                    WatchCard()
-                    mountSettings($model)
-                    capabilityCard
+                    .padding(CKSpacing.gutter)
+                    // Tapping anywhere that is not a control gives the keyboard back. Buttons,
+                    // toggles and the field itself consume their own taps first.
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissKeyboard() }
                 }
-                .padding(CKSpacing.gutter)
+                // Dragging the page down also dismisses it, the way Maps and Mail do.
+                .scrollDismissesKeyboard(.interactively)
+                .background(CKColor.background)
+                .navigationTitle("OpenCane")
             }
-            .background(CKColor.background)
-            .navigationTitle("CaneKit")
         }
         // Camera Control / volume-button spike: counts presses in the footer.
         .background(CameraControlInteraction { model.cameraControlPressed() })
     }
 
     // MARK: Pieces
+
+    /// Resigns the keyboard from wherever it is. The destination field's `@FocusState` follows
+    /// the first responder, so this keeps that view's state right without threading a focus
+    /// binding through two views.
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+    }
 
     /// Big, high-contrast status line — readable at arm's length on a cane.
     ///

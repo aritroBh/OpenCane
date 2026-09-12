@@ -205,4 +205,47 @@ final class CaneKitUITests: XCTestCase {
         go.tap()
         XCTAssertTrue(app.staticTexts["Type a destination first"].waitForExistence(timeout: 5))
     }
+
+    /// Typing offers campus places straight away and clears a stale error line.
+    ///
+    /// The gazetteer half of the suggestion list needs no network and no GPS fix, so it is the
+    /// half a simulator can prove: "Grainger" must offer the campus library as a VoiceOver button
+    /// (MKLocalSearch's own answer for that word is an industrial supply store in another town).
+    /// The row is not tapped: that would start a real Apple Maps route.
+    ///
+    /// ⚠ test contract: text field "Destination" and the suggestion row's VoiceOver label
+    /// "<place>, campus place" (`DestinationSuggestion.voiceOverLabel`, CaneKitLogic).
+    func testTypingOffersCampusSuggestionsAndClearsTheError() {
+        let go = app.buttons["Go"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()                                     // empty → error line
+        let error = app.staticTexts["Type a destination first"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+
+        let field = app.textFields["Destination"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("Grainger")
+
+        // Match on the name and the kind, not on the whole sentence: the row legitimately gains a
+        // detail line (and, with a GPS fix, a distance) a moment after it first appears, and
+        // asserting the exact final string made this test a race. What the feature promises is
+        // that the campus library is offered and is marked as a campus place — MKLocalSearch's own
+        // answer for "Grainger" is an industrial supply store in another town.
+        let campus = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@",
+                        "Grainger Engineering Library", "campus place")).firstMatch
+        XCTAssertTrue(campus.waitForExistence(timeout: 5), "campus places must be offered first")
+
+        // …and offered FIRST: no other suggestion row may sit above it. Map rows carry a street
+        // address, which is how they are told apart from the field and the buttons above.
+        let mapRows = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Urbana, IL")).allElementsBoundByIndex
+        for row in mapRows {
+            XCTAssertGreaterThan(row.frame.origin.y, campus.frame.origin.y,
+                                 "a map row must never rank above the campus place")
+        }
+        XCTAssertFalse(error.exists, "typing clears the previous attempt's error line")
+    }
+
 }

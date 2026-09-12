@@ -1,4 +1,4 @@
-# CaneKit stress test and end-to-end test plan (the 24 h before the demo)
+# OpenCane stress test and end-to-end test plan (the 24 h before the demo)
 
 Written Fri 2026-09-11 against HEAD `7b15256` plus the uncommitted working tree, then re-checked
 against the working tree once it added the hazards layer, the Files app keys and the review round 5
@@ -20,7 +20,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
 
 1. **The trip log and the hazard map are in the Files app.** `ios/project.yml` sets
    `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` to `true`, so Documents shows up
-   under **Files → On My iPhone → CaneKit**: the trip logs `canekit-*.jsonl` and
+   under **Files → On My iPhone → OpenCane**: the trip logs `canekit-*.jsonl` and
    `hazards/hazards-<session>.geojson` with its photos. AirDrop them from there after every walk; the
    Mac (§1.4) is only the fallback. A phone still running a build from before that change needs one
    `make run` first.
@@ -167,8 +167,8 @@ xcrun devicectl device copy from --device $DEVICE --domain-type appDataContainer
   --domain-identifier com.aritro.canekit --source Documents/<file>.jsonl --destination logs/<file>.jsonl
 ```
 
-Fallback: Xcode → Devices and Simulators → the phone → CaneKit → ⋯ → Download Container. Without
-the Mac (§0.1): Files → On My iPhone → CaneKit → AirDrop (trip logs, and `hazards/` for the hazard
+Fallback: Xcode → Devices and Simulators → the phone → OpenCane → ⋯ → Download Container. Without
+the Mac (§0.1): Files → On My iPhone → OpenCane → AirDrop (trip logs, and `hazards/` for the hazard
 map).
 
 **What's in the log.** One file per app launch: `canekit-<ISO time with - for :>.jsonl`. Every line
@@ -481,7 +481,7 @@ goes on the bug list with its log file name and video timestamp.
   - (f) Kill the phone app and press a watch button → `.retry` + "Phone not reachable".
   - (g) **Version skew**: after every `make run`, press Repeat on the watch during a route. "Update
     the phone app" + `.retry` means the phone build is older than the watch, so reinstall. Also
-    check Watch app → CaneKit is updated.
+    check Watch app → OpenCane is updated.
 - **Pass.**
   - (a) Aarav names 8/8 blind.
   - (b) 12/12 taps felt wrist-down.
@@ -541,7 +541,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 
 ### D13 Live Activity: bench + W2 · Aritro
 - **Steps.**
-  1. Settings → CaneKit → Live Activities on.
+  1. Settings → OpenCane → Live Activities on.
   2. Start the demo route and lock the phone for 20 s (LiDAR stops; accept that for this test).
   3. Unlock, go to the Home Screen for 10 s and look at the Dynamic Island.
   4. On W2, lock twice about 20 m apart, and once after WP2.
@@ -596,7 +596,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 ### D16 Screen lock and Guided Access: bench · Aritro, Sagar
 - **Steps.**
   - (a) Route running: lock the phone for 60 s while approaching a wall. Then unlock.
-  - (b) Settings → Accessibility → Guided Access on, set a passcode. In CaneKit triple-click → Options:
+  - (b) Settings → Accessibility → Guided Access on, set a passcode. In OpenCane triple-click → Options:
     **Side Button off, Volume Buttons off, Touch off, Keyboards off, Motion on, no time limit** →
     Start.
   - (c) Rub a palm over the screen for 10 s. Press the side, volume, Action and Camera Control
@@ -649,14 +649,14 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 
 ### D18 Cold launch permissions: bench, run first · Aritro
 - **Steps.**
-  1. Pull the old logs. Delete CaneKit. This also deletes the logs, the voice cache and the mount
+  1. Pull the old logs. Delete OpenCane. This also deletes the logs, the voice cache and the mount
      toggles, so redo D1's settings afterwards.
   2. `make run`, trust the developer if asked, and launch.
   3. At launch: the Camera prompt, then Location. Choose **While Using** and keep **Precise on**.
   4. First "Start demo route": the Motion & Fitness prompt and the Health sheet.
-  5. On the watch: open CaneKit → Health prompt.
+  5. On the watch: open OpenCane → Health prompt.
   6. Kill the app and relaunch.
-  7. Denial drill: deny Motion once. Then turn Location off for CaneKit, type a destination and
+  7. Denial drill: deny Motion once. Then turn Location off for OpenCane, type a destination and
      press Go.
 - **Pass.**
   - Each prompt appears once, and nothing blocks the Guide screen after it's answered.
@@ -666,7 +666,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
   - Motion denied → "Compass only" and the beacon still pans. Re-enable under Privacy → Motion &
     Fitness.
   - Location off + Go → refused at once (no 15 s wait for a fix): the error line "Location is off
-    for CaneKit" and "Location access is off. Turn on Location for CaneKit in Settings to
+    for OpenCane" and "Location access is off. Turn on Location for OpenCane in Settings to
     navigate." Turn Location back on (While Using, Precise).
   - The trip log starts with `start` {lidar:true, mesh:true, haptics:true}.
 
@@ -753,7 +753,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
   - Wrist cues sent while the watch is unreachable are **dropped**, not queued.
   - The status line (application context) arrives when the watch wakes.
   - Watch buttons give `.retry` + "Phone not reachable".
-  - At route start with the watch app not in front: "Watch not reachable. Open CaneKit on the
+  - At route start with the watch app not in front: "Watch not reachable. Open OpenCane on the
     watch.".
 - **Pass.** Current instruction on the watch ≤ 10 s after reconnect; buttons work ≤ 10 s after
   reconnect; 0 phone-side errors.
@@ -804,7 +804,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 - **Inject.** Swipe the app away, or let a crash happen. Relaunch from the Home Screen.
 - **Expect.**
   - The old log is complete up to ≤ 2 s before the kill (it flushes every 2 s and on background).
-  - A new log file starts, and "CaneKit ready." plays.
+  - A new log file starts, and "OpenCane ready." plays.
   - **No route is running.**
   - The old Live Activity may stay on the lock screen; swipe it away.
   - Guided Access has to be armed again. The watch workout keeps running.
@@ -874,18 +874,18 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 
 | T | Who | Action | Check |
 |---|---|---|---|
-| −60 | Aritro | Same build as W2. Charge the phone. Relaunch the app so a new log starts. | Files → On My iPhone → CaneKit shows a new `canekit-….jsonl` |
+| −60 | Aritro | Same build as W2. Charge the phone. Relaunch the app so a new log starts. | Files → On My iPhone → OpenCane shows a new `canekit-….jsonl` |
 | −60 | Sagar | Clamp: torque, no contact with any button, LiDAR window wiped, sun shade on. Power bank ≥ 80 %, cable can't snag. | Knock test: 0 button presses |
 | −55 | Aarav | AirPods ≥ 60 %: Transparency, Spatial Audio off, Head Tracking off. Watch ≥ 50 %, Wrist Detection on. | — |
 | −50 | Aritro | Focus silencing calls; Low Power off; Bluetooth + Wi-Fi on; media volume ≥ 75 %; Live Activities on; Location Precise on; Auto-Brightness off, brightness low | — |
 | −45 | Aritro | Warm the voice cache: Start demo route indoors on Wi-Fi, wait 60 s, Stop | Voice pill "ElevenLabs" on the intro |
 | −40 | Sagar + Aarav | Bench: 4 test haptics named blind through the grip; wall at 1 m; hand at the left edge; board overhead | 4/4; tiles 0.8–1.2 m; Left tiles; head hit + "Head height." (G3, G4) |
-| −35 | Aarav | AirPods in; open CaneKit on the watch | "\<name\> connected."; Watch card "Reachable"; Cross tap felt (G6) |
+| −35 | Aarav | AirPods in; open OpenCane on the watch | "\<name\> connected."; Watch card "Reachable"; Cross tap felt (G6) |
 | −30 | All | Out onto the plaza ≥ 40 m from the canopy. Start demo route, Recenter, body and head checks, watch Repeat. Then Stop. Phone stays in shade. | G5, G7 pass |
 | −25 | Aritro | Stand at the canopy (WP1, outdoor side) | GPS ≤ ±15 m for 30 s (G2). Still above 20 m at −15 → no-go |
 | −20 | Sagar | Spotter brief: positions, "Stop" / "Abort", crossing protocol, abort list. Kill-word drill 3×. | Walker frozen within 1 step, 3/3 |
 | −15 | Aritro | Read G1–G11 aloud; record GO / NO-GO with the time | NO-GO → sighted demo or backup video |
-| −10 | Aritro | Second phone starts filming (clap to sync). Optional screen recording on the CaneKit phone. **Start demo route** (the trip timer starts now). Arm Guided Access. | Intro plays; no channel warning follows (all channels up) |
+| −10 | Aritro | Second phone starts filming (clap to sync). Optional screen recording on the OpenCane phone. **Start demo route** (the trip timer starts now). Arm Guided Access. | Intro plays; no channel warning follows (all channels up) |
 | −5 | Aarav + Sagar | Mask on, spotter in position, walker says "ready". Stand still until the intro ends. | — |
 | 0 | All | Walk on the spotter's "Go" | Checkpoints: WP2 ~2 min · WP3 ~5 · WP4 ~9 (+signal) · WP6 ~15 (+signal) · WP7 ~19 · WP8 ~22 · arrival ~24 (20–30) |
 | +1 after arrival | Aritro | Stop filming, exit Guided Access, pull the log, run the fence script | Arrival summary heard; log saved |

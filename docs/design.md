@@ -1,4 +1,4 @@
-# CaneKit design system
+# OpenCane design system
 
 Visual + interaction spec for the iPhone app, the watch companion and the Live Activity.
 Code twins: `ios/CaneKit/UI/Theme.swift` (phone tokens + components), `ios/CaneKitWatch/WatchTheme.swift`
@@ -132,6 +132,7 @@ the two dangerous states are also the two darkest fills.
 | `warning` | `#FBBF24` | `#FFB000` | SWEEPING, VEER LEFT / RIGHT N°, GPS ±N M (> 15 m), GPS WEAK, the active cue (CENTER / LEFT / RIGHT / HEAD), SPEAKING, NO AIRPODS, BEACON PAUSED |
 | `danger` | = `laneUrgent` | = HC urgent | Stop route fill, ENGINE DOWN pill, error lines (as text colour) |
 | `neutral` | = `surfaceRaised` | — | GPS SEARCHING / OFF / DENIED, cue CLEAR, QUIET, SYSTEM voice, watch ASLEEP / NOT PAIRED, BEACON OFF / IDLE, HEAD TRACKED / COMPASS ONLY, last watch command. Text in `textPrimary` (the only non-ink pill) |
+| `accent` (pill tone) | = `accent` | — | The **CAMPUS** badge on a destination suggestion (§6.3). Not a state: it marks a hand-verified gazetteer entrance. Text in `onAccent`; accent never carries hazard meaning |
 
 ### Appearance policy
 - The app follows the system appearance (`UIUserInterfaceStyle Automatic`). **For the demo, set the phone to Dark Mode** (dark room; the screen must not light the judges' faces) and run under Guided Access.
@@ -166,8 +167,8 @@ All shapes use `.continuous` corners. Watch buttons use radius 14.
 
 Touch targets (`CKMetrics`): `CKBigButton` is ≥ 72 pt tall, full width or half width (two per row with
 `lg` between them). Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
-buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s and the destination `TextField` keep their
-system size (≥ 44 pt, HIG). Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
+buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s keep their system size (≥ 44 pt, HIG); the destination search field
+and every destination suggestion row are `touchTarget` (60 pt) like the buttons beside them. Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
 (`WKSpacing.touchTarget`: 48 pt pushed the bottom row off a 46 mm screen). Pills are 32 pt tall and not
 interactive.
 
@@ -208,7 +209,7 @@ and `HazardScanner` (signs, hazard watch). All speech goes through `SpeechQueue`
 | Priority | What speaks at it (literal lines from the code) | TTL while queued |
 |---|---|---|
 | `.safety` (3, top) | "Head height."; LiDAR ground hazards "Drop-off ahead, two meters." / "Hole ahead, …" / "Step up ahead, …" / "Low obstacle ahead, …" | 6 s "Head height.", 3 s ground hazards |
-| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "No route running."; "CaneKit ready."; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open CaneKit on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for CaneKit in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for CaneKit in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 10 s "Phone is hot…", 5 s headphone lines, 2 s "Recentered.", 8 s default |
+| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "No route running."; "OpenCane ready."; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 10 s "Phone is hot…", 5 s headphone lines, 2 s "Recentered.", 8 s default |
 | `.obstacle` (1) | Mesh names "door ahead, two meters" (door / wall / seat / window / table); "Left." / "Right." / "Ahead, one meter." when the phone cannot buzz; signs "Sign: sidewalk closed."; hazard watch "Caution: cones ahead, 3 meters." | 4 s names, 6 s cue, sign and caution lines |
 | `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed." | 3 s "Describing.", 20 s description, 8 s default |
 
@@ -241,7 +242,7 @@ once per second while it stays active.
 | Ground hazard (not `CueDecider`: `GroundHazardDetector`, "Detect drop-offs" toggle, off by default) | drop-off / hole / step up / low obstacle in a 0.9 m wide corridor 1.5–3.5 m ahead: an edge against the near-field ground, confirmed on 3 of the last 5 trusted frames | 4 heavy taps 70 ms apart (intensity 1.0, sharpness 0.3), `playGroundHazard` | Always spoken, `.safety`: "Drop-off ahead, two meters." (`GroundHazardPolicy`: the same hazard in the same place, e.g. a curb you stand at, is said once, then at most every 30 s, and again once it is 1 m closer) | Hazards card LIDAR row; hazard map entry | `.click` when the phone cannot buzz or the mirror toggle is on |
 | Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (each sign at most once a minute); "Caution: cones ahead, 3 meters." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
 | Sweeping | \|ω\| ≥ 0.6 rad/s | No new cue and no stop: the decider freezes, so a running centre loop keeps its last rate until the next trusted frame | Nothing | Obstacles pill SWEEPING (warning, spoken "Sweeping, warnings paused"); tiles keep drawing the latest values | — |
-| No depth | before the first depth frame / no LiDAR | Nothing | Nothing (at launch: "CaneKit. This phone has no LiDAR." on a non-LiDAR phone) | Tiles "—" / NO DATA; status card "Waiting for depth…" / "No LiDAR / sceneDepth on this device" | — |
+| No depth | before the first depth frame / no LiDAR | Nothing | Nothing (at launch: "OpenCane. This phone has no LiDAR." on a non-LiDAR phone) | Tiles "—" / NO DATA; status card "Waiting for depth…" / "No LiDAR / sceneDepth on this device" | — |
 
 "The phone cannot buzz" = the haptic engine is down **or** "Silence haptics" is on. In that case every
 fired cue is also mirrored to the watch; "Mirror obstacle cues to the watch" (off by default) mirrors
@@ -291,12 +292,12 @@ Recenter) it ignores head yaw.
 | Event | Felt | Heard | Shown (phone) | Watch |
 |---|---|---|---|---|
 | Where am I (phone button, watch Describe, Action button shortcut, Camera Control if it fires) | light impact on release (phone button) | "Describing." then the one-sentence description (`.scene`); without a key or network the on-device describer answers (Vision + Apple's on-device model, or a template). It waits up to 3 s for a camera frame; the frame from before a screen lock or backgrounding is dropped, so after unlocking it waits for a fresh one ("Camera warming up. Try again." if none comes) | Button reads "Describing…" (value "in progress", disabled); result text under it; error line in red | `.click` confirm on send |
-| Repeat (phone, watch, "Repeat in CaneKit") | light impact | The last line actually spoken + " Next, <place>, in N meters." | Instruction unchanged | `.click` |
+| Repeat (phone, watch, "Repeat in OpenCane") | light impact | The last line actually spoken + " Next, <place>, in N meters." | Instruction unchanged | `.click` |
 | Next (phone, watch button, crown 3 detents in 1 s) | light impact | The skipped waypoint's own line; "No route running." when idle | Instruction advances | `.click` |
 | Recenter (phone, watch) | light impact | "Recentered." | — | `.click` |
 | Watch command fails | — | — | — | `.retry` + red line "Phone not reachable"; phone older than watch: `.retry` + "Update the phone app" |
 | Headphones connect / disconnect | — | "<name> connected." / "Headphones disconnected. Beacon paused." | Beacon pill BEACON PAUSED + NO AIRPODS (warning) | — |
-| Watch not reachable at route start | — | "Watch not reachable. Open CaneKit on the watch." | Watch card pill ASLEEP (neutral) | — |
+| Watch not reachable at route start | — | "Watch not reachable. Open OpenCane on the watch." | Watch card pill ASLEEP (neutral) | — |
 | Haptic engine down | (cues go to the watch and to speech) | at route start, if the watch is also unreachable: "Haptics unavailable. Obstacle cues will be spoken." | ENGINE DOWN (danger) | obstacle mirror |
 | Thermal `.serious` / `.critical` | — | "Phone is hot. Door and wall names and sign reading paused." once per transition into hot (`.nav`) | Mesh classification off (so no mesh names), sign reading and hazard watch paused, the live camera view stops updating; status card "Mesh classification off (thermal)". The thermal state is only in the trip log | — |
 | Battery | — | Nothing | Nothing on screen; the trip log only | — |
@@ -315,8 +316,9 @@ phone speaker on the cane (the only way the phone speaker is used). The original
 open-ear rule was superseded by AirPods Pro (docs/ideas.md §7); the app cannot choose the AirPods noise
 mode, so keep traffic audible with Transparency (a recommendation, not enforced).
 
-**VoiceOver rule.** The `SpeechQueue` is the app's voice. The app never posts
-`AccessibilityNotification.Announcement`, so a VoiceOver user is never pushed a cue twice. Live values
+**VoiceOver rule.** The `SpeechQueue` is the app's voice. The app posts exactly one
+`AccessibilityNotification.Announcement` — the destination suggestion count ("6 results", §6.3), which
+is screen state nothing speaks — so a VoiceOver user is never pushed a *cue* twice. Live values
 carry `.updatesFrequently` so touching them reads the current state.
 
 ---
@@ -324,10 +326,10 @@ carry `.updatesFrequently` so touching them reads the current state.
 ## 6. Screens
 
 The phone app is **one scrolling page** (`ContentView`: `NavigationStack` > `ScrollView`, large title
-"CaneKit", `gutter` padding, `xl` between cards). There is no tab bar. Card order is the VoiceOver order:
+"OpenCane", `gutter` padding, `xl` between cards). There is no tab bar. Card order is the VoiceOver order:
 
 ```
-CaneKit                                   ← large navigation title
+OpenCane                                  ← large navigation title
 ┌ Guide ──────────────────────────────┐   §6.1 / §6.3  GuideCard
 ┌ This trip  |  Arrived ──────────────┐   §6.4  ArrivalCardView (only while navigating or after arrival)
 ┌ ✓ Depth OK ─────────────────────────┐   §6.2  status card (untitled)
@@ -356,12 +358,12 @@ While a route runs                                  Idle (before a route / after
 │ side. No crossing needed. Listen for … │          │ [ ◉ Where am I                       ] │
 │ 120 m                (↱ VEER RIGHT 40°)│          │ [ ⟲ Repeat                           ] │ ← only after arrival
 │ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ [ ▶ Start demo route                 ] │
-│ [ ◉ Where am I                       ] │          │ [Or type a destination     ] [ Go ]    │
-│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ Type a destination first               │ ← error line
-│ [ ⌖ Recenter                         ] │          └────────────────────────────────────────┘
-│ (BEACON 40%) (HEAD TRACKED)            │
-│ [ ■ Stop route                       ] │
-└────────────────────────────────────────┘
+│ [ ◉ Where am I                       ] │          │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
+│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
+│ [ ⌖ Recenter                         ] │          │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
+│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Grainger Industrial Supply        ] │
+│ [ ■ Stop route                       ] │          │ ⚠ Type a destination first             │ ← only after a
+└────────────────────────────────────────┘          └────────────────────────────────────────┘   failed attempt
 ```
 
 - Instruction: the *upcoming* waypoint's `say` ("Arrived: <say>" after arrival, "No route" when idle), `instruction` font, wraps without limit — the spotter reads it over the walker's shoulder.
@@ -385,9 +387,12 @@ While a route runs                                  Idle (before a route / after
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
 | 13 | Stop route | "Stop route" | hint "Ends guidance" | button |
 | — | Start demo route (idle) | "Start demo route" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
-| — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | return key "Go" submits | text field |
-| — | Go (idle) | "Go" | hint "Builds a walking route with Apple Maps"; disabled while building | button |
-| — | Error line | the error text ("Type a destination first", "No GPS fix yet", route / location errors) | — | static text |
+| — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
+| — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
+| — | Suggestion row (0–6, campus places first) | "&lt;place>, campus place, 400 meters away, &lt;address>" | hint "Starts walking guidance to this place" | button |
+| — | Go (idle) | "Go" | hint "Builds a walking route with Apple Maps to what you typed"; disabled while building | button |
+| — | Done (bar above the keyboard) | "Done" | hint "Hides the keyboard" | button |
+| — | Error line | the error text ("Type a destination first", "No GPS fix yet", route / location errors); a warning glyph sits beside it, hidden from VoiceOver | — | static text |
 
 Focus order is the visual order. Nothing uses `accessibilitySortPriority`.
 
@@ -432,26 +437,43 @@ The route picker is three controls in the idle Guide card:
 - **Navigate to CIF from here** — the same destination for a walker who is not at ISR: `MKDirections`
   walking from the live fix to the route file's *last waypoint as a bare coordinate*
   (40.11242, −88.22788, the CIF east entrance). No search, so MapKit can never pick a different "CIF".
-- A destination `TextField` + **Go** — the campus gazetteer (`CampusPlaces`: CIF, ISR, Grainger, Illini
-  Union, Siebel, Main Library, ARC → entrance coordinates) first; only when nothing matches,
-  `MKLocalSearch` (`regionPriority = .required`, points of interest + addresses) in a ±3 km region around
-  the walker, and the **nearest** result in range wins — names containing every typed word preferred —
-  never MapKit's first answer. Waypoints at each step end, 15 m fences, 20 m arrival.
+- A destination **search field + suggestion list + Go** (`UI/DestinationField.swift`) — the campus
+  gazetteer (`CampusPlaces`: CIF, ISR, Grainger, Illini Union, Siebel, Main Library, ARC → entrance
+  coordinates) first; only when nothing matches, `MKLocalSearch` (`regionPriority = .required`, points
+  of interest + addresses) in a ±3 km region around the walker, and the **nearest** result in range wins
+  — names containing every typed word preferred — never MapKit's first answer. Waypoints at each step
+  end, 15 m fences, 20 m arrival.
+
+  **The suggestion list** (Step 14). Typing offers up to six rows from two sources, merged by
+  `CaneKitLogic.DestinationSuggestions`: campus places (partial-name matching, nearest first when there
+  is a fix, at most three) always come **first** and carry a `CAMPUS` badge and a "On campus · 400 m"
+  line, because MKLocalSearch answers "Grainger" with an industrial supply store and a blind walker
+  cannot see that the wrong row is on top. MapKit rows come from one `MKLocalSearchCompleter`,
+  debounced 0.25 s, region-biased to the fix (or the campus centre when GPS is not running), and a row
+  that is only another spelling of a campus place is dropped. A **map row never shows a distance**: a
+  completer result carries no coordinate, so there is nothing to measure. Tapping a row starts guidance
+  at once — no second tap on Go — through `AppModel.navigate(to:)` / `navigate(to place:)`, the same
+  entry points Siri uses, so "Walking to \<place>, N meters." is still spoken first and Stop still
+  abandons a search in flight. The row count is posted as a VoiceOver announcement whenever it changes
+  (§5.5); the field is 60 pt with a magnifying glass, a clear (x) button and the secondary-button fill,
+  the keyboard has a **Done** bar, dragging the page or tapping outside dismisses it, and focusing the
+  field scrolls the Guide card to the top so nothing is hidden behind the keyboard. The error line
+  ("Type a destination first") appears only after a failed attempt and is cleared by the next keystroke.
 
 The last two share `AppModel.buildRoute`. Every MapKit route says **"Walking to \<place>, N meters."**
 (`WalkingIntro`: nearest 10 m, tenths of a kilometre above 1 km) before guidance starts, so a blind walker
 hears what was chosen and can Stop if it is wrong; **Stop route** also abandons a search still in flight.
-An empty field shows "Type a destination first"; with Location off for CaneKit it is refused at once with
-"Location is off for CaneKit" and the spoken fix (no wait for a fix); with no GPS fix after ~15 s: "No GPS
+An empty field shows "Type a destination first"; with Location off for OpenCane it is refused at once with
+"Location is off for OpenCane" and the spoken fix (no wait for a fix); with no GPS fix after ~15 s: "No GPS
 fix yet. Try again outside."; nothing within 3 km: "Could not find "…" within walking distance".
 
 Every control here is also a Siri phrase, because the walker this card is for cannot see it
 (`AppIntents.swift`): "Start the demo route / Navigate to CIF from here / Take me to Grainger / Take me
-somewhere / Repeat the last instruction / Next waypoint / Stop the route **in CaneKit**", plus "Where am I
-in CaneKit". Seven of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
+somewhere / Repeat the last instruction / Next waypoint / Stop the route **in OpenCane**", plus "Where am I
+in OpenCane". Seven of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
 obstacle warnings only run with the app frontmost, so guidance must never start in the background.
 App Shortcut phrases can only interpolate an `AppEnum`/`AppEntity`, so the phrase form carries the seven
-gazetteer places (`CampusDestination`); any other place goes through "Take me somewhere in CaneKit" and
+gazetteer places (`CampusDestination`); any other place goes through "Take me somewhere in OpenCane" and
 Siri asks "Where do you want to go?" for the free text.
 
 **Not built**: the route cards (Recorded route RECOMMENDED / Any destination), the search sheet, "Use this
@@ -502,7 +524,7 @@ Debug controls (sighted teammate / developer):
 
 Where the original Settings rows went: the scene-description provider is `VLM_PROVIDER` in
 `Secrets.plist` (no picker); the trip log (`canekit-*.jsonl`) and the hazard map
-(`hazards/hazards-<session>.geojson` + photos) are in the Files app under On My iPhone → CaneKit (no
+(`hazards/hazards-<session>.geojson` + photos) are in the Files app under On My iPhone → OpenCane (no
 Export button; the hazard map also has the Share button above).
 
 ### 6.6 Watch face (42–46 mm)
@@ -512,7 +534,7 @@ fire). The watch is always dark: black ground (OLED, wrist-down power).
 
 ```
 ┌──────────────────────┐
-│ ▯)            120 m  │  inline navigation title = distance ("CaneKit" when unknown);
+│ ▯)            120 m  │  inline navigation title = distance ("OpenCane" when unknown);
 │                      │  leading toolbar glyph = phone link (green / red iphone.slash)
 │ Goodwin Avenue.      │  instruction, .title3 semibold, ≤ 2 lines, scales to 70 %
 │ Intersection. Turn…  │
@@ -635,7 +657,9 @@ Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
 | `switches[…]` | "Mirror left / right" | Mount toggle | toggle test (value must change on tap) |
 | `switches[…]` | "Write trip log" | Mount toggle | labels test |
 | `otherElements[…]` | "Head row" | `LaneGridView` row label `"\(title) row"` | labels test |
-| `staticTexts[…]` (exact) | "Type a destination first" | `AppModel.startMapKitRoute()` → Guide error line | empty-destination test |
+| `staticTexts[…]` (exact) | "Type a destination first" | `AppModel.navigate(to:)` → Guide error line | empty-destination test, suggestion test |
+| `textFields[…]` | "Destination" | `DestinationField` search field | suggestion test (types "Grainger") |
+| `buttons[…]` | "Grainger Engineering Library, campus place" | `DestinationSuggestion.voiceOverLabel` (CaneKitLogic) for a campus row with no fix | suggestion test |
 | `staticTexts` label CONTAINS[c] | "Townsend" | WP1 `say` in `route_isr_cif.json`, shown as the instruction | route test |
 | `staticTexts` label CONTAINS[c] | "Illinois Street" | WP2 `say` (WP1's line also contains it) | route test |
 | `staticTexts` label CONTAINS[c] "camera" OR BEGINSWITH | "camera" / "Scene:" | describer error "No camera frame" (the simulator has no camera) or the scene text's label "Scene: <description>"; then "Where am I" must be back. No key is needed any more (cloud → on-device fallback) | no-key test |
@@ -649,7 +673,7 @@ free to improve, but keep them in step with §6.
 
 ## 10. Open design gaps (code ≠ intent, not yet fixed)
 
-- Error lines use `laneUrgent` as text colour: fine on dark cards (6.4:1) but 2.8:1 on the white light-mode card, below WCAG AA. An ink-on-`danger` pill or `textPrimary` + a symbol would fix it.
+- Error lines use `laneUrgent` as text colour: fine on dark cards (6.4:1) but 2.8:1 on the white light-mode card, below WCAG AA. **Fixed for the Guide's route error line** (Step 14: `textPrimary` text plus a `danger` warning glyph); the describer error line on Guide and the Hazards card's error line still use red text.
 - The lane-ladder contrast ratios quoted in `Theme.swift` / `CODE_REFERENCE.md` comments (11.4 / 15.2 / 8.9 / 7.1) are overstated; the recomputed values are in §2.
 - The watch cuts a long instruction after two lines (≈ 70 % scale) — Repeat is the recovery.
 - The Live Activity glyph's VoiceOver label is the raw kind string ("turnLeft", "straight").

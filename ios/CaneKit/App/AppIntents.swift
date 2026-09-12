@@ -4,7 +4,7 @@
 //
 //  Voice control for a walker who cannot see the screen: Siri phrases (and the Action button /
 //  Shortcuts) for everything the Guide card's buttons do. "Hey Siri, take me to Grainger in
-//  CaneKit", "Next waypoint in CaneKit", "Stop the route in CaneKit".
+//  OpenCane", "Next waypoint in OpenCane", "Stop the route in OpenCane".
 //
 //  Purpose: seven App Intents — Where am I / Start demo route / Navigate to CIF from here /
 //  Take me to <place> / Repeat / Next waypoint / Stop route — plus their
@@ -23,9 +23,15 @@
 //      obstacle channel must never start silently in the background.
 //    · Every shortcut phrase must contain `\(.applicationName)` (App Shortcuts requirement), and
 //      an app may register at most 10 App Shortcuts (this file registers 7).
+//    · ⚠ `\(.applicationName)` is resolved by the system from the bundle's **display name**
+//      (`CFBundleDisplayName`, set in `ios/project.yml` → OpenCane), never from the target or
+//      module name. That is why the phrases below need no edit when the product is renamed:
+//      the spoken word follows the home-screen name automatically. The *code* is still called
+//      CaneKit on purpose (AGENTS.md → "The name split"), so do not "fix" the mismatch here.
+//      What the walker must actually say today: "… in OpenCane".
 //    · Phrases can only interpolate AppEnum / AppEntity parameters, never a String: "Take me to
 //      Grainger" uses the `CampusDestination` enum; any other place goes through "Take me
-//      somewhere in CaneKit", where Siri asks "Where do you want to go?" for the String.
+//      somewhere in OpenCane", where Siri asks "Where do you want to go?" for the String.
 //    · ⚠ `CampusDestination` raw values are `CampusPlaces` ids (CaneKitLogic,
 //      `campusPlaceIdsArePinned`): add a gazetteer place in both, same id.
 //
@@ -56,7 +62,7 @@ struct WhereAmIIntent: AppIntent {
 /// Siri / Shortcuts "Start the demo route": starts the bundled ISR Townsend Hall → CIF route.
 struct StartDemoRouteIntent: AppIntent {
     /// Shown in Shortcuts.
-    static let title: LocalizedStringResource = "Start CaneKit route"
+    static let title: LocalizedStringResource = "Start OpenCane route"
     /// Subtitle in Shortcuts.
     static let description = IntentDescription("Starts the recorded ISR Townsend Hall to CIF route.")
     /// Foreground: guidance needs ARKit, the audio session and the screen kept awake.
@@ -90,7 +96,7 @@ struct NavigateToCIFIntent: AppIntent {
     }
 }
 
-/// The campus places Siri can hear inside a phrase ("Take me to Grainger in CaneKit").
+/// The campus places Siri can hear inside a phrase ("Take me to Grainger in OpenCane").
 /// ⚠ Raw values are `CampusPlaces` ids (CaneKitLogic, pinned by `campusPlaceIdsArePinned`);
 /// `CampusPlaces.place(id:)` turns a case into the entrance coordinate.
 enum CampusDestination: String, AppEnum {
@@ -112,8 +118,8 @@ enum CampusDestination: String, AppEnum {
 }
 
 /// Siri "Take me to <place>": a walking route from here. A campus place said in the phrase
-/// ("Take me to Grainger in CaneKit") goes straight to its gazetteer entrance; anything else
-/// ("Take me somewhere in CaneKit" → Siri asks "Where do you want to go?") is free text for
+/// ("Take me to Grainger in OpenCane") goes straight to its gazetteer entrance; anything else
+/// ("Take me somewhere in OpenCane" → Siri asks "Where do you want to go?") is free text for
 /// `AppModel.navigate(to:)` — the gazetteer, then the nearest reasonable Apple Maps result.
 /// Either way the app says "Walking to <place>, N meters." before guidance starts.
 struct TakeMeToIntent: AppIntent {
@@ -211,17 +217,33 @@ enum IntentSupport {
     /// speaks the localized message instead of silently doing nothing.
     struct NotReady: Error, CustomLocalizedStringResourceConvertible {
         /// Spoken / shown by the system when the intent fails.
-        var localizedStringResource: LocalizedStringResource { "CaneKit is still starting. Try again." }
+        var localizedStringResource: LocalizedStringResource { "OpenCane is still starting. Try again." }
     }
 
+    /// The app model, once it is actually ready to act on.
+    ///
     /// On a cold launch from the lock screen the SwiftUI scene may not have created the model
-    /// yet; wait briefly instead of silently doing nothing.
-    /// Polls `AppModel.shared` 20 × 100 ms (2 s total), then throws `NotReady`.
+    /// yet, so this polls 20 × 100 ms (2 s total). It waits for `started`, not merely for the
+    /// object to exist: `AppModel.shared` is assigned at the end of `init()`, but every engine is
+    /// wired in `start()`, which the root view's `.task` calls. A Siri phrase that won the race
+    /// against that `.task` would act on a model with no `depth.onReport` (no obstacle warnings),
+    /// no `nav.onSpeak` (the route's first instruction spoken to nobody), no audio session, and
+    /// an `announceChannels()` that reports AirPods and haptics as missing because their monitors
+    /// have not run — a walker told the wrong things about which safety channels are live.
+    ///
+    /// If the wait runs out with a model that exists but never started, it is started here rather
+    /// than refused: `start()` is idempotent (`guard !started`), so the later `.task` is a no-op,
+    /// and failing open keeps every voice phrase working in the one case where failing closed
+    /// would make all seven of them answer "OpenCane is still starting."
     @MainActor
     static func model() async throws -> AppModel {
         for _ in 0..<20 {
-            if let m = AppModel.shared { return m }
+            if let m = AppModel.shared, m.started { return m }
             try await Task.sleep(for: .milliseconds(100))
+        }
+        if let m = AppModel.shared {
+            m.start()
+            return m
         }
         throw NotReady()
     }

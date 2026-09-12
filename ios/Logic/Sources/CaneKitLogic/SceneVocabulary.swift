@@ -60,6 +60,10 @@ public enum SceneVocabulary {
         Group(rank: 8, noun: "a motorcycle", ids: ["motorcycle"]),
         Group(rank: 8, noun: "a scooter", ids: ["scooter"]),
         Group(rank: 8, noun: "a dog", ids: ["dog"]),
+        // Vision's dedicated animal detector (`RecognizeAnimalsRequest`) answers dog *or* cat, so
+        // "a cat" needs a group of its own — without it a detected cat could not be spoken and
+        // "cat" would not be a vocabulary stem the faithfulness gate can reject (PeopleAhead).
+        Group(rank: 8, noun: "a cat", ids: ["cat"]),
         Group(rank: 9, noun: "a fence", ids: ["fence"]),
         Group(rank: 9, noun: "a pole", ids: ["pole"]),
         Group(rank: 9, noun: "a street light", ids: ["streetlight", "lamppost"]),
@@ -131,16 +135,29 @@ public enum SceneVocabulary {
     /// (by its last word: "the street" → "street") when there are nouns, every number in it also
     /// appears in `facts`, and it is short enough to speak (≤ 30 words). Otherwise the caller
     /// speaks the deterministic template instead.
-    public static func isFaithful(_ sentence: String, facts: String, nouns: [String]) -> Bool {
+    ///
+    /// `detected` carries facts from Vision's **dedicated** detectors — today the people and
+    /// animals `PeopleAhead.nouns` found. They are grounded exactly like the scene labels and the
+    /// LiDAR distance: a body rectangle is something the sensors saw, so a sentence may name it,
+    /// and a frame where only people were detected (the classifier returning nothing is the case
+    /// this whole path exists for) still has something to be faithful to. Nothing else is loosened.
+    /// - Parameters:
+    ///   - sentence: what the language model produced.
+    ///   - facts: the plain-text facts it was given.
+    ///   - nouns: spoken nouns from the scene classifier (`SceneVocabulary.nouns`).
+    ///   - detected: spoken nouns from the dedicated detectors (`PeopleAhead.nouns`).
+    public static func isFaithful(_ sentence: String, facts: String, nouns: [String],
+                                  detected: [String] = []) -> Bool {
         let words = tokens(sentence)
         guard !words.isEmpty, words.count <= 30 else { return false }
         // Nothing nameable was detected: there is nothing the sentence could be faithful to, so the
         // deterministic template speaks (Muse: "A door ahead." at a blank wall passed the gate).
-        guard !nouns.isEmpty else { return false }
+        let grounded = nouns + detected
+        guard !grounded.isEmpty else { return false }
         // Accept the noun or any synonym the vocabulary merged into it ("road" for "the street",
         // "car" for "cars", "crossing" for "a crosswalk"), compared on a simple stem. Exact stem
         // equality only: prefix matching let "businesses" count as "bus" (Muse, final review).
-        let terms = Set(nouns.flatMap(synonyms(of:)).map(stem))
+        let terms = Set(grounded.flatMap(synonyms(of:)).map(stem))
         guard words.contains(where: { terms.contains(stem($0)) }) else { return false }
         // …and names nothing else from the vocabulary: with an example list in the prompt the
         // model answered "trees, grass" with "a crosswalk, then stairs, then a door, and finally
@@ -156,13 +173,37 @@ public enum SceneVocabulary {
         guard !invented else { return false }
         // Numbers, written as digits or words, must come from the facts: "two meters" in the facts
         // allows "2 meters"; an invented "three" or "zero" is rejected (Street View e2e, Muse).
-        return numbers(in: sentence).isSubset(of: numbers(in: facts))
+        return numbersAreGrounded(sentence, in: facts)
+    }
+
+    /// Does every number in `sentence` also appear in `facts`? Digits and number words are the same
+    /// number ("two meters" in the facts allows "2 meters"), decimals stay whole so an invented "4"
+    /// cannot hide inside "1.4". Empty facts ground nothing, so any number is invented.
+    ///
+    /// The one place this rule lives: `isFaithful` uses it for the on-device sentence and
+    /// `CloudSceneGate` for the cloud sentence, so a distance can never be legal on one path and
+    /// illegal on the other. Pinned by `groundedNumbersPredicateIsShared`,
+    /// `distancesMustBeTheLidarNumber`.
+    public static func numbersAreGrounded(_ sentence: String, in facts: String) -> Bool {
+        numbers(in: sentence).isSubset(of: numbers(in: facts))
     }
 
     /// True when `sentence` states a distance that `lidar` (the depth fact) gives — by number, not
     /// by the substring "meter" ("parking meters" and "kilometers" matched that; review of f5413b8).
     public static func mentionsDistance(_ sentence: String, from lidar: String) -> Bool {
         !numbers(in: sentence).isDisjoint(with: numbers(in: lidar))
+    }
+
+    /// True when `sentence` already names `noun`, counting every Vision identifier the vocabulary
+    /// merged into it ("person", "pedestrian" and "adult" all count as "people"). Used to decide
+    /// whether the people line still has to be prepended to a model sentence — a detected person
+    /// must be spoken, but never twice.
+    /// - Parameters:
+    ///   - sentence: the model's sentence.
+    ///   - noun: a spoken noun from `groups` ("people", "a dog").
+    public static func mentions(_ sentence: String, noun: String) -> Bool {
+        let terms = Set(synonyms(of: noun).map(stem))
+        return tokens(sentence).contains { terms.contains(stem($0)) }
     }
 
     /// Lower-case word and digit tokens ("1.5" → "1", "5").

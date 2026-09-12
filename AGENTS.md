@@ -7,13 +7,44 @@ module section in `docs/CODE_REFERENCE.md` in the same commit — agents rely on
 
 ## What this is
 
-CaneKit is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
+OpenCane is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
 user along GPS waypoints and warns about waist-to-head obstacles. The **phone is the only computer**:
 an iPhone 17 Pro Max (iOS 27) clamped to a non-metal 28.75 mm cane, plus AirPods Pro (beacon +
 speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
 external sensors. The demo route is ISR Townsend Hall → CIF on the UIUC campus
 (`ios/CaneKit/Resources/route_isr_cif.json`), but any destination works via MapKit walking directions.
 For the demo everything runs **untethered on the phone**; the Mac only signs and installs.
+
+## The name split — OpenCane to a human, CaneKit in the code (deliberate, do not "fix")
+
+Added 2026-09-11. The two names are **not** a half-finished rename; keeping them apart is the point.
+
+| | Name | Where it is set |
+|---|---|---|
+| What a person **sees and hears** | **OpenCane** | `CFBundleDisplayName` on all three targets (`ios/project.yml` → `make gen`); the nav title in `ContentView`; the watch nav title; every spoken line (`AppModel`, `SoundWatcher`, `AppIntents`); the `NS*UsageDescription` purpose strings; the Siri App Shortcut phrases, which interpolate `\(.applicationName)` and therefore follow the display name with no edit |
+| What the **code** is called | **CaneKit** | Xcode project and `CaneKit.xcodeproj`, target names, scheme, `PRODUCT_NAME` (so the build product is `CaneKit.app`), the `CaneKitLogic` SwiftPM module, every `ios/CaneKit…/` path and file name, `Makefile` targets, the `CANEKIT_*` environment variables, the `canekit-*.jsonl` trip-log filenames |
+| Frozen either way | `com.aritro.canekit`, `.watchkitapp`, `.widget` | hard rule 6 |
+
+Why the code keeps the old name:
+
+- **The bundle id must not move.** iOS keys the installed app, its permission grants, its
+  `UserDefaults`, its Documents folder (trip logs, hazard GeoJSON) and the ElevenLabs mp3 voice
+  cache off the bundle id. A new id installs a *second* app beside the old one, orphans all of it,
+  and burns another of the 10 App IDs a free personal team gets per week.
+- **`PRODUCT_NAME` names the build product.** `CaneKit.app` is referenced by `ios/Makefile`,
+  `ios/scripts/gen.sh` and `ios/scripts/e2e.py`.
+- **Renaming targets, the module and the paths buys nothing a user can see** and would touch
+  hundreds of files, `docs/CODE_REFERENCE.md` and every XCUITest, for a rename with no user-visible
+  effect.
+
+So: when you add a **spoken or visible** string, say OpenCane. When you touch a type, file, module,
+target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
+
+1. ⚠ `AppModel.commonLines` prefetches the ElevenLabs audio for fixed spoken lines and matches them
+   **by bytes**. "OpenCane ready." appears both there and at the `speech.say` in `AppModel.start()`;
+   change one without the other and that line silently falls back to Apple's system voice.
+2. ⚠ Changing `CFBundleDisplayName` changes **what the walker must say to Siri**: the phrase is
+   "… in OpenCane" now, not "… in CaneKit". `docs/design.md` §6 lists the current phrases.
 
 ## Layout
 
@@ -56,12 +87,19 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 7. **Audio session is one `.playback` session**, mode `.default`, `[.duckOthers]`, no Bluetooth options
    (HFP drops AirPods to phone-call quality). `CHHapticEngine(audioSession: nil)`. `.HRTF`, mono click.
    Do not "fix" the deviations listed in `ios/README.md §2` back to the original spec.
+   One opt-in exception exists: "Listen for sirens and horns" (off by default) needs an audio *input*,
+   so `SpeechQueue.setMicrophoneEnabled(_:)` moves the session to `.playAndRecord` with
+   `[.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker]` — never `.allowBluetoothHFP` — and reverts to
+   `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
+   code may call `setCategory`.
 8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
    never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start demo route,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
-   Type a destination first) must not change without updating the tests in the same commit.
+   Type a destination first, Destination, and a campus suggestion's label "Grainger Engineering
+   Library, campus place" — `DestinationSuggestion.voiceOverLabel`) must not change without updating
+   the tests in the same commit.
 10. **Every commit**: `cd ios && make test` green (Logic), `make sim` green, and for UI changes
     `make uitest` + `make tour` on the **iPhone 17 Pro Max / iOS 27** simulator (`make sim17` creates
     it once). Run the Muse review (`muse exec`, read-only, from a scratch dir) on the diff. Commit message
@@ -183,21 +221,33 @@ app container's Documents folder.
 - "Where am I" never needs a key: cloud provider → on-device fallback (Vision + Apple's on-device
   model, template when Apple Intelligence is off). On-device scene words go through
   `SceneVocabulary`: Vision identifiers not in its table ("conveyance", "portal", "machine") are
-  dropped on purpose and synonyms merge; add a group, never pass raw identifiers to speech. The front camera is deliberately unused: it
-  faces the walker on the cane, and ARKit owns the capture pipeline.
+  dropped on purpose and synonyms merge; add a group, never pass raw identifiers to speech. The front camera is not used for *scene* work: it faces the
+  walker on the cane, and ARKit owns the capture pipeline. It has two opt-in jobs of its own (both off
+  by default): "Head tracking without AirPods" (`userFaceTrackingEnabled` → `ARFaceAnchor` yaw, no
+  picture) and "Both cameras (pauses obstacle detection)", which is an `AVCaptureMultiCamSession` with
+  ARKit paused. ARKit can never give both pictures at once (Apple DTS, forums 677731; `ARFrame` has one
+  `capturedImage`), so pausing it is the only way — see `DualCameraSession`.
 - Veer decisions use a 15 m course smoother while walking; the beacon keeps the raw heading.
   The gyro gate applies to the compass only, never to the GPS course. The smoother is kept empty
   while the fix is inside the fence of the corner just reached (its first course would be a diagonal
   across the corner) and is reset after every veer cue (so a corrected walker is not told again).
 - The arrival hint ("You are close to …, press Next to finish") is clock-driven from the 10 Hz
   ticker (`NavigationEngine.tick`), because CoreLocation stops sending fixes while you stand still.
+- The destination box suggests places as you type (Step 14): the campus gazetteer first, *always*
+  above MapKit's rows and badged CAMPUS, because `MKLocalSearchCompleter` answers "Grainger" with an
+  industrial supply store and the walker cannot see that. Campus rows match partial text; the
+  gazetteer's own `CampusPlaces.match` stays whole-alias only on purpose (a partial name must reach
+  MapKit). Completer rows never show a distance — a completion carries no coordinate, so there is
+  nothing to measure. Tapping a row does not open a new code path: it calls the same
+  `AppModel.navigate(to:)` / `navigate(to place:)` Siri uses, so "Walking to <place>, N meters." is
+  still spoken before guidance. The row count is the app's only VoiceOver announcement (design.md §5.5).
 - "Take me to …" (typed field or Siri) checks the campus gazetteer (`CampusPlaces`: CIF, ISR,
   Grainger, Illini Union, Siebel, Main Library, ARC) before MapKit, then walks to the *nearest*
   MKLocalSearch result within 3 km (a name containing every typed word preferred), never MapKit's
   first answer; "Walking to <place>, N meters." is said before guidance so a wrong pick can be
   stopped, and Stop also abandons a search still in flight. Siri phrases can only carry the
-  gazetteer places ("Take me to Grainger in CaneKit"; App Shortcut phrases cannot hold a String);
-  any other place goes through "Take me somewhere in CaneKit" and Siri asks where. Gazetteer
+  gazetteer places ("Take me to Grainger in OpenCane"; App Shortcut phrases cannot hold a String);
+  any other place goes through "Take me somewhere in OpenCane" and Siri asks where. Gazetteer
   entrances other than CIF / ISR are OSM entrance nodes, not yet walked.
 - "Navigate to CIF from here" routes with Apple Maps to the route file's last waypoint as a bare
   coordinate (no search), so it can never pick a different "CIF". Starting the demo route also

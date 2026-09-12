@@ -98,6 +98,15 @@ public enum CampusPlaces {
                     aliases: ["ARC", "Activities and Recreation Center", "ARC gym"]),
     ]
 
+    /// The mean of every entrance above: "campus", for the one job that needs a point and has no
+    /// GPS fix — biasing `MKLocalSearchCompleter`'s region while the walker types on the idle
+    /// screen (GPS only runs during a route, design.md §6.1). It is never used as a distance
+    /// origin: a distance from a guessed origin would be a made-up number.
+    /// Pinned by `campusCentreIsWithinWalkingRangeOfEveryPlace`.
+    public static let center: Coordinate = Coordinate(
+        latitude: all.reduce(0) { $0 + $1.coordinate.latitude } / Double(all.count),
+        longitude: all.reduce(0) { $0 + $1.coordinate.longitude } / Double(all.count))
+
     /// Words dropped wherever they appear: "the CIF" = "CIF", "Activities & Recreation" =
     /// "Activities and Recreation" (the ampersand becomes a space).
     static let fillerWords: Set<String> = ["the", "and"]
@@ -185,7 +194,9 @@ public enum WalkingIntro {
 
     /// Nearest 10 m below a kilometre (at least "10 meters", never "0"), tenths of a kilometre
     /// from there ("1 kilometer", "1.2 kilometers"); nil for a negative or non-finite distance.
-    static func distancePhrase(_ meters: Double) -> String? {
+    /// Also the spoken distance on a destination-search row (`DestinationSuggestion.voiceOverLabel`),
+    /// so the list and the "Walking to …" line round the same way.
+    public static func distancePhrase(_ meters: Double) -> String? {
         guard meters.isFinite, meters >= 0 else { return nil }
         let tens = (meters / 10).rounded() * 10
         if tens < 1000 { return "\(max(10, Int(tens))) meters" }

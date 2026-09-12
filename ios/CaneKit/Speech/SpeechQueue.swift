@@ -18,6 +18,16 @@
 //
 //  Audio: one `.playback` session with `.duckOthers`, mode `.default`, no Bluetooth options
 //  (adding HFP would drop AirPods to phone-call quality and flip routes — ios/README.md §2).
+//  The single exception is `setMicrophoneEnabled(_:)`: the danger-sound watch needs an audio
+//  *input*, which `.playback` does not have, so that one method may move the session to
+//  `.playAndRecord` while the walker has the feature on. It reverts on any output-route change —
+//  not only the one it can see synchronously: iOS settles a route asynchronously, so for the whole
+//  time the microphone is on a `routeChangeNotification` observer holds the session to the output
+//  route it started with and puts it back to `.playback` (and tells `SoundWatcher`, which stops)
+//  the moment that route moves. No shipping code path may call `setCategory` anywhere else; the
+//  one other call in the app is `SensorProbe.caseEAudioSession()`, the debug audio probe, which
+//  runs only under `SensorProbe.isEnabled` (a launch argument) and finishes before
+//  `SoundWatcher.start()` is ever reached.
 //  Both backends use the app session so speech and the beacon share one route. Interruptions
 //  (phone call, Siri) re-activate the session when they end.
 //
@@ -70,6 +80,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 /// Priority of a spoken line. Higher raw value wins: a strictly higher priority interrupts the
 /// line playing; equal or lower queues behind it (FIFO within a band). Order is fixed by
@@ -109,7 +120,9 @@ final class SpeechQueue {
     /// "ElevenLabs" or "System" — what the last line used.
     private(set) var backendName = "System"
     /// Last natural-voice problem (fetch failure, playback failure, watchdog reset). Diagnostic
-    /// only; never cleared automatically, never spoken.
+    /// only, never spoken. Cleared when a new prefetch starts and when the natural voice actually
+    /// plays a line, so the card shows a live complaint rather than a grievance from a dead spot
+    /// the walker left ten minutes ago.
     private(set) var voiceError: String?
     /// Natural voice available (key present). Toggle `useNaturalVoice` to force the system voice.
     /// Built once from `Secrets.plist`; nil without `ELEVENLABS_API_KEY` (hard rule 4: no key,
@@ -118,6 +131,26 @@ final class SpeechQueue {
     /// When false every line uses `AVSpeechSynthesizer`, even with a key and a warm cache.
     /// Also gates `prefetch` (no point spending API quota on a voice we will not use).
     var useNaturalVoice = true
+
+    /// Lines that belong in the cache but are never urgent, appended to the end of *every*
+    /// prefetch batch. `AppModel.start()` sets it to `SpokenPhrases.warningLines`.
+    ///
+    /// Why a standing set rather than one long batch at launch: `prefetch` cancels the batch
+    /// running before it, and `speakNow` calls `prefetch([text])` for every warning that misses
+    /// the cache. One launch batch would therefore be abandoned by the first warning the walker
+    /// heard — a few seconds in, with most of its lines never synthesized — and the voice would go
+    /// on flipping for the rest of the session. Re-appending the set to every batch instead makes
+    /// each restart resume where the last stopped: `VoicePrefetch.queue` drops whatever already
+    /// reached the disk, so the remainder only shrinks and no line is paid for twice.
+    ///
+    /// Always last, so a route's own lines (waypoint 1 is needed *now*) are still requested first,
+    /// and still only `VoicePrefetch.maxConcurrent` requests are in flight.
+    @ObservationIgnored var backgroundLines: [String] = []
+
+    /// The spoken lines of the route currently being walked, re-appended to every prefetch batch so
+    /// a warning cache miss can never discard them. Set by `AppModel` when a route starts, cleared
+    /// when it ends; empty when no route is running.
+    @ObservationIgnored var routeLines: [String] = []
 
     // MARK: Private
 
@@ -179,6 +212,8 @@ final class SpeechQueue {
     @ObservationIgnored private var player: AVAudioPlayer?
     /// Strong reference to `player`'s delegate (AVAudioPlayer holds its delegate weakly).
     @ObservationIgnored private var playerRelay: PlayerRelay?
+    /// The one running batch prefetch, so a new route can cancel the previous route's.
+    @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// In-flight ElevenLabs fetch for a cache miss; cancelled by `stopCurrent`.
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
     /// True from a cache-miss fetch start until the fetch result *or* the 2.5 s deadline claims
@@ -214,7 +249,10 @@ final class SpeechQueue {
 
     /// Call once before the AR session starts (ARKit does not touch audio, but the beacon does).
     ///
-    /// This is the app's only `setCategory` call (AGENTS.md hard rule 7): `.playback` so speech
+    /// This is the app's `setCategory` call for every normal launch (AGENTS.md hard rule 7); the
+    /// only other one on a shipping path is `setMicrophoneEnabled(_:)`, which the walker has to
+    /// switch on and which reverts here on any output-route change, for as long as it is on. (The
+    /// debug `SensorProbe` has one more, behind a launch argument.) `.playback` so speech
     /// and the beacon play with the ring/silent switch on, mode `.default`, options
     /// `[.duckOthers]` so a podcast dips under guidance. Deliberately *no* `.allowBluetooth` /
     /// `.allowBluetoothHFP`: HFP would drop AirPods to mono call quality (no HRTF beacon) and
@@ -244,6 +282,174 @@ final class SpeechQueue {
             guard let type else { return }
             MainActor.assumeIsolated { self?.interruption(type) }
         }
+    }
+
+    // MARK: Microphone (danger-sound watch)
+
+    /// What asking for microphone input did to the audio route.
+    /// Returned by `setMicrophoneEnabled(_:)` so the caller can tell the walker the truth.
+    enum MicrophoneSessionResult: Equatable, Sendable {
+        /// Input is available and the **output** route is unchanged; safe to keep.
+        case granted(route: String)
+        /// Input was available but the output route changed (e.g. AirPods dropped from A2DP to
+        /// HFP call quality, which would kill the HRTF beacon). The session has already been put
+        /// back to `.playback`; the caller must not enable its recording feature.
+        case revertedRouteChanged(before: String, after: String)
+        /// `setCategory` / `setActive` threw. The session has been put back to `.playback`.
+        case failed(String)
+    }
+
+    /// Fired on the main actor when the **output** route moves while the microphone is on. The
+    /// session has **already** been put back to `.playback` before this is called; the parameters
+    /// are `(routeWhenGranted, routeNow)` so the owner can say what happened.
+    ///
+    /// Why a callback and not just a return value: the route settles asynchronously. The
+    /// before/after comparison inside `setMicrophoneEnabled(true)` only catches a route that has
+    /// already moved by the time `setActive` returns, and on AirPods it typically has not — iOS
+    /// publishes the new route roughly 0.1–0.5 s later, long after the switch has reported
+    /// success. Without this hook the walker keeps walking with the beacon's HRTF gone and the
+    /// voice at call quality, and nothing ever tells them. Set by `SoundWatcher.start()` and
+    /// cleared by `SoundWatcher.stop()`.
+    @ObservationIgnored var onMicrophoneRouteChanged: ((String, String) -> Void)?
+
+    /// The output route as it was when the microphone was granted; nil whenever the session is on
+    /// plain `.playback`. Every route-change notification is compared against this, not against
+    /// the previous notification, so a route that wanders away and is still wrong is still caught.
+    @ObservationIgnored private var microphoneRoute: String?
+
+    /// Token for the `AVAudioSession.routeChangeNotification` observer. Non-nil **only** while the
+    /// microphone is on: the guard costs nothing the rest of the time, and removing it before the
+    /// revert is what stops our own `setCategory(.playback)` from re-entering the handler.
+    @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
+
+    /// Switch the app's one audio session between `.playback` (the normal state) and
+    /// `.playAndRecord`, which is the only way to get an `AVAudioEngine` input node for the
+    /// danger-sound watch (`.playback` has no input at all — Apple's category table).
+    ///
+    /// This is the **only** other `setCategory` call in the app besides
+    /// `configureAudioSession()`, and it exists because AGENTS.md hard rule 7 / ios/README.md §2
+    /// pin the app to one `.playback` session: the rule is not silently broken, it is broken
+    /// *visibly, temporarily, and only while the walker has asked for it*, and undone the moment
+    /// the route degrades.
+    ///
+    /// Protections, in order:
+    ///   · `.allowBluetoothHFP` is never passed. Apple documents that when one device offers both
+    ///     HFP and A2DP "the system gives hands-free ports a higher priority for routing", which
+    ///     is exactly the AirPods call-quality drop that would destroy the beacon's HRTF.
+    ///   · `.allowBluetoothA2DP` **is** passed, because without it "paired Bluetooth A2DP devices
+    ///     don't show up as available audio output routes" under `.playAndRecord`.
+    ///   · `.defaultToSpeaker` keeps phone-only playback on the speaker; `.playAndRecord` would
+    ///     otherwise route to the earpiece, which a cane-mounted phone cannot be heard from.
+    ///   · The output route is compared before and after, and **any** immediate change reverts to
+    ///     `.playback` and reports `.revertedRouteChanged`.
+    ///   · The route is then watched for as long as the microphone stays on (see
+    ///     `beginWatchingOutputRoute`), because the immediate comparison is not enough: iOS
+    ///     settles a route change asynchronously, so an AirPods flip lands *after* the check
+    ///     passed. Any later output change reverts the session and calls
+    ///     `onMicrophoneRouteChanged`. Speech, warnings and the beacon are the safety path and a
+    ///     microphone feature never outranks them.
+    ///
+    /// Measured on the iPhone 17 Pro Max (2026-09-11, trip-log `probe_e_audio_session`): with no
+    /// headphones, `.playAndRecord` + these options left the output at `Speaker` and added
+    /// `MicrophoneBuiltIn` as an input, and restoring `.playback` worked. The AirPods case is
+    /// **not** measured yet, which is why the continuous watch above exists rather than a promise.
+    /// Caller: `SoundWatcher.start()` / `stop()`.
+    func setMicrophoneEnabled(_ on: Bool) -> MicrophoneSessionResult {
+        let session = AVAudioSession.sharedInstance()
+        guard on else {
+            stopWatchingOutputRoute()
+            let result = restorePlaybackSession()
+            return result ?? .granted(route: Self.outputRoute(session))
+        }
+        let before = Self.outputRoute(session)
+        do {
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker])
+            try session.setActive(true)
+        } catch {
+            audioSessionError = "Microphone session: \(error.localizedDescription)"
+            _ = restorePlaybackSession()
+            return .failed(error.localizedDescription)
+        }
+        let after = Self.outputRoute(session)
+        guard after == before else {
+            _ = restorePlaybackSession()
+            return .revertedRouteChanged(before: before, after: after)
+        }
+        audioSessionError = nil
+        beginWatchingOutputRoute(after)
+        return .granted(route: after)
+    }
+
+    /// Watch `AVAudioSession.routeChangeNotification` for as long as the microphone is on.
+    ///
+    /// The notification is registered with `queue: .main`, so the closure provably runs on the
+    /// main thread and `MainActor.assumeIsolated` is legal (the same pattern as the interruption
+    /// observer above); nothing but the decoded route string crosses into the isolated call.
+    /// Idempotent: a second call replaces the observer rather than stacking one.
+    /// - Parameter route: the output route to hold the session to.
+    private func beginWatchingOutputRoute(_ route: String) {
+        stopWatchingOutputRoute()
+        microphoneRoute = route
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.outputRouteMayHaveChanged() }
+        }
+    }
+
+    /// Take the observer down and forget the held route. Called on the way back to `.playback`
+    /// and before the revert inside the handler, so our own `setCategory` cannot re-enter it.
+    private func stopWatchingOutputRoute() {
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
+        routeChangeObserver = nil
+        microphoneRoute = nil
+    }
+
+    /// A route change arrived while the microphone was on. If the **output** half of the route
+    /// moved at all, put the session back to `.playback` immediately and tell the owner.
+    ///
+    /// Input-only changes are ignored on purpose: the danger-sound watch is allowed to gain or
+    /// lose a microphone (that is its own problem, reported by `SoundWatcher`), but it is never
+    /// allowed to cost the walker the output route their speech and beacon live on. A route
+    /// change that merely re-announces the same output route is also ignored — iOS posts several
+    /// of those around a category change.
+    private func outputRouteMayHaveChanged() {
+        guard let held = microphoneRoute else { return }
+        let now = Self.outputRoute(AVAudioSession.sharedInstance())
+        guard now != held else { return }
+        // Order matters: drop the observer *before* reverting, or our own `setCategory(.playback)`
+        // posts another route change straight back into this method.
+        stopWatchingOutputRoute()
+        _ = restorePlaybackSession()
+        onMicrophoneRouteChanged?(held, now)
+    }
+
+    /// Put the session back to the one configuration the rest of the app relies on.
+    /// - Returns: `.failed` when even the restore threw (the app is then in an unknown audio
+    ///   state and the error is left in `audioSessionError`), nil on success.
+    private func restorePlaybackSession() -> MicrophoneSessionResult? {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+            try session.setActive(true)
+            audioSessionError = nil
+            return nil
+        } catch {
+            audioSessionError = "Audio restore: \(error.localizedDescription)"
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// The current **output** route as a stable string ("BluetoothA2DP", "Speaker",
+    /// "Speaker+BluetoothA2DP"), for the before/after comparison, the continuous watch and the
+    /// trip log.
+    private static func outputRoute(_ session: AVAudioSession) -> String {
+        let ports = session.currentRoute.outputs.map(\.portType.rawValue).sorted()
+        return ports.isEmpty ? "none" : ports.joined(separator: "+")
     }
 
     /// Phone call / Siri: the system stops our audio without telling the backends. Put the
@@ -418,17 +624,42 @@ final class SpeechQueue {
     /// Pre-synthesize lines the route will need (no-op without the natural voice).
     /// Fire-and-forget on a detached `.utility` task so the network work never runs on (or
     /// blocks) the main actor; `ElevenLabsVoice` is a Sendable value, so capturing it is safe.
-    /// Failures are silent — a line that is still uncached later simply takes the fetch or
-    /// system-voice path in `speakNow`. Callers: `AppModel.start()` (common lines) and route
-    /// start (every waypoint line + intro); `speakNow` for a warning spoken by the system voice.
+    /// A line that is still uncached later simply takes the fetch or system-voice path in
+    /// `speakNow`. Callers: `AppModel.start()` (common lines) and route start (every waypoint line
+    /// + intro); `speakNow` for a warning spoken by the system voice.
+    ///
+    /// Only one prefetch runs at a time: starting a second route cancels the first. Two overlapping
+    /// batches would put twice `maxConcurrentPrefetches` requests in flight and rate-limit the live
+    /// cue the walker is waiting for, and the older batch is for a route nobody is walking any more.
+    /// `backgroundLines` is appended to whatever the caller passed, so a cancelled batch's
+    /// never-urgent tail is carried into the replacement instead of being dropped.
+    /// - Parameter lines: the urgent lines, in speaking order; requested before `backgroundLines`.
     func prefetch(_ lines: [String]) {
         guard let naturalVoice, useNaturalVoice else { return }
-        Task.detached(priority: .utility) { [weak self] in
-            let failure = await naturalVoice.prefetch(lines)
+        prefetchTask?.cancel()
+        // A new attempt: drop the previous complaint so the card cannot keep accusing the voice
+        // after the network came back. A failure below writes a fresh one.
+        voiceError = nil
+        // Route lines are a standing set too, for the same reason `backgroundLines` is one — and
+        // this is the case that matters most. At route start the whole route is prefetched, but the
+        // first obstacle warning that misses the cache calls `prefetch([text])`, which cancels this
+        // batch and replaces it. Without re-appending them every remaining waypoint line is dropped,
+        // and the walker's next turn or crossing instruction — at a street corner — waits on the
+        // network and arrives late in the system voice. They go before `backgroundLines` because a
+        // turn is time-critical and a warning phrase is only a nicety once it is cached.
+        let batch = lines + routeLines + backgroundLines
+        prefetchTask = Task.detached(priority: .utility) { [weak self] in
+            let failure = await naturalVoice.prefetch(batch)
             // Only report; never let a prefetch failure disable the voice. The live path has its
             // own circuit breaker, and the cache may already hold the line that matters.
-            guard let failure else { return }
-            await MainActor.run { self?.voiceError = failure }
+            guard let failure, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                // Backgrounding surfaces as a timeout, not a cancellation, and is not a voice
+                // problem: do not accuse the voice for a suspension the user caused.
+                guard UIApplication.shared.applicationState != .background else { return }
+                self.voiceError = failure
+            }
         }
     }
 
@@ -572,6 +803,10 @@ final class SpeechQueue {
     /// generation, so the queue never sticks. Main actor.
     private func playFile(_ url: URL, gen: Int) {
         backendName = "ElevenLabs"
+        // The natural voice just worked, so any earlier complaint is history. Without this a
+        // launch with no signal would leave "timed out" on the card for the rest of the day, even
+        // once every line was coming out in the ElevenLabs voice.
+        voiceError = nil
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             let relay = PlayerRelay { [weak self] in

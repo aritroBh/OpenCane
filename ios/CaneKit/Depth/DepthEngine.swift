@@ -20,6 +20,13 @@
 //  `AsyncStream`; the consumer task (main actor) drains it, so a slow main thread drops stale
 //  reports instead of queueing them.
 //
+//  Front camera: with `faceTrackingEnabled` the same session also runs the TrueDepth camera
+//  (`userFaceTrackingEnabled`), which adds an `ARFaceAnchor` for the walker's own head and changes
+//  nothing about the rear camera or LiDAR — measured on the phone, not assumed (`SensorProbe`,
+//  trip-log records `probe_a0_world_baseline` / `probe_a_world_plus_face`). ARKit delivers exactly
+//  one `capturedImage` per frame and it is the rear camera's, so there is no front-camera *picture*
+//  to show; the anchor's yaw goes to `onFaceYaw` and drives the beacon when there are no AirPods.
+//
 //  Invariants: the delegate and consumer are wired exactly once (first `start()`); later starts
 //  go through `resume()` and never reset tracking. Re-running the session (`setMeshClassification`)
 //  costs ~1–2 s of depth, so it happens only on a thermal *change*. No audio: ARKit here never
@@ -67,6 +74,17 @@ final class DepthEngine {
     /// Fired on the main actor for every report; the cue router hangs off this.
     /// Set once by `AppModel.start()` to `AppModel.handle(_:)` (haptics, watch mirror, speech).
     @ObservationIgnored var onReport: ((LaneReport) -> Void)?
+
+    /// Fired on the main actor at most every `FaceYawTracker.publishInterval` with the walker's
+    /// head yaw in ARKit's world frame (degrees) and the ARKit clock of the frame it came from.
+    /// Only ever called while `faceTrackingEnabled` — that is, while the front (TrueDepth) camera
+    /// runs alongside the back camera's LiDAR. Set once by `AppModel.start()` to
+    /// `AppModel.faceHead.ingest(worldYawDeg:now:)`.
+    @ObservationIgnored var onFaceYaw: ((Double, TimeInterval) -> Void)?
+
+    /// True while an `ARFaceAnchor` has been seen at all this session (any age). Only for the
+    /// Hazards card's "the front camera is live" line; freshness is `FaceHeadPose.isTracking`.
+    private(set) var faceAnchorSeen = false
 
     // MARK: Capability
 
@@ -156,17 +174,39 @@ final class DepthEngine {
         processor.stopMotion()
         processor.dropLatestImage()     // a paused frame is a stale frame: never describe it later
         isRunning = false
+        // A paused engine publishes no reports, so the last rate is not the current rate: leaving
+        // it at 30 made the "both cameras" trip-log record read as though depth were still
+        // flowing while ARKit was stopped. Zero it, and clear the window so the first rate after
+        // `resume()` is not averaged across the pause.
+        fps = 0
+        fpsWindow.removeAll(keepingCapacity: true)
         status = "Depth paused"
     }
 
-    /// Re-run the last configuration *without* resetting tracking (keeps anchors / mesh), restart
-    /// the gyro. Falls through to `start()` if the session was never started. Caller:
+    /// Re-run the configuration *without* resetting tracking (keeps anchors / mesh), restart the
+    /// gyro. Falls through to `start()` if the session was never started. Caller:
     /// `AppModel.scenePhaseChanged(.active)` and `start()` itself.
+    ///
+    /// ⚠ The configuration is rebuilt from the *current* settings, not replayed from the stored
+    /// one. `setFaceTracking`, `setMeshClassification` and `setHighFrameRate` all end in
+    /// `guard isRunning else { return }`: while the session is paused they record the flag and
+    /// skip the `session.run`, so the stored configuration still describes the world as it was
+    /// before the walker changed anything. Replaying it brought the session back *without* the
+    /// feature while every flag, every trip-log field and every UI readout said it was on. Not
+    /// hypothetical: on 2026-09-12 the walker turned on "Head tracking without AirPods"
+    /// (`canekit-2026-09-12T02-40-53Z.jsonl`, t=17.583) while "Both cameras" had ARKit paused
+    /// (t=5.772), so `userFaceTrackingEnabled` was requested and never actually run in that
+    /// process — the first session that really ran with it was the next cold launch, which died
+    /// inside the ARKit warm-up. A settings change has to reach ARKit at the next resume, or it
+    /// reaches it later somewhere nobody is watching. Rebuilding costs one value object, and
+    /// `session.run` without `.resetTracking` still keeps the world map.
     func resume() {
         guard !isRunning else { return }
-        guard let configuration else { start(); return }
+        guard configuration != nil else { start(); return }
+        let config = makeConfiguration(mesh: meshEnabled)
+        configuration = config
         processor.startMotion()
-        session.run(configuration)               // no reset: keep the world map
+        session.run(config)                      // no reset: keep the world map
         isRunning = true
         status = "Depth resuming…"
     }
@@ -187,6 +227,32 @@ final class DepthEngine {
     func setHighFrameRate(_ on: Bool) {
         guard on != highFrameRate else { return }
         highFrameRate = on
+        guard isRunning else { return }
+        let config = makeConfiguration(mesh: meshEnabled)
+        configuration = config
+        session.run(config)
+    }
+
+    /// Whether the front (TrueDepth) camera also tracks the walker's face, for head yaw without
+    /// AirPods (`ARWorldTrackingConfiguration.userFaceTrackingEnabled`).
+    ///
+    /// Measured on the iPhone 17 Pro Max (2026-09-11, `probe_a_world_plus_face` in the trip log):
+    /// with `userFaceTrackingEnabled = true`, LiDAR `sceneDepth` keeps arriving on every frame and
+    /// `capturedImage` is still the **rear** camera's 1920×1440 — the front camera contributes an
+    /// `ARFaceAnchor` and nothing else. See `SensorProbe` for the full measurement.
+    /// Off by default (AGENTS.md rule 6: anything new and untuned ships off).
+    private(set) var faceTrackingEnabled = false
+
+    /// Turn the front-camera face tracking on or off. Re-runs the session (~1–2 s of depth), so
+    /// callers flip it on a *setting change*, never per frame — exactly like
+    /// `setMeshClassification`. A no-op where the phone cannot do it
+    /// (`supportsFrontCameraWithLiDAR`), so the setting can be on harmlessly in the simulator.
+    /// Caller: `AppModel.faceHeadTrackingEnabled`'s `didSet`.
+    func setFaceTracking(_ on: Bool) {
+        let wanted = on && Self.supportsFrontCameraWithLiDAR
+        guard wanted != faceTrackingEnabled else { return }
+        faceTrackingEnabled = wanted
+        if !wanted { faceAnchorSeen = false }
         guard isRunning else { return }
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
@@ -218,6 +284,13 @@ final class DepthEngine {
         config.worldAlignment = .gravity
         config.planeDetection = []                       // we never use planes; saves CPU
         config.isAutoFocusEnabled = true
+        // The front (TrueDepth) camera, when the walker asked for head tracking without AirPods.
+        // It adds an `ARFaceAnchor` and changes nothing about the rear camera or LiDAR (measured:
+        // `probe_a_world_plus_face`). `supportsUserFaceTracking` is false in the simulator, so the
+        // flag is simply never set there.
+        if faceTrackingEnabled, Self.supportsFrontCameraWithLiDAR {
+            config.userFaceTrackingEnabled = true
+        }
         // Measured on the iPhone 17 Pro Max (2026-09-11): world tracking with LiDAR exposes only
         // the 1x wide camera, up to 60 fps (no ultra-wide, no 120). Use the full 4:3 frame (widest
         // view; the sign-range numbers assume it) at 30 fps by default, 60 when `highFrameRate`.
@@ -310,6 +383,17 @@ final class DepthEngine {
         isRunning = false
     }
 
+    /// One throttled face-yaw sample from the front camera, already reduced to a world yaw by
+    /// `SessionObserver` (which does the trigonometry on the delegate queue so no ARKit object
+    /// crosses to main). Publishes `faceAnchorSeen` and forwards to `onFaceYaw`.
+    /// - Parameters:
+    ///   - worldYawDeg: `FaceYawGeometry.worldYawDegrees` of the anchor's forward axis.
+    ///   - now: `ARFrame.timestamp` of the newest frame (the ARKit clock).
+    fileprivate func faceYawUpdated(_ worldYawDeg: Double, now: TimeInterval) {
+        faceAnchorSeen = true
+        onFaceYaw?(worldYawDeg, now)
+    }
+
     /// ARKit interruption begin/end (camera taken by another app, backgrounding). Status only:
     /// ARKit resumes the session by itself; `isRunning` is left unchanged.
     fileprivate func sessionInterrupted(_ interrupted: Bool) {
@@ -342,8 +426,11 @@ final class DepthEngine {
 /// Why not make the processor handle lifecycle too: it must never touch main-actor state. So
 /// this relay extracts Sendable values (`Int`, `String`, `ARCamera.TrackingState`) and hops
 /// with `Task { @MainActor in … }`; the `ARFrame` (not Sendable) never leaves the queue.
-/// `@unchecked Sendable` is sound: both stored properties are immutable after init and
-/// `engine` is only dereferenced on the main actor inside the hop.
+/// `@unchecked Sendable` is sound: `engine` and `frames` are immutable after init and `engine` is
+/// only dereferenced on the main actor inside the hop; the two mutable fields (`lastFrameTime`,
+/// `lastFaceHop`) are written and read **only** on the session's serial `delegateQueue`, the same
+/// "queue-only" discipline `DepthFrameProcessor` documents for its own fields. Nothing else in the
+/// app touches this object after `DepthEngine.start()` installs it.
 nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @unchecked Sendable {
     /// Weak so the relay never keeps the engine alive; read only inside main-actor hops.
     private weak var engine: DepthEngine?
@@ -355,9 +442,44 @@ nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @u
         self.frames = frames
     }
 
+    /// Newest `ARFrame.timestamp`, so a face anchor can be stamped with the ARKit clock (the
+    /// anchor callbacks carry no time of their own, and `session.currentFrame` is not documented
+    /// as safe to read off the delegate queue).
+    /// Queue-only: written and read on `DepthFrameProcessor.queue`, which is serial — the same
+    /// discipline the processor's own "queue-only" fields use, so no lock is needed.
+    private var lastFrameTime: TimeInterval = 0
+    /// ARKit clock of the last face yaw hopped to the main actor (queue-only), for the throttle.
+    private var lastFaceHop: TimeInterval = 0
+
     /// Hot path (~60 Hz): forward synchronously, no hop, no allocation.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        lastFrameTime = frame.timestamp
         frames.session(session, didUpdate: frame)
+    }
+
+    /// Anchors added — the walker's `ARFaceAnchor` arrives here first (and, with scene
+    /// reconstruction on, so do hundreds of `ARMeshAnchor`s, which `faceYaw` ignores).
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { faceYaw(anchors) }
+
+    /// Anchors updated (~camera rate while a face is in view).
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { faceYaw(anchors) }
+
+    /// Turn a face anchor into a world yaw and hop it to the main actor, at most every
+    /// `FaceYawTracker.publishInterval` (the beacon is rendered by a 10 Hz ticker; hopping at the
+    /// camera's rate would be main-thread work nobody reads).
+    ///
+    /// The trigonometry happens here, on the delegate queue, so only a `Double` crosses to main
+    /// and the `ARFaceAnchor` never leaves the queue (AGENTS.md hard rule 1). `columns.2` is the
+    /// face's +Z axis, which points out of the face — the direction the walker is looking.
+    private func faceYaw(_ anchors: [ARAnchor]) {
+        guard let face = anchors.lazy.compactMap({ $0 as? ARFaceAnchor }).first else { return }
+        let now = lastFrameTime
+        guard now - lastFaceHop >= FaceYawTracker.publishInterval else { return }
+        let forward = face.transform.columns.2
+        guard let yaw = FaceYawGeometry.worldYawDegrees(forwardX: Double(forward.x),
+                                                       forwardZ: Double(forward.z)) else { return }
+        lastFaceHop = now
+        Task { @MainActor [engine] in engine?.faceYawUpdated(yaw, now: now) }
     }
 
     /// Session failed (permissions, sensor). Hops code + message to `DepthEngine.sessionFailed`.

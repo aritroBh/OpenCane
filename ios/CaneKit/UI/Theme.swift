@@ -303,8 +303,10 @@ struct CKBigButtonStyle: ButtonStyle {
 /// Adds `.updatesFrequently` when asked, so VoiceOver re-reads a live pill on focus (§5 rule).
 struct CKStatusPill: View {
     /// Fill colour family: `trusted` / `warning` / `danger` use `ink` text; `neutral` uses
-    /// `textPrimary` on the raised surface.
-    enum Tone { case trusted, warning, danger, neutral }
+    /// `textPrimary` on the raised surface; `accent` is ink-on-ivory / ivory-on-ink (the brand
+    /// pairing) for a mark that is not a state — today only the "Campus" badge on a destination
+    /// suggestion (design.md §2, §6.3). Accent never carries hazard meaning.
+    enum Tone { case trusted, warning, danger, neutral, accent }
 
     /// Visible word(s); uppercased when drawn. Also the VoiceOver label when `spoken` is nil.
     let text: String
@@ -329,7 +331,7 @@ struct CKStatusPill: View {
                 .lineLimit(1)                       // a pill never hyphenates ("SPEAK-ING")
                 .minimumScaleFactor(0.8)
         }
-        .foregroundStyle(tone == .neutral ? CKColor.textPrimary : CKColor.ink)
+        .foregroundStyle(foreground)
         .padding(.horizontal, CKSpacing.md)
         .frame(minHeight: 32)
         .background(fill, in: Capsule())
@@ -346,6 +348,17 @@ struct CKStatusPill: View {
         case .warning: CKColor.warning
         case .danger: CKColor.danger
         case .neutral: CKColor.neutral
+        case .accent: CKColor.accent
+        }
+    }
+
+    /// Text / symbol colour: `ink` on every coloured fill (§2, one rule), `textPrimary` on the
+    /// raised neutral surface, `onAccent` on the accent fill.
+    private var foreground: Color {
+        switch tone {
+        case .neutral: CKColor.textPrimary
+        case .accent: CKColor.onAccent
+        default: CKColor.ink
         }
     }
 }

@@ -47,3 +47,4 @@ hardware/**/stl/
 *.gcode
 # OpenSCAD preview renders
 hardware/**/*.png
+.gstack/

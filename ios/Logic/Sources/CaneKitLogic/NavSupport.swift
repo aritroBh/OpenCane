@@ -295,7 +295,10 @@ public struct CueSpeechPolicy: Sendable, Equatable {
         case .right:
             candidate = phoneCannotBuzz ? ("Right.", .obstacle, sideInterval) : nil
         case .centerApproach(let d):
-            candidate = phoneCannotBuzz ? ("Ahead, \(SpokenDistance.phrase(d)).", .obstacle, sideInterval) : nil
+            // Built by `SpokenPhrases.approachLine`, which is also what the launch prefetch
+            // enumerates, so this line is byte-identical to the mp3 already in the cache and
+            // comes out in the natural voice instead of flipping to the system voice.
+            candidate = phoneCannotBuzz ? (SpokenPhrases.approachLine(distance: d), .obstacle, sideInterval) : nil
         }
         guard let (text, tier, interval) = candidate else { return nil }
         episodeKind = cue.kind
