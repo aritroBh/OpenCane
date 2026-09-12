@@ -19,7 +19,7 @@
 > | Scene read | Gemini Flash on a tap | "Where am I": custom OpenAI-compatible (Muse 1.3) / Anthropic / Gemini / OpenAI, chosen in `Secrets.plist`; Action button App Shortcut, watch, on-screen button; Camera Control unverified under ARKit | [`ios/README.md` §4](../ios/README.md) |
 > | Day-2 list | Live Activity, YOLO, OCR, MTD, events | Live Activity **shipped**. Not built: YOLO names, Vision OCR, Foundation Models, SpeechAnalyzer, UWB, MTD buses, calendar events, Aira handoff, hazard map, "find my cane" chirp | §5.2, §5.4 |
 > | Added, not in the plan | — | MapKit "any destination"; trip card (distance, minutes, steps via HealthKit / pedometer); JSONL trip log; AirPods / watch presence announcements; Repeat everywhere | `CHANGELOG.md` Steps 6–10 |
-> | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. The current checkout is tracked in [`ios/README.md`](../ios/README.md) and has 366 Logic-test annotations; device tests pending | [`docs/todo.md`](todo.md) |
+> | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. The current checkout is tracked in [`ios/README.md`](../ios/README.md) and has 372 Logic-test annotations; device tests pending | [`docs/todo.md`](todo.md) |
 >
 > "Shipped" above means the Step 10 build. Work in progress on Sep 11 and **not yet wired into the app**
 > when this banner was written: a hazards layer (LiDAR drop-off / pothole / curb detection, on-device sign

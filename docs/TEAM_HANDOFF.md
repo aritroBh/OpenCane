@@ -1,6 +1,7 @@
 # Team handoff: read this first after you pull
 
-State of OpenCane / CaneKit after the Step 25 safety interlock and Steps 23–24 voice-assistant
+State of OpenCane / CaneKit after the Step 25 safety interlock, Step 28 sound-recognition safety
+guard and Steps 23–24 voice-assistant
 merge, for Aritro, Sagar and Aarav. It says what exists, what is proven, what is not, what each of
 us does next, and which decisions are already made so nobody re-litigates them at 2 a.m. Historical
 claims below are labelled; current counts and build limitations are in the status table.
@@ -13,7 +14,7 @@ claims below are labelled; current counts and build limitations are in the statu
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (366 Logic tests with the Swift 6 toolchain).
+1. `git pull`, then `cd ios && make test` (372 Logic tests with the Swift 6 toolchain).
 2. Find your row in §3 and do its first item.
 3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
    only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
@@ -40,7 +41,7 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 366 annotations in the current checkout; the historical green run was 146 | `make test` |
+| Logic tests (every rule with a number in it) | 372 annotations in the current checkout; the historical green run was 146 | `make test` |
 | App + watch + widget build, Swift 6 strict | historical green; current local Xcode 15.1 cannot build the Xcode 27 project | `make sim` |
 | UI tests + screenshot tour | historical green; current simulator unavailable in this environment | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
@@ -87,7 +88,7 @@ rows below are the individual assignments.
 ```sh
 git pull
 cd ios
-make test          # 366 logic tests; requires the Swift 6 toolchain
+make test          # 372 logic tests; requires the Swift 6 toolchain
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build

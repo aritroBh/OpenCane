@@ -133,13 +133,15 @@ inset re-check after reinstall.
   `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
   `SceneDescriber` ask path, `describe_result` question field (merged).
 - Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). **Rerun settled the test-count
-  question** (2026-09-12, Step 27): the target holds 366 `@Test` annotations and `make test` on
-  Xcode 27 now reports **366 tests passed in 1 suite** — the counts agree. The 359 figure was the
-  last green run *before* the Step 25 interlock tests existed; reaching 366 first needed the
+  question** (2026-09-12, Step 27): the target held 366 `@Test` annotations and `make test` on
+  Xcode 27 reported **366 tests passed in 1 suite**. Step 28 adds six lifetime-guard tests, so the
+  current target holds **372 annotations**; the 359 figure was the last green run *before* the
+  Step 25 interlock tests existed; reaching 366 first needed the
   `#expect` + `mutating` compile fix in `DepthReadinessTests` (CHANGELOG Step 27).
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
-  stale 8/12 s timeouts and stale test-count references fixed; the current target has 366 `@Test` annotations).
+  stale 8/12 s timeouts and stale test-count references fixed; the Step 27 snapshot had 366 `@Test`
+  annotations, and the current target has 372).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
@@ -172,22 +174,29 @@ none blocks the demo — but they are real, and several need the phone to judge.
       newest-only stream gaps in pure `DepthFrameContinuity`, and exposes an observable **Cancel
       route start** action. The intentional no-LiDAR and camera-denied degraded paths still guide
       with an explicit obstacle-warning notice.
-- [ ] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
+- [x] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
       output route immediately after `setActive(true)`, but iOS settles the route ~0.5 s later — so
-      an AirPods flip to HFP would pass the check. Subscribe to route-change notifications for the
-      whole time the mic is on and revert on any change. (The AirPods case is still unmeasured; this
-      is the finding most likely to bite when it is.)
-- [ ] **Analyzer death keeps the microphone session open.** `SoundWatcher`'s failure path sets
-      `lastError` only: `isRunning` stays true, the session stays `.playAndRecord` (orange dot,
-      degraded beacon), and no alert ever fires again. It should `stop()` and revert.
-- [ ] **Permission race can start the mic after the user turned it off.** The `.undetermined` branch
-      restarts unconditionally in the permission callback, so toggling on → off → "Allow" records
-      with the switch showing off. Check a generation counter or the live toggle first.
+      an AirPods flip to HFP would pass the check. `SpeechQueue` now snapshots both output and input
+      ports (UID/name included), watches route changes for the complete microphone lifetime, and
+      reverts on every output or input-quality change. Old-device-unavailable notifications are
+      treated as a dropout even if the route has recovered by callback delivery. A startup
+      `none → usable` input settle is the sole bounded exception; it updates the baseline while the
+      one format retry completes. A shared microphone lease rejects push-to-talk overlap. The
+      AirPods case is still unmeasured on hardware, so the live route log remains a required device
+      check.
+- [x] **Analyzer death keeps the microphone session open.** `SoundWatcher` now treats SoundAnalysis,
+      AVAudioEngine configuration and engine-stop failures as hard stops: the tap/analyser are torn
+      down on their serial queue, the session returns to `.playback`, the switch follows reality and
+      the existing speech/UI failure channel says why.
+- [x] **Permission race can start the mic after the user turned it off.** The pure
+      `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
+      polls permission while it owns the session and cancels any pending continuation on Stop.
 - [ ] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
       The two-camera mode correctly refuses during a route; this path does not.
-- [ ] **The mic input format is read synchronously before the route settles**, so the first-ever
-      enable with AirPods can fail spuriously with "No microphone input available". Re-read after
-      the engine starts, with one short retry.
+- [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
+      re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
+      (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
+      transition. If the input is still absent, sound alerts fail loudly and navigation continues.
 - [ ] **"Degrades to the back camera alone" is documented but not implemented** — on a phone without
       multi-cam the mode shows no picture. Implement the single-session fallback or correct the
       header and the card copy.

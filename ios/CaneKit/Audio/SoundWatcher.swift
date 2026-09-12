@@ -28,13 +28,13 @@
 //  `.playAndRecord`, which AGENTS.md hard rule 7 and ios/README.md §2 deliberately forbid as the
 //  app's steady state (HFP would drop AirPods to call quality and kill the HRTF beacon). The
 //  compromise: the switch is **off by default**, the category change goes through the one owner of
-//  the session (`SpeechQueue.setMicrophoneEnabled`), `.allowBluetoothHFP` is never requested, and
+//  the session (`SpeechQueue.setMicrophoneEnabled(_:owner:)`), `.allowBluetoothHFP` is never requested, and
 //  the output route is guarded for the **whole time the microphone is on** — not just at the
 //  moment it is switched on. iOS settles a route change asynchronously (an AirPods flip lands
 //  a few hundred milliseconds after `setActive` returns), so the before/after comparison inside
 //  `setMicrophoneEnabled` cannot be the whole guard: `SpeechQueue` also watches
 //  `routeChangeNotification` and calls `onMicrophoneRouteChanged`, which lands in
-//  `outputRouteChanged(from:to:)` here and stops the watcher. Speech, obstacle warnings and the
+//  `routeChanged(from:to:)` here and stops the watcher. Speech, obstacle warnings and the
 //  beacon are the safety path; a microphone feature never outranks them.
 //
 //  Owner: `AppModel.sounds` (one instance).
@@ -88,17 +88,19 @@
 //
 //  Key invariants:
 //    · Nothing runs until `start()`, and `start()` is only called from the Hazards card's switch.
-//    · A degraded audio route always wins: `lastError` is set, the session is `.playback` again,
-//      and `isRunning` stays false.
+//    · A degraded audio route always wins: input and output ports are snapshotted, HFP/missing
+//      input or any output move restores `.playback`, `lastError` is set, and `isRunning` is false.
 //    · `stop()` always restores `.playback`, even if the engine failed half-way up.
-//    · Every way this feature can die ends in the same three things: the session back on
+//    · Every way this feature can die attempts the same three things: the session back on
 //      `.playback`, `isRunning` false, and `onFailure` fired so `AppModel` puts the switch back to
-//      off and says why once. A failure that only set `lastError` used to leave the microphone
-//      open, the orange recording dot on, and the switch showing a feature that was dead.
-//    · Anything that resumes asynchronously (the permission prompt, the input-format retry) is
-//      fenced by `generation`: if the walker turned the switch off in the meantime, it does
-//      nothing. A microphone that starts *after* you switched it off is the worst bug this file
-//      can have.
+//      off and says why once. If both bounded restore attempts fail, the card and spoken line say
+//      the audio state is unknown instead of claiming playback. A failure that only set
+//      `lastError` used to leave the microphone open, the orange recording dot on, and the switch
+//      showing a feature that was dead.
+//    · Anything that resumes asynchronously (the permission prompt, the input-format retry and
+//      the permission monitor) is fenced by `generation` / task cancellation: if the walker
+//      turned the switch off in the meantime, it does nothing. A microphone that starts *after*
+//      you switched it off is the worst bug this file can have.
 //
 
 import AVFoundation
@@ -116,6 +118,10 @@ final class SoundWatcher {
 
     /// True while the microphone tap and the analyser are live.
     private(set) var isRunning = false
+    /// True while this watcher owns the shared microphone lease, including the short startup
+    /// interval before its tap/analyser has become live. `VoiceInputEngine` uses this to avoid
+    /// attempting to restore or replace the session during that interval.
+    var ownsMicrophoneSession: Bool { sessionHeld || isRunning }
     /// Last line spoken because of a sound ("Siren. Do not start crossing."), for the Hazards card.
     private(set) var lastAlert: String?
     /// Why the watcher is not running: a refused microphone, a degraded audio route, or an engine
@@ -130,9 +136,10 @@ final class SoundWatcher {
     /// Fired on the main actor, once, when the watcher gives up for any reason: microphone
     /// refused, audio route degraded, analyser dead, engine dead.
     ///
-    /// By the time it fires the session is back on `.playback` and `isRunning` is false, so the
-    /// handler's only job is the part this object cannot do: put `AppModel.dangerSoundsEnabled`
-    /// back to off and say the message once. Without it the switch stayed on after a failed
+    /// By the time it fires the session has attempted to return to `.playback` and `isRunning` is
+    /// false, so the handler's only job is the part this object cannot do: put
+    /// `AppModel.dangerSoundsEnabled` back to off and say the message once. A restore failure is
+    /// included in that cue. Without it the switch stayed on after a failed
     /// start, and every foregrounding retried, failed and announced again
     /// (`AppModel.wireSounds()`).
     @ObservationIgnored var onFailure: ((String) -> Void)?
@@ -157,6 +164,10 @@ final class SoundWatcher {
     @ObservationIgnored private var pump: SoundAnalysisPump?
     /// The confidence / agreement / repeat rules (CaneKitLogic, SoundAlertsTests).
     @ObservationIgnored private var policy = SoundAlertPolicy()
+    /// Pure lifecycle / route / permission guard. The AVFoundation callbacks below only translate
+    /// framework state into `SoundRecognitionGuard` events; the guard decides whether one failure
+    /// may stop the feature, which keeps route-flapping and permission-race behavior testable.
+    @ObservationIgnored private var lifecycle = SoundRecognitionGuard()
     /// The labels this phone's classifier actually has, mapped to their kind. Built in `start()`
     /// from `knownClassifications`; empty until then, so nothing can match before the check.
     @ObservationIgnored private var activeLabels: [String: DangerSound] = [:]
@@ -177,13 +188,18 @@ final class SoundWatcher {
     /// which would otherwise orphan this task *and* re-baseline `SpeechQueue`'s route guard to
     /// whatever the route had already become.
     @ObservationIgnored private var formatRetry: Task<Void, Never>?
-    /// Observes `AVAudioSession.interruptionNotification` while the microphone is on, **log only**.
-    /// A Siri invocation (or call) that seizes the input kills the analyser, which lands in
-    /// `analysisFailed` and switches the feature off with no record of WHY it died — rinse that
-    /// correlation out of the trip log (`sound_watch` action `interruption_began/ended`) before
-    /// touching the lifecycle. Never restarts or stops anything from here: an observer that acts
-    /// is a second owner of the engine.
+    /// Observes `AVAudioSession.interruptionNotification` while the microphone is on. A call or
+    /// Siri invocation can leave SoundAnalysis alive but starved of frames, so `.began` is a hard
+    /// stop through `interruptionChanged`; the observer is removed with the session and `.ended`
+    /// is logged only for diagnosis. SpeechQueue independently handles speech interruption.
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
+    /// Polls the system permission while the watcher owns `.playAndRecord`. iOS has no reliable
+    /// permission-revoked notification; the short, bounded cadence is the adapter's only way to
+    /// catch Settings changes that do not emit a route or interruption event.
+    @ObservationIgnored private var permissionWatchTask: Task<Void, Never>?
+    /// Engine configuration changes can invalidate a tap/analyser without producing a route event.
+    /// It is observed only while this watcher owns the input and removed before teardown.
+    @ObservationIgnored private var engineConfigurationObserver: NSObjectProtocol?
     /// The classify request built by the current `start()`, held across the input-format retry so
     /// the retry does not rebuild the label table or re-log it. Nil whenever nothing is starting.
     @ObservationIgnored private var pendingRequest: SNClassifySoundRequest?
@@ -196,6 +212,9 @@ final class SoundWatcher {
     /// session it had taken. Everything goes through `releaseSession()` so there is one answer to
     /// "does the app still hold the microphone".
     @ObservationIgnored private var sessionHeld = false
+    /// Error returned while restoring the shared session to `.playback`. Kept until `fail` can
+    /// merge it into the technical Hazards-card line; explicit user stops report it immediately.
+    @ObservationIgnored private var sessionRestoreFailure: String?
 
     /// True when this build can create the built-in classifier at all (it cannot on a platform
     /// without the model). Evaluated once; gates the Hazards card's switch.
@@ -212,8 +231,8 @@ final class SoundWatcher {
     /// output route), build the analyser and start the engine.
     ///
     /// Order matters: permission → session → route guard → labels → analyser → tap → engine. A
-    /// failure at any step leaves `lastError` set, `isRunning` false, the session back on
-    /// `.playback` and `onFailure` fired.
+    /// failure at any step leaves `lastError` set, `isRunning` false, the session restored or an
+    /// explicit restore error recorded, and `onFailure` fired.
     /// Caller: `AppModel.dangerSoundsEnabled`'s `didSet`, `AppModel.start()` and
     /// `AppModel.scenePhaseChanged(.active)` when the setting was already on.
     func start() {
@@ -225,33 +244,75 @@ final class SoundWatcher {
         // one's `generation` and so would not be fenced by it.
         guard !isRunning, !sessionHeld, pendingRequest == nil else { return }
         lastError = nil
+        sessionRestoreFailure = nil
+        speech.microphoneRestoreError = nil
         // Permission first: `.playAndRecord` on a phone that has refused the microphone would
         // succeed and then deliver silence, which looks exactly like "no sirens today".
         switch AVAudioApplication.shared.recordPermission {
         case .denied:
+            guard lifecycle.beginStart() else { return }
             fail("Microphone is off for OpenCane. Sound alerts need it.")
             return
         case .undetermined:
             // The prompt can stay up for as long as the walker likes, and they can turn the
-            // switch off while it is up. Fence the continuation on `generation` so "off then
+            // switch off while it is up. Fence the continuation on both generations so "off then
             // Allow" cannot start the microphone behind a switch that says off.
-            let generation = self.generation
+            guard let permissionGeneration = lifecycle.beginPermissionRequest() else { return }
             AVAudioApplication.requestRecordPermission { [weak self] granted in
                 Task { @MainActor [weak self] in
-                    guard let self, self.generation == generation else { return }
-                    if granted { self.start() } else {
-                        self.fail("Microphone is off for OpenCane. Sound alerts need it.")
+                    guard let self else { return }
+                    let decision = self.lifecycle.permissionResolved(granted: granted,
+                                                                     generation: permissionGeneration)
+                    guard decision == .continueRunning else {
+                        if case .stop = decision {
+                            self.fail("Microphone is off for OpenCane. Sound alerts need it.")
+                        }
+                        return
                     }
+                    guard granted, self.lifecycle.beginStart() else {
+                        self.fail("Microphone is off for OpenCane. Sound alerts need it.")
+                        return
+                    }
+                    self.startGrantedSession()
                 }
             }
             return
         case .granted:
-            break
+            guard lifecycle.beginStart() else { return }
         @unknown default:
-            break
+            guard lifecycle.beginStart() else { return }
+            fail("Microphone permission is unavailable for OpenCane.")
+            return
         }
 
-        switch speech.setMicrophoneEnabled(true) {
+        startGrantedSession()
+    }
+
+    /// Continues a start after the permission check has succeeded. Kept separate from `start()` so
+    /// a permission callback cannot re-enter the lifecycle guard and accidentally create a second
+    /// generation while the first start is still being torn down.
+    private func startGrantedSession() {
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            fail("Microphone permission was revoked before sound alerts started.",
+                 speak: "Sound alerts could not start because microphone access was revoked.")
+            return
+        }
+        // Install before activating `.playAndRecord`: a call/Siri interruption can begin during
+        // category activation and route negotiation. The observer is generation-fenced and
+        // removed by every exit path, so an early notification cannot resurrect a later run.
+        let sessionGeneration = generation
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main
+        ) { [weak self] note in
+            let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            guard let type else { return }
+            MainActor.assumeIsolated {
+                self?.interruptionChanged(type, generation: sessionGeneration)
+            }
+        }
+        switch speech.setMicrophoneEnabled(true, owner: .soundRecognition) {
         case .granted(let route):
             sessionHeld = true
             onDiagnostic?("sound_watch", ["action": "session", "route": route])
@@ -259,22 +320,26 @@ final class SoundWatcher {
             // `setMicrophoneEnabled` only sees a route that has *already* moved; AirPods move
             // theirs a few hundred milliseconds later, which is exactly when the walker is
             // already walking.
-            speech.onMicrophoneRouteChanged = { [weak self] before, after in
-                self?.outputRouteChanged(from: before, to: after)
+            guard let routeSnapshot = speech.microphoneRouteSnapshot else {
+                fail("Microphone route was unavailable after activation.",
+                     speak: "Sound alerts could not start the microphone.")
+                return
             }
-            // Log-only interruption watch (see the property doc): Siri / calls vs real death.
-            interruptionObserver = NotificationCenter.default.addObserver(
-                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-            ) { [weak self] note in
-                // Same read as `SpeechQueue`'s own observer: unknown type → ignore, never log.
-                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
-                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
-                guard let type else { return }
-                MainActor.assumeIsolated {
-                    self?.onDiagnostic?("sound_watch", ["action": type == .began
-                                                        ? "interruption_began" : "interruption_ended"])
+            let sessionDecision = lifecycle.sessionStarted(route: routeSnapshot)
+            guard case .continueRunning = sessionDecision else {
+                let reason: SoundRecognitionFailure
+                if case .stop(let failure) = sessionDecision {
+                    reason = failure
+                } else {
+                    reason = .inputUnavailable
                 }
+                fail(failureMessage(for: reason), speak: spokenFailureMessage(for: reason))
+                return
             }
+            speech.onMicrophoneRouteChanged = { [weak self] before, after in
+                self?.routeChanged(from: before, to: after, generation: sessionGeneration)
+            }
+            startPermissionWatch()
         case .revertedRouteChanged(let before, let after):
             onDiagnostic?("sound_watch", ["action": "session_reverted", "before": before, "after": after])
             fail("Sound alerts would change the audio route from \(before) to \(after), so they stayed off.",
@@ -315,6 +380,13 @@ final class SoundWatcher {
     ///   whether there is another one.
     private func startEngine(attempt: Int) {
         guard let request = pendingRequest else { return }
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            pendingRequest = nil
+            releaseSession()
+            fail("Microphone permission was revoked while sound alerts were starting.",
+                 speak: "Sound alerts could not start because microphone access was revoked.")
+            return
+        }
         // `prepare()` realises the input node against the now-active session. Only on a retry: the
         // first read costs nothing and usually succeeds, and this keeps the happy path untouched.
         if attempt > 0 { engine.prepare() }
@@ -339,11 +411,16 @@ final class SoundWatcher {
             return
         }
 
+        let runGeneration = generation
         let analyzer = SNAudioStreamAnalyzer(format: format)
         let relay = SoundResultsRelay { [weak self] label, confidence in
-            Task { @MainActor [weak self] in self?.classified(label: label, confidence: confidence) }
+            Task { @MainActor [weak self] in
+                self?.classified(label: label, confidence: confidence, generation: runGeneration)
+            }
         } onFailure: { [weak self] message in
-            Task { @MainActor [weak self] in self?.analysisFailed(message) }
+            Task { @MainActor [weak self] in
+                self?.analysisFailed(message, generation: runGeneration)
+            }
         }
         do {
             try analyzer.add(request, withObserver: relay)
@@ -382,13 +459,52 @@ final class SoundWatcher {
                  speak: "Sound alerts could not start the microphone.")
             return
         }
+        // Register immediately after the engine is live, before the route/permission checks below.
+        // A configuration change can arrive in that small window; the analyser is already bound
+        // to the tap, so it must be treated as a hard failure rather than waiting for the 0.5 s
+        // permission/engine-health poll.
+        let engineGeneration = generation
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.engineConfigurationChanged(generation: engineGeneration)
+            }
+        }
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            pendingRequest = nil
+            stop(reportRestoreFailure: false)
+            fail("Microphone permission was revoked while sound alerts were starting.",
+                 speak: "Sound alerts stopped because microphone access was revoked.")
+            return
+        }
+        guard let activeRoute = speech.microphoneRouteSnapshot else {
+            pendingRequest = nil
+            stop(reportRestoreFailure: false)
+            fail("Sound alerts could not start with a usable microphone input.",
+                 speak: "Sound alerts could not start the microphone.")
+            return
+        }
+        let recognitionDecision = lifecycle.recognitionStarted(route: activeRoute)
+        guard case .continueRunning = recognitionDecision else {
+            let reason: SoundRecognitionFailure
+            if case .stop(let failure) = recognitionDecision {
+                reason = failure
+            } else {
+                reason = .inputUnavailable
+            }
+            pendingRequest = nil
+            stop(reportRestoreFailure: false)
+            fail(failureMessage(for: reason), speak: spokenFailureMessage(for: reason))
+            return
+        }
         pendingRequest = nil
         isRunning = true
         onDiagnostic?("sound_watch", ["action": "start", "sample_rate": format.sampleRate,
                                       "labels": activeLabels.count, "attempt": attempt])
     }
 
-    /// Stop the tap and the engine, drop the analyser and **always** restore `.playback`.
+    /// Stop the tap and the engine, drop the analyser and attempt to restore `.playback`.
     /// Callers: the Hazards card's switch (through `AppModel.dangerSoundsEnabled`),
     /// `AppModel.scenePhaseChanged(.background)`, and every failure path in this file.
     /// It deliberately survives a route ending: the walker asked to be told about traffic, not
@@ -397,23 +513,33 @@ final class SoundWatcher {
     /// Safe to call at any point of a start, including while the permission prompt is up or the
     /// input format is settling — that is what the `generation` bump above the early return is
     /// for. It does not clear `lastError`: a failure path stops first and records afterwards, so
-    /// the walker still learns why the feature went away.
-    func stop() {
+    /// the walker still learns why the feature went away. A restore failure is surfaced through
+    /// the existing `onFailure` cue when `reportRestoreFailure` is true; failure paths pass false
+    /// so their primary reason and the restore detail are spoken once together.
+    @discardableResult
+    func stop(reportRestoreFailure: Bool = true) -> String? {
         // Before the early return, not after: a start that is still waiting for the prompt or the
         // format has nothing to tear down, but it must still be told to give up.
         generation &+= 1
         formatRetry?.cancel()
         formatRetry = nil
+        permissionWatchTask?.cancel()
+        permissionWatchTask = nil
         pendingRequest = nil
+        _ = lifecycle.cancel()
         speech.onMicrophoneRouteChanged = nil
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
         }
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+            self.engineConfigurationObserver = nil
+        }
         // `sessionHeld` is in the guard on purpose: a start that got the session and is still
         // waiting for the input format has no analyser to tear down but very much has a
         // microphone to give back.
-        guard isRunning || analyzer != nil || sessionHeld else { return }
+        guard isRunning || analyzer != nil || sessionHeld else { return nil }
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
         // On the analysis queue, behind every buffer already queued there — never from main.
@@ -426,7 +552,16 @@ final class SoundWatcher {
         policy.reset()
         isRunning = false
         releaseSession()
+        let restoreFailure = sessionRestoreFailure
+        if reportRestoreFailure, let restoreFailure {
+            sessionRestoreFailure = nil
+            let message = "Sound alerts stopped, but audio session restore failed: \(restoreFailure)"
+            lastError = message
+            onDiagnostic?("sound_watch", ["action": "session_restore_failed", "error": restoreFailure])
+            onFailure?("Sound alerts stopped because audio output could not be restored.")
+        }
         onDiagnostic?("sound_watch", ["action": "stop"])
+        return restoreFailure
     }
 
     /// Give the audio session back to `.playback`, once, if this object took it.
@@ -439,31 +574,166 @@ final class SoundWatcher {
     private func releaseSession() {
         guard sessionHeld else { return }
         sessionHeld = false
-        _ = speech.setMicrophoneEnabled(false)
+        guard case .failed(_) = speech.setMicrophoneEnabled(false, owner: .soundRecognition) else {
+            return
+        }
+        // Audio-session activation can fail transiently while a route is settling. One immediate
+        // retry is bounded and keeps a normal stop from leaving the orange mic indicator up; if it
+        // also fails, preserve the second error and surface it instead of claiming playback.
+        guard case .failed(let error) = speech.setMicrophoneEnabled(false, owner: .soundRecognition) else {
+            return
+        }
+        sessionRestoreFailure = error
+        onDiagnostic?("sound_watch", ["action": "session_restore_failed", "error": error])
     }
 
     // MARK: Failure paths
 
-    /// The audio **output** route moved while the microphone was on (`SpeechQueue` has already put
-    /// the session back to `.playback`). Give the feature up.
+    /// The microphone route moved while it was on (`SpeechQueue` has already put the session back
+    /// to `.playback`). Give the feature up. The pure guard distinguishes an output move from an
+    /// HFP/missing-input transition; both are fail-safe stops, but the diagnostic says which one.
     ///
     /// This is the case the synchronous before/after check in `setMicrophoneEnabled` cannot see:
     /// AirPods negotiating HFP take a few hundred milliseconds, by which time the switch has
     /// already reported success. The spoken line deliberately does not read the port names out
     /// loud ("BluetoothHFP" means nothing to a walker); they go to the trip log instead.
     /// - Parameters:
-    ///   - before: the output route when the microphone was granted.
-    ///   - after: the output route now.
-    private func outputRouteChanged(from before: String, to after: String) {
+    ///   - before: the route snapshot when the microphone was granted.
+    ///   - after: the route snapshot now.
+    private func routeChanged(from before: SoundRecognitionRoute, to after: SoundRecognitionRoute,
+                              generation: Int) {
+        guard self.generation == generation else { return }
+        permissionRevokedIfNeeded()
+        let decision = lifecycle.routeChanged(after)
+        guard case .stop(let reason) = decision else { return }
         onDiagnostic?("sound_watch", ["action": "route_changed_stopped",
-                                      "before": before, "after": after])
+                                      "reason": reason.rawValue,
+                                      "before_output": before.output,
+                                      "after_output": after.output,
+                                      "before_input": before.input,
+                                      "after_input": after.input,
+                                      "before_quality": before.inputQuality.rawValue,
+                                      "after_quality": after.inputQuality.rawValue])
         // `SpeechQueue` restored `.playback` before calling us, so the session is no longer ours.
         // Clearing this first keeps `stop()` from setting the category and re-activating the
         // session a second time — a blocking main-actor call, made exactly while a Bluetooth route
         // is renegotiating and the walker is still being guided.
         sessionHeld = false
-        stop()
-        fail("Sound alerts stopped: the microphone was changing your headphone sound.")
+        if speech.microphoneRestoreError != nil {
+            // The first restore happens inside SpeechQueue's route observer. Retry once from the
+            // owner while the route event is still on the main actor; if it still fails, the error
+            // is retained and the existing failure cue tells the walker the output state is not
+            // known to be back on `.playback`.
+            _ = speech.setMicrophoneEnabled(false, owner: .soundRecognition)
+        }
+        if let restoreError = speech.microphoneRestoreError {
+            sessionRestoreFailure = restoreError
+        }
+        stop(reportRestoreFailure: false)
+        fail(failureMessage(for: reason), speak: spokenFailureMessage(for: reason))
+    }
+
+    /// Interruption notifications are guarded for the whole active lifetime, not just logged. A
+    /// call or Siri can leave SoundAnalysis alive but starved of frames; stopping immediately is
+    /// safer than pretending a silent classifier is still listening. SpeechQueue handles its own
+    /// speech interruption independently, so this only disables the optional sound watch.
+    private func interruptionChanged(_ type: AVAudioSession.InterruptionType, generation: Int) {
+        guard self.generation == generation else { return }
+        switch type {
+        case .began:
+            permissionRevokedIfNeeded()
+            let decision = lifecycle.interruptionBegan()
+            guard case .stop = decision else { return }
+            onDiagnostic?("sound_watch", ["action": "interruption_stopped"])
+            stop(reportRestoreFailure: false)
+            fail(failureMessage(for: .interrupted), speak: spokenFailureMessage(for: .interrupted))
+        case .ended:
+            onDiagnostic?("sound_watch", ["action": "interruption_ended_ignored"])
+        @unknown default:
+            break
+        }
+    }
+
+    /// iOS does not provide a dependable microphone-permission-revoked notification. Poll only
+    /// while this object owns the microphone, at a bounded Logic-pinned cadence, and tear the task
+    /// down with the rest of the session. Route/interruption callbacks also call this check through
+    /// `permissionRevokedIfNeeded` for immediate coverage of those transitions.
+    private func startPermissionWatch() {
+        permissionWatchTask?.cancel()
+        permissionWatchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(SoundRecognitionGuard.permissionPollInterval))
+                guard !Task.isCancelled, let self else { return }
+                guard self.isRunning || self.sessionHeld || self.pendingRequest != nil else { return }
+                self.permissionRevokedIfNeeded()
+                if self.isRunning, !self.engine.isRunning {
+                    self.engineConfigurationChanged()
+                    return
+                }
+            }
+        }
+    }
+
+    /// Check the live permission and fail once if Settings revoked it during setup or recognition.
+    private func permissionRevokedIfNeeded() {
+        guard AVAudioApplication.shared.recordPermission != .granted else { return }
+        let decision = lifecycle.permissionRevoked()
+        guard case .stop = decision else { return }
+        onDiagnostic?("sound_watch", ["action": "permission_revoked"])
+        stop(reportRestoreFailure: false)
+        fail(failureMessage(for: .permissionRevoked), speak: spokenFailureMessage(for: .permissionRevoked))
+    }
+
+    /// An input format/configuration change invalidates the analyser's bound stream. Treat it as a
+    /// hard failure even if SoundAnalysis has not emitted `didFailWithError` yet; the next buffer
+    /// would otherwise be consumed by a stale tap with no trustworthy classifications.
+    private func engineConfigurationChanged(generation: Int? = nil) {
+        if let generation, self.generation != generation { return }
+        permissionRevokedIfNeeded()
+        guard isRunning || analyzer != nil else { return }
+        guard case .stop(let reason) = lifecycle.analyzerFailed() else { return }
+        onDiagnostic?("sound_watch", ["action": "engine_configuration_failed"])
+        stop(reportRestoreFailure: false)
+        fail(failureMessage(for: reason), speak: spokenFailureMessage(for: reason))
+    }
+
+    /// Technical card/trip-log text stays separate from the short spoken line, as with every other
+    /// subsystem failure. These mappings are centralized so a new failure cannot accidentally read
+    /// an NSError or Bluetooth port name to a blind walker.
+    private func failureMessage(for reason: SoundRecognitionFailure) -> String {
+        switch reason {
+        case .outputRouteChanged:
+            return "Sound alerts stopped: the microphone changed the audio output route."
+        case .inputRouteDegraded:
+            return "Sound alerts stopped: microphone input degraded to a low-quality route."
+        case .inputUnavailable:
+            return "Sound alerts stopped: microphone input is unavailable."
+        case .analyzerFailed:
+            return "Sound alerts stopped: the sound analyzer failed."
+        case .interrupted:
+            return "Sound alerts stopped: audio was interrupted."
+        case .permissionRevoked:
+            return "Sound alerts stopped: microphone permission was revoked."
+        case .permissionDenied:
+            return "Microphone is off for OpenCane. Sound alerts need it."
+        }
+    }
+
+    private func spokenFailureMessage(for reason: SoundRecognitionFailure) -> String {
+        switch reason {
+        case .outputRouteChanged, .inputRouteDegraded:
+            return "Sound alerts stopped because they would change your headphone sound."
+        case .inputUnavailable:
+            return "Sound alerts stopped because the microphone is unavailable."
+        case .analyzerFailed:
+            return "Sound alerts stopped listening because the sound analyzer failed."
+        case .interrupted:
+            return "Sound alerts stopped because audio was interrupted."
+        case .permissionRevoked:
+            return "Sound alerts stopped because microphone access was revoked."
+        case .permissionDenied:
+            return "Sound alerts need microphone access."
+        }
     }
 
     /// The analyser gave up (format change, internal error). Stop properly instead of only
@@ -474,12 +744,17 @@ final class SoundWatcher {
     /// visibly enabled, silently deaf, and would never alert again. `stop()` runs first so the
     /// teardown is the normal one; `fail` then puts the message back, because `stop()` does not
     /// touch `lastError`.
-    /// - Parameter message: the analyser's message, already formatted by `SoundResultsRelay`.
-    private func analysisFailed(_ message: String) {
+    /// - Parameters:
+    ///   - message: the analyser's message, already formatted by `SoundResultsRelay`.
+    ///   - generation: the run token captured when the analyser was created; stale failures cannot
+    ///     tear down a newer run.
+    private func analysisFailed(_ message: String, generation: Int) {
+        guard self.generation == generation else { return }  // a late callback from an old run
         guard isRunning || analyzer != nil else { return }   // a late failure after a clean stop
+        guard case .stop(let reason) = lifecycle.analyzerFailed() else { return }
         onDiagnostic?("sound_watch", ["action": "analysis_failed", "error": message])
-        stop()
-        fail(message, speak: "Sound alerts stopped listening.")
+        stop(reportRestoreFailure: false)
+        fail("\(failureMessage(for: reason)) \(message)", speak: spokenFailureMessage(for: reason))
     }
 
     /// Record a reason the watcher is not running, make sure the flag agrees with it, cancel
@@ -503,7 +778,10 @@ final class SoundWatcher {
         generation &+= 1
         formatRetry?.cancel()
         formatRetry = nil
+        permissionWatchTask?.cancel()
+        permissionWatchTask = nil
         pendingRequest = nil
+        _ = lifecycle.cancel()
         // A start that got as far as the session but no further has already left a route hook on
         // `SpeechQueue`; nothing must be able to call back into a watcher that has given up.
         speech.onMicrophoneRouteChanged = nil
@@ -511,14 +789,28 @@ final class SoundWatcher {
             NotificationCenter.default.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
         }
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+            self.engineConfigurationObserver = nil
+        }
         // Structural, not conventional: every current caller releases the session before it fails,
-        // but the file header promises that *every* way this feature dies ends on `.playback`, and
+        // but the file header promises that *every* way this feature dies attempts `.playback`, and
         // a promise kept by six call sites agreeing is one bad merge from being broken.
         // `releaseSession()` is idempotent, so the duplicate costs nothing.
         releaseSession()
-        lastError = message
+        let restoreDetail = sessionRestoreFailure ?? speech.microphoneRestoreError
+        sessionRestoreFailure = nil
+        if let restoreDetail {
+            lastError = "\(message) Audio session restore failed: \(restoreDetail)"
+        } else {
+            lastError = message
+        }
         isRunning = false
-        onFailure?(spoken ?? message)
+        if restoreDetail != nil {
+            onFailure?((spoken ?? message) + " Audio output could not be restored.")
+        } else {
+            onFailure?(spoken ?? message)
+        }
     }
 
     // MARK: Classification
@@ -548,8 +840,10 @@ final class SoundWatcher {
     /// - Parameters:
     ///   - label: a classifier identifier known to be in `activeLabels`.
     ///   - confidence: 0…1 from `SNClassification.confidence`.
-    private func classified(label: String, confidence: Double) {
-        guard isRunning else { return }
+    ///   - generation: the run token captured when the analyser was created; stale callbacks are
+    ///     ignored after stop → start.
+    private func classified(label: String, confidence: Double, generation: Int) {
+        guard self.generation == generation, isRunning else { return }
         let kind = activeLabels[label]
         let now = Date().timeIntervalSinceReferenceDate
         guard let announce = policy.update(kind: kind, confidence: confidence, now: now) else { return }

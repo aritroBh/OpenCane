@@ -94,7 +94,8 @@ final class VoiceInputEngine {
 
     // MARK: - Control
 
-    /// Starts speech recognition. Transitions audio session to .playAndRecord preserving A2DP.
+    /// Starts speech recognition. Acquires SpeechQueue's `.playAndRecord` microphone lease for
+    /// push-to-talk, preserving A2DP and rejecting the start if SoundWatcher already owns it.
     func startListening() {
         guard !isListening else { return }
         guard let recognizer, recognizer.isAvailable else {
@@ -103,7 +104,7 @@ final class VoiceInputEngine {
         }
 
         // 1. Activate microphone session via SpeechQueue (Hard Rule 7)
-        let sessionResult = speech.setMicrophoneEnabled(true)
+        let sessionResult = speech.setMicrophoneEnabled(true, owner: .voiceInput)
         switch sessionResult {
         case .granted:
             break
@@ -217,9 +218,9 @@ final class VoiceInputEngine {
 
         // Restore .playback audio session if no other microphone feature (like SoundWatcher) is using it
         if let shouldRestore = shouldRestorePlaybackSession, shouldRestore() {
-            _ = speech.setMicrophoneEnabled(false)
+            _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
         } else if shouldRestorePlaybackSession == nil {
-            _ = speech.setMicrophoneEnabled(false)
+            _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
         }
 
         // Restore beacon state to previous setting

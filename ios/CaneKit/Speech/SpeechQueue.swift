@@ -18,13 +18,14 @@
 //
 //  Audio: one `.playback` session with `.duckOthers`, mode `.default`, no Bluetooth options
 //  (adding HFP would drop AirPods to phone-call quality and flip routes — ios/README.md §2).
-//  The single exception is `setMicrophoneEnabled(_:)`: the danger-sound watch needs an audio
-//  *input*, which `.playback` does not have, so that one method may move the session to
-//  `.playAndRecord` while the walker has the feature on. It reverts on any output-route change —
-//  not only the one it can see synchronously: iOS settles a route asynchronously, so for the whole
-//  time the microphone is on a `routeChangeNotification` observer holds the session to the output
-//  route it started with and puts it back to `.playback` (and tells `SoundWatcher`, which stops)
-//  the moment that route moves. No shipping code path may call `setCategory` anywhere else; the
+//  The single exception is `setMicrophoneEnabled(_:owner:)`: the danger-sound watch and the
+//  push-to-talk path need an audio *input*, which `.playback` does not have, so this one method may
+//  move the session to `.playAndRecord` while one feature has an explicit microphone lease. A
+//  second owner is rejected. It reverts on any output/input route change — not only the one it can
+//  see synchronously: iOS settles a route asynchronously, so for the whole time the microphone is
+//  on a `routeChangeNotification` observer holds the session to the route it started with and puts
+//  it back to `.playback` (and tells `SoundWatcher`, which stops) the moment that route moves. No
+//  shipping code path may call `setCategory` anywhere else; the
 //  one other call in the app is `SensorProbe.caseEAudioSession()`, the debug audio probe, which
 //  runs only under `SensorProbe.isEnabled` (a launch argument) and finishes before
 //  `SoundWatcher.start()` is ever reached.
@@ -78,6 +79,7 @@
 //
 
 import AVFoundation
+import CaneKitLogic
 import Foundation
 import Observation
 import UIKit
@@ -250,7 +252,7 @@ final class SpeechQueue {
     /// Call once before the AR session starts (ARKit does not touch audio, but the beacon does).
     ///
     /// This is the app's `setCategory` call for every normal launch (AGENTS.md hard rule 7); the
-    /// only other one on a shipping path is `setMicrophoneEnabled(_:)`, which the walker has to
+    /// only other one on a shipping path is `setMicrophoneEnabled(_:owner:)`, which a walker has to
     /// switch on and which reverts here on any output-route change, for as long as it is on. (The
     /// debug `SensorProbe` has one more, behind a launch argument.) `.playback` so speech
     /// and the beacon play with the ring/silent switch on, mode `.default`, options
@@ -271,6 +273,7 @@ final class SpeechQueue {
             try session.setCategory(.playback, mode: .default, options: [.duckOthers])
             try session.setActive(true)
             audioSessionError = nil
+            microphoneRestoreError = nil
         } catch {
             audioSessionError = "Audio session: \(error.localizedDescription)"
         }
@@ -286,10 +289,19 @@ final class SpeechQueue {
 
     // MARK: Microphone (danger-sound watch)
 
+    /// Which feature currently owns the temporary microphone lease. The audio session has one
+    /// input graph; rejecting a second owner prevents push-to-talk from replacing the sound
+    /// watcher's route observer (or vice versa) while either feature is live.
+    enum MicrophoneOwner: String, Equatable, Sendable {
+        case soundRecognition
+        case voiceInput
+    }
+
     /// What asking for microphone input did to the audio route.
-    /// Returned by `setMicrophoneEnabled(_:)` so the caller can tell the walker the truth.
+    /// Returned by `setMicrophoneEnabled(_:owner:)` so the caller can tell the walker the truth.
     enum MicrophoneSessionResult: Equatable, Sendable {
-        /// Input is available and the **output** route is unchanged; safe to keep.
+        /// The output route is unchanged. The input may still be settling; callers must inspect
+        /// `microphoneRouteSnapshot` before declaring a classifier live.
         case granted(route: String)
         /// Input was available but the output route changed (e.g. AirPods dropped from A2DP to
         /// HFP call quality, which would kill the HRTF beacon). The session has already been put
@@ -299,23 +311,37 @@ final class SpeechQueue {
         case failed(String)
     }
 
-    /// Fired on the main actor when the **output** route moves while the microphone is on. The
-    /// session has **already** been put back to `.playback` before this is called; the parameters
-    /// are `(routeWhenGranted, routeNow)` so the owner can say what happened.
+    /// Fired on the main actor when the microphone route moves while the microphone is on. For a
+    /// benign startup transition from an input-less route to the first usable input, the session is
+    /// still held and this callback only updates the baseline; for every other change the session
+    /// has **already** been put back to `.playback`. Parameters are `(routeWhenGranted, routeNow)`
+    /// and include both output identity and input quality.
     ///
     /// Why a callback and not just a return value: the route settles asynchronously. The
-    /// before/after comparison inside `setMicrophoneEnabled(true)` only catches a route that has
+    /// before/after comparison inside `setMicrophoneEnabled(true, owner:)` only catches a route that has
     /// already moved by the time `setActive` returns, and on AirPods it typically has not — iOS
     /// publishes the new route roughly 0.1–0.5 s later, long after the switch has reported
     /// success. Without this hook the walker keeps walking with the beacon's HRTF gone and the
     /// voice at call quality, and nothing ever tells them. Set by `SoundWatcher.start()` and
     /// cleared by `SoundWatcher.stop()`.
-    @ObservationIgnored var onMicrophoneRouteChanged: ((String, String) -> Void)?
+    @ObservationIgnored var onMicrophoneRouteChanged: ((SoundRecognitionRoute, SoundRecognitionRoute) -> Void)?
 
-    /// The output route as it was when the microphone was granted; nil whenever the session is on
-    /// plain `.playback`. Every route-change notification is compared against this, not against
+    /// The complete route as it was when the microphone was granted; nil whenever the session is
+    /// on plain `.playback`. Every route-change notification is compared against this, not against
     /// the previous notification, so a route that wanders away and is still wrong is still caught.
-    @ObservationIgnored private var microphoneRoute: String?
+    @ObservationIgnored private var microphoneRoute: SoundRecognitionRoute?
+
+    /// The complete route snapshot held while sound recognition owns `.playAndRecord`. Read by
+    /// `SoundWatcher` immediately after `setMicrophoneEnabled(true, owner:)` so its pure guard starts with
+    /// the same input/output identity the notification observer is watching.
+    var microphoneRouteSnapshot: SoundRecognitionRoute? { microphoneRoute }
+
+    /// Last failure while returning the microphone to `.playback`, if any. SoundWatcher includes
+    /// this in its existing failure card/speech path instead of claiming a restore succeeded.
+    @ObservationIgnored var microphoneRestoreError: String?
+
+    /// The owner of the temporary `.playAndRecord` lease, or nil in the normal `.playback` state.
+    @ObservationIgnored private var microphoneOwner: MicrophoneOwner?
 
     /// Token for the `AVAudioSession.routeChangeNotification` observer. Non-nil **only** while the
     /// microphone is on: the guard costs nothing the rest of the time, and removing it before the
@@ -353,13 +379,23 @@ final class SpeechQueue {
     /// headphones, `.playAndRecord` + these options left the output at `Speaker` and added
     /// `MicrophoneBuiltIn` as an input, and restoring `.playback` worked. The AirPods case is
     /// **not** measured yet, which is why the continuous watch above exists rather than a promise.
-    /// Caller: `SoundWatcher.start()` / `stop()`.
-    func setMicrophoneEnabled(_ on: Bool) -> MicrophoneSessionResult {
+    /// Caller: `SoundWatcher.start()` / `stop()` and `VoiceInputEngine`'s push-to-talk path.
+    func setMicrophoneEnabled(_ on: Bool, owner: MicrophoneOwner) -> MicrophoneSessionResult {
         let session = AVAudioSession.sharedInstance()
         guard on else {
+            guard microphoneOwner == nil || microphoneOwner == owner else {
+                return .failed("Microphone is owned by another OpenCane feature.")
+            }
             stopWatchingOutputRoute()
             let result = restorePlaybackSession()
+            if result == nil { microphoneOwner = nil }
             return result ?? .granted(route: Self.outputRoute(session))
+        }
+        if let microphoneOwner, microphoneOwner != owner {
+            return .failed("Microphone is already in use by another OpenCane feature.")
+        }
+        if microphoneOwner == owner, let route = microphoneRoute {
+            return .granted(route: route.output)
         }
         let before = Self.outputRoute(session)
         do {
@@ -377,7 +413,10 @@ final class SpeechQueue {
             return .revertedRouteChanged(before: before, after: after)
         }
         audioSessionError = nil
-        beginWatchingOutputRoute(after)
+        microphoneRestoreError = nil
+        let route = Self.microphoneRoute(session)
+        microphoneOwner = owner
+        beginWatchingOutputRoute(route)
         return .granted(route: after)
     }
 
@@ -385,17 +424,21 @@ final class SpeechQueue {
     ///
     /// The notification is registered with `queue: .main`, so the closure provably runs on the
     /// main thread and `MainActor.assumeIsolated` is legal (the same pattern as the interruption
-    /// observer above); nothing but the decoded route string crosses into the isolated call.
+    /// observer above); only a decoded `Bool` route edge crosses into the isolated call.
     /// Idempotent: a second call replaces the observer rather than stacking one.
-    /// - Parameter route: the output route to hold the session to.
-    private func beginWatchingOutputRoute(_ route: String) {
+    /// - Parameter route: the complete route snapshot to hold the session to.
+    private func beginWatchingOutputRoute(_ route: SoundRecognitionRoute) {
         stopWatchingOutputRoute()
         microphoneRoute = route
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(), queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.outputRouteMayHaveChanged() }
+        ) { [weak self] note in
+            let oldDeviceUnavailable = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+            MainActor.assumeIsolated {
+                self?.outputRouteMayHaveChanged(forceInputDrop: oldDeviceUnavailable)
+            }
         }
     }
 
@@ -409,47 +452,101 @@ final class SpeechQueue {
         microphoneRoute = nil
     }
 
-    /// A route change arrived while the microphone was on. If the **output** half of the route
-    /// moved at all, put the session back to `.playback` immediately and tell the owner.
-    ///
-    /// Input-only changes are ignored on purpose: the danger-sound watch is allowed to gain or
-    /// lose a microphone (that is its own problem, reported by `SoundWatcher`), but it is never
-    /// allowed to cost the walker the output route their speech and beacon live on. A route
-    /// change that merely re-announces the same output route is also ignored — iOS posts several
-    /// of those around a category change.
-    private func outputRouteMayHaveChanged() {
+    /// A route change arrived while the microphone was on. If either the **output** identity or
+    /// the input port/quality moved, put the session back to `.playback` immediately and tell the
+    /// owner. A route change that merely re-announces the same complete snapshot is ignored — iOS
+    /// posts several of those around a category change. Input-only degradation must not be ignored:
+    /// a Bluetooth HFP or missing input can leave the output name unchanged while the classifier
+    /// has already gone deaf.
+    private func outputRouteMayHaveChanged(forceInputDrop: Bool = false) {
         guard let held = microphoneRoute else { return }
-        let now = Self.outputRoute(AVAudioSession.sharedInstance())
+        var now = Self.microphoneRoute(AVAudioSession.sharedInstance())
+        // Preserve an old-device-unavailable edge even if the main-queue callback samples a route
+        // that has already recovered. The event itself proves that a microphone dropout happened.
+        if forceInputDrop, now == held {
+            now = SoundRecognitionRoute(output: now.output, input: now.input,
+                                        inputQuality: .unavailable,
+                                        outputIsHFP: now.outputIsHFP)
+        }
         guard now != held else { return }
+        // A just-activated `.playAndRecord` session can publish its output before the input port
+        // appears. Keep the session held for this one startup transition and update the baseline;
+        // `SoundWatcher`'s pure guard still requires a usable format before declaring recognition
+        // live. Once an input has been usable, disappearing or changing it is a hard stop below.
+        if held.output == now.output,
+           held.inputQuality == .unavailable,
+           now.inputQuality == .usable {
+            microphoneRoute = now
+            onMicrophoneRouteChanged?(held, now)
+            return
+        }
         // Order matters: drop the observer *before* reverting, or our own `setCategory(.playback)`
         // posts another route change straight back into this method.
         stopWatchingOutputRoute()
-        _ = restorePlaybackSession()
+        let restoreResult = restorePlaybackSession()
+        if restoreResult == nil { microphoneOwner = nil }
         onMicrophoneRouteChanged?(held, now)
     }
 
     /// Put the session back to the one configuration the rest of the app relies on.
-    /// - Returns: `.failed` when even the restore threw (the app is then in an unknown audio
-    ///   state and the error is left in `audioSessionError`), nil on success.
+    /// - Returns: `.failed` when the restore threw (the app is then in an unknown audio state and
+    ///   the error is left in `audioSessionError` / `microphoneRestoreError`), nil on success.
     private func restorePlaybackSession() -> MicrophoneSessionResult? {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [.duckOthers])
             try session.setActive(true)
             audioSessionError = nil
+            microphoneRestoreError = nil
             return nil
         } catch {
             audioSessionError = "Audio restore: \(error.localizedDescription)"
+            microphoneRestoreError = audioSessionError
             return .failed(error.localizedDescription)
         }
     }
 
-    /// The current **output** route as a stable string ("BluetoothA2DP", "Speaker",
-    /// "Speaker+BluetoothA2DP"), for the before/after comparison, the continuous watch and the
-    /// trip log.
+    /// The current **output** route as a stable string (for example
+    /// `BluetoothA2DP[uid|AirPods]` or `Speaker[...]`), including each port's UID/name for the
+    /// before/after comparison, continuous watch and trip log.
     private static func outputRoute(_ session: AVAudioSession) -> String {
-        let ports = session.currentRoute.outputs.map(\.portType.rawValue).sorted()
+        let ports = session.currentRoute.outputs.map(portDescription).sorted()
         return ports.isEmpty ? "none" : ports.joined(separator: "+")
+    }
+
+    /// Include UID and human-readable name, not only the port type: two AirPods or USB inputs can
+    /// share a type while still being a real route change that must stop recognition.
+    private static func portDescription(_ port: AVAudioSession.PortDescription) -> String {
+        let type = port.portType.rawValue
+        let uid = port.uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = port.portName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = [uid, name].filter { !$0.isEmpty }.joined(separator: "|")
+        return identity.isEmpty ? type : "\(type)[\(identity)]"
+    }
+
+    /// Build the Sendable route snapshot used by `SoundRecognitionGuard`. Input quality is derived
+    /// from the actual port list, never from the requested category: HFP and a missing input are
+    /// unsafe even if the output port still looks unchanged.
+    private static func microphoneRoute(_ session: AVAudioSession) -> SoundRecognitionRoute {
+        let outputPorts = session.currentRoute.outputs
+        let inputPorts = session.currentRoute.inputs
+        let outputs = outputPorts.map(portDescription).sorted()
+        let inputs = inputPorts.map(portDescription).sorted()
+        let output = outputs.isEmpty ? "none" : outputs.joined(separator: "+")
+        let input = inputs.isEmpty ? "none" : inputs.joined(separator: "+")
+        let quality: SoundInputQuality
+        if outputPorts.contains(where: { $0.portType == .bluetoothHFP })
+            || inputPorts.contains(where: { $0.portType == .bluetoothHFP }) {
+            quality = .hfp
+        } else if inputs.isEmpty {
+            quality = .unavailable
+        } else {
+            quality = .usable
+        }
+        return SoundRecognitionRoute(output: output, input: input, inputQuality: quality,
+                                     outputIsHFP: outputPorts.contains {
+                                         $0.portType == .bluetoothHFP
+                                     })
     }
 
     /// Phone call / Siri: the system stops our audio without telling the backends. Put the
