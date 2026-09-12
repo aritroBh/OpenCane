@@ -822,7 +822,15 @@ final class AppModel {
     /// CaneKit" → "Where do you want to go?"). Shows the text in the destination field.
     func navigate(to query: String) {
         let text = query.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { routeError = "Type a destination first"; return }
+        // Spoken as well as shown: this is the one failure on this path that said nothing, and the
+        // person most likely to tap Go with an empty box is the one who cannot see that the box is
+        // empty — or who meant to hit the clear button next to it. Idle-card only, so it can never
+        // cut a route cue. The visible string is unchanged (hard rule 9's label contract).
+        guard !text.isEmpty else {
+            routeError = "Type a destination first"
+            speech.say("Type a destination first.", .nav)
+            return
+        }
         destinationQuery = text
         buildRoute(to: .query(text), searchLine: "Finding a route to \(text).")
     }
