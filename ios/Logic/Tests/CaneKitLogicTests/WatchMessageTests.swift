@@ -5,6 +5,12 @@
 //  Purpose: pins WatchMessage.swift — the phone ↔ watch wire format under key "m": every
 //  message round-trips, and anything unknown (older / newer app) decodes to nil, never throws.
 //
+//  Callers of the pinned code: `PhoneWatchLink` (phone) and `WatchModel` (watch) encode / decode
+//  every WatchConnectivity message through `WatchEnvelope`. The phone and watch are separately
+//  installed binaries, so case names and raw values are a wire format: adding a case is safe,
+//  renaming or removing one is not. Breaks these catch: a message that does not survive the trip,
+//  and a version-skewed payload crashing either side instead of being ignored.
+//
 
 import Foundation
 import Testing

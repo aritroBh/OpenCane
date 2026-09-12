@@ -24,14 +24,16 @@
 //    · A distance is shown **only** when the caller passed a real GPS fix. A completer row carries
 //      no coordinate, so map rows never claim a distance (AGENTS.md: never say what we did not
 //      measure).
-//  Tests: DestinationSuggestionsTests.swift.
+//  Pure: Foundation-only, stateless; the app calls it on the main actor.
+//  Tests: DestinationSuggestionsTests.swift (14).
 //
 
 import Foundation
 
 /// Where a suggestion came from — drives the row's badge and its VoiceOver wording.
 public enum DestinationSuggestionKind: String, Sendable, Equatable {
-    /// A `CampusPlaces` entry: a hand-verified entrance, ranked first and badged "Campus".
+    /// A `CampusPlaces` entry: a known entrance (CIF / ISR walked; the others OSM entrance nodes,
+    /// not yet walked), ranked first and badged "Campus".
     case campus
     /// An `MKLocalSearchCompleter` row (point of interest or address).
     case map
@@ -42,7 +44,8 @@ public enum DestinationSuggestionKind: String, Sendable, Equatable {
 /// Built only by `DestinationSuggestions.suggestions(query:completions:from:)`. `id` is stable
 /// for a given row so SwiftUI's `ForEach` does not re-create the button while the list updates.
 public struct DestinationSuggestion: Sendable, Equatable, Identifiable {
-    /// Stable list identity ("campus:grainger", "map:Espresso Royale|1117 W Oregon St").
+    /// Stable list identity ("campus:grainger", "map:Espresso Royale|1117 W Oregon St"); map ids use
+    /// the trimmed title and subtitle, which is also how `mapRows` spots a repeat.
     public let id: String
     /// First line: the place name ("Grainger Engineering Library").
     public let title: String
@@ -77,6 +80,8 @@ public struct DestinationSuggestion: Sendable, Equatable, Identifiable {
     /// What VoiceOver reads for the row: the name, the campus marker, the distance when it is
     /// known, then the address. A sighted user sees the same four things (title + `detailLine`
     /// + the "Campus" badge). Pinned by `voiceOverLabelNamesTheKindAndTheDistance`.
+    /// ⚠ UI test contract (AGENTS.md rule 9): "Grainger Engineering Library, campus place" is
+    /// matched by the XCUITests — change the wording only together with them.
     public var voiceOverLabel: String {
         var parts = [title]
         if kind == .campus { parts.append("campus place") }
@@ -95,7 +100,8 @@ public struct DestinationSuggestion: Sendable, Equatable, Identifiable {
         return "On campus · \(short)"
     }
 
-    /// VoiceOver hint: tapping a suggestion starts guidance at once, with no second button.
+    /// VoiceOver hint: tapping a suggestion starts guidance at once, with no second button
+    /// (`DestinationField` calls `AppModel.navigate(to:)` straight from the row).
     public var voiceOverHint: String {
         "Starts walking guidance to this place"
     }
@@ -117,13 +123,14 @@ public struct CompletionLine: Sendable, Equatable {
     }
 }
 
-/// Ranking, merging and the three numbers behind the destination search box.
+/// Ranking, merging and the four numbers behind the destination search box.
 ///
 /// Pinned by `debounceIsAQuarterOfASecond`, `shortQueriesGetNoSuggestions`,
 /// `campusPlacesRankFirst`, `campusMatchingIsPartialUnlikeTheGazetteerLookup`,
 /// `nearerCampusPlacesComeFirstWithAFix`, `mapRowsThatDuplicateACampusPlaceAreDropped`,
 /// `theListNeverGrowsPastSixRows`, `voiceOverLabelNamesTheKindAndTheDistance`,
-/// `announcementCountsTheRows`.
+/// `announcementCountsTheRows`, `atMostThreeCampusRows`, `emptyAndRepeatedMapRowsAreDropped`,
+/// `detailLineShowsTheAddressOrTheCampusDistance`, `shortDistanceSwitchesToKilometresAt950Metres`.
 public enum DestinationSuggestions {
 
     // MARK: Numbers
@@ -134,8 +141,10 @@ public enum DestinationSuggestions {
     /// ⚠ The app must read this constant, never repeat the number.
     public static let debounceSeconds: Double = 0.25
 
-    /// Below this many non-space characters the list stays empty: one letter matches half of
-    /// Urbana and a VoiceOver user would hear the row count change for nothing.
+    /// Below this many characters of `CampusPlaces.normalize(query)` the list stays empty: one letter
+    /// matches half of Urbana and a VoiceOver user would hear the row count change for nothing.
+    /// Normalized first, so "the", "?" or " " count as nothing (`shortQueriesGetNoSuggestions`).
+    /// `DestinationSearch` and `DestinationField` read this constant for the same gate.
     public static let minimumQueryLength: Int = 2
 
     /// Most rows ever shown. Six is what fits above the keyboard on a 17 Pro Max at the default
@@ -150,6 +159,7 @@ public enum DestinationSuggestions {
 
     /// The ranked list for `query`: campus matches first (nearest first when there is a fix),
     /// then the completer rows in MapKit's own order, deduplicated, capped at `maxSuggestions`.
+    /// Called by `DestinationSearch` after every debounced keystroke and every completer reply.
     ///
     /// - Parameters:
     ///   - query: exactly what the walker has typed.
@@ -172,7 +182,11 @@ public enum DestinationSuggestions {
     /// Scoring per place (best alias wins): an alias that equals the key beats one that starts
     /// with it, which beats one whose *words* start with it ("union" → "Illini Union"), which
     /// beats one that merely contains it. Ties go to the nearer place when there is a fix, then
-    /// to `CampusPlaces.all` order.
+    /// to `CampusPlaces.all` order. At most `maxCampusSuggestions` rows; each carries its `placeId`
+    /// and, only with a fix, its straight-line distance.
+    /// - Parameters:
+    ///   - key: `CampusPlaces.normalize(query)`.
+    ///   - origin: the live fix, or nil.
     static func campusMatches(_ key: String, from origin: Coordinate?) -> [DestinationSuggestion] {
         let scored: [(place: CampusPlace, score: Int, distance: Double?, order: Int)] =
             CampusPlaces.all.enumerated().compactMap { order, place in
@@ -207,7 +221,11 @@ public enum DestinationSuggestions {
 
     /// The completer rows, in MapKit's order, minus empties, exact repeats, and anything that is
     /// only another spelling of a campus row already in the list (title matches a gazetteer alias
-    /// of that place, or the campus row's own name).
+    /// of that place, or the campus row's own name). Titles and subtitles are whitespace-trimmed.
+    /// - Parameters:
+    ///   - completions: completer rows in MapKit's order.
+    ///   - excluding: the campus rows already chosen (only those places block map rows — a
+    ///     gazetteer place that did not make the campus cut can still appear as a map row).
     static func mapRows(_ completions: [CompletionLine],
                         excluding campus: [DestinationSuggestion]) -> [DestinationSuggestion] {
         var blocked = Set<String>()

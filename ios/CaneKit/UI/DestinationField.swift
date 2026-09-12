@@ -32,6 +32,12 @@
 //  same two entry points Siri uses — so "Walking to <place>, N meters." is still spoken before
 //  guidance and Stop still abandons a search in flight. There is no second route-start path.
 //
+//  Owner / caller: `GuideCard`, idle branch only (it leaves the tree while a route runs, which
+//  releases its `DestinationSearch` and completer).
+//  Tests: `CaneKitUITests.testDestinationFieldRejectsEmptyQuery` and
+//  `testTypingOffersCampusSuggestionsAndClearsTheError`; ranking, caps, debounce and the spoken
+//  label / announcement are `DestinationSuggestionsTests` in CaneKitLogic.
+//
 
 import CaneKitLogic
 import SwiftUI
@@ -60,6 +66,9 @@ struct DestinationField: View {
     /// Scroll anchor for `scroller`; also the identity of the field in the scroll view.
     static let anchorID = "destination-field"
 
+    /// Field + Go in one row (the scroll anchor), then the suggestion rows or the completer's
+    /// offline line; the change handlers below drive search, announcements and scrolling, and a
+    /// keyboard toolbar adds "Done".
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: CKSpacing.sm) {

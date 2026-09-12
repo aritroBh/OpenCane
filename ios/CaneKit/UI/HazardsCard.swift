@@ -6,7 +6,7 @@
 //  (LiDAR drop-offs / potholes / curbs, sign reading, hazard watch, naming people), the last thing
 //  each one said, which backend the hazard watch uses, the hazard-map count with a share button,
 //  and an optional live camera view for the sighted spotter and the demo video: `LiveCameraView`,
-//  ARKit's own frames on the GPU at the camera's frame rate (it replaced a ~3 Hz JPEG refresh loop).
+//  ARKit's own frames on the GPU at up to 30 fps (it replaced a ~3 Hz JPEG refresh loop).
 //
 //  "Both cameras (pauses obstacle detection)" (step 14) is the one control in the app that
 //  switches the safety channel off: it shows the front and back cameras together through
@@ -15,12 +15,14 @@
 //  route is guiding, spoken out loud on the way in and on the way out, and its caption stays
 //  visible to VoiceOver. ⚠ Never make this quieter.
 //
-//  Two more sensors live here (step 14), both **off by default**:
+//  Three more sensor switches live here, all **off by default** (the first two from step 14):
 //    · "Listen for sirens and horns" — the microphone, through Apple's built-in sound classifier
 //      (`SoundWatcher`). It is the only feature that moves the app off its single `.playback`
 //      audio session, so its status rows say out loud when it refused to run.
 //    · "Head tracking without AirPods" — the **front** camera's face anchor, running beside the
-//      back camera's LiDAR. The row under the live view reports what the front camera is
+//      back camera's LiDAR. Not persisted, and refused while a route guides or starts
+//      (`FaceTrackingChange`: switching it re-runs the AR session, ~1–2 s with no obstacle
+//      frames). The row under the live view reports what the front camera is
 //      *detecting* (face found, head yaw) and states in as many words that there is no front
 //      camera picture: ARKit delivers one camera image per frame and it is the rear camera's.
 //      Never re-word that row into something a reader could take for a selfie preview.
@@ -40,15 +42,32 @@
 //  VoiceOver (they carry nothing a blind user needs) but the front-camera readout is not — it is
 //  the only proof a blind walker has that their head direction is being followed.
 //
+//  Owner / caller: `SensePage` in ContentView.swift (last card, after the obstacle grid).
+//  Tests: the view decisions are pure — `LiveViewTests` (`LiveView.state`, `BothCameras.state`,
+//  `FaceTrackingChange`, `BothCamerasLayout`), `HazardTests` (signs, hazard watch),
+//  `SoundAlertsTests`, `HeadNodDetectorTests`. No XCUITest queries this card's strings yet, so
+//  none is a test contract — keep them stable for VoiceOver users anyway.
+//
 
 import CaneKitLogic
 import SwiftUI
 
+/// "Hazards" card on the Sense page: every camera / microphone / head-motion hazard switch, the
+/// last line each source spoke, the hazard map, and the two optional camera views. Reads and
+/// binds `AppModel`; owns no state except the scene phase it observes.
 struct HazardsCard: View {
+    /// Source of every switch binding (`@Bindable` in `body`) and every status line shown here.
     @Environment(AppModel.self) private var model
     /// Backgrounded or locked: ARKit is paused, so the preview must not show a frozen frame.
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Top to bottom: Detect drop-offs (off by default), Read signs (on), Hazard watch (off), Name
+    /// people ahead (on); provider + "N mapped" pills; the last LiDAR / sign / watch lines; error;
+    /// Share hazard map (once a file exists); Listen for sirens and horns + its status; Nod to talk;
+    /// Head tracking without AirPods (+ refusal caption during a route or route start); Live
+    /// camera view + the view + the front-camera readout; Both cameras + its block; Flashlight
+    /// (binds through `AppModel.setTorch`, never refused); and the debug self tests when the
+    /// launch flag is set.
     var body: some View {
         @Bindable var model = model
         CKCard(title: "Hazards") {
@@ -240,9 +259,10 @@ struct HazardsCard: View {
     }
 
     /// Under the "Live camera view" switch: nothing when off; a caption while the phone is hot
-    /// (the view is optional, the lanes are not) or while ARKit is not running; else the GPU
-    /// `LiveCameraView` of the app's own ARSession at the camera's frame rate (30, or 60 with the
-    /// Mount card switch), in the camera's 3:4 portrait shape so the whole frame shows. The
+    /// (the view is optional, the lanes are not) or while ARKit is not running or the app is not
+    /// active; else the GPU `LiveCameraView` of the app's own ARSession at
+    /// `CameraRate.previewFramesPerSecond` (30 — capped even when the Mount card's switch runs the
+    /// camera at 60), in the camera's 3:4 portrait shape so the whole frame shows. The
     /// decision is `LiveView.state` (CaneKitLogic, pinned by LiveViewTests); the whole block is
     /// hidden from VoiceOver (it carries nothing a blind user needs).
     @ViewBuilder private var liveView: some View {
@@ -277,6 +297,11 @@ struct HazardsCard: View {
     }
 
     /// One detection row: a small caption and the spoken line.
+    /// Callers: the LiDAR / Sign / Watch rows in `body`, "Sound" in `soundStatus`, "Front camera"
+    /// in `frontCameraReadout`. One combined VoiceOver element ("LIDAR, Two meters ahead, …").
+    /// - Parameters:
+    ///   - source: caption word, drawn uppercased in `CKFont.pill`.
+    ///   - text: the line as it was spoken (or the readout).
     private func detection(_ source: String, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
             Text(source.uppercased()).font(CKFont.pill).foregroundStyle(CKColor.textSecondary)

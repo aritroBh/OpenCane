@@ -19,9 +19,17 @@
 //      `DestinationField`.
 //    ⚠ test contract texts: the instruction `Text` must stay a plain static text whose label is
 //      its content (tests match "Townsend" / "Illinois Street" from route_isr_cif.json); the
-//      error line must stay a plain `Text` (tests match "Type a destination first" exactly and
-//      a describer error containing "key").
-//  Focus order is the visual order: instruction → distance → pills → Where am I → route buttons.
+//      error line must stay a plain `Text` (tests match "Type a destination first" exactly); the
+//      describer line under "Where am I" must stay plain static texts too
+//      (testWhereAmIWithoutKeyReportsGracefully accepts a label containing "camera" or starting
+//      "Scene:" — no key is needed any more, so nothing matches "key").
+//  Focus order is the visual order: instruction → distance → pills → Where am I → Talk to
+//  OpenCane → route buttons → error line.
+//
+//  Owner / caller: `GuidePage` in ContentView.swift, which passes its `ScrollViewProxy`.
+//  Tests: `CaneKitUITests` — `testGuideStartsAndStopsDemoRoute`, `testWhereAmIWithoutKeyReportsGracefully`,
+//  `testNavigateToCIFButtonIsOnTheIdleGuide`, `testDestinationFieldRejectsEmptyQuery` — and
+//  `CaneKitVisualTour`. The 25° on-course and 15 m GPS thresholds here are display-only.
 //
 
 import CaneKitLogic
@@ -41,6 +49,12 @@ struct GuideCard: View {
     /// box scrolls the Guide card above the keyboard. nil in previews (then nothing scrolls).
     var scroller: ScrollViewProxy? = nil
 
+    /// One `CKCard("Guide")`: instruction; distance + bearing (navigating or arrived, with a fix);
+    /// GPS pills; "Where am I" and its result / error; "Talk to OpenCane" and the assistant's last
+    /// answer; then either the route controls (Repeat / Next, Recenter, beacon + head pills, Stop)
+    /// or the idle picker (Repeat after arrival, Cancel route start, Start route to CIF, Navigate
+    /// to CIF from here, the route-start status, `DestinationField`); last, the route / location
+    /// error line.
     var body: some View {
         @Bindable var model = model
         CKCard(title: "Guide") {
@@ -82,7 +96,8 @@ struct GuideCard: View {
 
             // ⚠ test contract: "Where am I". While describing, the label becomes "Describing…"
             // and the button is disabled; testWhereAmIWithoutKeyReportsGracefully relies on it
-            // returning to "Where am I" (enabled) or an error line containing "key".
+            // returning to "Where am I" and on a static text containing "camera" (the no-frame
+            // error) or starting "Scene:" (a description).
             CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
                         systemImage: "eye", role: .secondary,
                         hint: "Takes a photo and reads out hazards and landmarks ahead",
@@ -94,12 +109,15 @@ struct GuideCard: View {
                     .foregroundStyle(CKColor.textPrimary)
                     .accessibilityLabel("Scene: \(model.describer.lastDescription)")
             }
-            // Describer error, e.g. "Camera warming up" (the no-key UI test accepts "camera" or "Scene:").
+            // Describer error, e.g. "No camera frame" (the no-key UI test accepts "camera" or "Scene:").
             if let err = model.describer.lastError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
 
-            // Conversational assistant push-to-talk button
+            // Conversational assistant push-to-talk (Step 23): first tap listens, second submits
+            // (`AppModel.toggleVoiceInput`; listening also ends after 1.5 s of silence). The title
+            // follows the state — "Listening…" (destructive fill, value "listening") → "Thinking…"
+            // while `ConversationCoordinator` works → "Talk to OpenCane". Not an XCUITest contract.
             CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
                         systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
                         role: model.voiceInput.isListening ? .destructive : .secondary,
@@ -127,6 +145,8 @@ struct GuideCard: View {
                 }
                 CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
                             hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
+                // Beacon pill: warning without headphones (the beacon cannot play), trusted while it
+                // plays, neutral when off or idle. Head pill: warning without headphones.
                 HStack(spacing: CKSpacing.sm) {
                     CKStatusPill(text: beaconWord, tone: !model.audioRoute.headphonesConnected ? .warning
                                  : (model.beacon.isRunning && model.beaconEnabled ? .trusted : .neutral),
@@ -147,6 +167,9 @@ struct GuideCard: View {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
                                 hint: "Says the arrival line again") { model.repeatInstruction() }
                 }
+                // While a route request waits for depth evidence after a camera transition
+                // (`DepthReadiness` interlock): cancel it without the "Route stopped." of Stop.
+                // Start route to CIF and Navigate to CIF are disabled meanwhile.
                 if model.routeStartWaiting {
                     CKBigButton(title: "Cancel route start", systemImage: "xmark.circle",
                                 role: .destructive,
@@ -165,6 +188,8 @@ struct GuideCard: View {
                             hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
                             value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
                     .disabled(model.isBuildingRoute || model.routeStartWaiting)
+                // Why a route has not started yet (waiting for depth, or timed out); not an error,
+                // so primary text, spoken as written.
                 if let status = model.routeStartStatus {
                     Text(status)
                         .font(CKFont.secondary)

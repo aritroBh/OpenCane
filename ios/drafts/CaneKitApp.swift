@@ -5,6 +5,16 @@
 //  App entry + ContentView + AppModel (wires DepthEngine → HapticLogic → CaneBLE).
 //  iOS 18+, SwiftUI, @Observable throughout.
 //
+//  STATUS: draft, NOT in any target and never compiled by the current project (ios/project.yml
+//  lists no `drafts/` path). The original pre-hackathon starter; kept as history only. Do not
+//  edit or "fix" it (ios/drafts/README.md, AGENTS.md Layout) and do not copy code from it without
+//  checking the live file — it predates Swift 6 strict concurrency, the MainActor default and
+//  the phone-only reset (it drives an ESP32 grip through `CaneBLE`, now ios/stretch/).
+//  Live successors: `ios/CaneKit/App/CaneKitApp.swift` (entry), `ios/CaneKit/App/AppModel.swift`
+//  (owner of every engine), `ios/CaneKit/UI/ContentView.swift` + `LaneGridView.swift` (screens),
+//  `SpeechQueue` (speech). Its warn / urgent distances became `CueDecider` thresholds in
+//  CaneKitLogic (with tests). Tests: none.
+//
 
 import SwiftUI
 import UIKit

@@ -19,11 +19,26 @@
 //    · Every press has an audible outcome: an answer, "I did not catch that.", or the reason it
 //      could not listen. Silence is a bug here (AGENTS.md "make the invisible visible").
 //
+//  Owner: `AppModel.voiceInput`, built in `AppModel.init` with the app's `SpeechQueue` and
+//  `BeaconEngine`. Callers: `AppModel.toggleVoiceInput(source:)` (GuideCard "Talk to OpenCane",
+//  the Action Button's empty `TalkToOpenCaneIntent`) and `AppModel.startVoiceInput()` (AirPods
+//  double nod — start only, never a toggle). AppModel installs `onTranscriptionFinalized` (→
+//  `ConversationCoordinator.handleQuery`, then `finishProcessing()`), `shouldRestorePlaybackSession`
+//  (false while `SoundWatcher` owns the microphone) and `onEvent` (→ trip log). GuideCard reads
+//  `isListening`.
+//
 //  Threading / isolation:
 //    · Main actor isolated (`@MainActor @Observable`).
 //    · Real-time audio engine tap calls back on an audio thread; buffer relay is nonisolated Sendable.
 //    · Recognition results are relayed through a nonisolated class that carries only Sendable
 //      values into a main-actor hop (hard rule 1), mirroring `SoundResultsRelay`.
+//    · ⚠ Every framework callback closure formed in a main-actor method must be `@Sendable` (or be
+//      formed in a nonisolated relay): an inferred `@MainActor` closure invoked off main traps
+//      (Step 24 physical-device crash; 23 crash reports pulled on 2026-09-12).
+//
+//  Tests: the numbers are in CaneKitLogic — `UtteranceEndTests` (1.5 s silence, 10 s cap, 0.25 s
+//  tick), `SoundAlertsTests` (`MicrophoneStart` format retry). The engine itself (audio session,
+//  recogniser, permissions) has no unit test; device test in CHANGELOG Steps 23–24 and 30.
 //
 
 import AVFoundation
@@ -32,12 +47,21 @@ import Foundation
 import Observation
 import Speech
 
-/// Operational states of the voice input engine.
+/// Operational states of the voice input engine. Published as `VoiceInputEngine.state`; no view
+/// reads it today (the UI keys off `isListening` and `ConversationCoordinator.isProcessing`).
 enum VoiceInputState: Equatable, Sendable {
+    /// Ready for a press. Also the state after a permission denial, a cancel, an empty transcript
+    /// and `finishProcessing()`.
     case idle
+    /// The microphone is open and no words have been recognised yet.
     case listening
+    /// Words are arriving; `partialText` is the latest partial transcript.
     case recognizing(partialText: String)
+    /// A non-empty transcript was handed to `onTranscriptionFinalized`; the owner is answering and
+    /// must call `finishProcessing()` when done.
     case processing
+    /// The last press failed; the message was already spoken at `.nav`. Left until the next
+    /// successful start or `cancel()` (a later denial also resets to `.idle`).
     case error(String)
 }
 
@@ -49,17 +73,29 @@ enum VoiceInputState: Equatable, Sendable {
 /// function infers the closure to be `@MainActor` isolated. When Core Audio invokes it off-main, the runtime
 /// triggers `_swift_task_checkIsolatedSwift` and traps with SIGTRAP (`_dispatch_assert_queue_fail`).
 /// By installing the tap from this `nonisolated` class method, the tap block is guaranteed nonisolated.
+/// `@unchecked Sendable`: the only state is a weak reference set once in `init` and then only read
+/// (from the audio thread). The request itself is not Sendable; this box is the one place that
+/// crosses that line. (A nonisolated relay, not a main-actor class — hard rule 1's ban on
+/// `@unchecked Sendable` is about main-actor classes.)
 private nonisolated final class SpeechBufferBox: @unchecked Sendable {
+    /// The request buffers are fed to. Weak so the tap closure (alive until `removeTap`) never keeps
+    /// a finished request alive; `VoiceInputEngine.recognitionRequest` holds it strongly.
     private weak var request: SFSpeechAudioBufferRecognitionRequest?
 
+    /// - Parameter request: the current press's recognition request.
     init(_ request: SFSpeechAudioBufferRecognitionRequest) {
         self.request = request
     }
 
+    /// Forwards one microphone buffer to the request; called on the Core Audio thread. A no-op once
+    /// the request is gone.
     func append(_ buffer: AVAudioPCMBuffer) {
         request?.append(buffer)
     }
 
+    /// Installs the bus-0 tap (2048-frame buffers, `format` = the input node's validated output
+    /// format). The closure is formed here, in a nonisolated method, so it is nonisolated — see the
+    /// ⚠ note above. Caller: `VoiceInputEngine.startEngine(attempt:sessionField:)`.
     func installTap(on node: AVAudioNode, format: AVAudioFormat) {
         node.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             self?.append(buffer)
@@ -73,6 +109,7 @@ private nonisolated final class SpeechBufferBox: @unchecked Sendable {
 /// main-actor hop (AGENTS.md hard rule 1; the pattern is `SoundResultsRelay` in SoundWatcher).
 /// `recognizer.queue` is `.main`, so the hop is one run-loop turn, never a thread change.
 private nonisolated final class SpeechResultsRelay: Sendable {
+    /// The main-actor sink, `VoiceInputEngine.recognitionUpdate` (captured weakly by the engine).
     private let onResult: @MainActor @Sendable (String, Bool, String?) -> Void
 
     /// - Parameter onResult: `(transcript, isFinal, errorDescription)`; `transcript` is "" when
@@ -108,31 +145,55 @@ private nonisolated final class SpeechResultsRelay: Sendable {
 final class VoiceInputEngine {
 
     // MARK: - Published State
+    /// Where the engine is in a press (see `VoiceInputState`). Not read by any view today.
     private(set) var state: VoiceInputState = .idle
+    /// True from a successful engine start until `cleanupAudioPipeline` (submit, silence, cap,
+    /// final, error, cancel). Not true while waiting for a permission prompt or the format retry.
+    /// GuideCard shows "Listening…" from it; `AppModel.toggleVoiceInput` decides start vs submit.
     private(set) var isListening: Bool = false
+    /// The latest (partial) transcript of the current press; "" at each start. Kept after the
+    /// press ends until the next start.
     private(set) var latestTranscript: String = ""
 
     // MARK: - Dependencies
+    /// The app's speech channel: microphone lease (`setMicrophoneEnabled(_:owner: .voiceInput)`),
+    /// the voice hold, and every spoken outcome. `unowned`: `AppModel` owns both and outlives this.
     private unowned let speech: SpeechQueue
+    /// The spatial beacon, silenced while listening and restored to `previousBeaconEnabled` after.
     private unowned let beacon: BeaconEngine
+    /// en-US recogniser (nil if the locale is unsupported), delivering on the main queue.
     private let recognizer: SFSpeechRecognizer?
 
     // MARK: - Internal Audio Pipeline
+    /// One engine reused across presses (Step 24: engine reuse); its input node is the phone mic
+    /// while the session is `.playAndRecord` with A2DP output.
     @ObservationIgnored private let engine = AVAudioEngine()
+    /// The tap's nonisolated buffer relay for the current press; nil between presses.
     @ObservationIgnored private var bufferBox: SpeechBufferBox?
+    /// Strong reference to the results relay for the current press; nil between presses.
     @ObservationIgnored private var resultsRelay: SpeechResultsRelay?
+    /// The current press's streaming request (partial results on; on-device when supported).
+    /// Set before the format check so the retry can reuse it; `endAudio()`ed on teardown.
     @ObservationIgnored private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    /// The running recognition task; cancelled on teardown (its late callbacks are ignored
+    /// because `isListening` is already false).
     @ObservationIgnored private var recognitionTask: SFSpeechRecognitionTask?
     /// Polls `UtteranceEndDetector` every `checkInterval` while listening; also owns the cap.
     @ObservationIgnored private var endTicker: Task<Void, Never>?
+    /// The current press's end-of-utterance state machine (value type: copy → update → write back
+    /// in `checkEnd`); nil between presses.
     @ObservationIgnored private var endDetector: UtteranceEndDetector?
     /// The one settle wait between input-format reads (`startEngine(attempt:)`); non-nil only
     /// while a press is waiting for the route, when the session is already `.playAndRecord` and
     /// the beacon already off, so `cancel()` and a second press must treat it as live.
     @ObservationIgnored private var formatRetry: Task<Void, Never>?
+    /// `beacon.enabled` as it was when this press began (snapshotted at the top of
+    /// `startListening`, before any failure path can run the teardown that restores it). Muse
+    /// Step 23 finding 4: beacon state saved and restored across voice sessions.
     @ObservationIgnored private var previousBeaconEnabled: Bool = false
-    /// Bumped on every start/stop so a permission prompt answered after `cancel()` cannot start
-    /// the microphone behind the walker's back (same fence as `SoundWatcher.generation`).
+    /// Bumped on every successful engine start and every `cancel()` so a permission prompt (or a
+    /// format-retry wait) answered after `cancel()` cannot start the microphone behind the
+    /// walker's back (same fence as `SoundWatcher.generation`).
     @ObservationIgnored private var generation = 0
     /// `Date().timeIntervalSinceReferenceDate` when the engine started, for `voice_end` timing.
     @ObservationIgnored private var listeningSince: Double = 0
@@ -142,11 +203,16 @@ final class VoiceInputEngine {
     /// owner must call `finishProcessing()` when its reply is done so `state` leaves `.processing`.
     var onTranscriptionFinalized: ((String) -> Void)?
     /// Checked on teardown; returns false if another microphone feature (SoundWatcher) is live.
+    /// nil (not wired) is treated as true: the session is restored to `.playback`.
     var shouldRestorePlaybackSession: (() -> Bool)?
     /// Diagnostics for the trip log: `("voice_start" | "voice_end", fields)`. Wired by `AppModel`
     /// to `logger.event`. Field names never include `t` or `kind` (`TripLogRecord` owns those).
     var onEvent: ((String, [String: Any]) -> Void)?
 
+    /// - Parameters:
+    ///   - speech: the app's `SpeechQueue` (held unowned).
+    ///   - beacon: the app's `BeaconEngine` (held unowned).
+    /// Creates the en-US recogniser; asks for no permission (that happens on the first press).
     init(speech: SpeechQueue, beacon: BeaconEngine) {
         self.speech = speech
         self.beacon = beacon
@@ -360,7 +426,8 @@ final class VoiceInputEngine {
         }
     }
 
-    /// Feed the detector the latest transcript and the clock.
+    /// Feed the detector the latest transcript and the clock (`timeIntervalSinceReferenceDate`, the
+    /// same clock as `listeningSince`). `.listening` when no detector exists (not listening).
     private func checkEnd() -> UtteranceEndDetector.Verdict {
         guard var detector = endDetector else { return .listening }
         let verdict = detector.update(transcript: latestTranscript, now: Date().timeIntervalSinceReferenceDate)
@@ -370,6 +437,9 @@ final class VoiceInputEngine {
 
     /// Second press: stops listening, cleans up audio, restores .playback session, and delivers
     /// the finalized prompt. Also the shared end path for silence / cap / final / error.
+    /// Teardown (which releases the speech hold) runs *before* the prompt is delivered, so the
+    /// answer is never held behind the walker's own dictation. An empty transcript speaks
+    /// "I did not catch that." (`.scene`, ttl 6, immediate). No-op unless listening.
     /// - Parameter reason: written to `voice_end` — "press" | "silence" | "timeout" | "final" |
     ///   "error:<text>".
     func stopListeningAndSubmit(reason: String = "press") {
@@ -398,6 +468,8 @@ final class VoiceInputEngine {
     }
 
     /// Cancels listening without submitting; also voids a permission prompt still on screen.
+    /// Speaks nothing; logs `voice_end` with reason "cancel" only if it was listening. No caller
+    /// today (AppModel's background path does not cancel a press) — kept for that teardown.
     func cancel() {
         generation += 1
         if isListening {
@@ -412,6 +484,12 @@ final class VoiceInputEngine {
 
     // MARK: - Teardown
 
+    /// The one teardown for every exit (submit, silence, cap, final, error, cancel, failed start,
+    /// format-retry wait): release the speech hold, stop the end ticker and any format retry,
+    /// remove the tap and stop the engine, end and cancel recognition, give the microphone lease
+    /// back (unless `shouldRestorePlaybackSession` says SoundWatcher still needs `.playAndRecord`),
+    /// and restore the beacon to `previousBeaconEnabled`. Safe to call when nothing was started.
+    /// Does not change `state` — callers set it.
     private func cleanupAudioPipeline() {
         isListening = false
         // Release the speech hold first. The failure line / "I did not catch that." / answer
@@ -449,6 +527,9 @@ final class VoiceInputEngine {
 
     /// A permission is missing: say so once at `.nav`, log it, stay `.idle`. The wording tells the
     /// walker (or the sighted helper) which switch to find in Settings.
+    /// Nothing was acquired yet on this path (permissions come before the session and beacon), so
+    /// it needs no teardown. Logs `voice_start` with `session` "speech_denied" / "record_denied".
+    /// - Parameter isSpeechPermission: true for Speech Recognition, false for the microphone.
     private func denied(speech isSpeechPermission: Bool) {
         let line = isSpeechPermission
             ? "Speech recognition is off for OpenCane. Allow it in Settings to talk to me."
@@ -460,7 +541,8 @@ final class VoiceInputEngine {
 
     /// Tear down and tell the walker why, at `.nav` so it is not lost behind a scene line. The
     /// message is short and already user-facing; the technical reason goes to the trip log via
-    /// `voice_start`'s `session` / `format` fields.
+    /// `voice_start`'s `session` / `format` fields (callers log before calling this).
+    /// - Parameter message: the spoken, user-facing reason; also stored in `state` as `.error`.
     private func fail(with message: String) {
         cleanupAudioPipeline()
         state = .error(message)
@@ -471,6 +553,11 @@ final class VoiceInputEngine {
 
     /// `voice_start`: what the engine saw when the press arrived, so a silent phone can be read
     /// back from the log (`recognizer`, `on_device`, `speech_auth`, `record`, `format`, `session`).
+    /// Written once per press outcome: on success, and on every failure path before it speaks.
+    /// - Parameters:
+    ///   - session: "granted:<route>", "reverted:<before>><after>", "failed:<error>",
+    ///     "recognizer_unavailable", "speech_denied" or "record_denied".
+    ///   - format: "<Hz>Hz x<channels>" (+ " (retry)"), or nil before the input was read ("").
     private func logStart(session: String, format: String?) {
         let auth: String
         switch SFSpeechRecognizer.authorizationStatus() {
@@ -498,6 +585,9 @@ final class VoiceInputEngine {
     }
 
     /// `voice_end`: why listening stopped, how long it ran and how many characters were heard.
+    /// Fields: `reason` ("press" | "silence" | "timeout" | "final" | "error:<text>" | "cancel"),
+    /// `transcript_length` (characters, trimmed for a submit), `seconds` (3 dp since the engine
+    /// started). Tune `UtteranceEndDetector.silenceAfterSpeech` from these, not by feel.
     private func logEnd(reason: String, transcriptLength: Int) {
         let seconds = Date().timeIntervalSinceReferenceDate - listeningSince
         onEvent?("voice_end", [

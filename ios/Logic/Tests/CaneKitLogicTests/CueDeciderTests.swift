@@ -145,6 +145,24 @@ private func report(head: [Float] = [.infinity, .infinity, .infinity],
     #expect(d.update(report(torso: [4, 4, 4]), now: 1.6) == .stop)
 }
 
+/// Walking point-blank into a wall (< 0.7 m): when LiDAR saturates and drops to .infinity (dropout),
+/// the urgent cue latches active for nearDropoutHoldSeconds rather than clearing.
+@Test func nearDropoutHoldsUrgentObstacleAcrossBlindZone() {
+    let d = CueDecider()
+    // Approach a wall: at 0.5 m, centre approach fires.
+    #expect(d.update(report(torso: [4, 0.5, 4]), now: 0) == .fire(.centerApproach(distance: 0.5)))
+    #expect(d.active == .center)
+    // Walk into point-blank wall: LiDAR drops out completely to .infinity.
+    // Proximity latch holds the cue active at maximum rate!
+    #expect(d.update(report(torso: [4, .infinity, 4]), now: 0.5) == .updateCenter(distance: 0.5))
+    #expect(d.active == .center)
+    #expect(d.update(report(torso: [4, .infinity, 4]), now: 1.0) == .updateCenter(distance: 0.5))
+    #expect(d.active == .center)
+    // After nearDropoutHoldSeconds (1.5 s since last finite near reading), it stops if still empty.
+    #expect(d.update(report(torso: [4, .infinity, 4]), now: 1.6) == .stop)
+    #expect(d.active == .clear)
+}
+
 /// Before the first LiDAR frame (or on a non-LiDAR phone) no cue is ever emitted.
 @Test func noDepthMeansNothing() {
     let d = CueDecider()

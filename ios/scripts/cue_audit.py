@@ -36,8 +36,12 @@ Read-only: never writes into the log or the repo.
 # Inputs it depends on (renaming any of these in the app silently zeroes a section): record kinds
 # `lanes` (`head`, `torso`, `depth`, `tilt` from TripLogger.lanes), `cue` (field `cue`), `speech`
 # (`text`, `priority`), `speech_suppressed` (`reason`, `load`), `speech_dispatch` (`text`,
-# `priority`, `replays`, `resume_from`) and `speech_end` (`priority`), all written by AppModel /
-# TripLogger; `t` is seconds since the TripLogger was created (wall clock) on every record.
+# `priority`, `replays`, `resume_from`), `speech_end` (`priority`), and for the hazard sections
+# `hazard` (`type`, `source`), `hazard_watch` (`reply`, `error`, `dropped`, `ms`) and `describe_result`
+# (`ms`, −1 when unknown), all written by AppModel / TripLogger / HazardScanner; `t` is seconds since
+# the TripLogger was created (wall clock) on every record. ⚠ The describe_result section also counts
+# `source` / `outcome`, which AppModel.describe_result does not write (it logs `provider`, `gate`,
+# `error`, `question`, `frame`), so those counters read only "?" on a real log.
 
 from __future__ import annotations
 
@@ -216,6 +220,41 @@ def audit(records: list[dict]) -> dict:
     else:
         rep["dispatch"] = "no speech_dispatch records (build before Step 34): choppiness unmeasured"
 
+    # Ground hazards (TripLogger event "hazard")
+    hazards = [r for r in records if r.get("kind") == "hazard"]
+    rep["ground_hazards"] = {
+        "count": len(hazards),
+        "by_type": dict(Counter(r.get("type", "?") for r in hazards)),
+        "by_source": dict(Counter(r.get("source", "?") for r in hazards)),
+    }
+
+    # VLM Hazard Watch (TripLogger diagnostic "hazard_watch")
+    hw = [r for r in records if r.get("kind") == "hazard_watch"]
+    if hw:
+        hw_ms = [r["ms"] for r in hw if isinstance(r.get("ms"), (int, float))]
+        timeouts = sum(1 for r in hw if r.get("dropped") == "stale" or (isinstance(r.get("ms"), (int, float)) and r["ms"] >= 2500))
+        rep["hazard_watch"] = {
+            "calls": len(hw),
+            "replies": dict(Counter(r.get("reply", "NONE" if not r.get("error") else "error") for r in hw)),
+            "timeouts": timeouts,
+            "avg_ms": round(statistics.mean(hw_ms), 1) if hw_ms else None,
+        }
+    else:
+        rep["hazard_watch"] = None
+
+    # Scene Description / VLM Queries (TripLogger event "describe_result")
+    desc = [r for r in records if r.get("kind") == "describe_result"]
+    if desc:
+        desc_ms = [r["ms"] for r in desc if isinstance(r.get("ms"), (int, float))]
+        rep["describe_result"] = {
+            "calls": len(desc),
+            "by_source": dict(Counter(r.get("source", "?") for r in desc)),
+            "by_outcome": dict(Counter(r.get("outcome", "?") for r in desc)),
+            "avg_ms": round(statistics.mean(desc_ms), 1) if desc_ms else None,
+        }
+    else:
+        rep["describe_result"] = None
+
     rep["field_collisions"] = sum(1 for r in records if "field_kind" in r or "field_t" in r)
     return rep
 
@@ -244,6 +283,17 @@ def human(rep: dict) -> str:
                  f"suppressed {rep['suppressed']}")
     lines.append(f"top lines {rep['top_lines']}")
     lines.append(f"dispatch {rep['dispatch']}")
+    if rep.get("ground_hazards") and rep["ground_hazards"]["count"]:
+        gh = rep["ground_hazards"]
+        lines.append(f"ground hazards: {gh['count']} total {gh['by_type']} (sources: {gh['by_source']})")
+    if rep.get("hazard_watch"):
+        hw = rep["hazard_watch"]
+        lines.append(f"hazard watch: {hw['calls']} calls, replies {hw['replies']}, "
+                     f"{hw['timeouts']} timeouts (avg {hw['avg_ms']} ms)")
+    if rep.get("describe_result"):
+        dr = rep["describe_result"]
+        lines.append(f"describe results: {dr['calls']} calls, by source {dr['by_source']}, "
+                     f"outcomes {dr['by_outcome']} (avg {dr['avg_ms']} ms)")
     if rep["field_collisions"]:
         lines.append(f"⚠ APP BUG: {rep['field_collisions']} records carry field_kind / field_t")
     return "\n".join(lines)
@@ -313,6 +363,9 @@ def selftest() -> None:
         {"t": 8.0, "kind": "speech", "priority": "nav", "text": "Route started."},
         {"t": 9.0, "kind": "speech_dispatch", "text": "late", "priority": "nav", "replays": 0},
         {"kind": "speech_dispatch", "text": "no time", "priority": "nav"},       # skipped, no KeyError
+        {"t": 10.0, "kind": "hazard", "type": "stepUp", "text": "Step up", "source": "lidar"},
+        {"t": 11.0, "kind": "hazard_watch", "provider": "gemini", "reply": "NONE", "ms": 2501, "dropped": "stale"},
+        {"t": 12.0, "kind": "describe_result", "source": "cloud", "outcome": "spoken", "ms": 6300},
     ]
     rep = audit(recs)
     assert rep["head_band"]["torso_also_near"] == 3, rep
@@ -327,6 +380,9 @@ def selftest() -> None:
     assert rep["dispatch"]["replays_from_line_start"] == 1, rep   # no resume_from
     assert rep["dispatch"]["replays_resumed_mid_line"] == 0, rep
     assert rep["dispatch"]["cross_band_pause_under_0_3s"].startswith("no speech_end"), rep
+    assert rep["ground_hazards"]["count"] == 1 and rep["ground_hazards"]["by_type"] == {"stepUp": 1}, rep
+    assert rep["hazard_watch"]["calls"] == 1 and rep["hazard_watch"]["timeouts"] == 1, rep
+    assert rep["describe_result"]["calls"] == 1 and rep["describe_result"]["by_source"] == {"cloud": 1}, rep
     # End → next start: a safety line ends, a nav line starts 0.1 s later (missing pause → 1), a
     # nav line starts 0.36 s after an obstacle end (pause kept → 0), a safety start never counts.
     pauses = [

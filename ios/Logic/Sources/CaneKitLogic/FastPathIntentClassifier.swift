@@ -14,7 +14,21 @@
 //    · Pure Foundation only; no side effects.
 //    · Returns `nil` when a query is ambiguous, conversational, or visual ("what's in front of me?"),
 //      delegating cleanly to the cloud VLM / LLM layer.
-//    · Pinned by `FastPathIntentClassifierTests`.
+//    · First matching rule wins, in the numbered order below — the order is part of the behaviour
+//      (5b before 7 so "head nod" is not a headphones question; 2's "unsilence" before "silence").
+//    · Matching is lower-cased substring / exact / prefix on the whole query, not word-based, so
+//      it has false hits worth knowing (noted per rule). A miss costs a cloud round-trip; a false
+//      hit acts, so rules stay narrow.
+//    · `updateSetting` option strings must be `HandsFreeOption` raw values ("beacon", "dropOffs",
+//      "hazardWatch", "nodToTalk"): the app looks them up with `HandsFreeOption(rawValue:)`.
+//
+//  Why: Step 23 — answers to "battery?", "stop" or "set a post here" must be instant, work offline
+//  and cost no tokens; only open questions go to the network (and scene questions to the camera).
+//  Owner / callers: `ConversationCoordinator.handleQuery` (app, main actor) — `classify` first, then
+//  `isSceneQuestion`, then the cloud model; `executeAction` performs the result.
+//  Tests: `ConversationLogicTests` (`fastPathSettings`, `fastPathStatusAndStop`,
+//  `fastPathMarkersAndTrends`, `fastPathCampusNavigation`, `fastPathDelegatesOpenEnded`,
+//  `sceneQuestionDetection`) and `NodToTalkFastPathTests` (rule 5b).
 //
 
 import Foundation
@@ -23,6 +37,9 @@ import Foundation
 public enum FastPathIntentClassifier {
 
     /// Classifies a cleaned user query into an immediate `ConversationAction`, or `nil` if cloud reasoning is required.
+    /// - Parameter query: the recognised or typed text, any case; leading / trailing whitespace and
+    ///   the punctuation `. ? ! , " ' ; :` at either end are ignored (not inside the text).
+    /// - Returns: the action to perform, or nil (empty query, or no rule matched).
     public static func classify(query: String) -> ConversationAction? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -30,7 +47,8 @@ public enum FastPathIntentClassifier {
         let lower = trimmed.lowercased()
         let cleaned = lower.trimmingCharacters(in: CharacterSet(charactersIn: ".?!,\"';:"))
 
-        // 1. Navigation Escape / Stop
+        // 1. Navigation Escape / Stop — exact phrases only, so "stop the beacon" or "don't stop"
+        //    never end a route.
         if cleaned == "stop" || cleaned == "stop route" || cleaned == "stop navigating"
             || cleaned == "stop navigation" || cleaned == "cancel route" || cleaned == "end route" {
             return .stopRoute
@@ -57,7 +75,9 @@ public enum FastPathIntentClassifier {
             return .updateSetting(option: "beacon", enabled: true)
         }
 
-        // 4. Settings: Ground Drop-offs
+        // 3 matches exact phrases only ("please turn off the beacon" goes to the cloud).
+        // 4. Settings: Ground Drop-offs — needs an on/off verb; "detect" counts as on. A drop-off
+        //    phrase with no verb falls through to the later rules / the cloud.
         if cleaned.contains("dropoff") || cleaned.contains("drop off") || cleaned.contains("drop-off") {
             if cleaned.contains("turn off") || cleaned.contains("disable") || cleaned.contains("stop") {
                 return .updateSetting(option: "dropOffs", enabled: false)
@@ -90,17 +110,19 @@ public enum FastPathIntentClassifier {
             }
         }
 
-        // 6. Status: Battery
+        // 6. Status: Battery. ⚠ Substring "charge" also hits unrelated questions ("who is in charge").
         if cleaned.contains("battery") || cleaned.contains("charge") || cleaned.contains("power level") {
             return .answerStatus(aspect: .battery)
         }
 
-        // 7. Status: Headphones / AirPods
+        // 7. Status: Headphones / AirPods ("head tracking" is answered with the audio line).
         if cleaned.contains("airpod") || cleaned.contains("headphone") || cleaned.contains("head tracking") {
             return .answerStatus(aspect: .headphones)
         }
 
-        // 8. Status: Route Progress / Distance to Next Point
+        // 8. Status: Route Progress / Distance to Next Point. ⚠ "how far" also swallows
+        //    "how far have I walked", so rule 12's copy of that phrase is unreachable today (the
+        //    walker hears the distance to the next point, not the distance walked).
         if cleaned.contains("how far") || cleaned.contains("distance to next") || cleaned.contains("where am i going")
             || cleaned.contains("next instruction") || cleaned.contains("current route") {
             return .answerStatus(aspect: .route)
@@ -113,7 +135,10 @@ public enum FastPathIntentClassifier {
             return .answerStatus(aspect: .all)
         }
 
-        // 10. Voice Markers / Posts ("set a post here", "mark this spot")
+        // 10. Voice Markers / Posts ("set a post here", "mark this spot"). The name is the text
+        //     after "called " / "named ", else after the first "as " (⚠ a substring, so "has " also
+        //     matches), `.capitalized` from the lower-cased query; "Marker" when none is given.
+        //     The app appends no number to "Marker" on this path (the cloud tool uses "Marker N").
         if cleaned.contains("set a post") || cleaned.contains("drop a post") || cleaned.contains("mark this spot")
             || cleaned.contains("drop a pin") || cleaned.contains("drop a marker") || cleaned.contains("set a marker") {
             var markerName = "Marker"
@@ -151,6 +176,10 @@ public enum FastPathIntentClassifier {
 
         // 14. Campus Navigation via Gazetteer ("set location to X" is how walkers say it on
         // the phone — a recogniser hears "set", not "take", half the time).
+        // A gazetteer hit returns the place's spoken `name` (not its id), and `AppModel.navigate(to:)`
+        // re-matches it — ⚠ "the Townsend Hall doors" is not an ISR alias, so ISR falls through to
+        // MapKit there (see `CampusPlace.name`). Any other target after a prefix starts a route to
+        // `target.capitalized` through MapKit (⚠ "go to settings" becomes a place search).
         for prefix in ["take me to ", "route to ", "navigate to ", "go to ", "walk to ",
                        "set destination to ", "set location to ", "change destination to ",
                        "set my destination to "] {
@@ -177,6 +206,9 @@ public enum FastPathIntentClassifier {
     /// Whether a query the fast path left over is about what the camera can see, so that with no
     /// cloud model (`VLMClient.cloudPrimary == nil`) it can still be answered by `askAboutScene`
     /// instead of the "I need a network model" line. Caller: `ConversationCoordinator.handleQuery`.
+    /// ⚠ It runs BEFORE the cloud client is consulted, so a scene question always takes the
+    /// camera path (grounded by `CloudSceneGate`), even when a cloud conversation model exists.
+    /// Pinned by `sceneQuestionDetection`.
     /// ponytail: plain substring match; "see" also hits "seen"/"seems". Upgrade path is
     /// word-boundary matching if a real transcript is misrouted.
     public static func isSceneQuestion(_ query: String) -> Bool {

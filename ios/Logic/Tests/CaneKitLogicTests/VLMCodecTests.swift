@@ -9,11 +9,21 @@
 //  Key invariants: shapes only — these tests do not prove a provider accepts the body; that
 //  needs one live "Describe" per provider on the phone.
 //
+//  Also pins `ScenePrompt.text` (the fixed "Where am I" prompt: sides, hazards first, never a
+//  number, never "clear", < 400 characters) and the OpenAI-compatible reasoning budget
+//  (`VLMRequest.openAIMaxTokens` ≥ 1024, `reasoning_effort` only when passed, "low" not "none").
+//  Caller: `VLMClient` (app) builds every request and parses every response here; `SpokenDistance`
+//  is shared by the obstacle / ground-hazard / people lines. Breaks these catch: a prompt that asks
+//  the model for metres or clock directions (its worst tasks), a reasoning model spending its whole
+//  token budget and returning no sentence (measured on Muse Spark 1.3), a field a plain chat model
+//  rejects, a refusal or safety block spoken as an answer, and a raw decimal distance.
+//
 
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// UTF-8 `Data` from a JSON literal, for the response-parser fixtures.
 private func json(_ s: String) -> Data { Data(s.utf8) }
 
 // MARK: Requests

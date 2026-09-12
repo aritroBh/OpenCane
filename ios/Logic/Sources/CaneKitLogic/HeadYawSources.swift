@@ -28,7 +28,10 @@
 //      selector falls back to 0 rather than steering the beacon with an old head pose.
 //    · AirPods beat the camera whenever they have data: they sit on the head, they work in the
 //      dark, and they do not depend on the walker's face being inside the front camera's cone.
-//  Tests: HeadYawSourcesTests.swift.
+//  Pure: Foundation-only Sendable values, no clock of their own. The app-side `FaceHeadPose` and
+//  `AppModel` are main actor; `DepthEngine`'s anchor relay converts off-main (nonisolated) and hops
+//  to main at most every `FaceYawTracker.publishInterval`.
+//  Tests: HeadYawSourcesTests.swift (18).
 //
 
 import Foundation
@@ -70,8 +73,8 @@ public enum FaceYawGeometry {
 /// Why smoothing at all: the anchor updates at the camera's rate and the walker's head is on a
 /// body that the cane sweep shakes, so the raw yaw jitters by a few degrees. The beacon turns that
 /// jitter into a wobbling click. An exponential average with `smoothing` on the new sample settles
-/// in ~5 frames (≈ 0.17 s at 30 fps) — fast enough that a real head turn is not laggy, slow enough
-/// that the click holds still.
+/// to within 10 % of a step in 6 frames (≈ 0.2 s at 30 fps; 0.65⁶ ≈ 0.075) — fast enough that a
+/// real head turn is not laggy, slow enough that the click holds still.
 public struct FaceYawTracker: Sendable, Equatable {
 
     /// Weight of each new sample in the exponential average (0…1). 0.35 settles to within 10 % of
@@ -87,13 +90,17 @@ public struct FaceYawTracker: Sendable, Equatable {
     public var maxJump: Double = 45
     /// How many consecutive rejected samples are allowed before the tracker gives in and accepts
     /// the new value. Without this, a genuine fast turn that lands outside `maxJump` would keep
-    /// the walker pinned to a stale direction forever.
+    /// the walker pinned to a stale direction forever. The (N+1)th consecutive far sample is the
+    /// one accepted, and it is still smoothed (moves `smoothing` of the way). Rejected samples do
+    /// not refresh `lastSampleTime`. Pinned by `faceYawRejectsAGlitchButNotARealFastTurn`.
     public var maxConsecutiveRejections: Int = 3
 
     /// Smoothed raw yaw in the world frame, degrees; nil before the first accepted sample.
-    /// Exposed for the Hazards card's honest front-camera readout and the trip log.
+    /// Exposed for `FaceHeadPose` (the Hazards card's honest front-camera readout) and the tests.
     public private(set) var smoothedWorldYaw: Double?
-    /// The world yaw that counts as "straight ahead"; nil until `recenter()` is called with data.
+    /// The world yaw that counts as "straight ahead"; nil until `recenter()` / `recenterWhenReady`
+    /// runs with a sample. `FaceHeadPose.ingest` calls `recenterWhenReady` on every sample while
+    /// this is nil, which is what seeds it.
     public private(set) var referenceYaw: Double?
     /// `now` of the last accepted sample; drives `isFresh`.
     public private(set) var lastSampleTime: Double?
@@ -110,7 +117,9 @@ public struct FaceYawTracker: Sendable, Equatable {
     /// Creates a tracker with the default 0.35 / 0.7 s / 45° / 3 tuning.
     public init() {}
 
-    /// Feed one anchor's world yaw.
+    /// Feed one anchor's world yaw. The first sample seeds the average; later ones move it by
+    /// `smoothing` of the wrapped difference, unless rejected by `maxJump` (see there).
+    /// Pinned by `faceYawSmoothsTowardTheNewSample`, `faceYawTakesTheShortWayRound`.
     /// - Parameters:
     ///   - worldYawDeg: `FaceYawGeometry.worldYawDegrees`, degrees in the world frame.
     ///   - now: monotonic seconds (the app uses the ARKit frame clock, like the cue router).
@@ -131,7 +140,8 @@ public struct FaceYawTracker: Sendable, Equatable {
         lastSampleTime = now
     }
 
-    /// True while the last accepted sample is younger than `maxAge`.
+    /// True while the last accepted sample is no older than `maxAge` (inclusive).
+    /// Pinned by `faceYawGoesNilWhenTheFaceIsStale`.
     /// - Parameter now: the same clock `ingest` is given.
     public func isFresh(now: Double) -> Bool {
         guard let lastSampleTime else { return false }
@@ -140,7 +150,8 @@ public struct FaceYawTracker: Sendable, Equatable {
 
     /// Head yaw relative to the recentred forward direction, degrees in (−180, 180], positive =
     /// turned to the walker's right. nil when there is no fresh face or no reference yet — the
-    /// caller must then not steer the beacon from this source.
+    /// caller must then not steer the beacon from this source. Pinned by
+    /// `faceYawNeedsAReferenceBeforeItReportsAnything`, `faceYawIsMeasuredFromTheRecentredDirection`.
     /// - Parameter now: the same clock `ingest` is given.
     public func yawDeg(now: Double) -> Double? {
         guard isFresh(now: now), let smoothedWorldYaw, let referenceYaw else { return nil }
@@ -149,14 +160,18 @@ public struct FaceYawTracker: Sendable, Equatable {
 
     /// The walker's current head direction becomes "straight ahead" (the Recenter button, the
     /// watch Recenter command, and the auto-recenter when walking straight).
-    /// With no smoothed sample the reference is cleared, so the next accepted sample can seed it.
+    /// Callers: `FaceHeadPose.recenter()`. Unlike `recenterWhenReady` it does not check freshness.
+    /// With no smoothed sample the reference is cleared (nil), so the owner's next
+    /// `recenterWhenReady` can seed it from a real sample.
     public mutating func recenter() {
         referenceYaw = smoothedWorldYaw
     }
 
     /// Seed the reference from the next accepted sample: used when face tracking starts, so the
     /// walker's pose at route start is forward even before they press Recenter.
-    /// - Parameter now: the same clock `ingest` is given; a fresh sample seeds immediately.
+    /// - Parameter now: the same clock `ingest` is given; a fresh sample seeds immediately, a stale
+    ///   or missing one clears the reference (so a head pose from before a gap never becomes
+    ///   "forward"). Pinned by `faceYawSeedsTheReferenceOnlyFromAFreshSample`.
     public mutating func recenterWhenReady(now: Double) {
         if isFresh(now: now), smoothedWorldYaw != nil {
             referenceYaw = smoothedWorldYaw
@@ -166,7 +181,8 @@ public struct FaceYawTracker: Sendable, Equatable {
     }
 
     /// Forget everything (face tracking turned off, route stopped, ARKit paused) so the UI and the
-    /// beacon can never show a head pose from a previous walk.
+    /// beacon can never show a head pose from a previous walk. Callers: `FaceHeadPose.start()` /
+    /// `stop()`. Pinned by `faceYawResetForgetsEverything`.
     public mutating func reset() {
         smoothedWorldYaw = nil
         referenceYaw = nil
@@ -177,8 +193,9 @@ public struct FaceYawTracker: Sendable, Equatable {
 
 // MARK: - Choosing a source
 
-/// Which sensor the head yaw handed to the beacon came from. Written into the trip log and shown
-/// on the Hazards card, so a walk recording says *why* the beacon behaved as it did.
+/// Which sensor the head yaw handed to the beacon came from. Written into the trip log (the
+/// `head_source {source}` event on every change, raw value) and shown on the Hazards card, so a
+/// walk recording says *why* the beacon behaved as it did. Keep raw values stable.
 public enum HeadYawSource: String, Sendable, Equatable {
     /// No usable head yaw: the beacon pans from the phone's compass alone (yaw 0).
     case none
@@ -196,6 +213,7 @@ public struct HeadYawChoice: Sendable, Equatable {
     /// Which sensor produced `degrees`.
     public let source: HeadYawSource
 
+    /// Memberwise; only `HeadYawSelector.choose` builds these in the app.
     public init(degrees: Double, source: HeadYawSource) {
         self.degrees = degrees
         self.source = source
@@ -217,9 +235,14 @@ public enum HeadYawSelector {
     ///   - faceYaw: `FaceYawTracker.yawDeg(now:)`, or nil when there is no fresh face / reference.
     ///   - recenterPending: true between a waypoint advance and the next recenter. Both sources'
     ///     references then belong to the *previous* leg, and adding their yaw to the phone heading
-    ///     would double-count the body turn (AGENTS.md: "the beacon ignores head yaw until the
-    ///     first recenter after a turn"), so the yaw is forced to 0 while keeping the source name
-    ///     for the log.
+    ///     would double-count the body turn (AGENTS.md "Things that look wrong": until the
+    ///     auto-recenter happens the beacon ignores head yaw), so the yaw is forced to 0 while
+    ///     keeping the source name for the log.
+    /// - Returns: always-finite degrees; a non-finite winning value becomes 0 with its source kept
+    ///   (the fallback source is NOT tried). Callers: `AppModel.startTicker` (every 10 Hz beacon
+    ///   render) and `autoRecenterIfWalkingStraight` (the straight-walk check). Pinned by `headYawPrefersAirPodsOverTheCamera`,
+    ///   `headYawFallsBackToTheCamera`, `headYawFallsBackToTheCompassAlone`,
+    ///   `headYawIsZeroWhileARecenterIsPending`, `headYawNeverPassesANonFiniteValue`.
     public static func choose(airPodsYaw: Double?, faceYaw: Double?,
                               recenterPending: Bool) -> HeadYawChoice {
         let (value, source): (Double, HeadYawSource)

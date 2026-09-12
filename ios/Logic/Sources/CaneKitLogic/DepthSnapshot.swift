@@ -25,7 +25,15 @@
 //  I", not per frame. (A19 numbers will differ; the ratio to the lane pass is the thing to watch
 //  if `thermal` in the trip log ever moves.)
 //
-//  Tests: DepthSnapshotTests.swift.
+//  Owner / flow: `DepthFrameProcessor.computeGrid` builds one per published depth frame (queue-only,
+//  stored under `imageLock` with its ARKit frame time); `jpegSnapshotWithDepth` hands the grid out
+//  only when its frame time matches the retained image's (`maxDepthPairingSkew`), else `.empty`;
+//  `SceneDescriber` writes it into `SceneContext.setDepth`; `OnDeviceVLMClient` reads it and calls
+//  `distance(inVisionBox:)` for every person / animal `Sighting` (`PeopleAhead` speaks the result).
+//  The grid is built UNMIRRORED on purpose (the JPEG is only rotated); `mirrorLeftRight` is applied
+//  to the spoken side instead (`PeopleAhead.bearing`).
+//  Pure: Foundation-only, Sendable values; the raw `make` reads caller-locked pointer memory.
+//  Tests: DepthSnapshotTests.swift (14).
 //
 
 import Foundation
@@ -34,8 +42,9 @@ import Foundation
 /// measured on the upright (portrait) image Vision was handed.
 ///
 /// Mirrors only the four numbers the app needs; `SignPolicy.SeenText.Box` is the older,
-/// text-specific version and stays as it is. Built by `OnDeviceVision` from
-/// `HumanObservation.boundingBox.cgRect`; consumed by `DepthSnapshot` and `PeopleAhead`.
+/// text-specific version and stays as it is. Built by `OnDeviceVision` from the person and animal
+/// observations' `boundingBox.cgRect` (as `Sighting.box`); consumed by `DepthSnapshot` and
+/// `PeopleAhead`. Values are not validated here (a non-finite box is refused by the lookup).
 public struct NormalizedBox: Sendable, Equatable {
     /// Left edge, 0 = image left.
     public var minX: Float
@@ -46,6 +55,7 @@ public struct NormalizedBox: Sendable, Equatable {
     /// Height as a fraction of the image height.
     public var height: Float
 
+    /// Memberwise, no clamping.
     /// - Parameters:
     ///   - minX: left edge (0…1).
     ///   - minY: bottom edge (0…1, Vision's bottom-left origin).
@@ -73,7 +83,7 @@ public struct DepthSnapshot: Sendable, Equatable {
     /// Grid width used by the app. 16 columns over a ~50 deg horizontal field is ~3 deg per cell:
     /// finer than the direction bands `PeopleAhead` speaks, so a body never straddles the grid.
     public static let defaultCols = 16
-    /// Grid height used by the app (portrait frames are the taller axis).
+    /// Grid height used by the app (portrait frames are the taller axis). 16 × 24 = 384 Floats.
     public static let defaultRows = 24
 
     /// Number of columns, x left→right.
@@ -86,9 +96,12 @@ public struct DepthSnapshot: Sendable, Equatable {
     /// The "no depth yet" grid (non-LiDAR device, ARKit paused, or a frame without depth).
     public static let empty = DepthSnapshot(cols: 0, rows: 0, values: [])
 
-    /// True when there is nothing to look up (the caller then speaks a direction with no distance).
+    /// True when there is nothing to look up (the caller then speaks a direction with no distance):
+    /// no values, or a `values` count that does not match `cols * rows` (a malformed grid is treated
+    /// as empty rather than indexed out of bounds).
     public var isEmpty: Bool { values.count != cols * rows || values.isEmpty }
 
+    /// Memberwise; a mismatched `values` count is accepted and makes `isEmpty` true.
     /// - Parameters:
     ///   - cols: columns, x left→right.
     ///   - rows: rows, y top→bottom.
@@ -99,7 +112,8 @@ public struct DepthSnapshot: Sendable, Equatable {
         self.values = values
     }
 
-    /// One cell, or `.infinity` when the indices are outside the grid.
+    /// One cell, or `.infinity` when the indices are outside the grid. ⚠ Does not check `isEmpty`:
+    /// call it only on a grid whose `values` count matches (tests and diagnostics).
     /// - Parameters:
     ///   - col: 0 = leftmost.
     ///   - row: 0 = topmost.
@@ -119,8 +133,11 @@ public struct DepthSnapshot: Sendable, Equatable {
     ///   - box: the detection's normalized box (Vision's bottom-left origin; y is flipped here).
     ///   - sampleFraction: fraction of the box side read around its centre (0…1).
     /// - Returns: metres, or nil when no cell in the window has a trustworthy depth.
+    /// The window is never smaller than one cell on either axis, so a tiny box still reads its cell.
     /// ⚠ Pinned by `boxDepthIsTheMedianOfItsMiddle`, `boxDepthIgnoresEdgeSpikes`,
-    ///   `boxDepthIsNilWhenUnknown`, `boxDepthRejectsOutOfRangeLidar`.
+    ///   `boxDepthIsNilWhenUnknown`, `boxDepthRejectsOutOfRangeLidar`, `boxDepthFollowsTheBoxAcrossTheFrame`,
+    ///   `boxDepthFlipsVisionsBottomLeftOrigin`, `boxDepthSurvivesATinyBox`,
+    ///   `boxDepthClampsBoxesOffTheEdge`, `boxDepthRefusesANonFiniteBox`.
     public func distance(inVisionBox box: NormalizedBox, sampleFraction: Float = 0.4) -> Float? {
         guard !isEmpty else { return nil }
         // A non-finite box would trap in `Int(_:)`, and this runs on a blind walker's phone.
@@ -186,7 +203,8 @@ public struct DepthSnapshot: Sendable, Equatable {
     ///   - rows: grid height (default `defaultRows`).
     /// - Returns: the grid; cells with no valid sample are `.infinity`.
     /// ⚠ Pinned through the array overload by `snapshotHonoursPortraitRemap`,
-    ///   `snapshotDropsLowConfidencePixels`, `snapshotCellIsTheMedianOfItsSamples`.
+    ///   `snapshotDropsLowConfidencePixelsAndBadDepths`, `snapshotCellIsTheMedianOfItsSamples`,
+    ///   `snapshotWorksUnrotated`.
     public static func make(
         depth: UnsafeRawPointer,
         depthBytesPerRow: Int,
@@ -251,7 +269,8 @@ public struct DepthSnapshot: Sendable, Equatable {
     ///   - cols: grid width.
     ///   - rows: grid height.
     /// - Returns: the same grid the raw entry point would produce.
-    /// - Precondition: array sizes equal `width * height`.
+    /// - Precondition: array sizes equal `width * height`. An empty buffer returns `.empty`
+    ///   (`snapshotOfAnEmptyBufferIsEmptyNotACrash`).
     public static func make(
         depth: [Float],
         confidence: [UInt8]? = nil,
