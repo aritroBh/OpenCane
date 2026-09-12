@@ -73,7 +73,7 @@ test on the bench: run `.\scripts\verify_mount.ps1` (all green); print the bore 
 thread set - ring 1 must run the stub's full length by hand; then collar + ring: with no cane
 the ring reaches the shoulder, with the cane it stops ~3 mm short.
 
-## Step 22 — Three icon-only root tabs (Sat Sep 12)
+## Step 27 — Three icon-only root tabs (Sat Sep 12)
 
 The phone UI was one long scroll. A sighted helper (and the XCUITests that scroll it) had to
 page past Guide, the grid, hazards, haptics, watch and mount to reach anything. Split into
@@ -87,7 +87,7 @@ three pages under an icon-only bottom bar:
 
 The bar is `CKTabBar` (`ios/CaneKit/UI/TabBar.swift`): ivory/ink sliding capsule
 (`matchedGeometryEffect`), 60 pt hit targets, VoiceOver words **Guide / Sense / Settings**
-(⚠ test contract). Page slide is a 0.32 s spring; Reduce Motion is an instant swap. Tab
+(⚠ test contract). The page cross-fades over 0.2 s; Reduce Motion is an instant swap. Tab
 changes do not speak through `SpeechQueue` (VoiceOver already announces the selected button).
 Only the visible page is in the tree, so the 30 Hz depth isolation on Sense holds.
 
@@ -105,17 +105,55 @@ Two layout bugs found by looking at the screen, both fixed in this step:
   0.2 s) and never slide. A horizontal slide implies travel through an ordered set, which is not
   what a tab change means here. The capsule still slides between icons.
 
-**test on device:** `make test`; `make sim`; `make uitest` on the iPhone 17 Pro Max / iOS 27
-simulator (set GPS at ISR before the route tests). Visual: tab pill slides, Reduce Motion
-kills the travel, VoiceOver rotor still hits card headers on the current page.
+**Rebased onto Step 25, which renamed the button underneath it.** This work was written against
+"Start demo route" while `main` moved on to "Start route to CIF" (Step 22, app line). The rebase
+conflicted in exactly the three places that pin the label — `CaneKitUITests`, `CaneKitVisualTour`
+and the design.md §9 table — and each took both sides: the new name *and* the tab rows. The
+conversation-mode and Action Button work of Steps 23–25 touches `GuideCard`, which the Guide page
+still hosts, so it needed no change. Two stale lines in `docs/CODE_REFERENCE.md` surfaced in the
+merge and were corrected: the motion summary still claimed the button press was the only
+animation, and the "divergence to know" note still described a 4-tab design that neither the doc
+nor the code has.
+
+**Also in this step: `make test` did not compile at all, and a `tail` hid it.** Two tests added by
+the Step 25 interlock work call `DepthFrameContinuity.accepts`, which is `mutating`, directly inside
+`#expect`. The macro expands its argument into a closure that captures the value immutably
+(`$0.accepts($1)` → *cannot use mutating member on immutable value*), so `CaneKitLogicTests` failed
+to build on Xcode 27. The six calls are now hoisted into locals before the `#expect`s, in the same
+order (each call advances the anchor, so the order is the test). Note the pattern that *is* safe and
+appears hundreds of times: `#expect(d.update(…) == value)` compiles fine, because a comparison
+expands through a different check — only the bare-boolean form breaks. ⚠ If you add a `mutating`
+call to an `#expect`, hoist it.
+
+> **How this was nearly missed.** An earlier run of `make test | tail -8` printed a passing summary
+> and exited 0 — the exit code was `tail`'s, and the head of the log held the errors. Pipe to a file
+> and check the exit code, or grep for `error:`; never let `tail` be the verification.
+
+**Verified:** `scripts/gen.sh` clean, `make test` **366/366 passed** (was: build failure), `make sim`
+BUILD SUCCEEDED, app installed and launched on the booted iPhone 17 Pro Max simulator (compact bar
+confirmed by screenshot after the size fix).
+
+**Not yet run:** `make uitest` and `make tour` (AGENTS.md rule 10 wants both for a UI change) —
+the simulator needs `xcrun simctl location <udid> set 40.1140,-88.2249` first or the route tests
+fail for want of a fix, unrelated to the tabs. No Muse / Antigravity review of this diff yet.
+
+**test on device:** open each tab with VoiceOver on — the three icons read "Guide" / "Sense" /
+"Settings" with the selected one announced as selected; the rotor still reaches every card header
+on the current page; Reduce Motion turns the cross-fade into an instant swap; the selection tick
+is felt once per tab change and never during a route cue.
 
 
-> **Step numbers 15, 16, 17 and 21 each appear twice, and that is not a mistake to "fix".**
+> **Step numbers 15, 16, 17, 21, 22 and 25 each appear twice, and that is not a mistake to "fix".**
 > `feat/screwless-mount` (hardware, Windows) and `main` (iOS, Mac) numbered their steps
-> independently and in parallel, then met in a merge on 2026-09-12. The first of each
-> pair is the hardware line, the second the app line. Renumbering either would break
-> every commit message that already refers to them. Read the date and the subject, not
-> the number.
+> independently and in parallel, then met in a merge on 2026-09-12. For 15, 16, 17, 21 and 25 the
+> first of each pair is the hardware line and the second the app line. **22 is different**: both
+> are app-line entries, because the route-start depth gate and the button rename were written at
+> the same time on separate checkouts — the gate's own work was later finished as the app-line
+> Step 25, and its heading says so. Renumbering any of them would break every commit message that
+> already refers to them. Read the date and the subject, not the number.
+>
+> The app line has since passed the hardware line: 26 (README credits) and 27 (root tabs) are
+> app-line only, so the next hardware step should take the next free number rather than 26.
 
 ## Step 26 — Team credits corrected in the README (Sat Sep 12)
 
@@ -194,7 +232,8 @@ Hands-free voice assistant mode designed specifically for blind white-cane users
 - **Hardware triggers**: Wired into the physical iPhone Action Button via `TalkToOpenCaneIntent: AppIntent` (with `requestValueDialog: "How can OpenCane help?"`), plus accessible push-to-talk in `GuideCard.swift`.
 - **Speech priority hierarchy & double-speak elimination**: Spoken conversational replies are strictly `.scene` priority (lowest band, priority 3). Route instructions (`.nav`), obstacle alerts (`.obstacle`), and head-height warnings (`.head` / `.safety`) immediately interrupt any conversational reply. Actions that already announce themselves out loud (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) skip the coordinator's spoken repetition to prevent echoing.
 - **Muse adversarial audit (rounds 1 & 2)**: Addressed all findings: (1) `cloudPrimary` routing on `VLMClient` avoiding on-device prompt drops; (2) off-main thread JPEG encoding via detached task; (3) weak `appModel` across async gaps; (4) beacon state save and restoration across voice sessions; (5) eliminated fast-path and tool double-speaking; (6) fixed sticky `.error` state and guarded stale recognition callbacks against unlistening states; (7) reentrancy guards on `handleQuery`.
-- **Historical upstream verification**: 359/359 unit tests green (`make test`), simulator build clean (`make sim`), 10/10 XCUITests + visual tour green (`make uitest`). Deployed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2308); rerun after the current merge with Xcode 27.
+- **Historical upstream verification**: 359/359 unit tests green (`make test`), simulator build clean (`make sim`), 10/10 XCUITests + visual tour green (`make uitest`). Deployed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2308); rerun after the current merge with Xcode 27. **Rerun done in Step 27:** the
+  Logic suite needed a compile fix before it would build on Xcode 27 at all, and now reports 366/366.
 - **Follow-up fixes**: cloud-primary routing, detached JPEG encoding, stale recognition callbacks,
   double-speak suppression, and query reentrancy guard.
 

@@ -161,6 +161,18 @@ Simulator GPS replay: launch with `SIMCTL_CHILD_CANEKIT_DEMO_ROUTE=1` and feed
 `xcrun simctl location <udid> start --speed=4 --interval=1 <lat,lon> …`; read the JSONL trip log in the
 app container's Documents folder.
 
+Two traps that have already produced a false green (Step 27):
+
+- ⚠ **Never verify a command through `tail`.** `make test | tail -8` printed a passing test summary
+  and reported exit 0 while the build was failing — the exit status was `tail`'s, and the errors were
+  at the *head* of the log. Redirect to a file, check the command's own exit code, then grep `error:`.
+- ⚠ **`#expect` cannot call a `mutating` member.** The macro expands its argument into a closure that
+  captures the value immutably, so `#expect(continuity.accepts(11))` fails to compile
+  ("cannot use mutating member on immutable value: '$0' is immutable"). `#expect(d.update(…) == v)` is
+  fine — a comparison expands differently. Hoist the call into a local first (`DepthReadinessTests`).
+- ⚠ `make uitest` / `make tour` need a location on the simulator first
+  (`xcrun simctl location <udid> set 40.1140,-88.2249`), or the route tests fail for want of a GPS fix.
+
 ## Hardware / OpenSCAD — traps that have already cost us a night
 
 Everything here was paid for with a real mistake on 2026-09-12. Read it before touching a `.scad`.

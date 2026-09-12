@@ -132,7 +132,11 @@ inset re-check after reinstall.
 - Hands-free — `HandsFreeIntents.swift`, `QuestionPrompt` / `StatusSummary` + tests,
   `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
   `SceneDescriber` ask path, `describe_result` question field (merged).
-- Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). The current checkout has 366 Logic test annotations; upstream's original 359-test verification remains historical until rerun on Swift 6/Xcode 27.
+- Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). **Rerun settled the test-count
+  question** (2026-09-12, Step 27): the target holds 366 `@Test` annotations and `make test` on
+  Xcode 27 now reports **366 tests passed in 1 suite** — the counts agree. The 359 figure was the
+  last green run *before* the Step 25 interlock tests existed; reaching 366 first needed the
+  `#expect` + `mutating` compile fix in `DepthReadinessTests` (CHANGELOG Step 27).
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
   stale 8/12 s timeouts and stale test-count references fixed; the current target has 366 `@Test` annotations).
@@ -541,6 +545,30 @@ for 60 s so a weak network can never stall a cue.
 - [x] Muse adversarial review passed confirming 1:1 label parity and zero contract regressions
 - [x] Built and deployed to physical iPhone 17 Pro Max (`00008150-001A698C1108401C`)
 - **test on device:** see CHANGELOG Step 22
+
+## Step 27 — Three icon-only root tabs (Sat Sep 12)
+- [x] `RootTab` + `CKTabBar` (`ios/CaneKit/UI/TabBar.swift`): icon-only, sliding accent capsule
+      (`matchedGeometryEffect`), 60 pt hit targets, `.sensoryFeedback(.selection)`, Reduce Motion honoured
+- [x] `ContentView` split into `GuidePage` / `SensePage` / `SettingsPage`; only the visible page is in
+      the tree, so the Step 21 30 Hz depth isolation still holds
+- [x] Fixed: the bar filled the screen — a `Capsule` as a `ZStack` sibling takes the whole proposed
+      height; it is now the `.background` of a fixed 62 × 36 box (hit area still 60 pt)
+- [x] Fixed: pages all slid in from the right, so moving back left looked like moving forward.
+      Direction tracking was tried, then dropped for a 0.2 s cross-fade — pages never slide sideways
+- [x] VoiceOver labels "Guide" / "Sense" / "Settings" pinned in AGENTS.md rule 9 and design.md §9;
+      `CaneKitUITests` + `CaneKitVisualTour` open the matching tab before looking for its controls
+- [x] Rebased onto Step 25; the three label conflicts kept both the "Start route to CIF" rename and
+      the tab rows. Two stale `docs/CODE_REFERENCE.md` lines (motion summary, 4-tab divergence note) fixed
+- [x] Fixed `make test`, which did not compile on Xcode 27: `DepthReadinessTests` called the
+      `mutating` `DepthFrameContinuity.accepts` inside `#expect` (immutable closure capture). Six
+      calls hoisted into locals, order preserved. ⚠ `#expect(x.update(…) == v)` is fine; the bare
+      boolean form is not
+- [x] Verified: `scripts/gen.sh`, `make test` **366/366**, `make sim`, installed + launched on the
+      booted iPhone 17 Pro Max simulator (compact bar confirmed by screenshot)
+- [ ] `make uitest` + `make tour` — needs `xcrun simctl location <udid> set 40.1140,-88.2249` first,
+      or the route tests fail for want of a GPS fix (unrelated to the tabs)
+- [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
+- **test on device:** see CHANGELOG Step 27
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
