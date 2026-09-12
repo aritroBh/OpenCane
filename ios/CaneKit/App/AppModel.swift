@@ -253,11 +253,21 @@ final class AppModel {
     /// before anyone opens the Hazards card to see it is on. A microphone that turns itself on
     /// because of something you did yesterday is not a setting, it is a surprise. Turning it on is
     /// cheap; noticing it turned itself on is not.
+    ///
+    /// Writes from `SoundWatcher.onFailure` (a refused microphone, a degraded audio route, a dead
+    /// analyser) go through `applyingDangerSounds`, exactly as `bothCamerasEnabled` uses
+    /// `applyingBothCameras`: they only put the switch back on screen, they must not re-enter the
+    /// off path of a watcher that has already stopped itself.
     var dangerSoundsEnabled: Bool = false {
         didSet {
+            guard dangerSoundsEnabled != oldValue, !applyingDangerSounds else { return }
             if dangerSoundsEnabled { sounds.start() } else { sounds.stop() }
         }
     }
+
+    /// True while a `SoundWatcher` failure is snapping `dangerSoundsEnabled` back to false, so
+    /// that write cannot re-enter the `didSet` above. See `wireSounds()`.
+    @ObservationIgnored private var applyingDangerSounds = false
 
     // MARK: Lifecycle
 
@@ -991,11 +1001,34 @@ final class AppModel {
     /// a horn is not announced after it has passed.
     /// There is no haptic for sound alerts on purpose: the cane's taps mean "something is in your
     /// path", and borrowing them for something heard would make the safety channel ambiguous.
+    ///
+    /// It also wires `onFailure`, which is the *other* thing this feature can say. That line shares
+    /// the `.obstacle` band with the alerts, and for the same reason: a microphone that stopped
+    /// working is never more urgent than an obstacle in the path or a crossing instruction. The
+    /// watcher hands over a short hand-written sentence for speech and keeps the technical detail
+    /// (`NSError` descriptions, audio port names) for `lastError` and the trip log.
     private func wireSounds() {
         sounds.onDiagnostic = { [weak self] kind, fields in self?.logger.event(kind, fields) }
         sounds.onAlert = { [weak self] sound in
             self?.speech.say(sound.spokenLine, .obstacle, ttl: 6)
             self?.logger.event("speech", ["text": sound.spokenLine, "priority": "obstacle"])
+        }
+        // A failed start used to leave this switch ON: the watcher gave up, but every
+        // foregrounding and every `start()` retried it, failed again, announced again and moved
+        // the audio session again — with the UI showing a feature that does not exist. The switch
+        // has to follow the watcher, and the reason has to be said once, here, not once per retry.
+        sounds.onFailure = { [weak self] message in
+            guard let self else { return }
+            // Same guard as `setBothCameras`: this write is the switch moving on screen, not the
+            // walker turning the feature off, so it must not run the off path again.
+            self.applyingDangerSounds = true
+            self.dangerSoundsEnabled = false
+            self.applyingDangerSounds = false
+            // `.obstacle`, not `.nav`: this is the sound feature's own band (docs/design.md §5),
+            // so an explanation of why a *microphone* stopped can never cut an obstacle name or a
+            // route instruction. It queues behind them and still arrives within its 10 s TTL.
+            self.speech.say(message, .obstacle, ttl: 10)
+            self.logger.event("sound_watch", ["action": "disabled_after_failure", "why": message])
         }
     }
 
