@@ -14,6 +14,20 @@
 //    · the fix is inside the current waypoint's passed-by zone (live bearing swings / points back);
 //    · the current leg is `curved` in the route file (chord bearing ≠ walking direction);
 //    · the fix is poor (> 20 m), stale (> 5 s) or the user is not walking (≤ 0.5 m/s).
+//  How a muted moment reaches the off-course episode depends on *why* it was muted:
+//    · Settling, a curved leg, the zone beside the current waypoint, and a fix that positively
+//      reports the walker standing are a different *situation*, not a hole: they call
+//      `endEpisode()`, so a drift before a corner — or before a stop — is never added to the
+//      drift after it.
+//    · A missing fix / target bearing / smoothed course, or a poor or stale fix, or one whose
+//      speed CoreLocation does not know, is a hole in the evidence and is reported as
+//      `OffCourseDetector.gated(at:)` — one missed beat must not restart the 3 s hold (a walker
+//      drifting off course under bad GPS would then never be warned), while a hole longer than
+//      the detector's `maxEvidenceGap` (2 s) does drop the history, so GPS coming back after a
+//      gap cannot fire a veer from what the walker was doing before it.
+//  The two kinds interleave, so `update(heading:now:)` tests them in a fixed order (no fix →
+//  route situation → fix quality → speed → position situation → target bearing); the ⚠ comment
+//  there says why each guard sits where it does. Do not merge them back into one `guard`.
 //
 //  Owner: `AppModel.nav` (one instance). Module `navigation-trip` in docs/CODE_REFERENCE.md.
 //  Inputs arrive from `AppModel.wireNavigation()` (fixes from LocationService, gyro-gated
@@ -312,11 +326,75 @@ final class NavigationEngine {
             }
         }
         recomputeError()
-        guard let raw = bearingError, let fix = lastFix, let tracker,
-              fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy,
-              fix.speed > 0.5, now - fix.timestamp < 5,
-              !isSettling, !legCurved, !tracker.isNearCurrent(fix) else {
-            offCourse.endEpisode()   // a gated-out moment ends the episode: no instant veer after a GPS gap (Muse)
+        // Two kinds of "no veer decision right now", and the off-course episode must treat them
+        // differently:
+        //  · a different *situation* — a turn still settling, a curved leg, the zone beside the
+        //    current waypoint, the walker standing still: the error before it was about another
+        //    leg, or about an approach they have since stopped walking, so it must not be bridged
+        //    to the error after it. Those call `endEpisode()` outright.
+        //  · nothing to judge *with* — no fix at all, no target bearing, a poor or stale fix, an
+        //    unknown speed, no smoothed course yet: a hole in the evidence about the leg walked.
+        //    Reported as `gated(at:)`, which keeps an otherwise continuous hold across one missed
+        //    beat and drops the episode only when the hole passes `maxEvidenceGap` (2 s). Ending
+        //    the episode on the first such moment (the earlier shape of "no instant veer after a
+        //    GPS gap", a7a5fa6) meant a walker genuinely off course under intermittent GPS never
+        //    reached the 3 s hold and was never warned at all — silence exactly when the warning
+        //    matters most.
+        //
+        // ⚠ The order of the guards below is load-bearing; each one is where it is for a reason
+        // (both review rounds on this fix):
+        //  1. No fix at all — nothing is known, not even which situation we are in: a hole.
+        //  2. `isSettling` / `legCurved` are *route* state, true or false regardless of GPS, so
+        //     they are decided before the fix is judged. They must also come before any test of
+        //     `bearingError`: a curved leg and a settling crossing publish no `targetBearing`
+        //     (see `effectiveBearing`), so `bearingError` is nil for them too, and an
+        //     evidence-shaped guard would misreport them as a hole and bridge them.
+        //  3. Fix quality (accuracy, staleness). A fix we have just declared untrustworthy must
+        //     not drive *any* decision — including "the walker is beside the waypoint" in guard 5.
+        //     Judging that on a 40 m blob and calling `endEpisode()` would silence a genuine
+        //     drift on a position we do not believe.
+        //  4. Speed, and the two halves mean opposite things — this is the distinction the whole
+        //     fix turns on, and getting it wrong is a false "Veer" at a blind walker:
+        //       · `speed < 0` is CoreLocation saying it does not know: a hole, bridge it.
+        //       · `0 ≤ speed ≤ 0.5` is a *measurement* that the walker is not making progress.
+        //         Standing is the one state in which a walker can turn to face anywhere with no
+        //         evidence recording it, and the course smoother's 15 m trail still describes the
+        //         approach they walked *before* stopping. Bridging a 1 s stop therefore lets the
+        //         pre-stop drift finish the 3 s hold after the walker has already corrected and
+        //         set off again — "Veer right." at someone now walking the right way (adversarial
+        //         review, finding 1; the pure-logic half is pinned by `aStopMidDriftRestartsTheHold`).
+        //         So a standing fix ends the episode, exactly as it did before this fix.
+        //  5. `isNearCurrent` only now, on a fix good enough to locate the walker: a real change
+        //     of situation, so the drift before the corner is never added to the drift after it.
+        //  6. Whatever is left with no `bearingError` (and, while walking, no smoothed course) is
+        //     genuinely a missing measurement, not a situation: a hole. Reachable right after
+        //     `start()` keeps a < 30 s `lastFix`, before the first live fix computes a target.
+        guard let fix = lastFix, let tracker else {
+            offCourse.gated(at: now)         // no fix yet on this route: a hole, not a verdict
+            return
+        }
+        guard !isSettling, !legCurved else {
+            offCourse.endEpisode()
+            return
+        }
+        guard fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy, now - fix.timestamp < 5 else {
+            offCourse.gated(at: now)
+            return
+        }
+        guard fix.speed >= 0 else {
+            offCourse.gated(at: now)         // CoreLocation reports −1 for "no speed": a hole
+            return
+        }
+        guard fix.speed > 0.5 else {
+            offCourse.endEpisode()           // standing: measured, not missing — see guard 4
+            return
+        }
+        guard !tracker.isNearCurrent(fix) else {
+            offCourse.endEpisode()
+            return
+        }
+        guard let raw = bearingError else {
+            offCourse.gated(at: now)         // no target bearing yet: a hole, not a verdict
             return
         }
         // Walking: judge against the smoothed course (jitter-proof); standing/slow: the heading.
@@ -327,7 +405,7 @@ final class NavigationEngine {
             // fence (review: the old leg's course lagged ~16 s after each turn and produced false
             // veers right after WP2/WP3/WP6).
             guard let course = smoothedCourse, let target = targetBearing else {
-                offCourse.endEpisode()           // no judgement possible: no episode either
+                offCourse.gated(at: now)         // no judgement possible: a hole, not a verdict
                 return
             }
             err = GeoMath.bearingError(target: target, heading: course)
