@@ -1,7 +1,14 @@
 # hardware/: phone-to-cane mount
 
+> **Printing? Start at the print list at the top of
+> [`mount_screwless/PRINTING.md`](mount_screwless/PRINTING.md).** It says which files, in what
+> order, on which filament slot, and what to check when each one comes off the bed. The G-code
+> itself is on the repo's Releases page (`mount-gcode-step25`) or regenerated in five commands
+> on a Windows machine with OpenSCAD + Creality Print.
+
 The only new hardware in OpenCane / CaneKit is a mount. It clamps the iPhone 17 Pro Max upright to
-the 28.75 mm non-metal stick, near the grip, with the LiDAR and rear camera facing forward and
+the 27.65 mm non-metal stick (measured by the bore rings on 2026-09-12; it is a broom handle
+standing in for a cane), near the grip, with the LiDAR and rear camera facing forward and
 ~5° down. The phone's own buzz has to be felt through the cane. Everything else (AirPods Pro,
 Apple Watch) is off the shelf. This folder replaces the old `cad/` drafts for the phone mount;
 those drafts assumed a 12.7 mm cane and an ESP32 grip.
@@ -15,8 +22,10 @@ phone's buzz is felt in the handle, with nothing magnetic near the phone's botto
 and the shaft out of the camera's view. The full team context is in
 [`docs/TEAM_HANDOFF.md`](../docs/TEAM_HANDOFF.md).
 
-**Status (2026-09-11):** designed, not yet rendered or printed. Nobody has opened the SCAD files
-in OpenSCAD yet. Step 1 below comes first.
+**Status (2026-09-12, late):** two designs. `mount/` (screwed, this page's quick start) is a
+draft nobody has rendered. `mount_screwless/` is the live one: simulated end to end
+(`scripts/verify_mount.ps1`, 30 checks green), sliced, bore rings printed and read; the rest is
+not yet printed. See `CHANGELOG.md` Steps 21 and 25.
 
 ## Files
 

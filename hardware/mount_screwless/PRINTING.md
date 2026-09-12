@@ -1,5 +1,25 @@
 # Printing the screwless mount — operator runbook
 
+## Print list — read this if you are standing at a printer
+
+The G-code is on the repo's **Releases** page (`mount-gcode-step25`), or regenerate it with the
+five commands under "Slicing" below. Check the Filament Selection screen before every job.
+
+| # | File | Slot | Time | Then |
+|---|---|---|---|---|
+| ~~0~~ | bore rings | — | — | **Done.** `pole_d` = 27.65 mm (2026-09-12). Do not reprint |
+| 1 | `PETG_slot2__next_*.gcode` | PETG | 3 h 33 | Thread row + dovetail row. Read it — "Reading the thread set" and "Reading the dovetail pair" below. On two machines: `PETG_slot2__thread_*` (2 h 24) + `PLA_slot3or4__dovetail_*` (42 min) |
+| 2 | `PETG_slot2__arm_*.gcode` | PETG | 39 min | Needs no coupon. Any free machine, any time |
+| 3 | `PETG_slot2__collar_*.gcode` | PETG | 1 h 43 | After step 1 is read. Cut to thread nut 3 and dovetail 2; if other coupons win, put their numbers in `screwless_mount.scad`, run `verify_mount.ps1`, rebuild, re-slice |
+| 4 | `PETG_slot2__ring_*.gcode` | PETG | 55 min | Same |
+| 5 | `PETG_slot2__cradle_*.gcode` | PETG | 1 h 34 | Prints with support under the back plate; peel it off |
+
+Flat on the bed as sliced; rotate nothing. Assembly is under "Fitting it together". The
+pass/fail at the collar: **no cane in, the ring reaches the shoulder; cane in, it stops ~3 mm
+short.** Not settled: the three coupon numbers (step 1), `plateau_h` (measure the camera
+plateau's height from the top edge with calipers while the phone is out), and the fact that the
+prototype shaft is a broom handle — nothing from this geometry has been printed yet.
+
 This is the how-to. [`README.md`](README.md) is the why. If you are standing at a
 printer and want to know which file to send, you are in the right document.
 
