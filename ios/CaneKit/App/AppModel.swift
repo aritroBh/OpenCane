@@ -102,6 +102,11 @@ final class AppModel {
     /// When a confirmed ground hazard is worth saying again (CaneKitLogic, HazardTests).
     @ObservationIgnored private var groundPolicy = GroundHazardPolicy()
 
+    /// Conversational assistant coordinator (dialogue memory, history, tool dispatching, markers).
+    private(set) var conversation: ConversationCoordinator!
+    /// On-device push-to-talk speech recognition engine.
+    private(set) var voiceInput: VoiceInputEngine!
+
     /// Route picker state: the destination text typed in the route field (read/write from the UI).
     var destinationQuery = ""
     /// Last route-building failure shown under the route picker; nil when there is none.
@@ -369,6 +374,8 @@ final class AppModel {
         logger.enabled = loggingEnabled
         beacon.enabled = beaconEnabled
         AppModel.shared = self
+        self.conversation = ConversationCoordinator(appModel: self, client: client)
+        self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
     }
 
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
@@ -377,6 +384,20 @@ final class AppModel {
     func describeScene() {
         logger.event("describe", ["provider": describer.providerName ?? "none"])
         describer.describe()
+    }
+
+    /// Toggles on-device push-to-talk voice recording.
+    func toggleVoiceInput() {
+        if voiceInput.isListening {
+            voiceInput.stopListeningAndSubmit()
+        } else {
+            voiceInput.startListening()
+        }
+    }
+
+    /// Handles a spoken query from voice input, Shortcuts, or Siri.
+    func handleSpokenQuery(_ text: String) async {
+        await conversation.handleQuery(text)
     }
 
     /// Automation hook (`CANEKIT_DESCRIBE_EVERY_WAYPOINT=1`, used by `make e2e SCENARIO=streetview`):
@@ -522,6 +543,11 @@ final class AppModel {
         }
         wireHazards()
         wireDescriber()
+        voiceInput.onTranscriptionFinalized = { [weak self] transcript in
+            Task { @MainActor [weak self] in
+                await self?.conversation.handleQuery(transcript)
+            }
+        }
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy,
                                // ⚠ `haptics: false` used to be the whole story, and it is not a

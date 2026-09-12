@@ -415,3 +415,30 @@ struct SetOptionIntent: AppIntent {
         return .result()
     }
 }
+
+/// Action button / Shortcuts "Talk to OpenCane": spoken conversational assistant query.
+///
+/// Can be assigned directly to the iPhone Action Button in iOS Settings > Action Button > Shortcut,
+/// or triggered via Siri / Shortcuts. Speaks the answer back at `.scene` priority.
+struct TalkToOpenCaneIntent: AppIntent {
+    /// Shown in Shortcuts and the Action button picker.
+    static let title: LocalizedStringResource = "Talk to OpenCane"
+    /// Subtitle in Shortcuts.
+    static let description = IntentDescription("Speak to OpenCane to navigate, set posts, check status, or ask questions.")
+    /// ⚠ Foreground only: ensures the app is frontmost with obstacle warnings live.
+    static let supportedModes: IntentModes = .foreground(.immediate)
+
+    /// What the walker wants to ask or command.
+    @Parameter(title: "Query", requestValueDialog: "How can OpenCane help?")
+    var query: String?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let model = try await IntentSupport.model()
+        let text = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw $query.needsValueError("How can OpenCane help?") }
+        await model.handleSpokenQuery(text)
+        return .result()
+    }
+}
+

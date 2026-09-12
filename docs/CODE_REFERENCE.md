@@ -495,6 +495,16 @@ Pure ranking behind the Guide card's "as you type" suggestions. Foundation only;
 
 Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswerable questions) / `.text(for:)` (the model prompt); `StatusFacts` (gathered by `AppModel` at speak time) → `StatusSummary.lines` / `.sentence` (fixed six-clause order: obstacle detection, GPS, audio, haptics, route, battery) / `.hapticsLine` (shared with `announceChannels` so one fact has one sentence everywhere). Tests: `QuestionPromptTests.swift`, `StatusSummaryTests.swift`.
 
+### `ConversationModels.swift` / `FastPathIntentClassifier.swift` / `ConversationPrompt.swift` — conversational assistant logic (Step 23)
+
+Foundation-only conversational assistant decisions and models:
+- **`WalkMarker`**: Voice-dropped GPS breadcrumb pin (`coordinate`, `name`, `timestamp`, `altitude`).
+- **`ConversationContext`**: Live snapshot of navigation status, safety checks, telemetry, and trip metrics.
+- **`ConversationTurn` & `ConversationHistory`**: 6-turn rolling buffer tracking user queries, assistant responses, and tool calls.
+- **`ConversationTool` & `ConversationAction`**: Structured tools (`navigateTo`, `stopNavigation`, `dropMarker`, `queryScene`, `queryStatus`, `queryHistory`, `setSetting`, `setCaneSilenced`).
+- **`FastPathIntentClassifier`**: Sub-millisecond deterministic intent matcher resolving settings, status aspects, campus gazetteer destinations (`CampusPlaces`), marker drops, and trip metrics with zero LLM tokens.
+- **`ConversationPrompt` & `ConversationResponseParser`**: Compact telemetry serialization with strict anti-slop rules (< 25 words, no pleasantries) and `CloudSceneGate` safety filters stripping false "all clear" reassurance. Tests: `ConversationLogicTests.swift`.
+
 ---
 
 ### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 316 tests on main before Step 16 (run `make test` for the count with the Step 16 cases)
@@ -660,6 +670,8 @@ Three files: the `@main` entry, the `AppModel` that owns every engine and all se
 | `sceneContext` | `SceneContext` (`nonisolated final class: Sendable`, `Scene/OnDeviceVision.swift`) | 11 | Built in `init`; `set(AppModel.contextLine(report))` on every report; read off-main by `OnDeviceVLMClient`. |
 | `hazards` | `HazardScanner` | 11 | Built in `init` as `HazardScanner(processor: depth.processor, watchClient: client)` (same client as the describer). `signsEnabled`, `watchEnabled`, `paused`, `onHazard`, `isNavigating`, `currentSpeed`, `start/stop`, `watchProvider`, `lastSign`, `lastCaution`, `lastError`. |
 | `hazardLog` | `HazardLog` | 11 | `record(kind:text:fix:jpeg:)`, `records`, `fileURL`, `fileWritten`, `lastError`. |
+| `conversation` | `ConversationCoordinator` | 23 | Handles fast-path commands, LLM fallback tool calling, drop-marker posts, and status queries. |
+| `voiceInput` | `VoiceInputEngine` | 23 | Push-to-talk `SFSpeechRecognizer` using `SpeechQueue.setMicrophoneEnabled` (never `.allowBluetoothHFP`). |
 | `decider` | `CueDecider` (`@ObservationIgnored private let`, CaneKitLogic) | 3 | Pure cue state machine; `update(_:now:) -> CueOutput?`, `reset()`. |
 | `namer` | `ObstacleNamer` (`@ObservationIgnored private let`) | 4 | Mesh-class → "door ahead, two meters"; `update(_:now:) -> String?`, `reset()`. |
 

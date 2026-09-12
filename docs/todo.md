@@ -132,8 +132,9 @@ inset re-check after reinstall.
 - Hands-free — `HandsFreeIntents.swift`, `QuestionPrompt` / `StatusSummary` + tests,
   `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
   `SceneDescriber` ask path, `describe_result` question field (merged).
-- `CHANGELOG.md` (Step 16), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
-  QuestionPrompt/StatusSummary, HandsFreeIntents, cloudPrimary sections; AppIntents rewritten;
+- Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). 359 Logic tests green, 10/10 UITests green, visual tour green.
+- `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
+  QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
   stale 8/12 s timeouts and 243-test count fixed).
 
 **Committed on a branch, not yet merged:**
