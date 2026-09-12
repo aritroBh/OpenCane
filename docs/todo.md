@@ -135,16 +135,17 @@ sensors did not see is ever spoken.*
   **Deliberately held**: it conflicts with the people-detection work in the same files and buys
   nothing for the demo.
 
-**Uncommitted work in worktrees — these are the only copies (reviewed, deliberately unmerged):**
-- `/Users/aritro/Downloads/cane-wt-emergency` — emergency-siren rework (siren gate 0.50 → 0.60,
-  three agreeing windows, `.emergency` urgency → `.nav` band, `best(of:)` anti-shadowing). Read end
-  to end, no crash path found; unmerged because the gate cannot run from a sandboxed session.
-- `/Users/aritro/Downloads/cane-wt-handsfree` — hands-free voice control (Status / Ask /
-  Silence-haptics shortcuts to the 10-shortcut limit, `QuestionPrompt` / `StatusSummary` in Logic
-  with tests, `docs/handsfree.md`). Same gate reason.
-- `/Users/aritro/Downloads/cane-wt-all-sensors` — old pre-merge snapshot, superseded by the
-  `feat/all-sensors` merge; ⚠ do not merge from here. Its sound watcher wants `.playAndRecord`,
-  which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
+**Branches (2026-09-12 cleanup):** 11 merged branches deleted (`all-sensors`, `detect-people`,
+`live-view-gpu`, `rename-opencane`, `voice-nav-search`, all six `fix/*`). Remaining: `main`,
+`feat/emergency-alerts` + `feat/handsfree` (retire after the Step 16 gate goes green),
+`feat/fm-image-describe` (deliberately held, conflicts with people-detection),
+`feat/multicam-depth` (worktree has uncommitted DepthEngine changes — triage separately),
+`experiment/gemma-cactus` (untracked `CactusCodec` + bench script — triage separately).
+
+**Worktrees:** the 11 clean ones were unregistered from git; their directories still sit in
+`~/Downloads/cane-wt-*` (sandbox cannot delete outside the repo — one `rm -rf` from your
+terminal, command below). Keep until the gate is green: `cane-wt-emergency`, `cane-wt-handsfree`
+(Step 16 supersedes both, verified identical modulo renames).
 
 ### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
 
