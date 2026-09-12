@@ -59,7 +59,8 @@ struct WhereAmIIntent: AppIntent {
     }
 }
 
-/// Siri / Shortcuts "Start the demo route": starts the bundled ISR Townsend Hall → CIF route.
+/// Siri / Shortcuts "Start route to CIF" (the legacy "Start the demo route" phrase is still
+/// accepted): starts the bundled ISR Townsend Hall → CIF route.
 struct StartDemoRouteIntent: AppIntent {
     /// Shown in Shortcuts.
     static let title: LocalizedStringResource = "Start OpenCane route"

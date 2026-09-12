@@ -22,6 +22,33 @@ public enum DepthReadinessState: String, Sendable, Equatable {
     case timedOut
 }
 
+/// Tracks continuity of the published depth-report stream across a transition boundary.
+/// `AsyncStream.bufferingNewest(1)` may drop an intermediate report; the adapter must then discard
+/// the newest report as readiness evidence and earn a wholly contiguous run again. This stays in
+/// CaneKitLogic so the policy is testable without ARKit. Caller: `DepthEngine.ingest`.
+public struct DepthFrameContinuity: Sendable, Equatable {
+    private var baseline: Int?
+    private var last: Int?
+
+    public init() {}
+
+    /// Start a new stream window. Reports at or before `after` are pre-transition evidence.
+    public mutating func begin(after sequence: Int?) {
+        baseline = sequence
+        last = nil
+    }
+
+    /// Accept one published sequence as contiguous evidence. The first report after a known
+    /// boundary must be exactly `baseline + 1`; after that every report must increment by one.
+    /// A gap returns false and becomes the new anchor, so the next report can start a fresh run.
+    public mutating func accepts(_ sequence: Int) -> Bool {
+        defer { last = sequence }
+        if let last { return sequence == last &+ 1 }
+        if let baseline { return sequence == baseline &+ 1 }
+        return true
+    }
+}
+
 /// Pure state machine for the route-start depth interlock.
 ///
 /// A frame counts only when all three facts are true for that same ARKit frame: camera tracking is

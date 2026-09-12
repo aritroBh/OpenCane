@@ -28,7 +28,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
    background, which pauses ARKit and stops the haptics. GPS, speech, the beacon and watch cues keep
    running (the `location` and `audio` background modes). Guided Access with the side button disabled
    is required (D16).
-3. **A killed app doesn't resume the route.** "Start demo route" starts again at WP1. Look-ahead is
+3. **A killed app doesn't resume the route.** "Start route to CIF" starts again at WP1. Look-ahead is
    only 2 waypoints and passed-by needs you within 2 × radius, so from mid-route the tracker is stuck
    and the beacon points back toward ISR. The recovery is to press **Next** once per waypoint already
    passed (F12 table).
@@ -69,7 +69,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
     press that can't reach the phone plays `.retry`. Every route cue (and veer) is also felt on the
     cane as soft continuous buzzes: left one 0.45 s buzz, right two 0.35 s, crossing three 0.3 s,
     arrived long-short-long. A ground hazard is 4 heavy taps.
-12. **Voice cache.** Prefetch covers exactly 29 lines: 19 `commonLines`, 9 waypoint `say` lines and
+12. **Voice cache.** Prefetch covers exactly 30 lines: 20 `commonLines`, 9 waypoint `say` lines and
     the intro. Any line built at runtime is a cache miss: Repeat (it includes a distance), "Passed X.
     Y in N meters.", the arrival summary, "\<AirPods\> connected.", channel warnings, "Describing.".
     A route or Repeat line that misses waits up to **2.5 s** for ElevenLabs, then falls back to the
@@ -97,7 +97,7 @@ no blindfolded walk.
 
 | ID | Command (from `ios/`) | What it covers | Pass | Time |
 |---|---|---|---|---|
-| A1 | `make test` | 146 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file | 114/114 | < 1 min |
+| A1 | `make test` | 366 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, depth-readiness interlock, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file | current count: 366 annotations | < 1 min |
 | A2 | `make sim` | Swift 6 strict build for the simulator | 0 errors | ~3 min |
 | A3 | `make uitest` | 7 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggles, a11y labels, empty destination; the Street View "Where am I" test is skipped unless run with `make uitest-streetview` | 6/6 + 1 skipped | ~4 min |
 | A4 | `make tour` | PNG per screen state → `build/shots` | Every PNG reviewed: no truncated pill ("SPEAKI…"), no hyphenated "Recen-ter", instruction not clipped | ~3 min |
@@ -143,7 +143,7 @@ part of F12.
 
 | ID | What | Who | Pass |
 |---|---|---|---|
-| W1 | **Survey walk, sighted.** Start the demo route (GPS only logs while a route runs) and stand **30 s still** at the outdoor side of the ISR canopy (WP1), the plaza-to-sidewalk junction (WP2), the pedestrian corners at WP3/4/6/7, WP5, the CIF path turn (WP8) and the CIF east door (WP9). At each corner, pace the distance from the curb to the OSM node and write it down. Mark tree-canopy stretches for F1. | Aarav walks, Aritro logs | For each stop, the "stop" script (§1.4) prints the offset to the JSON coordinate. Offset > 8 m on WP1/2/8/9 → Aritro edits `route_isr_cif.json` and reruns A1 + A5. Curb > 10 m from the node → that crossing releases by heading or after 25 s of moving, not at the curb (note it for F2). |
+| W1 | **Survey walk, sighted.** Start route to CIF (GPS only logs while a route runs) and stand **30 s still** at the outdoor side of the ISR canopy (WP1), the plaza-to-sidewalk junction (WP2), the pedestrian corners at WP3/4/6/7, WP5, the CIF path turn (WP8) and the CIF east door (WP9). At each corner, pace the distance from the curb to the OSM node and write it down. Mark tree-canopy stretches for F1. | Aarav walks, Aritro logs | For each stop, the "stop" script (§1.4) prints the offset to the JSON coordinate. Offset > 8 m on WP1/2/8/9 → Aritro edits `route_isr_cif.json` and reruns A1 + A5. Curb > 10 m from the node → that crossing releases by heading or after 25 s of moving, not at the curb (note it for F2). |
 | W2 | **Reference walk, sighted, app running.** Normal pace, no injected faults; film it with the second phone. Includes D9 (auto-recenter), D12, D13, D14. | Aarav walks, Aritro films, Sagar spots | D12 pass criteria |
 | W3 | **Stress walk.** The same route with the scripted faults F1, F2, F3, F6, F7, F8 (one segment), F9 (one segment), F12 (at WP5). Run it ≥ 30 min unplugged in the sun, which doubles as F5. | All three | §3 criteria; the route still completes |
 | W4 | **Blindfolded rehearsal** after a full §4 go/no-go. Same protocol as the demo. | Aarav walks, Sagar spots, Aritro films | Arrives with ≤ 2 spotter "Stop" interventions and 0 aborts |
@@ -382,7 +382,7 @@ goes on the bug list with its log file name and video timestamp.
 - **Steps and expected results.**
   - (a) Haptics card → **Speech test**. The scene line is cut at a word boundary by "Door ahead, one
     meter.", then the scene line replays from its start **once**.
-  - (b) Start the demo route and make a head-height cue during the intro. "Head height." cuts in
+  - (b) Start route to CIF and make a head-height cue during the intro. "Head height." cuts in
     and the intro replays once. A second cut during that replay drops the intro (max 1 replay).
   - (c) Press **Repeat** mid-line. The last line restarts at once, followed by " Next, \<place\>, in
     N meters.".
@@ -402,19 +402,19 @@ goes on the bug list with its log file name and video timestamp.
 - **Prerequisite.** `ELEVENLABS_API_KEY` must be in `Secrets.plist` **before** `make run`, because it
   ships inside the app.
 - **Steps.**
-  1. On Wi-Fi: Start the demo route, wait 60 s (it prefetches 25 lines, 3 at a time), then Stop.
+  1. On Wi-Fi: Start route to CIF, wait 60 s (it prefetches 30 lines, 3 at a time), then Stop.
   2. Turn on airplane mode (then turn Bluetooth back on).
-  3. Start the demo route and press Next 9× to hear every waypoint line. Press Repeat once. Make a
+  3. Start route to CIF and press Next 9× to hear every waypoint line. Press Repeat once. Make a
      head-height cue.
   4. Turn airplane mode off, switch to cellular only with one signal bar if you can find one, and
      press Repeat 3×.
-- **Expect.** All 25 prefetched lines play in the ElevenLabs voice (pill "ElevenLabs"). The Repeat
+- **Expect.** All 30 prefetched lines play in the ElevenLabs voice (pill "ElevenLabs"). The Repeat
   text (runtime-built) uses the system voice. "Head height." never waits.
 - **Pass.**
-  - **25/25** prefetched lines are ElevenLabs offline.
+  - **30/30** prefetched lines are ElevenLabs offline.
   - Offline, no line starts more than 0.5 s after its trigger.
   - Weak cellular: Repeat starts ≤ 3.0 s after the press (2.5 s timeout, then system voice).
-  - ≥ 25 files in `Library/Caches/elevenlabs` (`devicectl … info files --subdirectory
+  - ≥ 30 files in `Library/Caches/elevenlabs` (`devicectl … info files --subdirectory
     Library/Caches/elevenlabs`).
 - **Log.** Which voice played isn't logged; use the screen recording of the voice pill.
 
@@ -423,7 +423,7 @@ goes on the bug list with its log file name and video timestamp.
   so the click should come from the door. (At the door itself the bearing is meaningless.)
 - **Prerequisites.** AirPods Pro in, system Spatial Audio and Head Tracking **off**.
 - **Steps.**
-  1. Start the demo route. The pills should show "Beacon N%" and "Head tracked".
+  1. Start route to CIF. The pills should show "Beacon N%" and "Head tracked".
   2. Turn body and cane until the click goes silent.
   3. Press **Recenter** → "Recentered.".
   4. With the body still, turn the head 60° left, then 60° right.
@@ -542,7 +542,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 ### D13 Live Activity: bench + W2 · Aritro
 - **Steps.**
   1. Settings → OpenCane → Live Activities on.
-  2. Start the demo route and lock the phone for 20 s (LiDAR stops; accept that for this test).
+  2. Start route to CIF and lock the phone for 20 s (LiDAR stops; accept that for this test).
   3. Unlock, go to the Home Screen for 10 s and look at the Dynamic Island.
   4. On W2, lock twice about 20 m apart, and once after WP2.
   5. On arrival, watch the lock screen. Also test Stop route.
@@ -653,7 +653,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
      toggles, so redo D1's settings afterwards.
   2. `make run`, trust the developer if asked, and launch.
   3. At launch: the Camera prompt, then Location. Choose **While Using** and keep **Precise on**.
-  4. First "Start demo route": the Motion & Fitness prompt and the Health sheet.
+  4. First "Start route to CIF": the Motion & Fitness prompt and the Health sheet.
   5. On the watch: open OpenCane → Health prompt.
   6. Kill the app and relaunch.
   7. Denial drill: deny Motion once. Then turn Location off for OpenCane, type a destination and
@@ -808,7 +808,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
   - **No route is running.**
   - The old Live Activity may stay on the lock screen; swipe it away.
   - Guided Access has to be armed again. The watch workout keeps running.
-- **Recovery drill.** Start demo route, then press **Next** once for each waypoint already passed.
+- **Recovery drill.** Start route to CIF, then press **Next** once for each waypoint already passed.
   Walker stands still. Lines older than 12 s drop out of the queue; press Repeat once it's quiet.
 
   | Last waypoint passed | 2 Illinois sw | 3 Goodwin | 4 Green | 5 mid | 6 Springfield | 7 Mathews | 8 CIF path |
@@ -878,14 +878,14 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 | −60 | Sagar | Clamp: torque, no contact with any button, LiDAR window wiped, sun shade on. Power bank ≥ 80 %, cable can't snag. | Knock test: 0 button presses |
 | −55 | Aarav | AirPods ≥ 60 %: Transparency, Spatial Audio off, Head Tracking off. Watch ≥ 50 %, Wrist Detection on. | — |
 | −50 | Aritro | Focus silencing calls; Low Power off; Bluetooth + Wi-Fi on; media volume ≥ 75 %; Live Activities on; Location Precise on; Auto-Brightness off, brightness low | — |
-| −45 | Aritro | Warm the voice cache: Start demo route indoors on Wi-Fi, wait 60 s, Stop | Voice pill "ElevenLabs" on the intro |
+| −45 | Aritro | Warm the voice cache: Start route to CIF indoors on Wi-Fi, wait 60 s, Stop | Voice pill "ElevenLabs" on the intro |
 | −40 | Sagar + Aarav | Bench: 4 test haptics named blind through the grip; wall at 1 m; hand at the left edge; board overhead | 4/4; tiles 0.8–1.2 m; Left tiles; head hit + "Head height." (G3, G4) |
 | −35 | Aarav | AirPods in; open OpenCane on the watch | "\<name\> connected."; Watch card "Reachable"; Cross tap felt (G6) |
-| −30 | All | Out onto the plaza ≥ 40 m from the canopy. Start demo route, Recenter, body and head checks, watch Repeat. Then Stop. Phone stays in shade. | G5, G7 pass |
+| −30 | All | Out onto the plaza ≥ 40 m from the canopy. Start route to CIF, Recenter, body and head checks, watch Repeat. Then Stop. Phone stays in shade. | G5, G7 pass |
 | −25 | Aritro | Stand at the canopy (WP1, outdoor side) | GPS ≤ ±15 m for 30 s (G2). Still above 20 m at −15 → no-go |
 | −20 | Sagar | Spotter brief: positions, "Stop" / "Abort", crossing protocol, abort list. Kill-word drill 3×. | Walker frozen within 1 step, 3/3 |
 | −15 | Aritro | Read G1–G11 aloud; record GO / NO-GO with the time | NO-GO → sighted demo or backup video |
-| −10 | Aritro | Second phone starts filming (clap to sync). Optional screen recording on the OpenCane phone. **Start demo route** (the trip timer starts now). Arm Guided Access. | Intro plays; no channel warning follows (all channels up) |
+| −10 | Aritro | Second phone starts filming (clap to sync). Optional screen recording on the OpenCane phone. **Start route to CIF** (the trip timer starts now). Arm Guided Access. | Intro plays; no channel warning follows (all channels up) |
 | −5 | Aarav + Sagar | Mask on, spotter in position, walker says "ready". Stand still until the intro ends. | — |
 | 0 | All | Walk on the spotter's "Go" | Checkpoints: WP2 ~2 min · WP3 ~5 · WP4 ~9 (+signal) · WP6 ~15 (+signal) · WP7 ~19 · WP8 ~22 · arrival ~24 (20–30) |
 | +1 after arrival | Aritro | Stop filming, exit Guided Access, pull the log, run the fence script | Arrival summary heard; log saved |
@@ -894,7 +894,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 
 | Symptom | Action |
 |---|---|
-| App crash or kill | Relaunch → Start demo route → Next × (last waypoint passed; F12 table) → re-arm Guided Access. More than 45 s → abort. |
+| App crash or kill | Relaunch → Start route to CIF → Next × (last waypoint passed; F12 table) → re-arm Guided Access. More than 45 s → abort. |
 | AirPods die | Carry on: speech comes from the cane speaker and there's no beacon. The spotter decides. |
 | Watch not reachable | Raise the wrist or open the app. Not a reason to stop. |
 | "GPS weak" for more than 60 s | Abort the solo walk; sighted guide to the next waypoint. |

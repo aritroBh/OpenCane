@@ -87,7 +87,7 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
 
     /// Show the location prompt now (app launch, while a sighted helper is around) instead of
     /// stacking it with the Motion and HealthKit prompts at route start.
-    /// True when the user refused (or a profile restricts) location for CaneKit. Read straight
+    /// True when the user refused (or a profile restricts) location for OpenCane. Read straight
     /// from CoreLocation, so it is right on the very first route (review: the `denied` flag is only
     /// set by a live update, which never comes when denied).
     var authorizationDenied: Bool {

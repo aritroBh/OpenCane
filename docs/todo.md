@@ -132,10 +132,10 @@ inset re-check after reinstall.
 - Hands-free — `HandsFreeIntents.swift`, `QuestionPrompt` / `StatusSummary` + tests,
   `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
   `SceneDescriber` ask path, `describe_result` question field (merged).
-- Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). 359 Logic tests green, 10/10 UITests green, visual tour green.
+- Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). The current checkout has 366 Logic test annotations; upstream's original 359-test verification remains historical until rerun on Swift 6/Xcode 27.
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
-  stale 8/12 s timeouts and 243-test count fixed).
+  stale 8/12 s timeouts and stale test-count references fixed; the current target has 366 `@Test` annotations).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
@@ -159,12 +159,15 @@ obstacle detection; "Obstacle detection is back" was spoken before it was true; 
 setting persisted across launches). **Every one below is in a feature that is OFF by default**, so
 none blocks the demo — but they are real, and several need the phone to judge.
 
-- [x] **Camera-transition route-start interlock (Step 22).** `beginRoute` now waits for the
+- [x] **Camera-transition route-start interlock (Step 25).** `beginRoute` now waits for the
       serialized two-camera teardown, then requires three consecutive same-frame reports with
       `.normal` tracking, valid scene depth and the existing sweep trust bit. `DepthReadiness`
       resets on interruption/pause/resume/reconfiguration and times out after 5 s; queued starts
-      resume automatically when ready and fail loudly otherwise. The intentional no-LiDAR and
-      camera-denied degraded paths still guide with an explicit obstacle-warning notice.
+      resume automatically when ready and fail loudly otherwise. The adapter drains the old AR
+      delegate queue at every reconfiguration, publishes every frame in 60 Hz mode, rejects
+      newest-only stream gaps in pure `DepthFrameContinuity`, and exposes an observable **Cancel
+      route start** action. The intentional no-LiDAR and camera-denied degraded paths still guide
+      with an explicit obstacle-warning notice.
 - [ ] **The microphone route guard checks once, synchronously.** `setMicrophoneEnabled` compares the
       output route immediately after `setActive(true)`, but iOS settles the route ~0.5 s later — so
       an AirPods flip to HFP would pass the check. Subscribe to route-change notifications for the
@@ -453,7 +456,7 @@ for 60 s so a weak network can never stall a cue.
 - [x] CourseSmoother veer (15 m); corner-fence reset; reset after each veer cue
 - [x] Muse full-app review fixes (H1–H3, M1–M8, L2/L5/L6)
 - [x] Round-4 and round-5 adversarial reviews (28 + 22 findings) fixed; nav harness 0 false veers / 72 walks
-- [x] Logic tests (146 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
+- [x] Logic tests (historical 146 green after Step 12), simulator build, 7 XCUITests + tour, `make e2e` (clean, missed_fence, gps_jitter, wrong_turn)
 - [x] Street View mock of ISR → CIF: FrameReplay, `make uitest-streetview`, `make e2e SCENARIO=streetview`, vision_probe
 - [x] graphify knowledge graph (`graphify-out/`, `graphify query`)
 - [x] docs/stress_test_plan.md, docs/README.md, hardware/mount (phone-to-cane mount for Sagar)
@@ -466,7 +469,7 @@ for 60 s so a weak network can never stall a cue.
 - [x] Street View e2e: hazard watch on, "Where am I" at start + every waypoint, ≥ 8 of 10 described
 - [x] `SceneVocabulary`: plain pedestrian nouns instead of Vision taxonomy words (5 tests)
 - [x] `sign_probe.swift`: measured sign range; text floor 1/128 (7.5 cm letters ≈ 7 m); STOP dropped, PUSH BUTTON added
-- [x] "CaneKit ready." no longer spoken after "Camera access is off"
+- [x] "OpenCane ready." no longer spoken after "Camera access is off"
 - [x] On-device model gate (`isFaithful`: names a detected thing, no invented numbers), OCR-junk filter, new prompt
 - [x] One-word sign phrases must be close (`shortPhraseMinHeight` 1/80); people / ice / plants in the vocabulary
 - [x] Engineering bar written into AGENTS.md + CLAUDE.md; hardware/ handed to Sagar
@@ -483,7 +486,7 @@ for 60 s so a weak network can never stall a cue.
 - [x] `LiveActivityController`: added `immediate: Bool = false` dismissal policy; `start()` and `AppModel.endRouteQuietly()` use `immediate: true` to prevent stacked lock screen activities
 - [x] `WatchModel.updateKeepAlive`: guarded with `!text.hasPrefix("No route")` to prevent false workout starts on idle status messages
 - [x] Dual camera + LiDAR depth architecture audit: verified hardware capabilities on iPhone 17 Pro Max (12 multi-cam sets with front + rear LiDAR depth at 320x240) and ARKit single-camera constraint
-- [x] Verified 348/348 unit tests, `make sim` build, 10/10 UITests + visual tour, and clean GPS e2e replay (100% pass, 9/9 waypoints)
+- [x] Historical verification: 348/348 unit tests, `make sim` build, 10/10 UITests + visual tour, and clean GPS e2e replay (100% pass, 9/9 waypoints)
 - [x] Device install and verification on connected iPhone 17 Pro Max
 - **test on device:** see CHANGELOG Step 20
 
@@ -493,11 +496,11 @@ for 60 s so a weak network can never stall a cue.
 - [x] Preserved pure value semantics on `LaneGridView(report:)` and hoisted `laneNames` static array
 - [x] Verified zero concurrency regressions under Swift 6 strict concurrency (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`)
 - [x] Muse adversarial review passed, adopting Muse's recommendation for leaf container over environment fallback
-- [x] Verified 348/348 Logic tests (`make test`), clean simulator build (`make sim`), 10/10 UITests (`make uitest`), and e2e replay
+- [x] Historical verification: 348/348 Logic tests (`make test`), clean simulator build (`make sim`), 10/10 UITests (`make uitest`), and e2e replay
 - **test on device:** see CHANGELOG Step 21
 
 ## Step 22 — Rename primary route action to "Start route to CIF" (Sat Sep 12)
-- [x] Renamed GuideCard button from "Start demo route" to "Start route to CIF"
+- [x] Renamed GuideCard button from the historical "Start demo route" to "Start route to CIF"
 - [x] Added "Start route to CIF in OpenCane" to Siri App Shortcuts in AppIntents
 - [x] Synchronized test contracts across `AGENTS.md` (Rule 9), `docs/CODE_REFERENCE.md`, `docs/design.md`
 - [x] Updated `CaneKitUITests` and `CaneKitVisualTour` and verified all 10 tests pass

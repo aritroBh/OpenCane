@@ -1,13 +1,17 @@
-# Team brief: OpenCane / CaneKit, night before the demo (Fri 2026-09-11)
+# Team brief: OpenCane / CaneKit, merged safety build (Sat 2026-09-12)
 
 The short version for Sagar and Aarav. The full picture is in
 [`TEAM_HANDOFF.md`](TEAM_HANDOFF.md); start with its "Start here (5 minutes)" section.
 
-## Status right now (Fri 2026-09-11, ~15:30 CT) — read this first
+## Status right now (Sat 2026-09-12) — read this first
 
-- **Main branch is tested and pushed.** 243 logic tests pass; the app builds, installs and runs on
-  Aritro's iPhone 17 Pro Max (iOS 27).
-- **Proven on the real phone (desk test):**
+- **Main contains Steps 0–25**, including the camera-transition depth interlock and the merged
+  conversational voice assistant / Action Button work. The current checkout has **366 Logic test
+  annotations**; run them with Swift 6/Xcode 27.
+- **The local review environment cannot rerun the full gates:** its Xcode 15.1 / Swift 5.9.2 is
+  older than the package's Swift tools 6.0, and XcodeGen/CoreSimulator/Muse/Antigravity are not
+  installed. Do not describe the historical green runs below as current verification.
+- **Historical physical-phone desk test (before this merge):**
   - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
     (Apple Vision + Apple's on-device model; no key or network needed);
   - depth at 30 reports/s, heat nominal.
@@ -15,19 +19,15 @@ The short version for Sagar and Aarav. The full picture is in
   - false "Hole ahead" while hand-held (ground hazards now need the mount's tilt);
   - a 10 Hz timing bug;
   - "Where am I" mixing two moments.
-- **In progress on branches (not merged yet; merged to main only after tests + reviews pass):**
-  - `feat/voice-nav-search`: Siri voice control ("Hey Siri, take me to Grainger in OpenCane",
-    "where am I", "repeat", "next", "stop"), a "Navigate to CIF from here" button, better
-    destination search (campus place list + nearest result), a trip-log fix;
-  - `feat/live-view-gpu`: smooth live camera view;
-  - `feat/fm-image-describe`: "Where am I" from the image with Apple's model (iOS 27), off by default;
-  - `experiment/gemma-cactus`: Gemma 4 E2B on-device via Cactus — experiment only.
+- **Merged current features:** Siri/Action Button voice control, campus route search, live camera
+  view, on-device scene description, and the depth readiness interlock. Experimental Gemma work
+  remains outside the shipped targets.
 - **The live checklist is `docs/todo.md` → "TONIGHT".** Every item is ticked only after it was
   verified.
 
 ## Setup checklist for tonight (do these in order)
 
-1. **Pull:** `git pull`, then `cd ios && make test` (243 tests).
+1. **Pull:** `git pull`, then `cd ios && make test` (366 Logic tests, Swift 6/Xcode 27).
 2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
    `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
    `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
@@ -51,9 +51,10 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## State of things
 
-- The app is done and tested on the Mac and simulator: 146 logic tests, UI tests, and replays of
-  the ISR → CIF route, including missed turns, noisy GPS and wrong turns.
-- **Nothing has run on the real phone yet.** That is tonight's job;
+- The current source has 366 Logic tests plus the UI tests and replays described below. Historical
+  simulator/device results remain useful evidence but must be rerun after this merge with Xcode 27.
+- **The Step 25 interlock has not been device-validated in this checkout yet.** That is the next
+  safety task;
   [`stress_test_plan.md`](stress_test_plan.md) has the checklist and the schedule.
 - Until the phone tests pass, the blindfolded walk is a no-go. A sighted demo is always the fallback.
 
