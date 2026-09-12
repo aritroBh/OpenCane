@@ -1,5 +1,7 @@
 # hardware/mount_screwless/: the no-hardware phone mount
 
+> **At a printer? The print list at the top of [`PRINTING.md`](PRINTING.md) is the one page you need.**
+
 **Sagar owns this folder.** It is an alternative to [`../mount/`](../mount/), not a
 replacement — pick whichever one is fitted on the day and say so in `CHANGELOG.md`.
 
