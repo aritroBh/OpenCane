@@ -30,21 +30,30 @@
 .PARAMETER Part
     Render one part instead of all of them.
     collar | ring | arm | cradle | coupons | socket | lock
-    bore | thread | dovetail                  - one coupon ROW at a time, so a
-                                                fit test is a 20-minute print
-                                                instead of a 3-hour plate
+    coupons_bore | coupons_thread | coupons_dovetail   - one coupon ROW at a
+                                                time (the names slice_gcode.ps1 asks for)
+    coupons_next                                - thread + dovetail rows, bore done
     swivel_test | ball_lower | ball_upper | ball_stem   - rolling ball tip
 
 .PARAMETER Png
     Also write a preview PNG next to each STL.
+
+.PARAMETER PoleD
+    Render the two cane-dependent parts (collar and ring) for a different
+    cane diameter without editing the .scad, and name the files for it:
+    -PoleD 28.75 writes collar_pole28.75.stl and ring_pole28.75.stl.
+    Nothing else depends on pole_d. Use it to have the collar for every
+    candidate diameter sliced and on the stick before the bore rings have
+    been read.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('all', 'collar', 'ring', 'arm', 'cradle', 'coupons', 'socket', 'lock',
-                 'bore', 'thread', 'dovetail',
+                 'coupons_bore', 'coupons_thread', 'coupons_dovetail', 'coupons_next',
                  'swivel_test', 'ball_lower', 'ball_upper', 'ball_stem')]
     [string]$Part = 'all',
-    [switch]$Png
+    [switch]$Png,
+    [double]$PoleD = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,18 +101,19 @@ $targets = @(
     @{ Name = 'arm';     Scad = $mainScad;   Def = 'part=\"arm\"'    },
     @{ Name = 'cradle';  Scad = $mainScad;   Def = 'part=\"cradle\"' },
     @{ Name = 'coupons'; Scad = $couponScad; Def = 'what=\"all\"'    },
+    # The single-row coupon plates. slice_gcode.ps1 asks for these by name
+    # (-Plate bore | thread | dovetail), so rendering only the combined
+    # 'coupons' above left the runbook's very first command with no STL.
+    @{ Name = 'coupons_bore';     Scad = $couponScad; Def = 'what=\"bore\"'     },
+    @{ Name = 'coupons_thread';   Scad = $couponScad; Def = 'what=\"thread\"'   },
+    @{ Name = 'coupons_dovetail'; Scad = $couponScad; Def = 'what=\"dovetail\"' },
+    @{ Name = 'coupons_next';     Scad = $couponScad; Def = 'what=\"next\"'     },
     # Ball-joint parts. Only needed when joint = "ball" in the .scad;
     # harmless to render either way, and cheap.
     @{ Name = 'socket';  Scad = $mainScad;   Def = 'part=\"socket\"' },
     @{ Name = 'lock';    Scad = $mainScad;   Def = 'part=\"lock\"'   },
-    # Coupon rows, individually. Printing one row answers one question in
-    # well under an hour; the full plate is 3 h 01 m and answers three.
-    # Print the row you actually need next - see PRINTING.md print order.
-    @{ Name = 'bore';     Scad = $couponScad; Def = 'what=\"bore\"'     },
-    @{ Name = 'thread';   Scad = $couponScad; Def = 'what=\"thread\"'   },
-    @{ Name = 'dovetail'; Scad = $couponScad; Def = 'what=\"dovetail\"' },
-    # Rolling ball tip. swivel_test FIRST - it is 9 cm3 and decides
-    # whether a printed swivel spins at all before any ball is printed.
+    # Rolling ball tip (hardware/cane_tip/ball_tip.scad). swivel_test FIRST -
+    # it is 9 cm3 and decides whether a printed swivel spins at all.
     @{ Name = 'swivel_test'; Scad = $tipScad; Def = 'part=\"swivel_test\"' },
     @{ Name = 'ball_lower';  Scad = $tipScad; Def = 'part=\"lower\"'       },
     @{ Name = 'ball_upper';  Scad = $tipScad; Def = 'part=\"upper\"'       },
@@ -111,9 +121,21 @@ $targets = @(
 )
 if ($Part -ne 'all') { $targets = $targets | Where-Object { $_.Name -eq $Part } }
 
+# A pole_d override only means something for the main file's parts, and the
+# arm is drawn at nominal so it never changes. Everything else gets the
+# extra -D and a file name that says which cane it is for.
+$poleTag = if ($PoleD -gt 0) { '_pole' + $PoleD.ToString([Globalization.CultureInfo]::InvariantCulture) } else { '' }
+# The inner parentheses are load-bearing: in PowerShell the comma binds
+# tighter than +, so @('-D', 'pole_d=' + $x) is THREE elements and OpenSCAD
+# prints its usage screen.
+$poleDef = if ($PoleD -gt 0) { @('-D', ('pole_d=' + $PoleD.ToString([Globalization.CultureInfo]::InvariantCulture))) } else { @() }
+# Only the collar and the ring are sized by pole_d. The cradle, the socket
+# and the lock render byte-identical for any cane, and the arm is nominal.
+function Uses-PoleD($t) { $PoleD -gt 0 -and $t.Name -in @('collar', 'ring') }
+
 $fail = 0
 foreach ($t in $targets) {
-    $stl = Join-Path $outDir "$($t.Name).stl"
+    $stl = Join-Path $outDir ("{0}{1}.stl" -f $t.Name, $(if (Uses-PoleD $t) { $poleTag } else { '' }))
     if (Test-Path $stl) { Remove-Item $stl -Force }
     Write-Host ("  {0,-9} -> {1}" -f $t.Name, (Split-Path -Leaf $stl)) -NoNewline
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -122,7 +144,7 @@ foreach ($t in $targets) {
     # binstl: OpenSCAD still defaults to ASCII STL, which is ~5x larger
     # and makes Creality Print sluggish on the threaded parts.
     $argv = @() + $backend + @('--export-format', 'binstl', '-o', $stl,
-                               '-D', $t.Def, $t.Scad)
+                               '-D', $t.Def) + $(if (Uses-PoleD $t) { $poleDef } else { @() }) + @($t.Scad)
     $out  = & $scad.Path @argv
     $code = $LASTEXITCODE
     $sw.Stop()
@@ -142,9 +164,9 @@ foreach ($t in $targets) {
     if ($Png) {
         # NOT $png - that is the -Png switch, and PowerShell vars are
         # case-insensitive, so assigning to it clobbers the parameter.
-        $pngPath = Join-Path $outDir "$($t.Name).png"
+        $pngPath = [IO.Path]::ChangeExtension($stl, '.png')
         $pargv = @() + $backend + @('-o', $pngPath, '--imgsize=900,900',
-                                    '--viewall', '--autocenter', '-D', $t.Def, $t.Scad)
+                                    '--viewall', '--autocenter', '-D', $t.Def) + $(if (Uses-PoleD $t) { $poleDef } else { @() }) + @($t.Scad)
         & $scad.Path @pargv | Out-Null
     }
 }

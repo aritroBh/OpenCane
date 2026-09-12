@@ -2,6 +2,77 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 25 — The arm went through the phone: the screwless mount simulated, redesigned, and re-sliced (Sat Sep 12, evening)
+
+Windows-side hardware pass over `hardware/mount_screwless/`, prompted by a printed ring that
+would not go fully down. Done in parallel with Step 21 on a different machine and merged onto it
+afterwards: Step 21's measured `pole_d`, its polar `thread_profile` (the chord version printed a
+0.74 mm square tooth whatever the parameters said), `thr_sink`, `pawl_catch_h` and the four-nut
+thread coupon are kept; its `block_y` / `arm_tip_t` / `arm_boss` / `dt_stand` / `port_w` are
+superseded by the socket-below-the-phone layout and the open floor below, which close the four
+items Step 21 left as "still open and blocking" (numbers 1-3; number 4, the closed bore, stands). Instead of trusting the assembly preview, every pair of parts that
+must not touch was **intersected** in OpenSCAD and measured, the ring was driven through its
+travel in the model, and each printable was checked for shells and overhangs in its print
+orientation. The harness is in the repo: `hardware/mount_screwless/verify.scad` run by
+`scripts/verify_mount.ps1` (30 checks; measuring done by `scripts/stl_tools.js`). All green at
+the end of the pass; the design has still not been printed as a set.
+
+**What was wrong, in order of how badly it would have gone at the printer:**
+
+- **The arm passed through the phone - 6.9 cm³ of overlap - and through the cradle's block
+  (2.2 cm³ — Step 21 measured 4.7 / 0.95 cm³ on its own variant).** Forced by geometry, not a typo: the camera must face away from the cane, so the
+  cradle's back plate is on the far side of the phone from the arm, and a fin landing at
+  mid-phone height has to go through the phone. The preview showed nothing because overlapping
+  colours look like parts. Fix: the cradle's dovetail socket moved to below the phone's bottom
+  edge (`sock_y`), the arm runs out and up to a pad under it, and the fin lands on the pad's
+  foot. Same layout the screwed mount uses.
+- **The cradle's top latch was drawn straight through the phone.** Its riser was inside the
+  phone pocket, so the phone cut left the hook as a **loose island 8.75 mm off the bed**
+  (0.275 cm³, its own shell in the STL), and its leaf sat on the camera plateau (0.574 cm³).
+  Replaced by two sprung top-corner caps on rails beside the phone, behind the button line;
+  the phone loads from the front. Floor opened between the cups for USB-C.
+- **The cradle slid off the arm under its own weight**: gravity runs 5° off the dovetail's
+  slide and the socket was a through-slot with no stop. Stops at the lower end of both sockets
+  now. The collar joint is locked by the ring (socket open at the top, arm drops in with the
+  ring off, the ring's rim reaches 1.5 mm past the tenon); the far joint has a leaf pawl that
+  lies on the fin's bed face - the only place a printed spring in a pocket comes out solid.
+- **The ring could not reach the shoulder.** The collar's cone started at the thread's major
+  radius, 0.75 mm outside the ring's thread crests, so the ring's own thread hit the cone's base
+  with 3.8 mm to go: 0.165 cm³ of overlap at every height from 6 mm up, found by lifting the ring
+  in the model. The cone now starts 0.10 mm inside the crest radius (`cone_relief`), taper 1.6
+  (finger tips 1.75 mm), and the sweep is empty until the last 7.5 mm, where the squeeze (now
+  0.6, was 0.8 - about 1 N·m at the ring) builds to 0.83 cm³ at the shoulder. Thread slack and radial
+  clearance are cut to nut 3 of Step 21's four-nut coupon, [0.45, 0.45] (the bench's [0.35, 0.25]
+  jammed; 0.125 mm per flank is under one line of over-extrusion); flank 60° (was 69°, every lower
+  flank in air).
+- **Every headless slice had support OFF** (`enable_support = 0` in the footer; the GUI plate had
+  it on by hand). The cradle's plate would have printed in mid-air. `slice_gcode.ps1` turns it on
+  for the cradle, bridges the socket roof rather than filling the socket with support (Orca's
+  default `max_bridge_length` 10 did fill it - checked in the gcode), and refuses a cradle file
+  without support.
+- **Dovetail flanks were 67° overhangs** wherever the width is the build axis (the arm's tenons,
+  the cradle's socket). Now 45° (24 / 14 / 5); the dovetail coupon's tenons lie on their side
+  like the arm's so `dt_clear` is read on the real geometry.
+- `build_stl.ps1` never rendered the coupon rows under the names `slice_gcode.ps1` asks for
+  (`coupons_bore.stl`; Step 21 added them as `bore.stl`, which the slicer still could not find), so
+  the runbook's first command failed on a fresh clone. Fixed; `coupons_next` and the ball-tip parts
+  are in the same list. `-PoleD` added to both scripts for the day a different shaft turns up.
+
+**Measured, not asserted:** wide camera axis −5.00°; lower shaft 47.5° off it (keep-out 45°),
+5.4° outside the LiDAR cone; closest printed point to the shaft 55.5 mm (assert and vertex
+scan agree); thread handedness confirmed (turned against the helix: 0.16 cm³ of tooth clash);
+flank slack measured at 0.25 per side; ring lock: arm free at 0.4 mm, stopped at 1 mm.
+
+**Still unknown:** `thr_clear`/`thr_axial` (four-nut coupon, not yet printed from this geometry),
+`dt_clear`, `plateau_h`, and everything a printer does to a number. **Still open from Step 21:** the
+collar is a closed 71 mm bore, so on a real cane it goes on over the tip or the handle. On the
+broom-handle prototype that is a non-issue; on a cane it is a split collar or a removable tip,
+and neither is designed.
+
+test on the bench: run `.\scripts\verify_mount.ps1` (all green); print the bore rings, then the
+thread set - ring 1 must run the stub's full length by hand; then collar + ring: with no cane
+the ring reaches the shoulder, with the cane it stops ~3 mm short.
+
 ## Step 22 — Three icon-only root tabs (Sat Sep 12)
 
 The phone UI was one long scroll. A sighted helper (and the XCUITests that scroll it) had to
