@@ -7,9 +7,10 @@ defaults, `NavigationEngine`, `SpeechQueue`, `BeaconEngine` and `route_isr_cif.j
 and another doc disagree, the code is right; §0 lists the disagreements. If a number in the code
 changes, update this file.
 
-**People.** **Aritro** does the software: builds, automation, logs, phone setup, filming. **Sagar**
-does the hardware: clamp, mount angle, cane, power bank, sun shade, heat. **Aarav** is the walker and
-wears the watch and AirPods. For the blindfolded walks, Sagar spots and Aritro films.
+**People.** **Aritro**, **Aarav** and **Tejas** do the software: builds, automation, logs, phone
+setup, filming. **Sagar** and **Tommy** do the hardware: clamp, mount angle, cane, power bank, sun
+shade, heat. On the walks **Aarav** is the walker and wears the watch and AirPods. For the
+blindfolded walks, Sagar spots and Aritro films.
 
 **Test IDs.** A = automated · B = bench (indoors, phone plugged in) · W = outdoor walk ·
 D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).

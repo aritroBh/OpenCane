@@ -55,9 +55,13 @@ The README credited the team by a role split that no longer matched who is doing
 Numbered 26 rather than 22 because Steps 23–25 (voice assistant, Action Button audio isolation,
 camera interlock hardening) landed upstream while this was being written.
 
-Nothing else changed — no code, no geometry, no parameter. `docs/TEAM_HANDOFF.md`,
-`docs/TEAM_BRIEF.md` and `docs/todo.md` still carry the old role split and are left for a
-separate sweep rather than folded in here, so this diff stays exactly what it claims to be.
+The same split is now in the other three places that named the team: the second "Who does what"
+table in `hardware/README.md`, the **People** paragraph in `docs/stress_test_plan.md`, and the
+per-person table in `docs/TEAM_HANDOFF.md`. The walk-day safety roles are deliberately left alone —
+Aarav still walks, Sagar still spots, Aritro still films — because those are physical assignments,
+not team membership, and rewriting them from a credits change would be inventing facts.
+
+Nothing else changed — no code, no geometry, no parameter.
 
 test on device: nothing. Documentation only.
 
