@@ -2,6 +2,95 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 37 — Talk floor: a direction cut by a warning resumes from its clause; a pause between the two (Sat Sep 12)
+
+**Why:** the owner said "when the app is giving directions and it's giving notifications on objects
+near you, it interrupts each other". Two trip logs show the pattern.
+- **2026-09-12T22-20-53Z:** 5 of 58 dispatched lines were restarts, and 9 line starts were < 1 s apart.
+- **22-27-00Z** (a friend's 37-minute handheld walk): 45 "Head height." lines, and 4 restarts,
+  including the whole route intro played twice.
+
+Every restart was a `.nav` line cut by `.safety` "Head height." and replayed from its first word.
+
+**Design decision:**
+- **First plan rejected (Muse review):** hold "Head height." behind a direction, with a buzz and a
+  chirp now and the words later. A walker reaches a 1.5 m overhang in about 1.5 s, before the words.
+- **Owner chose "Cut in, then resume":** the warning stays instant, and the direction continues from
+  the clause it was cut in.
+- **Owner chose "Leave as is" for walls:** they still get "Head height."
+
+**What changed**
+- New CaneKitLogic `SpeechResume`:
+  - Clause starts are `. ! ? , ; :` plus a space, but not after "St." / "Dr." / "U.S.".
+  - `resumeOffset` handles a word-boundary stop that finishes the last word, and snaps to a
+    character boundary.
+  - `nextResume`: at most 3 resumes, and the resume point never moves backwards.
+  - mp3 progress is mapped proportionally and backed off 8 UTF-16 units. The seek starts 0.25 s early.
+  - `gapSeconds`: 0.35 s between different bands. `.safety` never waits, and the app passes the
+    safety band in.
+- `SpeechQueue`:
+  - Progress comes from `willSpeakRangeOfSpeechString` (system voice) or `currentTime / duration`
+    (mp3).
+  - A resumed line speaks its remainder (system voice) or seeks the whole cached clip. The text
+    stays whole as coalescing, cache and Repeat key.
+  - A call / Siri or dictation restarts from the top, since a fragment after seconds has no context.
+  - The TTL is extended on the first cut only.
+  - `inGap` pause state, with its own generation: `.safety`, or a same-band line that ties the head,
+    ends it. `sayAgain` ranks against the queue head. `stopAll`, an interruption or a voice hold
+    clears it. `isSpeaking` stays true, so the beacon stays ducked.
+- Trip log:
+  - `speech_dispatch` gains `resume_from`.
+  - New `speech_end {priority}` for natural line ends.
+- `cue_audit.py`: new `replays_resumed_mid_line` / `replays_from_line_start`, and
+  `cross_band_pause_under_0_3s` measured from `speech_end` to the next start.
+- Docs:
+  - AGENTS rule 8, design.md §5.1 and CODE_REFERENCE are updated.
+  - todo: talk floor inserted as 37, and the later cue v2 steps are renumbered 38–45. The "Step 40"
+    references to torso taps in code are now "Step 41".
+
+**Review** (Muse, Antigravity, 4-lens adversarial workflow with a verifier per finding). Every
+finding was checked against the code; fixed unless noted.
+- **Muse** (no blocking findings):
+  - The front camera trusted a one-shot preview angle (camera commit).
+  - The TTL was re-extended on every resume.
+  - mp3 timing is uneven, so progress is now backed off.
+  - `safetyBand` was a copied literal.
+  - Stale `maxReplays` comments.
+  - `stopAll` left resume state behind.
+  - Accepted: explicit Repeat skips the pause.
+- **Antigravity:**
+  - A re-cut within `clipLead` of an mp3 resume was dropped as "no progress". This led to
+    `nextResume`.
+  - Progress inside an emoji or combining accent emptied the remainder and dropped the line. A
+    script confirmed it on the old code at offsets 4 and 14.
+  - `sayAgain` during a pause could jump a higher queued line.
+  - A same-band line waited out a pause meant for another band.
+  - A stray end callback could cut the pause short (the pause now bumps the generation).
+  - The front camera angle.
+- **Workflow:**
+  - A resumed line cut before its first new word was dropped along with unheard clauses (same fix
+    as `nextResume`).
+  - The pause metric compared start times and could never see a missing pause (`speech_end` added).
+  - Low severity: abbreviations split clauses; a word-boundary cut on the last word replayed a
+    clause; a finished mp3 whose callback was still in flight was re-queued from the top; call and
+    dictation resumes lost context; a misleading audit label; `isPortrait` was unused.
+- **Refuted:** the front preview-angle claim (already fixed in the tree).
+- **Deferred to todo:**
+  - A system-voice line resumed from a cached mp3 maps an exact word offset to a proportional time.
+  - The pre-existing interruption resume retry is not cancelled by a new `.began`.
+
+**Verification:**
+- `make test` 457/457. `make sim` green. `make e2e` PASS (266 s).
+- `make uitest` 11 run, 10 passed, 1 skipped (needs a key), 0 failures.
+- `cue_audit.py --selftest` ok.
+- Installed on the phone 2026-09-12 evening.
+
+test on device: start the route and let the intro play; point the phone at a wall at head height 1 m
+away mid-sentence. You hear "Head height.", a short pause, then the intro CONTINUES from the phrase it
+was on (not "Route started." again). Repeat on 2–3 later directions. Plug in, `make audit`:
+`replays_resumed_mid_line` > 0, `replays_from_line_start` only for cuts in a first clause, and
+`cross_band_pause_under_0_3s` = 0.
+
 ## Fix — Both cameras: the back feed was sideways again; rotation is now chosen per camera (Sat Sep 12)
 
 **Why:** the owner's screenshot showed the back picture rotated 90° while the front inset was upright,

@@ -93,7 +93,10 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
    code may call `setCategory`.
 8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
-   never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
+   never suppressed. Interrupted lines are re-queued and resume from the clause they were cut in
+   (`SpeechResume`, Step 37 — never restarted from the first word after a warning); lines of different
+   priorities are separated by a 0.35 s pause that a safety line never waits for. Keep `docs/design.md §5`
+   and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
