@@ -122,6 +122,21 @@ final class SpeechQueue {
     /// Also gates `prefetch` (no point spending API quota on a voice we will not use).
     var useNaturalVoice = true
 
+    /// Lines that belong in the cache but are never urgent, appended to the end of *every*
+    /// prefetch batch. `AppModel.start()` sets it to `SpokenPhrases.warningLines`.
+    ///
+    /// Why a standing set rather than one long batch at launch: `prefetch` cancels the batch
+    /// running before it, and `speakNow` calls `prefetch([text])` for every warning that misses
+    /// the cache. One launch batch would therefore be abandoned by the first warning the walker
+    /// heard — a few seconds in, with most of its lines never synthesized — and the voice would go
+    /// on flipping for the rest of the session. Re-appending the set to every batch instead makes
+    /// each restart resume where the last stopped: `VoicePrefetch.queue` drops whatever already
+    /// reached the disk, so the remainder only shrinks and no line is paid for twice.
+    ///
+    /// Always last, so a route's own lines (waypoint 1 is needed *now*) are still requested first,
+    /// and still only `VoicePrefetch.maxConcurrent` requests are in flight.
+    @ObservationIgnored var backgroundLines: [String] = []
+
     // MARK: Private
 
     /// A line waiting in `queue`.
@@ -430,14 +445,18 @@ final class SpeechQueue {
     /// Only one prefetch runs at a time: starting a second route cancels the first. Two overlapping
     /// batches would put twice `maxConcurrentPrefetches` requests in flight and rate-limit the live
     /// cue the walker is waiting for, and the older batch is for a route nobody is walking any more.
+    /// `backgroundLines` is appended to whatever the caller passed, so a cancelled batch's
+    /// never-urgent tail is carried into the replacement instead of being dropped.
+    /// - Parameter lines: the urgent lines, in speaking order; requested before `backgroundLines`.
     func prefetch(_ lines: [String]) {
         guard let naturalVoice, useNaturalVoice else { return }
         prefetchTask?.cancel()
         // A new attempt: drop the previous complaint so the card cannot keep accusing the voice
         // after the network came back. A failure below writes a fresh one.
         voiceError = nil
+        let batch = lines + backgroundLines
         prefetchTask = Task.detached(priority: .utility) { [weak self] in
-            let failure = await naturalVoice.prefetch(lines)
+            let failure = await naturalVoice.prefetch(batch)
             // Only report; never let a prefetch failure disable the voice. The live path has its
             // own circuit breaker, and the cache may already hold the line that matters.
             guard let failure, !Task.isCancelled else { return }
