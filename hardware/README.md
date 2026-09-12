@@ -1,10 +1,8 @@
 # hardware/: phone-to-cane mount
 
-> **Printing? Start at the print list at the top of
-> [`mount_screwless/PRINTING.md`](mount_screwless/PRINTING.md).** It says which files, in what
-> order, on which filament slot, and what to check when each one comes off the bed. The G-code
-> itself is on the repo's Releases page (`mount-gcode-step25`) or regenerated in five commands
-> on a Windows machine with OpenSCAD + Creality Print.
+> **Printing? Go to [`3d_print_files/`](3d_print_files/).** The sliced G-code, the STLs, and a
+> README that says which file, in what order, on which filament slot, and what to check when each
+> one comes off the bed. Nothing to install, nothing to generate.
 
 The only new hardware in OpenCane / CaneKit is a mount. It clamps the iPhone 17 Pro Max upright to
 the 27.65 mm non-metal stick (measured by the bore rings on 2026-09-12; it is a broom handle

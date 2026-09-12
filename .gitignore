@@ -48,3 +48,10 @@ hardware/**/stl/
 # OpenSCAD preview renders
 hardware/**/*.png
 .gstack/
+
+# hardware/3d_print_files/ is the one place build output IS committed: the
+# sliced G-code and STLs for the screwless mount, so a teammate at a printer
+# needs nothing but a download. Regenerate with scripts/build_stl.ps1 and
+# scripts/slice_gcode.ps1, then copy here.
+!hardware/3d_print_files/
+!hardware/3d_print_files/**
