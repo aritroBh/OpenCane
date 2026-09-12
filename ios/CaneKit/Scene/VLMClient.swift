@@ -167,8 +167,14 @@ nonisolated enum VLMClientFactory {
         switch provider {
         case .custom:
             guard let base = Secrets.string("CUSTOM_BASE_URL"), let key = Secrets.string("CUSTOM_API_KEY") else { return nil }
+            // Muse Spark reasons before it answers, and `max_tokens` covers the thinking as well as
+            // the sentence. Left at the model's own default the phone measured 11 s and an empty
+            // reply. "low" is the documented floor ("none" is a 400) and the right depth for
+            // naming what a camera sees; `CUSTOM_REASONING_EFFORT: ""` opts a different endpoint out.
             return OpenAICompatibleClient(name: "Muse", baseURL: base, apiKey: key,
-                                          model: Secrets.string("CUSTOM_MODEL") ?? "muse-1.3")
+                                          model: Secrets.string("CUSTOM_MODEL") ?? "muse-1.3",
+                                          reasoningEffort: Secrets.string("CUSTOM_REASONING_EFFORT")
+                                              ?? VLMRequest.lowReasoningEffort)
         case .openai:
             guard let key = Secrets.string("OPENAI_API_KEY") else { return nil }
             return OpenAICompatibleClient(name: "OpenAI", baseURL: "https://api.openai.com/v1", apiKey: key,
@@ -225,6 +231,14 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
     let apiKey: String
     /// `model` field of the chat request.
     let model: String
+    /// Value for the request's top-level `reasoning_effort`, or nil to omit the field.
+    ///
+    /// nil for plain OpenAI — a non-reasoning chat model rejects the field outright. "low" for the
+    /// `custom` provider, which is Muse Spark: a reasoning model that, left to choose for itself,
+    /// thinks for longer than a walking pace allows and can spend the entire token budget doing it.
+    /// Overridable from `Secrets.plist` (`CUSTOM_REASONING_EFFORT`) so a different endpoint can opt
+    /// out without a rebuild.
+    var reasoningEffort: String? = nil
 
     /// POST `<base>/chat/completions` with the image as a base64 data-URL message part.
     func describe(jpeg: Data, prompt: String) async throws -> String {
@@ -233,7 +247,8 @@ nonisolated struct OpenAICompatibleClient: VLMClient {
         while base.hasSuffix("/") { base.removeLast() }
         if !base.hasSuffix("/chat/completions") { base += "/chat/completions" }
         guard let url = URL(string: base), url.scheme != nil else { throw VLMError.malformed("bad base URL") }
-        let body = try VLMRequest.openAICompatible(model: model, jpegBase64: jpeg.base64EncodedString(), prompt: prompt)
+        let body = try VLMRequest.openAICompatible(model: model, jpegBase64: jpeg.base64EncodedString(),
+                                                   prompt: prompt, reasoningEffort: reasoningEffort)
         let data = try await post(url, headers: ["Authorization": "Bearer \(apiKey)"], body: body)
         return try VLMResponse.openAICompatible(data)
     }

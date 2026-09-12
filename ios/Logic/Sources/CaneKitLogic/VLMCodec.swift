@@ -108,12 +108,39 @@ public enum VLMRequest {
         return try JSONEncoder().encode(body)
     }
 
+    /// Output-token budget for a *reasoning* model on the OpenAI-compatible path.
+    ///
+    /// 1024, not the 120 a one-sentence answer needs, because on this endpoint `max_tokens` caps
+    /// **reasoning plus visible output together**. Measured on the phone: Muse Spark 1.3 with
+    /// `max_tokens` 120 spent the whole budget thinking and returned `finish_reason: "length"` with
+    /// `content: null`, which the app could only read as a failure — so it waited 11 s and then
+    /// spoke the on-device template instead. The walker heard nothing the cloud model saw. 1024 is
+    /// the same figure the Anthropic path already uses for the same reason (see the file header).
+    public static let openAIMaxTokens = 1024
+
+    /// Reasoning depth asked of a reasoning model for scene description: the lowest the endpoint
+    /// allows.
+    ///
+    /// Naming what a camera sees is a direct-answer task, and Meta's own guidance is to use "low"
+    /// for those — higher effort buys nothing here and costs the one thing a blind walker cannot
+    /// spare, latency. `"none"` is documented to return HTTP 400 on Muse Spark, so "low" is the
+    /// floor, not a compromise.
+    public static let lowReasoningEffort = "low"
+
     /// OpenAI-compatible chat/completions (OpenAI itself and the `custom` provider).
-    /// Body: one user message `[text, image_url(data:image/jpeg;base64,…)]`, `max_tokens` 120,
-    /// temperature 0.2.
-    /// - Parameter model: model id sent verbatim (e.g. "muse-1.3").
-    /// Pinned by `openAIRequestUsesDataURI`.
-    public static func openAICompatible(model: String, jpegBase64: String, prompt: String = ScenePrompt.text) throws -> Data {
+    /// Body: one user message `[text, image_url(data:image/jpeg;base64,…)]`,
+    /// `max_tokens` `openAIMaxTokens`, temperature 0.2.
+    /// - Parameters:
+    ///   - model: model id sent verbatim (e.g. "muse-spark-1.3-contributor").
+    ///   - reasoningEffort: value for the top-level `reasoning_effort` field, or nil to omit it.
+    ///     Omitted by default because a plain OpenAI chat model rejects the field outright; the
+    ///     `custom` provider passes `lowReasoningEffort` because Muse Spark always reasons and, left
+    ///     to itself, reasons for longer than a walking pace allows.
+    /// Pinned by `openAIRequestUsesDataURI`, `openAIRequestBudgetsForReasoningTokens`,
+    /// `openAIRequestOmitsReasoningEffortUnlessAsked`.
+    public static func openAICompatible(model: String, jpegBase64: String,
+                                        prompt: String = ScenePrompt.text,
+                                        reasoningEffort: String? = nil) throws -> Data {
         struct Body: Encodable {
             struct ImageURL: Encodable { var url: String }
             struct Part: Encodable {
@@ -124,13 +151,17 @@ public enum VLMRequest {
             struct Message: Encodable { var role = "user"; var content: [Part] }
             var model: String
             var messages: [Message]
-            var max_tokens = 120
+            // Qualified: a nested struct cannot default a property from the enclosing scope.
+            var max_tokens = VLMRequest.openAIMaxTokens
             var temperature = 0.2
+            /// nil is encoded as absent, not null: an endpoint that does not know the field must
+            /// not see it at all.
+            var reasoning_effort: String?
         }
         let body = Body(model: model, messages: [.init(content: [
             .init(type: "text", text: prompt),
             .init(type: "image_url", image_url: .init(url: "data:image/jpeg;base64,\(jpegBase64)")),
-        ])])
+        ])], reasoning_effort: reasoningEffort)
         return try JSONEncoder().encode(body)
     }
 

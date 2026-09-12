@@ -60,6 +60,38 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     #expect((content[1]["image_url"] as! [String: Any])["url"] as? String == "data:image/jpeg;base64,BBBB")
 }
 
+/// A reasoning model's thinking must not eat the sentence.
+///
+/// Measured on the phone: with `max_tokens` 120, Muse Spark 1.3 spent the whole budget reasoning and
+/// returned `finish_reason: "length"` with `content: null`. The app could only read that as a
+/// failure, so it waited 11 s and spoke the on-device template — the walker never heard what the
+/// model saw. On this endpoint `max_tokens` caps reasoning *plus* visible output.
+@Test func openAIRequestBudgetsForReasoningTokens() throws {
+    let body = try VLMRequest.openAICompatible(model: "muse-spark-1.3-contributor", jpegBase64: "BBBB")
+    let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+    #expect(obj["max_tokens"] as? Int == VLMRequest.openAIMaxTokens)
+    // One sentence needs ~30 tokens; the rest is headroom for the private chain of thought.
+    #expect(VLMRequest.openAIMaxTokens >= 1024)
+}
+
+/// `reasoning_effort` is sent only when asked for, and asks for the shallowest depth allowed.
+///
+/// A plain (non-reasoning) chat model rejects the field outright, so it must be absent unless a
+/// caller opts in — nil has to encode as *missing*, not as null. "none" is documented to return
+/// HTTP 400 on Muse Spark, so "low" is the floor; naming what a camera sees is a direct-answer task
+/// and deeper reasoning buys only latency a walking pace cannot spare.
+@Test func openAIRequestOmitsReasoningEffortUnlessAsked() throws {
+    let plain = try JSONSerialization.jsonObject(
+        with: try VLMRequest.openAICompatible(model: "gpt-4o-mini", jpegBase64: "BBBB")) as! [String: Any]
+    #expect(plain.keys.contains("reasoning_effort") == false)
+
+    let muse = try JSONSerialization.jsonObject(
+        with: try VLMRequest.openAICompatible(model: "muse-spark-1.3-contributor", jpegBase64: "BBBB",
+                                              reasoningEffort: VLMRequest.lowReasoningEffort)) as! [String: Any]
+    #expect(muse["reasoning_effort"] as? String == "low")
+    #expect(VLMRequest.lowReasoningEffort != "none")   // documented HTTP 400 on Muse Spark
+}
+
 /// Describe via Anthropic sends image then prompt with a 1024-token cap so thinking cannot starve the answer.
 @Test func anthropicRequestShape() throws {
     let body = try VLMRequest.anthropic(model: "claude-opus-5", jpegBase64: "CCCC")
