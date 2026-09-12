@@ -131,8 +131,10 @@ public enum SpokenPhrases {
     ///
     /// `ObstacleClass.spokenName` supplies the nouns (nil-named classes — none, floor, ceiling —
     /// are never announced) and `bucketSamples` the distances, with walls cut off at
-    /// `wallMaxDistance` because `ObstacleNamer` only names a wall when it is close. Obstacle names
-    /// are on by default, so this is the set the walker hears most: it is prefetched first.
+    /// `wallMaxDistance` because `ObstacleNamer` only names a wall when it is close. Since Step 36
+    /// names are off by default and `CueRules` never lets a wall through, so the wall lines here are
+    /// prefetched but unreachable; kept so a future level that names walls needs no prefetch change
+    /// (a few kB of cache). Prefetched first because, when names are on, they are the most frequent.
     public static let obstacleNameLines: [String] = ObstacleClass.allCases.flatMap { cls -> [String] in
         guard let name = cls.spokenName else { return [] }
         let limit = cls == .wall ? wallMaxDistance : obstacleMaxDistance

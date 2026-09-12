@@ -49,6 +49,13 @@ final class HazardScanner {
     /// User toggles (persisted by AppModel).
     var signsEnabled = true
     var watchEnabled = true
+    /// Sign phrases that may be spoken (nil = all). Set by `AppModel.applyCueRules` from
+    /// `CueRules.allowedSignPhrases` (Quiet / Indoors: safety signs only); forwarded to
+    /// `SignPolicy.allowedPhrases`.
+    @ObservationIgnored var signAllowedPhrases: Set<String>? {
+        get { signPolicy.allowedPhrases }
+        set { signPolicy.allowedPhrases = newValue }
+    }
 
     /// Output: (spoken line, source, JPEG of the frame it came from).
     @ObservationIgnored var onHazard: ((String, HazardSource, Data?) -> Void)?

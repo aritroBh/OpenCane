@@ -515,18 +515,20 @@ the walk). **Not built**: the checkmark hero, "Describe where I am" and "Done" b
 
 ### 6.5 Settings and debug cards
 
-There is no Settings screen; the settings are system `Toggle`s inside cards (label + VoiceOver hint;
+The Settings tab is cards of system `Toggle`s (and, since Step 36, two segmented pickers in the Cues card) (label + VoiceOver hint;
 VoiceOver announces "switch button, on / off" for free). All persist in `UserDefaults` except "Live
 camera view", which is off at every launch.
 
 | Card | Control (visible label = VoiceOver label) | Default | Hint |
 |---|---|---|---|
+| Cues | "Cue detail" segmented Quiet / Standard / Detailed | Detailed (= today, until a mounted trip log tunes the calmer levels) | "How much OpenCane says and taps on its own. Quiet is overhangs, drop-offs, route turns and safety signs only." Change spoken once ("Quiet cues.") |
+| Cues | "Place" segmented Outdoors / Indoors | Outdoors | "Indoors shortens the head-height distance, stops naming furniture and reads only safety signs." Change spoken once ("Indoor mode.") |
 | Mount | "Phone held upright (portrait)" | on | "Turn off if the phone is clamped sideways" |
 | Mount | "Mirror left / right" | off | "Turn on if left and right warnings feel swapped" |
 | Mount | "Audio beacon while navigating" | on | "A soft click from the direction to walk, through the AirPods" |
 | Mount | "Write trip log" | on | "Saves a JSONL log of lanes, cues and location to the Files app" |
 | Haptics | "Silence haptics" | off | "The phone stops vibrating; obstacle cues go to the watch and are spoken instead" |
-| Haptics | "Speak obstacle names" | on | "Says door, wall, seat, window or table when one is straight ahead" |
+| Haptics | "Speak obstacle names" | off (Step 36) | "Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place." Walls are never named. |
 | Hazards | "Detect drop-offs" | off (until validated on the phone) | "LiDAR warns about curbs, holes and drop-offs 1.5 to 3 meters ahead" |
 | Hazards | "Read signs" | on | "Reads signs like sidewalk closed or detour, on the phone, offline" |
 | Hazards | "Hazard watch" | off (until validated on the phone) | "While walking a route, checks the path for cones, barriers and scooters every 8 seconds" |
@@ -679,6 +681,7 @@ Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
 | `buttons[…]` | "Go" | `GuideCard`, idle | empty-destination test, tour |
 | `buttons[…]` | "Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic" | `HapticsCard` (`"Test \(title.lowercased()) haptic"`) | haptics test, tour |
 | `switches[…]` | "Silence haptics" | `HapticsCard` toggle | haptics test, tour |
+| `buttons[…]` | "Standard", "Detailed", "Indoors", "Outdoors" | Settings → Cues segmented pickers (`CueLevel.title` / `CuePlace.title`, CaneKitLogic) | cue picker test (selects, then restores Detailed / Outdoors in a teardown block) |
 | `switches[…]` | "Mirror left / right" | Mount toggle | toggle test (value must change on tap) |
 | `switches[…]` | "Write trip log" | Mount toggle | labels test |
 | `otherElements[…]` | "Head row" | `LaneGridView` row label `"\(title) row"` | labels test |

@@ -356,12 +356,15 @@ goes on the bug list with its log file name and video timestamp.
 - **Log.** `cue` {cue:"head"}; `speech` "Head height." priority `safety`.
 
 ### D6 Obstacle names indoors: ISR lobby + CIF entrance · Aarav, Aritro
+- **Setup (since Step 36).** Settings → Cues: **Detailed** + **Outdoors** (the default), and turn
+  **Speak obstacle names** on (off by default now). A second pass with **Indoors** must name nothing
+  and read only `CueRules.safetySignPhrases` (no EXIT / PUSH / PULL / ENTRANCE).
 - **Steps.** Five approaches each from 4 m at walking pace, cane still, to the ISR lobby door, the CIF
   east door, a chair, a table and a window. Then 2 approaches to the door with a sweep. Then stand
   10 s at 2 m.
 - **Expect.**
   - Mesh lookups at about 4 Hz give "Two meters ahead, door" once the object is closer than
-    **3.0 m**. Walls are named only closer than **1.5 m**.
+    **3.0 m**. Walls are **never** named (Step 36: the cane trails walls).
   - A class is named again only when it changes or after moving a full metre ("One meter ahead,
     door"), and never more often than every 2.5 s.
   - A class is forgotten 2 s after it leaves the centre. The line is dropped if it waits more than
@@ -374,7 +377,7 @@ goes on the bug list with its log file name and video timestamp.
 - **Pass.**
   - The door is named in ≥ 4/5 approaches, first at ≤ 3.0 m.
   - A ~10 cm-lettered sign is read from ≥ 4 m in ≥ 3/5 approaches, and never twice within a minute.
-  - Wrong class ≤ 1/5, and never "wall ahead" with the wall more than 1.5 m away.
+  - Wrong class ≤ 1/5, and never "wall" at any distance.
   - Standing 10 s: ≤ 1 line.
   - Note whether the first approach into a new room is late (the mesh takes time to build).
 - **Log.** `speech` priority `obstacle`; the `lanes` `mesh` field; `hazard` {source: sign}.

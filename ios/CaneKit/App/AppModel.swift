@@ -189,10 +189,54 @@ final class AppModel {
         didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
     /// Speak obstacle names ("Two meters ahead, door"). Off = haptics only.
-    /// Read on every report in `handle(_:)`; not pushed anywhere.
-    var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: true) {
+    /// Read on every report in `handle(_:)`; not pushed anywhere. Even when on, `cueRules` decides
+    /// which classes may be named (Quiet / Indoors: none; Standard: doors on a route; Detailed:
+    /// all but walls).
+    /// ⚠ Default **off** since Step 36 (cue design v2 #2, the lowest-risk calming change): the first
+    /// field log suppressed 10 names in 2 minutes, and blind travellers rank furniture names lowest
+    /// because the cane finds furniture (docs/cue_design_v2.md P1/P7). A walker who turned it on
+    /// before keeps their stored `true`; a walker who never touched the switch (no stored key, so
+    /// the old default applied) now has names off — turn them on for the D6 names test and demos.
+    var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: false) {
         didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
     }
+    /// Cue verbosity level (Settings → Cues). Persisted as `CueLevel.rawValue` under `cueLevel`.
+    /// ⚠ Default `.detailed` = today's behaviour until a trip log from the MOUNTED cane tunes the
+    /// calmer levels (owner decision 2026-09-12; AGENTS.md "How we engineer" 6). A change is
+    /// applied (`applyCueRules`), spoken once at `.nav` ("Quiet cues.") and logged `cue_profile`.
+    var cueLevel: CueLevel = CueLevel(rawValue: Settings.string("cueLevel", default: CueLevel.detailed.rawValue)) ?? .detailed {
+        didSet { cueProfileChanged(levelChanged: cueLevel != oldValue, placeChanged: false) }
+    }
+    /// Outdoors / Indoors (Settings → Cues). Persisted as `CuePlace.rawValue` under `cuePlace`;
+    /// default outdoors (today). Indoors shortens the head distance to 1.2 m, names nothing and
+    /// reads only safety signs (`CueRules`).
+    var cuePlace: CuePlace = CuePlace(rawValue: Settings.string("cuePlace", default: CuePlace.outdoors.rawValue)) ?? .outdoors {
+        didSet { cueProfileChanged(levelChanged: false, placeChanged: cuePlace != oldValue) }
+    }
+    /// The rules the current level × place imply (CaneKitLogic `CueRules`, `CueProfileTests`).
+    var cueRules: CueRules { CueRules(level: cueLevel, place: cuePlace) }
+
+    /// Persist, apply, speak and log a level or place change. Called only from the two `didSet`s;
+    /// an unchanged value (a picker re-selecting its current segment) does nothing.
+    private func cueProfileChanged(levelChanged: Bool, placeChanged: Bool) {
+        guard levelChanged || placeChanged else { return }
+        Settings.set(cueLevel.rawValue, "cueLevel")
+        Settings.set(cuePlace.rawValue, "cuePlace")
+        applyCueRules()
+        let line = levelChanged ? cueLevel.spokenLine : cuePlace.spokenLine
+        speech.say(line, .nav, ttl: 6)
+        logger.event("cue_profile", ["level": cueLevel.rawValue, "place": cuePlace.rawValue, "text": line])
+    }
+
+    /// Push `cueRules` into the engines that hold a copy: the head distance into `CueDecider`, the
+    /// allowed sign phrases into `HazardScanner`. Obstacle names read `cueRules` per report in
+    /// `handle(_:)`. Called from `init` (stored values) and `cueProfileChanged`.
+    private func applyCueRules() {
+        let rules = cueRules
+        decider.thresholds.head = rules.headEnterM
+        hazards.signAllowedPhrases = rules.allowedSignPhrases
+    }
+
     /// Spatial click toward the next waypoint while navigating. Mirrored into `beacon.enabled`.
     var beaconEnabled: Bool = Settings.bool("beaconEnabled", default: true) {
         didSet { Settings.set(beaconEnabled, "beaconEnabled"); beacon.enabled = beaconEnabled }
@@ -520,6 +564,7 @@ final class AppModel {
         sounds = SoundWatcher(speech: speech)
         hazards.signsEnabled = signsEnabled
         hazards.watchEnabled = hazardWatchEnabled
+        applyCueRules()                               // the stored level / place into the engines
         context.setPeopleEnabled(namePeopleEnabled)
         pushDepthSettings()
         depth.setHighFrameRate(highFrameRateCamera)   // before start(): only sets the flag
@@ -764,7 +809,10 @@ final class AppModel {
                                // Which of the two new sensor paths this launch is using.
                                "face_head_tracking": depth.faceTrackingEnabled,
                                "danger_sounds": dangerSoundsEnabled,
-                               "sound_classifier": SoundWatcher.isAvailable])
+                               "sound_classifier": SoundWatcher.isAvailable,
+                               // Which cue profile this walk ran with (cue_audit.py compares walks).
+                               "cue_level": cueLevel.rawValue, "cue_place": cuePlace.rawValue,
+                               "obstacle_names": obstacleNamesEnabled])
         // The microphone watch starts only if the walker left it on; it is off by default.
         if dangerSoundsEnabled { sounds.start() }
         let cameraDenied = announceCameraDenied()
@@ -1099,7 +1147,11 @@ final class AppModel {
                 logger.event("cue", ["cue": "clear"])
             }
         }
-        if obstacleNamesEnabled, let line = namer.update(report, now: report.timestamp) {
+        let rules = cueRules
+        let navigating = nav.isNavigating
+        if obstacleNamesEnabled,
+           let line = namer.update(report, now: report.timestamp,
+                                   allows: { rules.allowsName($0, navigating: navigating) }) {
             if speech.say(line, .obstacle, ttl: 4, load: .ambientObstacleName) {
                 logger.event("speech", ["text": line, "priority": "obstacle"])
             }
@@ -1986,6 +2038,9 @@ final class AppModel {
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
         "Siren. Do not start crossing.", "Horn nearby.", "Vehicle sound nearby.",
     ]
+        // Cue level / place change lines (`CueRules.allSpokenLines`, pinned by
+        // `CueProfileTests.profileChangeLines`).
+        + CueRules.allSpokenLines
         // Every flashlight line (`TorchSwitch.allSpokenLines`, pinned to the outcomes by
         // `TorchSwitchTests.allSpokenLinesMatchOutcomes`): toggle feedback never waits on a fetch.
         + TorchSwitch.allSpokenLines
@@ -2385,6 +2440,16 @@ enum Settings {
     }
     /// Persists `value` under `key` in `UserDefaults.standard`.
     static func set(_ value: Bool, _ key: String) {
+        UserDefaults.standard.set(value, forKey: key)
+    }
+
+    /// Stored String for `key` (a persisted enum's raw value), or `d` when never written.
+    static func string(_ key: String, default d: String) -> String {
+        _ = launchMode              // ⚠ forces the recovery above before any setting is read
+        return UserDefaults.standard.string(forKey: key) ?? d
+    }
+    /// Persists `value` under `key` in `UserDefaults.standard`.
+    static func set(_ value: String, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }
 }

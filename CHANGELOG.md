@@ -2,6 +2,64 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 36 — Cue detail (Quiet / Standard / Detailed) × Place (Outdoors / Indoors); names off by default (Sat Sep 12)
+
+**Why:** cue design v2 §3.3 / §3.5 and the owner's "overstimulating" report. The walker picks how
+much OpenCane volunteers, and indoor clutter gets quieter. **Speech only in this step:** haptics are
+identical at every level until Step 40.
+
+**What changed**
+- New pure `CueRules` (CaneKitLogic `CueProfile.swift`).
+  - Obstacle names: Quiet and Indoors name nothing. Standard names doors, and only while a route
+    guides. Detailed names everything except walls.
+  - Signs: Quiet and Indoors read only `safetySignPhrases` (closures, danger, caution, wet floor,
+    push button). Other levels read every sign.
+  - Head distance: 1.5 m outdoors (today), 1.2 m indoors [H].
+  - `namesLimitLine` for voice feedback.
+- `SignPolicy.allowedPhrases`: a disallowed phrase is skipped unstamped and never counts as matched.
+- `AppModel.cueLevel` / `cuePlace` are persisted (`Settings.string`). **Default Detailed + Outdoors**
+  (owner decision, until a mounted log tunes the calmer levels). A change is applied to the decider
+  and the sign policy, spoken once ("Quiet cues.", "Indoor mode.", prefetched) and logged
+  `cue_profile`. The `start` record carries `cue_level`, `cue_place`, `obstacle_names`.
+- **`obstacleNamesEnabled` now defaults off** (research #2, lowest risk). Walkers who never touched
+  the switch lose names until they turn it on; D6 in `docs/stress_test_plan.md` now says to.
+- Settings → new **Cues** card first on the page: two segmented pickers with visible labels, VoiceOver
+  containers and a caption that says what the level does today.
+- "Turn on obstacle names" by voice now adds why it may stay quiet ("Quiet cues name nothing.").
+- New XCUITest `testCuePickersChangeAndRestore`, restoring defaults in a teardown block. The segment
+  titles are added to AGENTS.md rule 9 and design.md §9.
+
+**Review** (35-agent adversarial workflow, Muse, Antigravity), every finding verified by hand:
+- **Antigravity:** "no serious defects".
+- **Muse:** no blocking defects. Its latent sign-swallow note is fixed (filter before `matched`,
+  `sameFrameAllowedPhraseSurvives`). Its teardown note is fixed. Its stale `SpokenPhrases` comment is
+  fixed; the wall prefetch lines are kept as a few unreachable kB.
+- **Fixed (agents):**
+  - Caption and hint promised haptic changes this step does not make.
+  - The UI test could leave Standard / Indoors persisted after a failed assert.
+  - Voice "Obstacle names on." was a silent promise under Quiet / Indoors.
+  - Segmented pickers had no VoiceOver context.
+  - D6 expected names by default and wall names.
+  - The design.md §9 contract table and the CODE_REFERENCE `Settings` row were stale.
+- **Rejected with evidence:**
+  - "Safety-sign allowlist would mute a future phrase" (2/2 refuted: today it equals every phrase
+    minus EXIT / ENTRANCE / PULL / PUSH; a new phrase is a deliberate table edit).
+  - "Test title claims same-frame behaviour" (2/2 refuted; same-frame test added anyway).
+  - "Names default flip contradicts Detailed = today" (2/2 refuted: the default flip is research #2,
+    approved in the plan; the comment is now precise about who loses names).
+- **Noted, by design:** switching to Indoors while a head cue is active at 1.35–1.5 m clears it. That
+  is opt-in calming, and the hysteresis never latches (Muse, Antigravity).
+
+**Verification:** `make test` 438/438, `make sim` green. `make uitest` first failed to COMPILE — the
+teardown block captured the implicitly-unwrapped `app` as an Optional (`guard let app` fixed it); the
+re-run result is in the commit message. On the phone (trip log 2026-09-12T22-20-53Z, t = 132–152 s) the
+owner flipped every level and place: each tap logged one `cue_profile` record and dispatched its line.
+
+test on device: Settings → Cues. Tap Quiet: hear "Quiet cues.", and no obstacle names even with Speak
+obstacle names on. Tap Indoors: hear "Indoor mode.", and an EXIT sign is not read while a WET FLOOR /
+CLOSED sign is. Detailed + Outdoors with names on: a door and a table are named, a wall never is. The
+trip log `start` record shows `cue_level`, `cue_place`, `obstacle_names`.
+
 ## Step 35 — Cue design v2 research, plan, and the "measure first" audit script (Sat Sep 12)
 
 **Device report (owner):** the voice is choppy and it is overstimulating: "although it's describing
