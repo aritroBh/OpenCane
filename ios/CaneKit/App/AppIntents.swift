@@ -281,7 +281,9 @@ struct CaneKitShortcuts: AppShortcutsProvider {
                     shortTitle: "CIF from here",
                     systemImageName: "location.north.circle")
         AppShortcut(intent: StartDemoRouteIntent(),
-                    phrases: ["Start my route in \(.applicationName)", "Start the demo route in \(.applicationName)"],
+                    phrases: ["Start my route in \(.applicationName)",
+                              "Start the demo route in \(.applicationName)",
+                              "Start route to CIF in \(.applicationName)"],
                     shortTitle: "Start route",
                     systemImageName: "figure.walk")
         AppShortcut(intent: RepeatInstructionIntent(),

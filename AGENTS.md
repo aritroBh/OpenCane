@@ -94,7 +94,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    code may call `setCategory`.
 8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
    never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
-9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start demo route,
+9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
    Type a destination first, Destination, and a campus suggestion's label "Grainger Engineering
