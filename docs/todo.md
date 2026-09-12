@@ -298,6 +298,52 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Install on the phone, verify each item from the trip log, push
 - [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
 
+### Hardware tonight (Sagar, Windows machine)
+- [x] OpenSCAD on Windows: 2021.01 via winget renders the threaded collar in 6 min 52 s; 2025.09.15
+      portable snapshot does it in 0.3 s and is unzipped at `%USERPROFILE%\Tools\`
+- [x] `scripts/build_stl.ps1` — one command, all five printables, binary STL, finds the fast OpenSCAD
+- [x] `hardware/mount_screwless/` designed and rendering clean: collet clamp (collar + ring), arm,
+      cradle, coupons. Zero screws, inserts, nuts or magnets.
+- [x] `.gitignore` now covers `stl/`, `*.stl`, `*.3mf`, `*.gcode` — it did not before
+- [x] `scripts/slice_gcode.ps1` — headless slicing through Creality Print 7.2 (an Orca fork, so it
+      takes Orca's command line). Reproducible, no GUI, and it reads back what it wrote and refuses
+      to call a file safe if it cannot confirm the material. See `hardware/mount_screwless/PRINTING.md`.
+- [x] **The thread generator never produced a thread.** A twisted `linear_extrude` maps *angle* to
+      height; the tooth was drawn as a flat y-offset and came out 0.031 mm thick, so the collar's
+      threaded band sliced as a smooth cylinder. Rewritten as an angular sector: 0.62–0.75 mm.
+      Both copies had it — `screwless_mount.scad` and the hand-copied one in `coupons.scad`.
+- [ ] **Print the bore rings and set `pole_d` from them.** Everything else waits on this number.
+      `pole_d = (smallest ring that goes on) − 0.10` — **not −0.35**, which is what `coupons.scad`
+      said until 2026-09-12 and was wrong by ~0.25 mm. `bore_clear` is *not* an output of this
+      test: the rings are rigid, the collar is a collet that closes, so clearance is a design
+      decision and `collet_squeeze` takes it up.
+- [ ] Thread + dovetail coupons; set `thr_clear` and `dt_clear`. The thread coupon is the first
+      physical proof the rewritten thread exists — **if the ring will not thread on, do not print
+      the collar.**
+- [ ] Print the bore rings in PETG too. PLA rings need a shrinkage correction of ~0.06 mm (worst
+      case 0.168 mm, which is larger than the clearance the collet has to work with); PETG rings
+      need none, because the collar is PETG.
+- [ ] Print collar + ring; check the ring actually closes the collet on the real cane
+- [ ] Print arm + cradle; T0 fit with the phone in it. The **arm needs no measurement first** — its
+      tenons are drawn at `dt_section(0)` and the pawl is fixed geometry, so neither `pole_d` nor
+      `dt_clear` reaches it. It is the only real part printable before the coupons are read.
+- [ ] **Pawl release window is ~79% blocked by the arm** — there may be no way to press the catch
+      to release the joint. Confirm on the printed arm, then either move the window or add a
+      cutaway.
+- [ ] Remaining unfixed, found by review on 2026-09-12 and not yet addressed: no lead-in ramp on
+      the pawl catch; `socket_part()`'s "flare" is a flat 90° ledge, not a flare; the button
+      windows overrun the top of both side walls; `dt_clear` gives 0.325 mm at the mouth and
+      0.139 mm buried instead of a uniform 0.25; ball-socket fingers at ~7–9% strain will crack.
+- [!] **Cane diameter disputed: 27.65 (dial caliper) vs 28.75 (hardware/mount + brief) vs
+      28.65 (1.128 in).** 1.1 mm apart. `mount_screwless/` uses 27.65; `mount/` still uses
+      28.75. Bore coupons bracket all three — print them and settle it, then fix the loser.
+- [ ] Ball joint (`joint = "ball"`): print socket + lock, check the clamp actually holds the
+      phone through a sweep. Brief and mount/DESIGN.md rejected free ball joints; this one is
+      clamped, which answers that but is untested.
+- [ ] Decide on the day: `hardware/mount/` (screwed) or `hardware/mount_screwless/`. Record which in
+      CHANGELOG.md.
+- [ ] T7 shake / T8 drop on whichever is fitted; check the camera still reads 3–8° down afterwards
+
 ### Scene understanding: the decision, and why (researched 2026-09-11, 65 agents)
 
 **Question asked:** run Gemma 4 2B/4B locally via Cactus so the app can name everything it sees,

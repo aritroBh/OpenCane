@@ -2,6 +2,260 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+> **Step numbers 15, 16 and 17 each appear twice, and that is not a mistake to "fix".**
+> `feat/screwless-mount` (hardware, Windows) and `main` (iOS, Mac) numbered their steps
+> independently and in parallel, then met in a merge on 2026-09-12. The first of each
+> pair is the hardware line, the second the app line. Renumbering either would break
+> every commit message that already refers to them. Read the date and the subject, not
+> the number.
+
+## Step 19 — The collar had no thread on it (Sat Sep 12, overnight)
+
+Three adversarial sub-agent reviews were run over `hardware/mount_screwless/` before
+committing the sliced plate to a printer. Every load-bearing finding was verified here
+by measurement before it was acted on, because the first pass of my own verification was
+wrong (see "a wrong measurement" below). Six defects fixed; each one re-measured after.
+
+**`thread()` never produced a thread.** This is the headline and it invalidated the
+entire clamp — the mechanism the whole design is built around.
+
+`linear_extrude(twist=)` maps **angle** to height, not distance. At `thr_pitch = 3` the
+twist rate is 360/3 = **120°/mm**. The tooth was drawn as a linear offset in y, so a
+tooth `y` mm "tall" came out `atan(y/r)/120` mm thick — about **0.031 mm**, a fifth of a
+layer. The collar's threaded band sliced as a plain smooth cylinder. The ring would have
+slid straight off.
+
+The tooth is now drawn as an angular **sector**, via `thr_ang(axial_mm) = axial_mm *
+360 / thr_pitch`, with `thr_duty` / `thr_crest` / `thr_axial` expressed as fractions of
+the pitch in the parameter block and three asserts that catch a tooth wider than half a
+turn, an inverted flank, and no room left between turns. Measured on the rendered
+collar by sectioning at five heights: **0.616–0.747 mm**. `coupons.scad` carried a
+hand-copied duplicate of the same bug and got the same rewrite.
+
+The other five:
+
+| Fix | Before | After |
+|---|---|---|
+| Thread tooth, axial thickness | 0.031 mm | **0.616–0.747 mm** |
+| Arm first-layer bed contact | 42 mm² (Creality's own figure) | **1627.4 mm²** |
+| Material blocking the cradle's dovetail slide | 986.57 mm³ | **0.00 mm³** |
+| Cradle overhanging the phone's front face | 0.02 mm³ | **514.99 mm³** |
+
+- **`collet_nut()` cancelled its own squeeze.** It applied `thr_clear` to the cone as
+  well as the thread, so the ring closed the collet by ~0.04 mm instead of the intended
+  amount. The nut's internal cone must share the collar cone's **taper rate**, not its
+  end radii — `ring_cone_lo/hi` and `lock_cone_lo/hi` are now derived that way, with
+  `collet_squeeze = 0.80` and `ball_squeeze = 0.60` as the stated closures, and asserts
+  that the squeeze exceeds the clearance it has to take up first.
+- **The cradle's phone cut removed every retention feature.** `phone_block`'s default
+  runs 10 mm past the phone's front face, and the side lips, the corner cups' lips and
+  the whole top latch live in exactly that 10 mm. The cut now stops at the front face.
+- **The latch hook was buried inside the phone.** It sat at `phone_d - back_t`, i.e.
+  3.2 mm *inside* the phone, gripping nothing. It sits on the front face now.
+- **The cradle's dovetail socket was a blind pocket**, so the arm could not slide in at
+  all. Opened through.
+- **`arm_t` 10.0 → 20.0.** At 10 mm the arm stood balanced on its two dovetail edges:
+  42 mm² of bed contact. It would have been knocked off the plate. Asserted against
+  `dt_wide` so it cannot regress.
+
+All six parts re-render `Status: NoError` with every assert passing;
+`part = "assembly"` echoes a 13.15 mm phone-to-shaft gap.
+
+**`coupons.scad`'s selection formula contradicted its own criterion.** It said
+`pole_d = bore − 0.35` while describing a ring that "goes on with firm thumb pressure",
+which is 0.05–0.15 mm of clearance, not 0.35. For a collet, ~0.25 mm is the difference
+between gripping the cane and never reaching it. Corrected to **−0.10**, and the note
+now says plainly that `bore_clear` is *not* an output of this test — the rings are
+rigid, the collar is a collet that closes, so clearance is a design decision and
+`collet_squeeze` takes it up.
+
+The bore set was also rebuilt: **27.75 / 28.05 / 28.35 / 28.65 / 28.95** in even 0.30
+steps, replacing 27.85 / 28.25 / 28.45 / 28.95 / 29.15. The old set *started above* the
+27.65 caliper reading, so if the caliper was right the smallest ring still fitted and
+the test had no lower bracket — it could only contradict itself. It also put 28.65 and
+28.75 inside one 0.50 mm gap.
+
+**A wrong measurement, recorded because it nearly cleared a real bug.** My first check
+of the thread filtered the collar's cross-section by `r > 17.10` and found healthy 66°
+runs. Those were the dovetail pad, which sits at azimuth 0 and reaches past r = 22.
+Restricting to azimuths 80–280° isolated the real thread crossing at 3.77–7.48°, i.e.
+0.031–0.062 mm, and confirmed the agent was right. A filter that accidentally selects a
+different feature reads as a pass.
+
+**Headless slicing.** `scripts/slice_gcode.ps1` drives Creality Print 7.2 from the
+command line — it is an Orca fork and takes Orca's arguments — so slicing is
+reproducible and needs no GUI. It re-opens every file it writes and echoes the material,
+both temperatures, walls, time and weight, and **refuses to name a file safe if it
+cannot read the material back out**. That guard exists because a PETG plate was very
+nearly sent to a machine holding four PLA spools: `START_PRINT EXTRUDER_TEMP=250
+BED_TEMP=80` is substituted at *slice* time and cannot be corrected at the printer.
+Two Windows traps are documented in the script: the Creality exe needs
+`2>&1 | Out-String` *and* a relaxed `$ErrorActionPreference` or it silently writes
+nothing, which is the exact opposite of `build_stl.ps1`'s OpenSCAD rule.
+
+New `hardware/mount_screwless/PRINTING.md` is the operator runbook: material → slot →
+temperature, print order, how to read each coupon, and what the coupons do not settle.
+
+**Not done, and not claimed:** Muse and Antigravity are both absent from this Windows
+machine (`muse`, `agy`, `make`, `xcodebuild` and `swift` all resolve to nothing), so the
+diff has had the multi-agent review the engineering bar asks for but **not** the Muse or
+Antigravity passes. No iOS source changed in this step, so no Logic tests were affected.
+Run both on a Mac before this merges to `main`.
+
+**Still open** (found by review, not yet fixed): the pawl release window is ~79% blocked
+by the arm, so there may be no way to press the catch; no lead-in ramp on the pawl
+catch; `socket_part()`'s "flare" is a flat 90° ledge; the button windows overrun the top
+of both side walls; `dt_clear` gives 0.325 mm at the mouth and 0.139 mm buried instead
+of a uniform 0.25; the ball-socket fingers at ~7–9% strain will crack. All are in
+`docs/todo.md`.
+
+test on device: nothing printed yet at time of writing. Print the bore rings first
+(`-Plate bore -Material PLA -Walls 4`, 52m53s), read `pole_d` off them, then the thread
+coupon — if the ring will not thread onto the stub, do not print the collar. The arm can
+go on any free machine now; it depends on neither `pole_d` nor `dt_clear`.
+
+## Step 18 — Sliced on the SPARKX i7 (Sat Sep 12)
+
+All six mount parts on one plate, sliced clean in Creality Print 7.2 against
+`0.20mm Standard @SPARKX i7 0.4 nozzle`: **4 h 31 min, 101.94 g, 34.18 m**. Project saved
+as `hardware/mount_screwless/opencane_mount_plate.3mf` (gitignored).
+
+Support is **on, build-plate-only**. That combination is deliberate. The cradle stands on
+its dovetail block and needs support under the back plate; the socket's ball cavity must
+NOT be supported, because support inside the cup cannot be got out through a 17 mm mouth.
+Build-plate-only draws the first and skips the second, because support for the cavity
+would have to stand on the model. Support is 6.8% of print time, interface another 3.2%.
+
+**Do not use auto-arrange on this plate.** It packs the parts tight enough that Creality
+Print reports gcode path conflicts (lock↔arm at z=2.75, then ring↔cradle at z=5.20).
+Explicit positions that slice clean, X/Y mm: cradle (65, 150), collar (150, 200),
+ring (150, 140), lock (215, 140), socket (215, 200), arm (70, 42).
+
+**Diameter call: 27.65 mm is self-consistent and the collet has margin, but it is a
+one-way bet.** Bore is 28.05 mm (27.65 + 0.40). On a 27.65 shaft the collet closes a
+0.20 mm radial gap; the cone sheds 0.13 mm of radius per mm of ring travel, so that is
+1.5 mm of travel — half a turn of a 3 mm pitch — against 17 mm of cone engagement. Huge
+margin. But 28.05 is SMALLER than both competing figures (28.65, 28.75), so if the caliper
+is wrong the collar does not grip loosely, it does not go on at all. Coupons first.
+
+While checking that, found `grip_ribs` are **grooves, not ribs** — the cylinders are
+subtracted, scalloping eight ~0.3 mm dishes out of the bore. The behaviour is right (eight
+narrow lands grip harder than a full bore) but the names and comments said the opposite.
+Comments fixed; no geometry changed, so the sliced plate still stands.
+
+test on device: nothing printed yet. Coupon plate first, then this one.
+
+## Step 17 — The assembly preview earned its keep (Fri Sep 11)
+
+Built the full `part = "assembly"` preview — ghost cane, ghost phone, and a red ray down
+the rear camera's optical axis — because the previous preview drew only the collar, ring
+and arm, and everything it left out was broken. Four faults, all found by looking:
+
+- **Both dovetail sockets were on the wrong axis.** `rotate([0,-90,0])` put the slide
+  along the radius instead of along the cane, so the joint resisted nothing the phone
+  actually does to it. Now `rotate([0,0,90])` everywhere, one orientation, arm drawn in
+  the collar's own frame so `assembly()` is a single translate you can check by eye.
+- **The collar's pad was shorter than the dovetail it holds.** `base_len` was 9 mm
+  against a 30 mm slide, so the socket cut clean through the pad. `base_len` is 36 mm
+  and there are asserts on it, on `pad_w` and on `pad_t`.
+- **The arm's cradle end hung off nothing.** The fin tapered to 15 mm deep under a 30 mm
+  tenon. The fin is now one hull from the collar face to the cradle face.
+- **The phone's bottom corner cleared the shaft by 1.1 mm.** `arm_angle` rakes the phone
+  back toward the cane, which `arm_reach = 46` (inherited from the screwed mount, whose
+  geometry differs) did not account for. `arm_reach` is 58 mm, gap is **13.1 mm**, and
+  `tip_clear` asserts it and echoes it on every render.
+
+Also fixed the camera's direction, which was mirrored — it looked at the shaft. The frame
+now matches `mount/cane_mount.scad` lines 26–35: screen toward the walker, camera forward
+past the open top of the cradle, `arm_angle + cane_angle - 90` = 5° below the horizon.
+
+**The cradle needs support.** It stands on its dovetail block with the back plate 7 mm
+off the bed. Added a 45° flare that carries the plate for 7 mm all round; the rest needs
+"support on build plate only". The header's blanket no-support claim was wrong and now
+says so per part. Every other part is still support-free.
+
+All seven printables still render `NoError`.
+
+test on device: nothing yet — none of this has been printed. Print `coupons` first.
+
+## Step 16 — Cane diameter disputed, clamped ball joint, SPARKX i7 (Fri Sep 11)
+
+**The cane is 27.65 mm, not 28.75.** Dial caliper, Sagar. That contradicts
+`hardware/mount/cane_mount.scad`, the hardware brief, and the 1.128 in (28.65 mm) quoted
+earlier the same evening. The spread is 1.1 mm — three times any sane bore clearance, so
+a collar bored for 28.75 would spin freely on a 27.65 shaft. `mount_screwless/` now uses
+27.65 and the bore coupons were changed from *clearances* to *absolute bore diameters*
+(27.85 / 28.25 / 28.45 / 28.95 / 29.15, 1–5 notches) so one 20-minute print settles it
+against the real cane instead of against anyone's memory. **`hardware/mount/` is still
+modelled at 28.75 — one of the two folders is wrong.** Whoever prints first, record the
+answer here.
+
+**Clamped ball joint, `joint = "ball"`.** Sagar asked for a gyroscopic / ball-socket aim.
+Both the hardware brief and `mount/DESIGN.md` rejected ball joints on purpose — "ball
+joints slip under sweep vibration and break the Point-to-Identify calibration" — so this
+is not a free ball. It is the cane collar's collet trick at small scale: a slotted socket
+cup squeezed onto the ball by a threaded lock ring, so holding force comes from a wedge
+you tighten rather than from how snugly it printed. That answers the recorded objection
+without deleting it: an undertightened clamp still slips, and now in two axes. The
+fixed-angle dovetail arm stays the default and the safe demo part. T7 (shake) decides.
+Two new parts, `socket` and `lock`, still zero bought hardware. The collar's ring and the
+ball's lock ring are now one `collet_nut()` module, so a thread-fit fix lands in both.
+
+**Printer is the Creality SPARKX i7** (260 × 260 × 255, 0.4 hardened nozzle, Klipper, on
+the network at 172.23.209.71:4408, profile `0.20mm Standard @SPARKX i7 0.4 nozzle`).
+Largest part is the coupon plate at 174 × 195 mm, so everything lies flat with room.
+Print single-colour — it is a multi-material machine and the purge would waste more PETG
+than the parts use.
+
+**Not done:** still never printed, never fitted, never walked. The ball socket's grip is
+reasoning about a wedge, not a measurement. No rain hood.
+
+test on device: n/a (no app change). On the printer: bore coupons first — they decide
+whether 27.65 or 28.75 is right, and everything else waits on that.
+
+## Step 15 — Screwless phone mount, Windows CAD toolchain (Fri Sep 11)
+
+Hardware side, on Sagar's Windows machine. Nothing here touches the app.
+
+**Why another mount.** `hardware/mount/` needs four M4 screws, four M4 brass heat-set inserts, an
+M5 bolt and nyloc, two M3 countersunk screws, two M3 inserts, two nylon screws and two nylon nuts,
+plus a soldering iron with a heat-set tip. On the night before the build none of that was confirmed
+to be in the building, and heat-set inserts are the one item no hardware store in Champaign stocks.
+`hardware/mount_screwless/` does the same job with four printed parts and nothing else. It is an
+alternative, not a replacement — whichever gets fitted, say which in this file.
+
+**Clamp is a collet**, not a snap fit and not a printed bolt across a C-clamp. The collar's nose is
+a slotted cone; the ring screws down over it and squeezes the slots onto the cane, like a drill
+chuck. Clamping force comes from a wedge, so sweep vibration cannot walk it loose, and both thread
+helices run along the print Z axis — the only orientation a printed thread is reliable in. A printed
+bolt across the split would have put the thread axis horizontal, where it prints as stacked overhangs.
+
+**Modularity is the pitch.** collar (cane interface) | arm (angle interface) | cradle (phone
+interface), all meeting at one sliding dovetail that runs along the cane axis, so the phone's weight
+loads every joint in shear across its widest face instead of trying to peel it open. Different cane,
+different pose or different phone each reprint exactly one part. `arm_angle` stays derived as
+`90 - cane_angle + cam_down`, so the 3–8° camera requirement is inherited, not re-litigated.
+
+**Toolchain.** OpenSCAD 2021.01 (the winget release, `OpenSCAD.OpenSCAD`) has no Manifold backend
+and renders the threaded collar in **6 min 52 s**. The 2025.09.15 portable snapshot renders it in
+**0.3 s**. `scripts/build_stl.ps1` prefers a snapshot in `%USERPROFILE%\Tools\` and warns loudly
+when it falls back. Two Windows PowerShell 5.1 traps are commented in that script because both fail
+silently: 5.1 strips the quotes from `-D part="collar"` so OpenSCAD renders an empty file, and a
+local `$png` clobbers the `-Png` switch parameter because variables are case-insensitive.
+
+**Coupons carry notches, not numbers.** `text()` needs fontconfig, which the portable Windows
+snapshot does not ship; it renders as nothing at all, silently, leaving four identical unlabelled
+bore rings. Count notches instead — which also reads by thumb.
+
+**`.gitignore` now covers `stl/`, `*.stl`, `*.3mf`, `*.gcode`.** It did not before, and the
+hardware brief wrongly claimed it did.
+
+**Not done:** never printed, never fitted, never walked. Every clearance in the file is a guess
+until the coupons come off the bed. No rain hood. The pawl spring thickness is untested and may be
+too stiff to click or too thin to survive.
+
+test on device: n/a (no app change). On the printer: coupons `what="bore"` first, set `bore_clear`,
+then thread and dovetail coupons, then collar + ring, then arm + cradle.
 ## Step 17 — App icon (Sat Sep 12, on phone and launched)
 
 Both `AppIcon` sets were empty — the app shipped with no icon. v1 ("Folded Signal", from
