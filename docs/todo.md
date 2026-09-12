@@ -16,7 +16,7 @@ lower down, this block is right.**
 | --- | --- |
 | LiDAR depth, mesh names, haptics, head-height cue | `start` record: `lidar: true, mesh: true, haptics: true`; speech records "window ahead, one and a half meters", "table ahead, half a meter", "Head height." |
 | Depth at 30 reports/s | `lanes.fps` median **29.988** (was exactly 10.0 before the `PublishGate` timing fix) |
-| Both cameras at once | `both_cameras` records: `supported: true, front: true, back: true, error: "", hardware_cost: 0.26`, and after stop `depth_running: true, depth_fps: 30, status: "Depth OK"` |
+| Both cameras at once — ⚠ **superseded evidence** | The `both_cameras` records (`supported: true, front: true, back: true, error: ""`, `hardware_cost: 0.26`, and after stopping `depth_running: true, depth_fps: 30, status: "Depth OK"`) were measured against the **preview-layer** version, which no longer exists: the feeds now render from `AVCaptureVideoDataOutput` into `AVSampleBufferDisplayLayer` because a preview layer makes LiDAR depth unreliable (Apple forums 742501). What still carries over is that multi-cam is supported and that ARKit resumes cleanly after the mode stops. **Whether the two feeds actually draw has never been seen on hardware.** |
 | Trip-log field collision fixed | zero rows carry `field_kind` / `field_t` |
 | ElevenLabs (Bella) reachable | key verified `HTTP 200`, free tier 0/10 000 chars; a real 9 kB mono mp3 at 22.05 kHz came back for the app's exact payload |
 | Muse Spark 1.3 reachable + multimodal | key verified `HTTP 200` from `muse-spark-1.3-contributor`; docs confirm `/v1/chat/completions` and image understanding |
@@ -24,6 +24,14 @@ lower down, this block is right.**
 ### What is NOT proven on the phone yet
 
 - People/animal detection (Vision's neural models cannot run in the simulator — phone-only).
+- **That the two camera feeds actually appear.** The render path was rewritten after the only device
+  run, so it is unproven; if it shows black, the fallback is Metal or `CIContext`, never a preview
+  layer.
+- The `.playAndRecord` microphone switch **with AirPods connected**. It was measured only with no
+  headphones (output stayed `Speaker`, restore worked). The revert-on-route-change guard exists
+  precisely because the AirPods case is unmeasured.
+- The `multicam_depth` probe's answer — whether a future version could show both cameras *and* keep
+  depth through AVFoundation instead of ARKit. The probe is in the build and has never run.
 - The Muse scene sentence end to end after tonight's reasoning-token fix.
 - Ground hazards (drop-offs, potholes) on real pavement; still **off by default**.
 - Sound recognition (sirens, horns) and front-camera head tracking; both **off by default**.

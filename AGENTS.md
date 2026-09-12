@@ -55,6 +55,11 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 7. **Audio session is one `.playback` session**, mode `.default`, `[.duckOthers]`, no Bluetooth options
    (HFP drops AirPods to phone-call quality). `CHHapticEngine(audioSession: nil)`. `.HRTF`, mono click.
    Do not "fix" the deviations listed in `ios/README.md §2` back to the original spec.
+   One opt-in exception exists: "Listen for sirens and horns" (off by default) needs an audio *input*,
+   so `SpeechQueue.setMicrophoneEnabled(_:)` moves the session to `.playAndRecord` with
+   `[.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker]` — never `.allowBluetoothHFP` — and reverts to
+   `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
+   code may call `setCategory`.
 8. **Cue priorities** (speech): scene < obstacle names < route lines < "Head height." The `.head` cue is
    never suppressed. Interrupted lines are re-queued. Keep `docs/design.md §5` and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start demo route,
@@ -184,8 +189,12 @@ app container's Documents folder.
 - "Where am I" never needs a key: cloud provider → on-device fallback (Vision + Apple's on-device
   model, template when Apple Intelligence is off). On-device scene words go through
   `SceneVocabulary`: Vision identifiers not in its table ("conveyance", "portal", "machine") are
-  dropped on purpose and synonyms merge; add a group, never pass raw identifiers to speech. The front camera is deliberately unused: it
-  faces the walker on the cane, and ARKit owns the capture pipeline.
+  dropped on purpose and synonyms merge; add a group, never pass raw identifiers to speech. The front camera is not used for *scene* work: it faces the
+  walker on the cane, and ARKit owns the capture pipeline. It has two opt-in jobs of its own (both off
+  by default): "Head tracking without AirPods" (`userFaceTrackingEnabled` → `ARFaceAnchor` yaw, no
+  picture) and "Both cameras (pauses obstacle detection)", which is an `AVCaptureMultiCamSession` with
+  ARKit paused. ARKit can never give both pictures at once (Apple DTS, forums 677731; `ARFrame` has one
+  `capturedImage`), so pausing it is the only way — see `DualCameraSession`.
 - Veer decisions use a 15 m course smoother while walking; the beacon keeps the raw heading.
   The gyro gate applies to the compass only, never to the GPS course. The smoother is kept empty
   while the fix is inside the fence of the corner just reached (its first course would be a diagonal

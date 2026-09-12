@@ -33,7 +33,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>CaneKit uses your location and heading to guide you along the route.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>CaneKit uses the microphone for spoken commands.</string>
+	<string>CaneKit can listen for sirens, car horns and vehicle sounds to warn you about traffic you cannot see, and for spoken commands.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>CaneKit uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

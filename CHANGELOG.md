@@ -2,6 +2,88 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)
+
+Everything below is verified by 303 CaneKitLogic tests, a clean Swift 6 strict build and a green
+`make uitest`. The phone left the building partway through, so **the device column is honest: much
+of this has never run on hardware.** See the WHERE WE ARE block in docs/todo.md.
+
+### Found broken, fixed
+
+- **The Live Activity has never existed in any installed build.** `scripts/gen.sh` worked around
+  XcodeGen issue #1613 with an unanchored `sed` that rewrote *every* copy-files phase from
+  `dstSubfolderSpec` 13 to 16. XcodeGen already emits 16 for the watch, so the substitution's only
+  live effect was moving the **widget's** embed phase out of `PlugIns/` — and a widget outside
+  PlugIns is never loaded, so `Activity.request` failed and the error was swallowed into
+  `lastError`. No crash, no log, just no Dynamic Island, while the docs promised one. Confirmed
+  before the fix: zero `dstSubfolderSpec = 13` in the pbxproj and no `PlugIns/` inside
+  `CaneKit.app`, with `CaneKitWidget.appex` sitting loose beside it. The patch now touches only the
+  phase whose `dstPath` is the Watch folder, and `gen.sh` **asserts both phases afterwards** rather
+  than hoping — a widget in the wrong folder produces no error at build or run time, which is
+  exactly why this survived so long.
+- **Muse Spark could not answer at all.** With the key wired, the trip log showed
+  `provider: "Muse + On-device"`, `ms: 11066`, and a spoken line that was the on-device LiDAR
+  template. `max_tokens` was 120, which one sentence needs — but on that endpoint the budget covers
+  **reasoning plus visible output**, and the model spent it thinking and returned `content: null`.
+  An empty reply reads as a failure, so the app fell back, silently, after blowing the 8 s timeout.
+  A direct probe with `max_tokens: 10` reproduced it in miniature: `finish_reason: "length"`,
+  `content: null`, `reasoning_tokens: 7`. Now 1024 tokens and `reasoning_effort: "low"` (Meta's own
+  guidance for direct-answer tasks; `"none"` is a documented HTTP 400 on Muse Spark). The field is
+  omitted for any other OpenAI-compatible endpoint, because a non-reasoning chat model rejects it.
+- **The cloud scene sentence was spoken ungated.** `SceneVocabulary.isFaithful` ran only on the
+  on-device path. Measured hallucination classes now refused: street names Vision never read on this
+  route's own frames ("S Grand Blvd"), distances that contradict LiDAR, counts (models measure ~53 %
+  there), clock-face directions — and, worst, a false all-clear: handed a solid white frame a model
+  said *"The path ahead is clear and unobstructed"* four times out of four. Telling a blind walker
+  the path is clear when the lens is covered is the worst failure this app has.
+- **The voice alternated between Bella and Apple's, line to line.** Warnings never wait for the
+  network, so an `.obstacle` / `.safety` cache miss is spoken by AVSpeechSynthesizer at once, while
+  nav and scene lines — prefetched per route — played as Bella. `commonLines` only prefetched
+  *fixed* strings and warning lines are generated. `SpokenPhrases` now enumerates the whole finite
+  warning phrase space and the launch prefetch warms it: **74 lines, 1,722 characters, 17.2 % of the
+  monthly free tier**, paid once because every line is cached on disk forever. The safety rule is
+  untouched — the cache simply already has the line.
+- **VoiceOver read the words on screen instead of the sentence we wrote.** A suggestion row's
+  accessibility modifiers sat on the `Button` rather than on its label, so `children: .ignore`
+  applied outside it left the composed children exposed: "Grainger Engineering Library, On campus,
+  Campus". Both labels were observed on the same row in one test run, which is what made the test
+  flaky. (The second "failing" test was not a bug at all — it was simulator contention from a
+  concurrent `make e2e`, which also produced a bogus "harness error: No such file or directory".)
+- **Tapping Go with an empty box said nothing** — it only drew the error. The person most likely to
+  do that is the one who cannot see the box is empty.
+- **A self-test paused ARKit for ~13 s at launch**, so pressing "Where am I" in that window answered
+  "Camera warming up. Try again." and looked like a broken app. The self-tests are debug buttons now.
+
+### New, all off by default
+
+- **"Both cameras (pauses obstacle detection)"** — the front and back camera on screen at once via
+  `AVCaptureMultiCamSession`, with ARKit explicitly paused. ARKit can never deliver both pictures;
+  Apple DTS, developer forums 677731: *"There can only be one running capture session at a time,
+  ARKit requires a running capture session, and there is no ARConfiguration that will enable you to
+  receive both the front and rear camera image, so the functionality that you are looking for is not
+  possible."* `ARFrame` structurally has one `capturedImage`. Pausing ARKit is therefore the only
+  design. Announced out loud both ways, refused while a route is guiding, torn down on backgrounding.
+  **No `AVCaptureVideoPreviewLayer`**: forums 742501 reports LiDAR depth going unreliable once a
+  preview layer joins a session producing depth, and depth is the safety channel.
+- **"Head tracking without AirPods"** — `userFaceTrackingEnabled` → `ARFaceAnchor` yaw as a second
+  source for the beacon and Recenter. This is what lets the beacon work for someone who has only the
+  phone, which is the point.
+- **"Listen for sirens and horns"** — SoundAnalysis over the microphone, the one feature that leaves
+  `.playback`. It never requests HFP, compares the **output route** before and after, and reverts —
+  refusing itself — on any change. Measured with no headphones: output stayed `Speaker`, restore
+  worked. **The AirPods case is unmeasured**, which is precisely why the revert exists.
+- **People and animals named with measured distances** — `DetectHumanRectanglesRequest` and
+  `RecognizeAnimalsRequest`, different models from the 1,303-class classifier that returned *zero*
+  usable labels on the phone. Distances come from a LiDAR grid read inside each detection's own
+  bounding box; outside 0.3–5 m the walker hears the direction with **no** distance rather than a
+  made-up one.
+
+test on device: **most of this has not run on hardware.** In priority order: the Dynamic Island now
+that the widget is actually embedded; "Where am I" with the Muse key (expect `provider: Muse`, `ms`
+well under 8000, and a sentence naming what is really there); that every warning comes out in Bella's
+voice; people named with plausible distances; and only then the two-camera mode, whose render path
+was rewritten after its only device run and has never been seen to draw.
+
 ## Step 13 — Voice control, live camera view, natural voice, nearest-result search (Fri Sep 11, on device)
 
 Everything in this step was driven by the phone itself, not the simulator.

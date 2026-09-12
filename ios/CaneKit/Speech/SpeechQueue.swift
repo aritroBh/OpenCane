@@ -18,6 +18,10 @@
 //
 //  Audio: one `.playback` session with `.duckOthers`, mode `.default`, no Bluetooth options
 //  (adding HFP would drop AirPods to phone-call quality and flip routes — ios/README.md §2).
+//  The single exception is `setMicrophoneEnabled(_:)`: the danger-sound watch needs an audio
+//  *input*, which `.playback` does not have, so that one method may move the session to
+//  `.playAndRecord` while the walker has the feature on — and reverts immediately if the output
+//  route changes at all. Nothing else in the app may call `setCategory`.
 //  Both backends use the app session so speech and the beacon share one route. Interruptions
 //  (phone call, Siri) re-activate the session when they end.
 //
@@ -234,7 +238,9 @@ final class SpeechQueue {
 
     /// Call once before the AR session starts (ARKit does not touch audio, but the beacon does).
     ///
-    /// This is the app's only `setCategory` call (AGENTS.md hard rule 7): `.playback` so speech
+    /// This is the app's `setCategory` call for every normal launch (AGENTS.md hard rule 7); the
+    /// only other one is `setMicrophoneEnabled(_:)`, which the walker has to switch on and which
+    /// reverts here the instant the output route moves. `.playback` so speech
     /// and the beacon play with the ring/silent switch on, mode `.default`, options
     /// `[.duckOthers]` so a podcast dips under guidance. Deliberately *no* `.allowBluetooth` /
     /// `.allowBluetoothHFP`: HFP would drop AirPods to mono call quality (no HRTF beacon) and
@@ -264,6 +270,96 @@ final class SpeechQueue {
             guard let type else { return }
             MainActor.assumeIsolated { self?.interruption(type) }
         }
+    }
+
+    // MARK: Microphone (danger-sound watch)
+
+    /// What asking for microphone input did to the audio route.
+    /// Returned by `setMicrophoneEnabled(_:)` so the caller can tell the walker the truth.
+    enum MicrophoneSessionResult: Equatable, Sendable {
+        /// Input is available and the **output** route is unchanged; safe to keep.
+        case granted(route: String)
+        /// Input was available but the output route changed (e.g. AirPods dropped from A2DP to
+        /// HFP call quality, which would kill the HRTF beacon). The session has already been put
+        /// back to `.playback`; the caller must not enable its recording feature.
+        case revertedRouteChanged(before: String, after: String)
+        /// `setCategory` / `setActive` threw. The session has been put back to `.playback`.
+        case failed(String)
+    }
+
+    /// Switch the app's one audio session between `.playback` (the normal state) and
+    /// `.playAndRecord`, which is the only way to get an `AVAudioEngine` input node for the
+    /// danger-sound watch (`.playback` has no input at all — Apple's category table).
+    ///
+    /// This is the **only** other `setCategory` call in the app besides
+    /// `configureAudioSession()`, and it exists because AGENTS.md hard rule 7 / ios/README.md §2
+    /// pin the app to one `.playback` session: the rule is not silently broken, it is broken
+    /// *visibly, temporarily, and only while the walker has asked for it*, and undone the moment
+    /// the route degrades.
+    ///
+    /// Protections, in order:
+    ///   · `.allowBluetoothHFP` is never passed. Apple documents that when one device offers both
+    ///     HFP and A2DP "the system gives hands-free ports a higher priority for routing", which
+    ///     is exactly the AirPods call-quality drop that would destroy the beacon's HRTF.
+    ///   · `.allowBluetoothA2DP` **is** passed, because without it "paired Bluetooth A2DP devices
+    ///     don't show up as available audio output routes" under `.playAndRecord`.
+    ///   · `.defaultToSpeaker` keeps phone-only playback on the speaker; `.playAndRecord` would
+    ///     otherwise route to the earpiece, which a cane-mounted phone cannot be heard from.
+    ///   · The output route is compared before and after. **Any** change reverts to `.playback`
+    ///     and reports `.revertedRouteChanged`: speech, warnings and the beacon are the safety
+    ///     path and a microphone feature never outranks them.
+    ///
+    /// Measured on the iPhone 17 Pro Max (2026-09-11, trip-log `probe_e_audio_session`): with no
+    /// headphones, `.playAndRecord` + these options left the output at `Speaker` and added
+    /// `MicrophoneBuiltIn` as an input, and restoring `.playback` worked. The AirPods case is
+    /// **not** measured yet, which is why the revert above exists rather than a promise.
+    /// Caller: `SoundWatcher.start()` / `stop()`.
+    func setMicrophoneEnabled(_ on: Bool) -> MicrophoneSessionResult {
+        let session = AVAudioSession.sharedInstance()
+        guard on else {
+            let result = restorePlaybackSession()
+            return result ?? .granted(route: Self.outputRoute(session))
+        }
+        let before = Self.outputRoute(session)
+        do {
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.duckOthers, .allowBluetoothA2DP, .defaultToSpeaker])
+            try session.setActive(true)
+        } catch {
+            audioSessionError = "Microphone session: \(error.localizedDescription)"
+            _ = restorePlaybackSession()
+            return .failed(error.localizedDescription)
+        }
+        let after = Self.outputRoute(session)
+        guard after == before else {
+            _ = restorePlaybackSession()
+            return .revertedRouteChanged(before: before, after: after)
+        }
+        audioSessionError = nil
+        return .granted(route: after)
+    }
+
+    /// Put the session back to the one configuration the rest of the app relies on.
+    /// - Returns: `.failed` when even the restore threw (the app is then in an unknown audio
+    ///   state and the error is left in `audioSessionError`), nil on success.
+    private func restorePlaybackSession() -> MicrophoneSessionResult? {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+            try session.setActive(true)
+            audioSessionError = nil
+            return nil
+        } catch {
+            audioSessionError = "Audio restore: \(error.localizedDescription)"
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// The current **output** route as a stable string ("BluetoothA2DP", "Speaker",
+    /// "Speaker+BluetoothA2DP"), for the before/after comparison and the trip log.
+    private static func outputRoute(_ session: AVAudioSession) -> String {
+        let ports = session.currentRoute.outputs.map(\.portType.rawValue).sorted()
+        return ports.isEmpty ? "none" : ports.joined(separator: "+")
     }
 
     /// Phone call / Siri: the system stops our audio without telling the backends. Put the

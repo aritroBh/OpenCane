@@ -2,7 +2,10 @@
 //  LiveView.swift
 //  CaneKitLogic
 //
-//  The camera's frame rate and what the Hazards card's "Live camera view" shows.
+//  The camera's frame rate and what the Hazards card's two camera views show:
+//    · `CameraRate` / `LiveView` — the ARKit-backed "Live camera view" (back camera only).
+//    · `BothCameras` / `BothCamerasLayout` — the "Both cameras" mode, which shows the front and
+//      back cameras together through `AVCaptureMultiCamSession` and **pauses ARKit** to do it.
 //
 //  Purpose: the live view is a GPU view of ARKit's own camera frames (`LiveCameraView` in the
 //  app). Two rules with numbers decide it, so they live here with tests instead of inline in
@@ -66,5 +69,79 @@ public enum LiveView: Equatable, Sendable {
         if hot { return .hot }
         guard cameraRunning else { return .cameraOff }
         return .live(fps: CameraRate.previewFramesPerSecond(highFrameRate: highFrameRate))
+    }
+}
+
+// MARK: - Both cameras (front + back at once)
+
+/// What the Hazards card's "Both cameras (pauses obstacle detection)" switch shows.
+///
+/// Purpose: the owner wants to *see* the front and the back camera at the same time. ARKit cannot
+/// do it — it delivers one camera image per frame and it is the rear one (Apple DTS, developer
+/// forums 677731: "there is no ARConfiguration that will enable you to receive both the front and
+/// rear camera image, so the functionality that you are looking for is not possible"; and
+/// "you still must choose one camera feed to show to the user at a time") — so the app switches to an
+/// `AVCaptureMultiCamSession` and **pauses ARKit** for the duration. Measured on the iPhone 17 Pro
+/// Max (trip-log `probe_c_multicam`): with both pipelines running, multi-cam delivered 246 front
+/// and 244 back frames while ARKit collapsed to 8 frames in the same 4 s window. That trade is a
+/// safety decision, so the rules about when the mode may be on live here with tests rather than
+/// inside a SwiftUI body.
+///
+/// Precedence, strictest first: not in the foreground → off; a route is running → blocked; the
+/// switch is off → off; the phone cannot do multi-cam → `backOnly`; else `live`.
+/// Tests: LiveViewTests.swift (`bothCameras…`).
+public enum BothCameras: Equatable, Sendable {
+    /// Nothing built, no cameras held, ARKit owns the camera as usual.
+    case off
+    /// Refused because guidance is running: the walker is *walking*, and the obstacle channel is
+    /// not something a spotter's picture may switch off mid-route.
+    case blockedByRoute
+    /// This phone cannot run two cameras at once, so only the back camera is shown, with a message.
+    case backOnly
+    /// Front and back camera previews, both live. ARKit is paused.
+    case live
+
+    /// - Parameters:
+    ///   - enabled: the card's switch (never persisted, so a launch can never start here).
+    ///   - supported: `DualCameraSession.isSupported` (`AVCaptureMultiCamSession.isMultiCamSupported`).
+    ///   - navigating: `NavigationEngine.isNavigating`.
+    ///   - foreground: false while backgrounded or locked (the capture session is stopped then).
+    public static func state(enabled: Bool, supported: Bool, navigating: Bool,
+                             foreground: Bool = true) -> BothCameras {
+        guard foreground else { return .off }
+        if navigating { return enabled ? .blockedByRoute : .off }
+        guard enabled else { return .off }
+        return supported ? .live : .backOnly
+    }
+}
+
+/// Geometry of the picture-in-picture inset in `BothCamerasView`.
+/// Numbers, so they live here with a test instead of inside `layoutSubviews`.
+public enum BothCamerasLayout {
+
+    /// The front camera's inset takes this fraction of the view's width. A third is big enough to
+    /// see a face on a phone screen and small enough to leave the back camera — the one that shows
+    /// where the walker is going — clearly the main picture.
+    public static let insetWidthFraction: Double = 0.33
+    /// Points between the inset and the view's edges.
+    public static let insetMargin: Double = 10
+    /// Corner radius of the inset, matching the card's button radius.
+    public static let insetCornerRadius: Double = 12
+    /// The inset is drawn in the camera's portrait shape (a 4:3 sensor shown upright).
+    public static let insetAspectWidthOverHeight: Double = 3.0 / 4.0
+
+    /// Frame of the front-camera inset inside a view of `width` × `height`, bottom-trailing.
+    /// - Returns: `(x, y, width, height)` in points. Clamped so the inset can never be taller than
+    ///   the view: a short preview box would otherwise push it off the top edge.
+    public static func insetRect(width: Double, height: Double)
+        -> (x: Double, y: Double, width: Double, height: Double) {
+        var w = width * insetWidthFraction
+        var h = w / insetAspectWidthOverHeight
+        let maxHeight = max(0, height - 2 * insetMargin)
+        if h > maxHeight {
+            h = maxHeight
+            w = h * insetAspectWidthOverHeight
+        }
+        return (x: width - w - insetMargin, y: height - h - insetMargin, width: w, height: h)
     }
 }
