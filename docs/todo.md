@@ -226,7 +226,7 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [ ] `scripts/gen.sh` → `make build` → `make install` on the phone; watch app installs
 - [x] Commit "Steps 1–2 (pre-device)" + CHANGELOG entry
 - [x] Simulator build green (Swift 6 strict)
-- **test on device:** app shows "LiDAR OK — ready" with three green capability rows; watch shows "CaneKit / Waiting for the phone"
+- **test on device:** app shows "LiDAR OK — ready" with three green capability rows; watch shows "OpenCane / Waiting for the phone"
 
 ## Step 2 — DepthEngine
 - [x] DepthFrameProcessor (historical Step 2 baseline: ARSession delegate on a background queue, gyro gate, 15 Hz, AsyncStream; current pipeline is 30 Hz normal / 60 Hz high-rate)
