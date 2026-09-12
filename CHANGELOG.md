@@ -2,6 +2,7 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+<<<<<<< HEAD
 <<<<<<< Updated upstream
 ## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
 
@@ -1013,6 +1014,37 @@ test on device: from a normal terminal `cd ios && make run`; then Settings → A
 Shortcut → Talk to OpenCane (if missing, open the Shortcuts app once to re-index, then retry);
 press → tick → "how is my battery" → press again → answer; walk past a doorway and confirm the
 order is "N meters ahead, door"; check the trip log for `voice_toggle {source: actionButton}`.
+=======
+## Step 29 — Refuse AR sensor-mode restarts during navigation (Sat Sep 12)
+
+The route-time sensor interlock now covers the remaining ARKit reconfiguration gap. `SensorModeInterlock`
+in `CaneKitLogic` tracks idle, route-starting, navigating and camera-teardown phases: face-tracking
+and 60-fps user changes are refused during every protected phase, the setting snaps back to the applied value, and
+the existing route error + speech channels explain why. Thermal mesh changes take the safe middle
+path: processor mesh lookup is disabled immediately to reduce heat, but the ARSession restart is
+deferred until Stop, arrival or cancellation, so obstacle lanes and haptics do not disappear for the
+~1–2 s configuration hand-off. Deferred configuration is applied once, with deterministic logging,
+and self-tests are blocked while a route is starting or guiding. AR session failures and active
+interruptions now clear stale obstacle cues and announce the degraded channel through speech/watch;
+recovery is announced only after a trusted frame. Added Logic coverage for idle permission,
+queued/active refusals, thermal deferral, cancellation and stable release ordering.
+
+**Verification:** `swiftc -typecheck` passes for all Logic sources with the available compiler;
+changed app files pass Swift parse and `git diff --check`. Full `make test` remains blocked here by
+the installed Swift 5.9 toolchain versus the package's Swift 6 tools version; simulator/device,
+Muse, Antigravity and `graphify update .` require the Xcode 27/tooling installations documented in
+`TEAM_BRIEF.md`.
+
+**Adversarial review dispositions:** a proposed report/session epoch was not added to `LaneReport`:
+every AR reconfiguration drains the serial delegate queue with `processor.synchronize()`, then
+captures a fresh processor sequence boundary before `DepthReadiness` accepts frames, so an epoch
+would duplicate that established hand-off and change the Logic wire value. Thermal mesh mitigation
+is intentionally processor-only until route end; the AR configuration stays untouched while the
+walker is moving because restarting it is the safety hazard this step removes.
+
+test on device: start a route, try enabling "Head tracking without AirPods" and "60 fps camera (warmer)" from Settings and confirm each switch snaps back, guidance never pauses, and the app says "Sensor settings cannot change while a route is guiding you. Stop the route first." During a route, heat the phone until the thermal warning appears and confirm lanes/haptics continue without a camera gap; stop or arrive, then confirm the deferred mesh configuration applies and the next route starts through the normal fresh-depth gate. Repeat both setting attempts while route start is warming and confirm the starting-specific message. With the debug sensor-self-test controls enabled, start the front-camera self-test first, then attempt a route and confirm the app refuses the route with "Finish the sensor self-test before starting a route." After the self-test finishes, start the route and confirm the normal gate runs. Cancel a queued route while the two-camera teardown is still draining, try either sensor self-test, and confirm it waits for the camera transition instead of restarting ARKit beside MultiCam.
+
+>>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 ## Step 28 — Sound recognition fails safe across its whole microphone lifetime (Sat Sep 12)
 
 The optional "Listen for sirens and horns" path now treats its microphone as untrusted unless the
