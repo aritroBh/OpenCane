@@ -46,7 +46,7 @@ Any other destination works through MapKit walking directions. The route and its
 | Part | Role |
 |---|---|
 | iPhone 17 Pro Max (iOS 27) | The only computer. LiDAR depth, Core Haptics through the cane, GPS + compass, camera for "Where am I" |
-| Non-metal stick, 28.75 mm shaft | The cane |
+| Non-metal stick, 27.65 mm shaft (a broom handle, for the prototype) | The cane |
 | Printed phone mount | Clamps the phone to the shaft. See [`hardware/mount/DESIGN.md`](hardware/mount/DESIGN.md) and [`hardware/README.md`](hardware/README.md). |
 | AirPods Pro | Spatial-audio beacon, speech, head yaw for the beacon |
 | Apple Watch | Wrist taps for turns / crossings / arrival, Repeat / Next / Describe / Recenter, crown = Next |
