@@ -183,14 +183,30 @@ final class DepthEngine {
         status = "Depth paused"
     }
 
-    /// Re-run the last configuration *without* resetting tracking (keeps anchors / mesh), restart
-    /// the gyro. Falls through to `start()` if the session was never started. Caller:
+    /// Re-run the configuration *without* resetting tracking (keeps anchors / mesh), restart the
+    /// gyro. Falls through to `start()` if the session was never started. Caller:
     /// `AppModel.scenePhaseChanged(.active)` and `start()` itself.
+    ///
+    /// ⚠ The configuration is rebuilt from the *current* settings, not replayed from the stored
+    /// one. `setFaceTracking`, `setMeshClassification` and `setHighFrameRate` all end in
+    /// `guard isRunning else { return }`: while the session is paused they record the flag and
+    /// skip the `session.run`, so the stored configuration still describes the world as it was
+    /// before the walker changed anything. Replaying it brought the session back *without* the
+    /// feature while every flag, every trip-log field and every UI readout said it was on. Not
+    /// hypothetical: on 2026-09-12 the walker turned on "Head tracking without AirPods"
+    /// (`canekit-2026-09-12T02-40-53Z.jsonl`, t=17.583) while "Both cameras" had ARKit paused
+    /// (t=5.772), so `userFaceTrackingEnabled` was requested and never actually run in that
+    /// process — the first session that really ran with it was the next cold launch, which died
+    /// inside the ARKit warm-up. A settings change has to reach ARKit at the next resume, or it
+    /// reaches it later somewhere nobody is watching. Rebuilding costs one value object, and
+    /// `session.run` without `.resetTracking` still keeps the world map.
     func resume() {
         guard !isRunning else { return }
-        guard let configuration else { start(); return }
+        guard configuration != nil else { start(); return }
+        let config = makeConfiguration(mesh: meshEnabled)
+        configuration = config
         processor.startMotion()
-        session.run(configuration)               // no reset: keep the world map
+        session.run(config)                      // no reset: keep the world map
         isRunning = true
         status = "Depth resuming…"
     }

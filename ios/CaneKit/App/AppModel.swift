@@ -19,6 +19,10 @@
 //
 //  Key invariants:
 //    · `start()` runs once; its order (audio session → haptics → ARKit) is load-bearing.
+//    · **No optional feature may keep the app from starting.** Optional sensor/model features are
+//      either not persisted at all (the microphone and the front camera) or cleared by
+//      `LaunchRecovery` after a launch that never reported itself healthy. A walker who cannot
+//      reach the switch cannot turn the feature off, so the app has to do it for them.
 //    · Cue-router timing uses the ARKit clock (`report.timestamp`), never wall time.
 //    · The `.head` cue is never suppressed (AGENTS.md hard rule 8); "Head height." is spoken
 //      once per obstacle episode, never every second.
@@ -233,9 +237,30 @@ final class AppModel {
     /// `userFaceTrackingEnabled`). Default OFF: new and untuned on the real cane (AGENTS.md rule
     /// 6), and it costs the TrueDepth camera's power. Turning it on re-runs the AR session
     /// (~1–2 s of depth), which is why it is a *setting* and not something the app flips itself.
-    var faceHeadTrackingEnabled: Bool = Settings.bool("faceHeadTrackingEnabled", default: false) {
+    ///
+    /// ⚠ **Not persisted**, for the same reason the microphone switch below is not — and this one
+    /// was learned the hard way. It *was* persisted, and on 2026-09-12 that made the app
+    /// unstartable. The evidence, from the phone:
+    ///   · `canekit-2026-09-12T02-40-53Z.jsonl`, t=17.583:
+    ///     `{"kind":"face_tracking","supported":true,"enabled":true}` — the switch went on. "Both
+    ///     cameras" was running at the time (t=5.772), so ARKit was paused and
+    ///     `DepthEngine.setFaceTracking` only stored the flag; the session was never actually run
+    ///     with it in that process.
+    ///   · `canekit-2026-09-12T02-41-13Z.jsonl`, the next launch: three records —
+    ///     `session` (t=0.641), `start` with `"face_head_tracking":true` (t=0.667) and
+    ///     `multicam_depth` (t=0.827) — and the file stops. `TripLogger` buffers and flushes every
+    ///     2 s, so those reached disk at the t≈2 s flush and nothing survived the t≈4 s one: the
+    ///     process died inside the ARKit warm-up, before the first `lanes` record (the healthy
+    ///     session before it wrote one at t=3.117).
+    /// Persisting it meant the first thing the app did on every later launch was the thing that
+    /// had just killed it, and the switch that would turn it off is on a screen the app never
+    /// reached. A blind walker cannot get out of that. Like the microphone below, the front camera
+    /// is cheap to turn on and expensive to notice, so it is a per-session choice now and not a
+    /// setting that re-arms itself because of something the walker did yesterday.
+    /// `LaunchRecovery` (CaneKitLogic) is the belt to this braces: it also *removes* any
+    /// `faceHeadTrackingEnabled` an older build left on disk.
+    var faceHeadTrackingEnabled: Bool = false {
         didSet {
-            Settings.set(faceHeadTrackingEnabled, "faceHeadTrackingEnabled")
             depth.setFaceTracking(faceHeadTrackingEnabled)
             if faceHeadTrackingEnabled { faceHead.start() } else { faceHead.stop() }
             logger.event("face_tracking", ["enabled": faceHeadTrackingEnabled,
@@ -265,6 +290,9 @@ final class AppModel {
     @ObservationIgnored private var thermalObserver: NSObjectProtocol?
     /// Token for the `batteryLevelDidChangeNotification` observer (kept alive for the process).
     @ObservationIgnored private var batteryObserver: NSObjectProtocol?
+    /// Token for the `didEnterBackgroundNotification` observer that marks this launch healthy
+    /// (`observeLaunchHealth`). Kept alive for the process, like the two above.
+    @ObservationIgnored private var backgroundObserver: NSObjectProtocol?
 
     /// The 10 Hz beacon-sync loop (`startTicker`); non-nil only while a route is active.
     @ObservationIgnored private var ticker: Task<Void, Never>?
@@ -288,7 +316,10 @@ final class AppModel {
         context.setPeopleEnabled(namePeopleEnabled)
         pushDepthSettings()
         depth.setHighFrameRate(highFrameRateCamera)   // before start(): only sets the flag
-        depth.setFaceTracking(faceHeadTrackingEnabled) // likewise: the flag, not a session re-run
+        // Likewise the flag, not a session re-run. Always `false` now that the switch does not
+        // persist (see the property): the app can no longer come up with the front camera on
+        // because of a tap in a previous session.
+        depth.setFaceTracking(faceHeadTrackingEnabled)
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
         beacon.enabled = beaconEnabled
@@ -379,7 +410,12 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+        // Before a single engine runs: from here on, a launch that dies is a launch the next one
+        // has to recover from. `Settings.launchMode` has already read (and cleared) the previous
+        // launch's marker at the first settings read in `init`.
+        Settings.armLaunchMarker()
         observeThermalAndBattery()
+        observeLaunchHealth()
         logger.start()
         speech.configureAudioSession()       // before ARKit and before the haptic engine
         wireAudioRoute()
@@ -426,7 +462,17 @@ final class AppModel {
         wireHazards()
         wireDescriber()
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
-                               "haptics": haptics.isHealthy, "vision": describer.providerName ?? "none",
+                               "haptics": haptics.isHealthy,
+                               // ⚠ `haptics: false` used to be the whole story, and it is not a
+                               // story: on 2026-09-12 three consecutive launches logged it with no
+                               // way to tell a dead Taptic Engine from a failed
+                               // `CHHapticEngine.start()`. `HapticPlayer` already holds the
+                               // reason — write it down (AGENTS.md "make the invisible visible").
+                               "haptics_error": haptics.lastError ?? "",
+                               // Which launch this is: `recovered` means the previous one never
+                               // reported itself healthy and the optional features were cleared.
+                               "launch": Settings.launchMode.rawValue,
+                               "vision": describer.providerName ?? "none",
                                // What this phone can run alongside LiDAR (measured, not assumed).
                                "video_format": depth.chosenFormat,
                                "video_formats": DepthEngine.supportedFormats,
@@ -454,6 +500,7 @@ final class AppModel {
         if !cameraDenied {
             speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
         }
+        announceLaunchRecovery()
         // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
         // CANEKIT_DEMO_ROUTE=1 environment variable starts guidance at launch.
         if CommandLine.arguments.contains("--demo-route")
@@ -463,6 +510,44 @@ final class AppModel {
         // What this phone's cameras could do *together* — a capability read, no session started,
         // off the main thread, one `multicam_depth` record. See `MultiCamDepthProbe`.
         logMultiCamDepthProbe()
+    }
+
+    // MARK: Launch health (an optional feature may never stop the app from starting)
+
+    /// Arm the marker's removal: this launch counts as healthy once it has been alive for
+    /// `LaunchRecovery.healthySeconds`, or the moment the walker deliberately sends the app to the
+    /// background (locking the phone or switching away is something only a *running* app can have
+    /// done, so it is proof the launch worked and it stops a quick, legitimate exit from being read
+    /// as a crash).
+    ///
+    /// ⚠ Deliberately a `UIApplication` notification rather than a line in `scenePhaseChanged`:
+    /// launch health has nothing to do with pausing engines, and keeping it here keeps the two
+    /// concerns from growing into each other. Registered with `queue: .main`, so
+    /// `MainActor.assumeIsolated` is sound (AGENTS.md hard rule 1), exactly like
+    /// `observeThermalAndBattery`. Caller: `start()`.
+    private func observeLaunchHealth() {
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { Settings.markLaunchHealthy() }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(LaunchRecovery.healthySeconds))
+            Settings.markLaunchHealthy()
+        }
+    }
+
+    /// Say, once, that the previous launch died and what this one turned off to come up.
+    ///
+    /// The walker cannot see that a switch moved, and an app that silently drops features is worse
+    /// than one that admits it: `.nav` priority so it never steps on an obstacle warning, with a
+    /// ttl so it is dropped rather than spoken late if the walker is already moving.
+    /// Caller: `start()`, after "CaneKit ready."
+    private func announceLaunchRecovery() {
+        guard let line = LaunchRecovery.spokenLine(for: Settings.launchMode) else { return }
+        logger.event("launch_recovery", ["cleared": LaunchRecovery.optionalFeatureKeys,
+                                         "healthy_seconds": LaunchRecovery.healthySeconds])
+        speech.say(line, .nav, ttl: 20)
     }
 
     // MARK: Sensor self-tests (debug controls — never automatic)
@@ -1599,9 +1684,76 @@ final class AppModel {
 /// Thin UserDefaults wrapper so settings stay one-liners above.
 /// Keys are the AppModel property names; main-actor by the target default.
 enum Settings {
+
+    /// How this launch is running — and the side effect that makes it true.
+    ///
+    /// Reading this the first time is what performs the crash-loop recovery: it looks for the
+    /// marker the previous launch should have removed and, when the marker is still there, clears
+    /// every key in `LaunchRecovery.optionalFeatureKeys` before any of them can be read.
+    ///
+    /// ⚠ It has to run **before the first setting is read**, because a stored property's default
+    /// value is evaluated before `AppModel.init`'s body ever runs — by the time the body could
+    /// call anything, `groundHazardsEnabled` and friends already hold the values that killed the
+    /// last launch. `bool(_:default:)` therefore forces it, and Swift's `static let` gives that
+    /// exactly-once, thread-safe semantics for free.
+    ///
+    /// Why a recovery at all: on 2026-09-12 a persisted optional feature (front-camera head
+    /// tracking) made the app die ~2–4 s into launch, on every launch, with the switch that would
+    /// have turned it off on a screen the app never reached. `LaunchRecovery` (CaneKitLogic, with
+    /// the trip-log evidence and the tests) is the rule that no optional feature may ever hold the
+    /// app's start hostage again.
+    ///
+    /// ⚠ Reading this only *reads and clears*. Arming the marker for this launch is
+    /// `armLaunchMarker()`, called from `AppModel.start()` — deliberately not from here (Muse M1).
+    /// A process that builds an `AppModel` and never starts its engines (an App Intent waking the
+    /// app on the lock screen, an XCUITest that is torn down, a SwiftUI preview) would otherwise
+    /// arm a marker nothing ever clears, and the next real launch would throw away the walker's
+    /// settings for a crash that never happened. Only a launch that actually reached `start()` —
+    /// the launch that can be killed by a feature — arms it.
+    static let launchMode: LaunchMode = {
+        let defaults = UserDefaults.standard
+        // Absent marker = the previous launch removed it = the previous launch was healthy.
+        let previousCompleted = !FileManager.default.fileExists(atPath: markerURL.path)
+        let mode = LaunchRecovery.mode(previousLaunchCompleted: previousCompleted)
+        if mode == .recovered {
+            // Remove rather than write `false`: the walker gets the built-in default back
+            // (sign reading on, drop-offs off), not a value the app invented.
+            for key in LaunchRecovery.optionalFeatureKeys { defaults.removeObject(forKey: key) }
+        }
+        return mode
+    }()
+
+    /// Where the "a launch is in progress" marker lives: an empty file in Application Support.
+    ///
+    /// ⚠ A file, not a `UserDefaults` key (see `LaunchRecovery.markerName`): the marker has to
+    /// survive a process that dies two seconds after writing it, and `UserDefaults` only promises
+    /// to flush "at appropriate intervals". Application Support rather than Caches (the system may
+    /// purge Caches, which would silently disarm the guard) and rather than Documents (that folder
+    /// is the walker's, and the trip logs they AirDrop live there).
+    private static let markerURL: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? URL.documentsDirectory
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.appendingPathComponent(LaunchRecovery.markerName)
+    }()
+
+    /// This launch has begun starting engines: if it dies before it is healthy, the next one
+    /// recovers. Caller: `AppModel.start()`, before anything is started.
+    static func armLaunchMarker() {
+        FileManager.default.createFile(atPath: markerURL.path, contents: nil)
+    }
+
+    /// This launch got far enough to be trusted: drop the marker so the next launch is normal.
+    /// Called by `AppModel.start()` after `LaunchRecovery.healthySeconds`, and at once when the
+    /// walker deliberately backgrounds the app (an app someone is using is an app that started).
+    static func markLaunchHealthy() {
+        try? FileManager.default.removeItem(at: markerURL)
+    }
+
     /// Stored Bool for `key`, or `d` when the key has never been written (not `false`).
     static func bool(_ key: String, default d: Bool) -> Bool {
-        UserDefaults.standard.object(forKey: key) as? Bool ?? d
+        _ = launchMode              // ⚠ forces the recovery above before any setting is read
+        return UserDefaults.standard.object(forKey: key) as? Bool ?? d
     }
     /// Persists `value` under `key` in `UserDefaults.standard`.
     static func set(_ value: Bool, _ key: String) {
