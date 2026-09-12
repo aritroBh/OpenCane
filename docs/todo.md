@@ -1,6 +1,92 @@
 # CaneKit — strict build checklist
 
-Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested (no Xcode on the Mac yet) · `[!]` blocked
+Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested · `[!]` blocked on a person
+
+---
+
+## WHERE WE ARE — Fri 2026-09-11, 19:45 (read this first)
+
+Demo: Sat 2026-09-12. The app runs untethered on Aritro's iPhone 17 Pro Max (iOS 27), clamped to a
+cane, with AirPods Pro. **This block is rewritten on every push; if it contradicts an older section
+lower down, this block is right.**
+
+### What is proven ON THE PHONE (measured, from trip logs in `Documents/`)
+
+| Thing | Evidence |
+| --- | --- |
+| LiDAR depth, mesh names, haptics, head-height cue | `start` record: `lidar: true, mesh: true, haptics: true`; speech records "window ahead, one and a half meters", "table ahead, half a meter", "Head height." |
+| Depth at 30 reports/s | `lanes.fps` median **29.988** (was exactly 10.0 before the `PublishGate` timing fix) |
+| Both cameras at once | `both_cameras` records: `supported: true, front: true, back: true, error: "", hardware_cost: 0.26`, and after stop `depth_running: true, depth_fps: 30, status: "Depth OK"` |
+| Trip-log field collision fixed | zero rows carry `field_kind` / `field_t` |
+| ElevenLabs (Bella) reachable | key verified `HTTP 200`, free tier 0/10 000 chars; a real 9 kB mono mp3 at 22.05 kHz came back for the app's exact payload |
+| Muse Spark 1.3 reachable + multimodal | key verified `HTTP 200` from `muse-spark-1.3-contributor`; docs confirm `/v1/chat/completions` and image understanding |
+
+### What is NOT proven on the phone yet
+
+- People/animal detection (Vision's neural models cannot run in the simulator — phone-only).
+- The Muse scene sentence end to end after tonight's reasoning-token fix.
+- Ground hazards (drop-offs, potholes) on real pavement; still **off by default**.
+- Sound recognition (sirens, horns) and front-camera head tracking; both **off by default**.
+- The outdoor ISR → CIF walk.
+
+### Honest capability table — what the demo can and cannot claim
+
+| Hazard | Mechanism | Status |
+| --- | --- | --- |
+| Poles, signs, branches, open doors (waist-to-head) | LiDAR geometry, no model | **Works, verified on device.** The strongest claim we have |
+| Drop-offs, potholes, curbs, steps | LiDAR ground geometry | Built + tested, tilt-gated against the false "Hole ahead"; off by default, untested on real pavement |
+| People, dogs, cats + direction + measured distance | Apple `DetectHumanRectanglesRequest` / `RecognizeAnimalsRequest` + LiDAR box depth | Built, 206 Logic tests, **never run on hardware** |
+| Signs, crosswalk push-buttons | Vision OCR, measured to ≈ 7 m for 7.5 cm letters | Works |
+| **Cars, bikes, ice, puddles, construction** | **No Apple detector exists.** Only the 1 303-label classifier — which returned *zero* usable labels on the phone — or a vision-language model | **Needs the Muse key, which is now wired.** Verify on device before claiming it |
+| Route guidance, veer, crossings | GPS + MapKit + compass | Works; the veer regression below is being fixed |
+
+**The line to say out loud at the demo:** *the model names things; LiDAR measures them. No number the
+sensors did not see is ever spoken.*
+
+### Keys (git-ignored `ios/CaneKit/Resources/Secrets.plist`, never committed)
+
+- `ELEVENLABS_API_KEY` — set. Voice `EXAVITQu4vr4xnSDxMaL` (Bella), model `eleven_flash_v2_5`,
+  settings stability 0.4 / similarity 0.75.
+- `CUSTOM_*` — set to Meta Model API: `https://api.meta.ai/v1`, `muse-spark-1.3-contributor`,
+  `VLM_PROVIDER = custom`. Key format is **pipe**-delimited (`LLM|<digits>|<chars>`).
+- ⚠ **Rotate both keys after the event** — they were pasted into a chat transcript.
+- ⚠ A build made in a git worktree gets an **empty** Secrets.plist (the file is git-ignored), so an
+  agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
+  do the same for any new one, or install only from the main checkout.
+
+### In flight right now (branches, none merged — main has 2 failing UI tests)
+
+- `feat/all-sensors` — both-cameras mode, front-camera head tracking, microphone sound recognition
+- `fix/veer-gap-regression` — the safety regression below
+- `fix/voice-consistency` — stop the voice alternating between Bella and Apple's
+- `fix/cloud-scene-gate` — gate the cloud sentence + the Muse reasoning-token fix (committed)
+- `feat/detect-people` — people/animal detection (committed)
+- `feat/fm-image-describe` — Apple on-device model with the image (experiment, off by default)
+- main — the search-box suggestion rework (committed) + its two failing UI tests
+
+### Open safety items (these outrank every feature)
+
+- [ ] **Veer regression.** A veer cue needs 3 s of continuous off-course. A Muse review earlier today
+      made a *gated* moment (poor/stale fix, or not walking) end the episode — so under jittery GPS
+      the hold never accumulates and **the veer warning never fires at all**. Caught by `make e2e`
+      (`wrong_turn`, `gps_jitter`). Being fixed with failing tests first, for both directions: no
+      phantom veer after a real GPS gap, and no missing veer under mere jitter.
+- [ ] **`wrong_turn` also reports "no arrival (last waypoint index 3)"** — same cause or a second bug,
+      under investigation.
+- [ ] Two failing XCUITests on main (`testDestinationFieldRejectsEmptyQuery`,
+      `testTypingOffersCampusSuggestionsAndClearsTheError` — the "Go" button is not found at all).
+
+### The merge gate (nothing lands on main that fails any step)
+
+1. `cd ios/Logic && swift test` · 2. `make sim` · 3. `make uitest` (muted) · 4. `make e2e` (4 scenarios)
+· 5. Muse + Antigravity over the **merged whole**, every finding verified by hand before acting
+· 6. install on the phone and confirm from the trip log.
+
+⚠ Never run two simulator jobs at once — concurrent `make uitest` and `make e2e` produced a bogus
+"harness error: No such file or directory" that looks like a real failure. Use
+`make uitest SIM="iPhone 18 Pro"` to work alongside someone else's run.
+
+---
 
 ## Step 0 — phone-only reset
 - [x] Push 3 commits to origin/main
