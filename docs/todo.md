@@ -229,12 +229,12 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - **test on device:** app shows "LiDAR OK — ready" with three green capability rows; watch shows "CaneKit / Waiting for the phone"
 
 ## Step 2 — DepthEngine
-- [x] DepthFrameProcessor (ARSession delegate on a background queue, gyro gate, 15 Hz, AsyncStream)
+- [x] DepthFrameProcessor (historical Step 2 baseline: ARSession delegate on a background queue, gyro gate, 15 Hz, AsyncStream; current pipeline is 30 Hz normal / 60 Hz high-rate)
 - [x] DepthEngine (main-actor owner: start/pause/resume, video format, thermal hook, fps)
 - [x] LaneGridView / DebugView (6 tiles, TRUSTED pill, fps, |ω|, thermal, battery, portrait/mirror toggles)
 - [x] CameraControlInteraction spike (AVCaptureEventInteraction) — log whether it fires under ARKit
 - [ ] Build, install, run the test list; Muse review; commit
-- **test on device:** wall at 1 m ≈ 1.0 in all six tiles; hand at left edge → Left tiles red; raise hand → Head row; swing cane → TRUSTED off; fps ≈ 15; Camera Control press shows "CC event" (or not — record which)
+- **test on device (historical Step 2 baseline):** wall at 1 m ≈ 1.0 in all six tiles; hand at left edge → Left tiles red; raise hand → Head row; swing cane → TRUSTED off; fps ≈ 15; Camera Control press shows "CC event" (or not — record which). For the current pipeline use the Step 25 cadence/interlock checklist.
 
 ## Step 3 — Core Haptics
 - [x] HapticPlayer (CHHapticEngine, pre-built players, Geiger loop, reset/stopped handlers, isHealthy) — compiles, untested on device
@@ -491,7 +491,7 @@ for 60 s so a weak network can never stall a cue.
 - **test on device:** see CHANGELOG Step 20
 
 ## Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root (Sat Sep 12)
-- [x] Profiled SwiftUI Observation invalidation under high-frequency LiDAR updates (15–30 Hz `model.depth.report`)
+- [x] Profiled SwiftUI Observation invalidation under high-frequency LiDAR updates (historical 15–30 Hz `model.depth.report`; current normal cadence is 30 Hz, high-rate is up to 60 Hz)
 - [x] Extracted `ObstaclesCard` and `MountAimRow` leaf subviews inside `ContentView.swift`
 - [x] Preserved pure value semantics on `LaneGridView(report:)` and hoisted `laneNames` static array
 - [x] Verified zero concurrency regressions under Swift 6 strict concurrency (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`)
