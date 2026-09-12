@@ -177,6 +177,20 @@ final class AppModel {
     var hazardWatchEnabled: Bool = Settings.bool("hazardWatchEnabled", default: false) {
         didSet { Settings.set(hazardWatchEnabled, "hazardWatchEnabled"); hazards.watchEnabled = hazardWatchEnabled }
     }
+    /// Name people (and dogs / cats) in "Where am I" (Hazards card).
+    ///
+    /// Default **ON**, unlike the drop-off and hazard-watch switches: this runs nowhere near the
+    /// cue path — only when the walker asks "Where am I", a few times a walk — and it is expected
+    /// to add no wall clock there, because the body detectors run concurrently with the text pass
+    /// (`OnDeviceVision.detect`), which is the long pole. It is a switch at all because Vision's neural
+    /// models cannot be exercised in the simulator: the first real evidence comes from the phone,
+    /// and if the detector is noisy on the cane it can be turned off here without a rebuild.
+    var namePeopleEnabled: Bool = Settings.bool("namePeopleEnabled", default: true) {
+        didSet {
+            Settings.set(namePeopleEnabled, "namePeopleEnabled")
+            sceneContext.setPeopleEnabled(namePeopleEnabled)
+        }
+    }
     /// Live camera view on the Hazards card (sighted helper / demo video). Not persisted: off at launch.
     var liveViewEnabled = false
 
@@ -199,10 +213,12 @@ final class AppModel {
         let context = SceneContext()
         sceneContext = context
         let client = VLMClientFactory.resolved(context: context)
-        describer = SceneDescriber(processor: depth.processor, speech: speech, client: client)
+        describer = SceneDescriber(processor: depth.processor, speech: speech, client: client,
+                                   context: context)
         hazards = HazardScanner(processor: depth.processor, watchClient: client)
         hazards.signsEnabled = signsEnabled
         hazards.watchEnabled = hazardWatchEnabled
+        context.setPeopleEnabled(namePeopleEnabled)
         pushDepthSettings()
         depth.setHighFrameRate(highFrameRateCamera)   // before start(): only sets the flag
         haptics.silenced = hapticsSilenced
@@ -234,6 +250,9 @@ final class AppModel {
                 "frame": frame,
                 "labels": OnDeviceVision.lastClassify.withLock { $0.labels },
                 "vision_error": OnDeviceVision.lastClassify.withLock { $0.error ?? "" },
+                // What the dedicated detectors saw ("2 person, 1 dog"), so a walk log shows
+                // whether people were found even on the frames where the classifier said nothing.
+                "people": OnDeviceVision.lastPeople.withLock { $0 },
             ])
         }
     }
@@ -1020,9 +1039,13 @@ final class AppModel {
 
     // MARK: Private
 
-    /// Pushes `portraitMode` / `mirrorLeftRight` into the depth engine's lane remap.
+    /// Pushes `portraitMode` / `mirrorLeftRight` into the depth engine's lane remap, and the
+    /// mirror into `sceneContext` as well: the camera image is never mirrored, so a mirrored
+    /// mount has to swap left and right in *speech* (`PeopleAhead.bearing`), exactly as the lane
+    /// grid swaps them in the haptics.
     private func pushDepthSettings() {
         depth.apply(portrait: portraitMode, mirror: mirrorLeftRight, groundHazards: groundHazardsEnabled)
+        sceneContext.setMirrored(mirrorLeftRight)
     }
 
     /// Enables battery monitoring, reads the initial values and subscribes to thermal / battery
