@@ -6,19 +6,25 @@
 //    · `CameraRate` / `LiveView` — the ARKit-backed "Live camera view" (back camera only).
 //    · `BothCameras` / `BothCamerasLayout` — the "Both cameras" mode, which shows the front and
 //      back cameras together through `AVCaptureMultiCamSession` and **pauses ARKit** to do it.
+//    · `FaceTrackingChange` — when "Head tracking without AirPods" may re-run the AR session (Step 34).
+//    · `DualCameraRotation` — the per-camera `videoRotationAngle` for the two-camera view (after
+//      Step 36, measured on the owner's phone).
+//  (The Hazards card is on the Sense tab.)
 //
 //  Purpose: the live view is a GPU view of ARKit's own camera frames (`LiveCameraView` in the
 //  app). Two rules with numbers decide it, so they live here with tests instead of inline in
 //  SwiftUI: the camera runs 30 fps (60 with the Mount card's "60 fps camera" switch), and the view
-//  renders at exactly that rate; and the view is paused while the phone is hot, because it is
-//  optional and the obstacle lanes are not.
-//  Owners: `DepthEngine.makeConfiguration` (video format fps) and `HazardsCard` (view state).
+//  renders at that rate capped at `CameraRate.previewCap` (30) — so always 30 today; and the view
+//  is paused while the phone is hot, because it is optional and the obstacle lanes are not.
+//  Owners: `DepthEngine.makeConfiguration` / `setHighFrameRate` (video format fps, publish cap),
+//  `HazardsCard` (`LiveView.state`, `BothCameras.state`), `AppModel` (`FaceTrackingChange`),
+//  `DualCameraSession.connect` (`DualCameraRotation`), `BothCamerasView` (`BothCamerasLayout`).
 //
 //  Key invariants:
 //    · The view never renders faster than the camera delivers frames (a 60 Hz render of a
 //      30 fps camera is heat for nothing).
 //    · Hot beats running: the thermal pause hides the view even when ARKit is running.
-//  Tests: LiveViewTests.swift.
+//  Tests: LiveViewTests.swift (22).
 //
 
 import Foundation
@@ -36,6 +42,8 @@ public enum CameraRate {
     /// picture must never cost the walker their obstacle warnings, and heat pauses those
     /// (Muse review of the live-view branch).
     public static let previewCap = 30
+    /// The live view's render rate: `framesPerSecond` capped at `previewCap` (so 30 either way).
+    /// Callers: `LiveView.state`, `LiveCameraView`. Pinned by `liveViewRendersAtMostThirtyFramesPerSecond`.
     public static func previewFramesPerSecond(highFrameRate: Bool) -> Int {
         min(previewCap, framesPerSecond(highFrameRate: highFrameRate))
     }
@@ -50,11 +58,13 @@ public enum LiveView: Equatable, Sendable {
     case hot
     /// ARKit is not running (no LiDAR, backgrounded, or failed): a text line, no GPU view.
     case cameraOff
-    /// The GPU camera view, rendered at `fps` (the camera's own frame rate).
+    /// The GPU camera view, rendered at `fps` (`CameraRate.previewFramesPerSecond`: the camera's
+    /// rate capped at 30).
     case live(fps: Int)
 
     /// Decide the live view from the switch, the thermal pause, the session state and the camera
-    /// rate. Precedence: off → hot → cameraOff → live. Pinned by the `liveView…` tests.
+    /// rate. Precedence: not in the foreground → cameraOff (even with the switch off), then
+    /// off → hot → cameraOff → live. Pinned by the `liveView…` tests (`liveViewIsOffInTheBackground`).
     /// - Parameters:
     ///   - enabled: `AppModel.liveViewEnabled` (the card's switch; not persisted).
     ///   - hot: `HazardScanner.paused` (set by `AppModel.updateThermal` at `.serious` / `.critical`).
@@ -114,6 +124,7 @@ public enum BothCameras: Equatable, Sendable {
     ///   - supported: `DualCameraSession.isSupported` (`AVCaptureMultiCamSession.isMultiCamSupported`).
     ///   - navigating: `NavigationEngine.isNavigating`.
     ///   - foreground: false while backgrounded or locked (the capture session is stopped then).
+    /// - Returns: see the precedence above. Caller: `HazardsCard` (the caption / picture under the switch).
     public static func state(enabled: Bool, supported: Bool, navigating: Bool,
                              foreground: Bool = true) -> BothCameras {
         guard foreground else { return .off }
@@ -191,6 +202,9 @@ public enum DualCameraRotation {
         return candidates.first(where: supports)
     }
 
+    /// True when a delivered buffer is taller than wide (and non-empty). Diagnostics only:
+    /// `DualCameraSession` logs it as `front_portrait` / `back_portrait`; nothing acts on it.
+    /// Pinned by `deliveredBufferIsPortraitWhenTallerThanWide`.
     public static func isPortrait(width: Int, height: Int) -> Bool {
         width > 0 && height > width
     }
@@ -198,6 +212,7 @@ public enum DualCameraRotation {
 
 /// Geometry of the picture-in-picture inset in `BothCamerasView`.
 /// Numbers, so they live here with a test instead of inside `layoutSubviews`.
+/// Pinned by `bothCamerasInsetSitsInTheBottomTrailingCorner`, `bothCamerasInsetIsClampedInAShortBox`.
 public enum BothCamerasLayout {
 
     /// The front camera's inset takes this fraction of the view's width. A third is big enough to

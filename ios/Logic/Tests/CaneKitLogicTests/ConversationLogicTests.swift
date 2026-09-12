@@ -9,8 +9,8 @@
 //  `ConversationHistory` ring buffer), `FastPathIntentClassifier.swift` (`classify`,
 //  `isSceneQuestion`) and `ConversationPrompt.swift` (`ConversationPrompt.buildUserPrompt`,
 //  `ConversationResponseParser.parse`). The classifier's "Nod to talk" rule is pinned separately in
-//  `NodToTalkFastPathTests.swift`. (⚠ The source headers name `ConversationPromptTests` /
-//  `FastPathIntentClassifierTests`; no such files exist — this file is those tests.)
+//  `NodToTalkFastPathTests.swift`. (There is no separate `ConversationPromptTests` or
+//  `FastPathIntentClassifierTests` file: those tests live here.)
 //  Caller of everything pinned here: `ConversationCoordinator` (app); the dropped markers are
 //  persisted by `PostStore` (app) as `[WalkMarker]` JSON.
 //

@@ -7,10 +7,29 @@
 //  while this type owns the consecutive-frame and timeout rules so they can be tested without
 //  ARKit or a real camera.
 //
+//  Why (Steps 22 / 25): a route used to start while ARKit was still warming up or recovering from
+//  the "Both cameras" teardown, so the first seconds of guidance had no obstacle channel. Guidance
+//  now waits for fresh, same-frame evidence that depth works — bounded, so a dead camera fails
+//  loudly ("Obstacle detection is not ready. Route did not start.", `.safety`) instead of leaving
+//  the walker waiting. The no-LiDAR and camera-denied paths deliberately skip this gate and guide
+//  with GPS only (AGENTS.md "How we engineer" 6).
+//
+//  Owner / callers: `DepthEngine` (main actor) holds one `DepthReadiness` and one
+//  `DepthFrameContinuity`: `beginReadiness(at:)` / `pollReadiness(at:)` / `cancelReadiness()` for
+//  `AppModel.queueRouteStart`, `frame(at:…)` from `ingest(_:)` for every post-baseline report,
+//  `invalidate(at:)` on interruption, pause / resume, configuration re-runs and two-camera
+//  transitions. State changes reach `AppModel.depthReadinessChanged` (ready → `startRouteNow`;
+//  timedOut → `failQueuedRouteStart`) and the `route_readiness` trip-log event.
+//  Clock: every `now` here is `ProcessInfo.systemUptime` supplied by the app (not the ARKit frame
+//  timestamp), so `maxFrameGap` measures gaps between *consumed* reports on the main actor.
+//  Tests: DepthReadinessTests.swift (7).
+//
 
 import Foundation
 
 /// The state of the short ARKit warm-up window used before starting route guidance.
+/// Mirrored in `DepthEngine.readinessState`; `ready` and `timedOut` are terminal until the next
+/// `begin` / `invalidate` / `cancel`.
 public enum DepthReadinessState: String, Sendable, Equatable {
     /// No route-start request is waiting for depth.
     case idle
@@ -26,13 +45,21 @@ public enum DepthReadinessState: String, Sendable, Equatable {
 /// `AsyncStream.bufferingNewest(1)` may drop an intermediate report; the adapter must then discard
 /// the newest report as readiness evidence and earn a wholly contiguous run again. This stays in
 /// CaneKitLogic so the policy is testable without ARKit. Caller: `DepthEngine.ingest`.
+/// ⚠ `accepts` is `mutating`: call it into a local before `#expect` (a `mutating` call inside
+/// `#expect` does not compile — Step 27, `DepthReadinessTests`).
 public struct DepthFrameContinuity: Sendable, Equatable {
+    /// `LaneReport.frameSequence` of the last report published before the boundary; nil = no
+    /// boundary known (the first report is accepted as-is).
     private var baseline: Int?
+    /// The last sequence seen since `begin`; nil until the first `accepts`.
     private var last: Int?
 
+    /// No boundary, nothing seen: the first sequence is accepted.
     public init() {}
 
     /// Start a new stream window. Reports at or before `after` are pre-transition evidence.
+    /// - Parameter sequence: `DepthFrameProcessor.latestPublishedSequence()` read by `DepthEngine`
+    ///   at the transition (a reconfiguration drains the processor queue first), or nil when unknown.
     public mutating func begin(after sequence: Int?) {
         baseline = sequence
         last = nil
@@ -41,6 +68,10 @@ public struct DepthFrameContinuity: Sendable, Equatable {
     /// Accept one published sequence as contiguous evidence. The first report after a known
     /// boundary must be exactly `baseline + 1`; after that every report must increment by one.
     /// A gap returns false and becomes the new anchor, so the next report can start a fresh run.
+    /// Sequences wrap (`&+`), matching the processor's wrapping counter.
+    /// - Returns: true when `sequence` is contiguous evidence; false → the caller invalidates the run.
+    /// Pinned by `publishedFrameContinuityRejectsGapsAndRecovers`,
+    /// `publishedFrameContinuityHonorsTransitionBoundary`.
     public mutating func accepts(_ sequence: Int) -> Bool {
         defer { last = sequence }
         if let last { return sequence == last &+ 1 }
@@ -59,13 +90,16 @@ public struct DepthFrameContinuity: Sendable, Equatable {
 /// camera release / ARKit warm-up is about 1–3 seconds, while three reports at the normal 30 Hz
 /// publish rate provide roughly 67 ms of healthy evidence after the first frame.
 public struct DepthReadiness: Sendable, Equatable {
-    /// Tunables kept in the logic module and injectable for deterministic tests.
+    /// Tunables kept in the logic module and injectable for deterministic tests. The app uses only
+    /// `standardConfiguration` (3 frames / 0.5 s / 5 s; also logged in `route_readiness`).
     public struct Configuration: Sendable, Equatable {
-        /// Number of consecutive qualifying reports required.
+        /// Number of consecutive qualifying reports required (clamped ≥ 1).
         public var requiredFrames: Int
-        /// Maximum allowed gap between qualifying reports before the run restarts.
+        /// Maximum allowed gap (s) between qualifying reports before the run restarts at 1 (≥ 0).
         public var maxFrameGap: TimeInterval
-        /// Maximum time spent waiting for recovery.
+        /// Maximum time (s) from `begin` before the window is `timedOut` (≥ 0). ⚠ `AppModel` also
+        /// sleeps this long in its own request timer, which covers a camera transition that never
+        /// lets `begin` run at all.
         public var timeout: TimeInterval
 
         /// Creates a bounded freshness policy, clamping invalid caller values to safe minima.
@@ -89,7 +123,10 @@ public struct DepthReadiness: Sendable, Equatable {
     /// Number of qualifying frames in the current consecutive run.
     public private(set) var consecutiveFrames = 0
 
+    /// `now` of the `begin` that opened the window; nil when idle. Not moved by `invalidate`, so
+    /// repeated interruptions cannot extend the request past `timeout`.
     private var startedAt: TimeInterval?
+    /// `now` of the last qualifying frame in the current run; nil after a break.
     private var lastQualifyingFrameAt: TimeInterval?
 
     /// Creates an idle gate. A route request starts the gate with `begin(at:)`.
@@ -97,7 +134,9 @@ public struct DepthReadiness: Sendable, Equatable {
         self.configuration = configuration
     }
 
-    /// Begin (or restart) a bounded warm-up window.
+    /// Begin (or restart) a bounded warm-up window: state `warming`, empty run, deadline
+    /// `now + timeout`. Pinned by `coldStartNeedsConsecutiveTrustedDepthFrames`.
+    /// - Parameter now: seconds (the app passes `systemUptime`).
     @discardableResult
     public mutating func begin(at now: TimeInterval) -> DepthReadinessState {
         state = .warming
@@ -107,7 +146,15 @@ public struct DepthReadiness: Sendable, Equatable {
         return state
     }
 
-    /// Feed one report's same-frame readiness facts.
+    /// Feed one report's same-frame readiness facts. Ignored unless `warming`; at or past the
+    /// deadline it times out even when the frame qualifies. A non-qualifying frame empties the run.
+    /// - Parameters:
+    ///   - now: seconds, same clock as `begin`.
+    ///   - trackingNormal: `LaneReport.trackingNormal` (read from that exact `ARFrame`).
+    ///   - sceneDepthAvailable: `LaneReport.depthAvailable`.
+    ///   - reportTrusted: `LaneReport.isTrusted` (the sweep gate).
+    /// - Returns: the state after this frame. Pinned by `normalFastWarmupClearsImmediately`,
+    ///   `staleGapRestartsTheRun`.
     @discardableResult
     public mutating func frame(at now: TimeInterval,
                                trackingNormal: Bool,
@@ -142,6 +189,8 @@ public struct DepthReadiness: Sendable, Equatable {
     /// Reset the consecutive run after an AR interruption, pause/resume, or session reconfigure.
     /// The overall timeout does **not** restart: a request must remain bounded even when a session
     /// repeatedly interrupts. Only the freshness evidence is earned again after the recovery.
+    /// A `ready` or `timedOut` gate goes back to `warming` (no-op when idle). Pinned by
+    /// `interruptionAndResumeRequireFreshEvidence`.
     @discardableResult
     public mutating func invalidate(at _: TimeInterval) -> DepthReadinessState {
         guard state != .idle else { return state }
@@ -151,7 +200,8 @@ public struct DepthReadiness: Sendable, Equatable {
         return state
     }
 
-    /// Check the timeout when no frame has arrived.
+    /// Check the timeout when no frame has arrived (`AppModel` polls every 100 ms while a route
+    /// waits). Pinned by `warmupTimesOutWithoutRecovery`.
     @discardableResult
     public mutating func poll(at now: TimeInterval) -> DepthReadinessState {
         guard state == .warming, expired(at: now) else { return state }
@@ -159,7 +209,8 @@ public struct DepthReadiness: Sendable, Equatable {
         return state
     }
 
-    /// Cancel a pending route-start request and return to idle.
+    /// Cancel a pending route-start request and return to idle (Stop, a newer destination, or the
+    /// route starting after `ready`).
     @discardableResult
     public mutating func cancel() -> DepthReadinessState {
         state = .idle
@@ -169,6 +220,7 @@ public struct DepthReadiness: Sendable, Equatable {
         return state
     }
 
+    /// True once `timeout` has elapsed since `begin`; false when idle.
     private func expired(at now: TimeInterval) -> Bool {
         guard let startedAt else { return false }
         return now - startedAt >= configuration.timeout

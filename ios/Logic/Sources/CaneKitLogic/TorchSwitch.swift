@@ -16,7 +16,9 @@
 //
 //  Pure: Foundation-only, clock injected, no AVFoundation. The app (`AppModel.setTorch`, the
 //  torch observer and its deadline task) owns the device and the speech.
-//  Tests: `TorchSwitchTests.swift`.
+//  Isolation: nonisolated `Sendable` value held in `AppModel.torchSwitch` (main actor); the KVO
+//  callback hops to main before calling `report`. Clock: `ProcessInfo.systemUptime` seconds.
+//  Tests: `TorchSwitchTests.swift` (16).
 //
 
 import Foundation

@@ -6,6 +6,14 @@
 //  spoken-style description. API key comes from Info.plist "GEMINI_API_KEY"
 //  (or the GEMINI_API_KEY environment variable in the Xcode scheme, for dev).
 //
+//  STATUS: draft, NOT in any target and never compiled by the current project. The iOS 18
+//  starter's Gemini-only describer, kept as history only; do not edit it (ios/drafts/README.md).
+//  ⚠ Its key handling is obsolete: keys now live only in the git-ignored
+//  `ios/CaneKit/Resources/Secrets.plist`, read by `Secrets` (never Info.plist, never printed —
+//  AGENTS.md hard rule 4). Live successors: `ios/CaneKit/Scene/SceneDescriber.swift` +
+//  `VLMClient.swift` (cloud providers with an on-device fallback, so no key is required) and the
+//  request / response codec `VLMCodec.swift` in CaneKitLogic (tested). Tests: none.
+//
 
 import Foundation
 import Observation

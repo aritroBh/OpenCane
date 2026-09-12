@@ -7,6 +7,12 @@ defaults, `NavigationEngine`, `SpeechQueue`, `BeaconEngine` and `route_isr_cif.j
 and another doc disagree, the code is right; §0 lists the disagreements. If a number in the code
 changes, update this file.
 
+**Re-checked Sat 2026-09-12 after Step 37 (HEAD `076fcaa`)** against `SpeechQueue`, `SpeechResume`,
+`CueRules`, `TorchSwitch`, `DualCameraRotation`, `FaceTrackingChange`, `ios/scripts/cue_audit.py` and
+CHANGELOG Steps 34–37: §0.12, §1.0–§1.4, D7, D8, D15 changed, and **D19–D24** are new (flashlight
+settle, both cameras refusal + rotation, face-tracking refusal, cue level × place, talk-floor resume +
+pause, reading `make audit`).
+
 **People.** **Aritro**, **Aarav** and **Tejas** do the software: builds, automation, logs, phone
 setup, filming. **Sagar** and **Tommy** do the hardware: clamp, mount angle, cane, power bank, sun
 shade, heat. On the walks **Aarav** is the walker and wears the watch and AirPods. For the
@@ -70,11 +76,24 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
     press that can't reach the phone plays `.retry`. Every route cue (and veer) is also felt on the
     cane as soft continuous buzzes: left one 0.45 s buzz, right two 0.35 s, crossing three 0.3 s,
     arrived long-short-long. A ground hazard is 4 heavy taps.
-12. **Voice cache.** Prefetch covers exactly 30 lines: 20 `commonLines`, 9 waypoint `say` lines and
-    the intro. Any line built at runtime is a cache miss: Repeat (it includes a distance), "Passed X.
-    Y in N meters.", the arrival summary, "\<AirPods\> connected.", channel warnings, "Describing.".
-    A route or Repeat line that misses waits up to **2.5 s** for ElevenLabs, then falls back to the
-    system voice. Obstacle and safety lines never wait.
+12. **Voice cache.** At launch the app prefetches `AppModel.commonLines`: 35 lines (24 fixed lines,
+    the 5 Cues card lines, the 6 flashlight lines). At route start it prefetches the 9 waypoint `say`
+    lines, `commonLines` again and the intro, then `SpokenPhrases.warningLines` (74 generated warning
+    lines) as a background tail; 2 requests are in flight at a time (`VoicePrefetch.maxConcurrent`).
+    Any line built at runtime is a cache miss: Repeat (it includes a distance), "Passed X. Y in N
+    meters.", the arrival summary, "\<AirPods\> connected.", channel warnings, "Describing.". A route
+    or Repeat line that misses waits up to **2.5 s** for ElevenLabs, then falls back to the system
+    voice (and for 60 s after such a failure every miss goes straight to the system voice). Obstacle
+    and safety lines never wait.
+13. **A cut line resumes, it does not restart (Step 37).** When "Head height." (or any higher band)
+    cuts a line, the line continues from the start of the clause it was cut in, after a 0.35 s pause
+    — not from its first word. A cut inside the first clause resumes from the top; after a phone call /
+    Siri or dictation the line restarts from its last resume point (the top if it was never cut). A line is resumed at most 3 times, then dropped: press
+    Repeat. The trip log shows it as `speech_dispatch {replays ≥ 1, resume_from > 0}` (D23).
+14. **Speak obstacle names is off by default (Step 36)** and the Cues card decides which names and
+    signs are spoken (Quiet / Indoors: no names, safety signs only). D6 and D22 turn names on first;
+    every other test runs on the default Detailed + Outdoors. Check the `start` record's
+    `cue_level`, `cue_place`, `obstacle_names` before comparing two walks.
 
 ---
 
@@ -84,8 +103,8 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
 
 | Block | When | What runs | Who | Done when |
 |---|---|---|---|---|
-| A: bench | Tonight, phone plugged in, ISR lobby, ~3.5 h | A1–A5; **D18 first** (needs a fresh install); D1–D8, D10, D11, D13, D15–D17; F10, F11, F12 drill | Aritro on all; Sagar D1–D5 + D16 clamp; Aarav D2, D11 | Every bench D-test passes, or is on the bug list with its log file |
-| B: first daylight | Sat from ~08:00 (sunrise ≈ 06:35 CDT), ~2 h | W1 survey → route JSON fixes → A1 + A5 → reinstall + B-smoke → **W2 reference walk** (D9, D12, D13, D14) | Aarav walks, Aritro logs and films, Sagar spots | W2 meets every D12 pass criterion |
+| A: bench | Tonight, phone plugged in, ISR lobby, ~4.5 h | A1–A5, A7; **D18 first** (needs a fresh install); D1–D8, D10, D11, D13, D15–D17, **D19–D23**; F10, F11, F12 drill | Aritro on all; Sagar D1–D5 + D16 clamp; Aarav D2, D11 | Every bench D-test passes, or is on the bug list with its log file |
+| B: first daylight | Sat from ~08:00 (sunrise ≈ 06:35 CDT), ~2 h | W1 survey → route JSON fixes → A1 + A5 → reinstall + B-smoke → **W2 reference walk** (D9, D12, D13, D14) → **D24** (`make audit` on the W2 log) | Aarav walks, Aritro logs and films, Sagar spots | W2 meets every D12 pass criterion and D24 reads ON THE MOUNT |
 | C: stress | 11:00–14:00 | W3 stress walk ≥ 30 min (F1–F3, F5–F9, F12); F4 at 12:30–13:30 | All three | Every F result logged |
 | D: fix + freeze | After C, ~2 h | Triage logs → fixes → A1–A6 → reinstall → B-smoke → **code freeze ≥ 3 h before the demo walk** → W2′ (sighted walk on the frozen build) | Aritro | W2′ meets D12 on the frozen build |
 | E: rehearsal | Start by 18:15 CDT | §4 go/no-go → **W4 blindfolded rehearsal** | All three | W4 passes |
@@ -98,12 +117,13 @@ no blindfolded walk.
 
 | ID | Command (from `ios/`) | What it covers | Pass | Time |
 |---|---|---|---|---|
-| A1 | `make test` | 372 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, depth-readiness interlock, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file, sound-recognition lifetime guard | current count: 372 annotations | < 1 min |
+| A1 | `make test` | 457 Swift Testing tests: lane math, CueDecider hysteresis and rates, geofence skip-ahead, passed-by, arrival plausibility (30 m blob), TurnSettle incl. curb release, StraightWalk, CueSpeechPolicy, CourseSmoother, depth-readiness interlock, ground hazards / signs / hazard watch / GeoJSON, Crown, watch and VLM codecs, route file, sound-recognition lifetime guard, and since Step 34: `TorchSwitchTests` (flashlight settle), `LiveViewTests` (both-cameras `.blockedByRoute`, `FaceTrackingChange`, `DualCameraRotation`), `CueProfileTests` (level × place rules, safety-sign filter), `SpeechResumeTests` (clause resume, 3-resume cap, 0.35 s pause) | 457/457 (CHANGELOG Step 37; 457 `@Test` annotations in `ios/Logic/Tests`) | < 1 min |
 | A2 | `make sim` | Swift 6 strict build for the simulator | 0 errors | ~3 min |
-| A3 | `make uitest` | 7 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggles, a11y labels, empty destination; the Street View "Where am I" test is skipped unless run with `make uitest-streetview` | 6/6 + 1 skipped | ~4 min |
+| A3 | `make uitest` | 11 XCUITests: start/Next/Repeat/Recenter/Stop, Where am I without a key, haptic buttons + Silence, mount toggle, Cues pickers (Standard / Indoors selected, then Detailed / Outdoors restored), a11y labels and tabs, Navigate to CIF button, empty destination, campus suggestions, plus the tour; the Street View "Where am I" test is skipped unless run with `make uitest-streetview` | 10 passed + 1 skipped, 0 failures | ~4 min |
 | A4 | `make tour` | PNG per screen state → `build/shots` | Every PNG reviewed: no truncated pill ("SPEAKI…"), no hyphenated "Recen-ter", instruction not clipped | ~3 min |
 | A5 | `make e2e` (or `SCENARIO=clean`) | GPS replay through the real app on the iPhone 17 Pro Max / iOS 27 simulator; asserts on the JSONL log. Report: `build/e2e/report.json` | 4/4 PASS | ~20 min |
 | A6 | `python3 scripts/e2e.py --scenario clean --speed 1.0` | Same `clean` path at walking pace (the default 4 m/s makes the distance-based turn-settle release fire before the 25 s moving-time one) | PASS | ~19 min |
+| A7 | `python3 scripts/cue_audit.py --selftest` (the first half of `make audit`) | The audit script's fixture checks: wall / overhang / dropout head cells, mounted tilt verdict, replays with and without `resume_from`, the end → next-start pause count, a `field_kind` collision | prints `cue_audit selftest: ok` | < 5 s |
 
 What `make e2e` asserts (from `scripts/e2e.py`), so a failure is easy to read:
 
@@ -126,19 +146,20 @@ What `make e2e` asserts (from `scripts/e2e.py`), so a failure is easy to read:
   Activity rendering, thermal state.
 
 **When to run what.** Every code change: A1 + A2. Every UI change: + A3 + A4. Every change to
-nav, speech or the route file: + A5. Before each phone install: A1 + A2 + `make e2e SCENARIO=clean`.
-Before code freeze: A1–A6.
+nav, speech or the route file: + A5. Every change to `cue_audit.py` or to a trip-log field it reads:
++ A7. Before each phone install: A1 + A2 + `make e2e SCENARIO=clean`. Before code freeze: A1–A7.
 
 ### 1.2 Bench (indoors, phone plugged in, ISR lobby)
 
-Runs the D-tests that don't need GPS: D1–D8, D10, D11, D13, D15–D18, plus F10, F11 and the bench
-part of F12.
+Runs the D-tests that don't need GPS: D1–D8, D10, D11, D13, D15–D23, plus F10, F11 and the bench
+part of F12. (D23 needs a route running, which needs a GPS fix: stand by a window or use the lobby
+door.)
 
 - **Thermal and battery numbers from the bench don't count**, because charging heats the phone.
 - **Screen-record every bench session** so you capture the pills that §0.4 says aren't logged (the
   debug footer is gone, so fps is not visible anywhere).
-- **Bench smoke (B-smoke, 15 min)** runs after every reinstall: D1 wall, D2 four patterns, D5 head,
-  D10(a)(b), D11(a)(c).
+- **Bench smoke (B-smoke, 20 min)** runs after every reinstall: D1 wall, D2 four patterns, D5 head,
+  D10(a)(b), D11(a)(c), D19(a), D23(a) one cut.
 
 ### 1.3 Outdoor walks
 
@@ -175,14 +196,29 @@ map).
 **What's in the log.** One file per app launch: `canekit-<ISO time with - for :>.jsonl`. Every line
 has `t` (seconds since launch) and `kind`:
 
-- `session` · `start` {lidar, mesh, haptics, vision} · `route` {action start|stop, name, waypoints,
-  headphones, watch}
+- `session` · `start` {lidar, mesh, haptics, vision, launch, face_head_tracking, danger_sounds,
+  cue_level, cue_place, obstacle_names, …} · `route` {action start|stop, name, waypoints, headphones,
+  watch}
 - `gps` {lat, lon, acc, speed} ~1 Hz, only while a route runs · `waypoint` {index = the 1-based
   waypoint reached} · `navcue` {cue} · `arrived`
-- `speech` {text, priority obstacle|safety|nav, repeat?} · `cue` {cue center|left|right|head|clear,
+- `speech` {text, priority obstacle|safety|nav, repeat?} — written only for cue / obstacle / route
+  lines, **not** for flashlight, refusal or describer lines · `cue` {cue center|left|right|head|clear,
   ar_t, distance?}
+- `speech_dispatch` {text (the whole line), priority, replays, resume_from} for **every** line handed
+  to a voice backend (Step 34; `resume_from` Step 37) · `speech_end` {priority} at every natural line
+  end (Step 37) · `speech_suppressed` {text, load, reason} for a dropped obstacle name. Dispatched is
+  not the same as heard.
+- `torch` {action request_on|request_off|unsupported, active} per press, then {action
+  confirmed(on: true)|failed(requested: true)|changedByDevice(on: false)…, active, text, error?} per
+  spoken outcome (Step 34)
+- `both_cameras` {action start|stop|depth_after|refused_route|refused_route_start|unsupported|
+  start_failed_recovered|off_for_route|off_background…; on start: front_rotation, back_rotation,
+  front_capture_angle, back_capture_angle, front_size, back_size, front_portrait, back_portrait,
+  front_mirrored, front_frames, back_frames, hardware_cost, thermal} · `face_tracking` {enabled,
+  supported} or {action refused_route|refused_route_start, requested} · `cue_profile` {level, place,
+  text}
 - `lanes` at 2 Hz {head[3], torso[3] (−1 = no data or clear), trusted, omega, cue, thermal, battery,
-  mesh}
+  mesh, tilt, fps}
 - `audioroute` {connected, name} · `recenter` {auto?} · `repeat` · `watch` {command | test} ·
   `describe` {provider} · `destination` {name, meters, waypoints} (a MapKit route was chosen)
 - No field ever replaces a record's own `t` or `kind` (older builds let `cue` / `hazard` fields
@@ -384,10 +420,14 @@ goes on the bug list with its log file name and video timestamp.
 
 ### D7 Speech queue, priorities, Repeat: bench · Aritro
 - **Steps and expected results.**
-  - (a) Haptics card → **Speech test**. The scene line is cut at a word boundary by "One meter
-    ahead, door.", then the scene line replays from its start **once**.
-  - (b) Start route to CIF and make a head-height cue during the intro. "Head height." cuts in
-    and the intro replays once. A second cut during that replay drops the intro (max 1 replay).
+  - (a) Settings → Haptics card → **Speech test**. It queues "Scene test: sidewalk ahead, bike rack
+    at ten o'clock, two meters." (`.scene`) and at once "One meter ahead, door." (`.obstacle`). The
+    obstacle line cuts the scene line before its first clause is heard, so after the obstacle line and
+    a short (0.35 s) pause the scene line plays **from its first word**, once (`speech_dispatch`
+    `replays: 1, resume_from: 0`).
+  - (b) Start route to CIF and make a head-height cue during the intro, after "Route started.". "Head
+    height." cuts in, and the intro **continues from the clause it was on**, not from "Route started."
+    (Step 37; the full resume test is D23).
   - (c) Press **Repeat** mid-line. The last line restarts at once, followed by " Next, \<place\>, in
     N meters.".
   - (d) Press Repeat 5× within 2 s. You hear exactly one full playback after the last press.
@@ -397,29 +437,32 @@ goes on the bug list with its log file name and video timestamp.
 - **Pass.**
   - (a)–(e) 5/5 each.
   - A cut lands ≤ 0.5 s after the higher-priority trigger (video).
-  - No line plays more than twice.
+  - No line is heard from its first word twice unless it was cut inside its first clause, by a call /
+    Siri or by dictation (D23); a line is resumed at most 3 times.
   - The pill goes back to "Quiet" ≤ 1 s after the audio ends. If it sticks, the watchdog frees it
     after 6 s + characters/6 s; log that as a bug.
-- **Log.** `speech` (with `repeat:true`), `repeat`, `route` stop.
+- **Log.** `speech` (with `repeat:true`), `repeat`, `route` stop; `speech_dispatch` {replays,
+  resume_from} and `speech_end` for (a) and (b).
 
 ### D8 ElevenLabs cache and offline voice: bench · Aritro
 - **Prerequisite.** `ELEVENLABS_API_KEY` must be in `Secrets.plist` **before** `make run`, because it
   ships inside the app.
 - **Steps.**
-  1. On Wi-Fi: Start route to CIF, wait 60 s (it prefetches 30 lines, 3 at a time), then Stop.
+  1. On Wi-Fi: Start route to CIF, wait 60 s (it prefetches the 9 waypoint lines, `commonLines` and
+     the intro, 2 requests at a time, then the 74 warning lines in the background; §0.12), then Stop.
   2. Turn on airplane mode (then turn Bluetooth back on).
   3. Start route to CIF and press Next 9× to hear every waypoint line. Press Repeat once. Make a
      head-height cue.
   4. Turn airplane mode off, switch to cellular only with one signal bar if you can find one, and
      press Repeat 3×.
-- **Expect.** All 30 prefetched lines play in the ElevenLabs voice (pill "ElevenLabs"). The Repeat
-  text (runtime-built) uses the system voice. "Head height." never waits.
+- **Expect.** The intro and all 9 waypoint lines play in the ElevenLabs voice (pill "ElevenLabs"). The
+  Repeat text (runtime-built) uses the system voice. "Head height." never waits.
 - **Pass.**
-  - **30/30** prefetched lines are ElevenLabs offline.
+  - **10/10** route lines (intro + 9 waypoints) are ElevenLabs offline.
   - Offline, no line starts more than 0.5 s after its trigger.
   - Weak cellular: Repeat starts ≤ 3.0 s after the press (2.5 s timeout, then system voice).
-  - ≥ 30 files in `Library/Caches/elevenlabs` (`devicectl … info files --subdirectory
-    Library/Caches/elevenlabs`).
+  - ≥ 45 files in `Library/Caches/elevenlabs` (35 `commonLines` + intro + 9 waypoint lines;
+    `devicectl … info files --subdirectory Library/Caches/elevenlabs`).
 - **Log.** Which voice played isn't logged; use the screen recording of the voice pill.
 
 ### D9 Beacon L/R, head tracking, Recenter: outdoors · Aritro, Aarav
@@ -582,11 +625,13 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
   - (c) "Hey Siri, what time is it?";
   - (d) a call during a crossing's silent turn-settle.
 - **Expect.**
-  - The current line is put back in the queue. Lines said during the call wait and play after the
-    interruption ends (or after a 15 s fallback) **if their 12 s TTL hasn't run out**. After a 20 s
-    call, expect to need Repeat.
-  - The beacon goes silent when the interruption begins and restarts afterwards (3 retries, 1 s
-    apart).
+  - The current line is put back in the queue and, after the interruption, restarts **from its last
+    resume point** — from its first word if it was never cut — never from mid-clause (a fragment after
+    seconds has no context; Step 37). Lines said during the call wait and play after the interruption
+    ends (or after a 15 s fallback) **if their 12 s TTL hasn't run out**. After a 20 s call, expect to
+    need Repeat.
+  - The beacon goes silent when the interruption begins and restarts afterwards (the audio session is
+    re-activated in up to 3 attempts, 1 s apart).
   - AirPods may switch to HFP for the call, giving "Headphones disconnected…" and later "…
     connected.". That's expected.
 - **Pass.**

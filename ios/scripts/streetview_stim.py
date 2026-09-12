@@ -17,9 +17,23 @@ Usage:
     python3 ios/scripts/streetview_stim.py --fast             # instant batch processing
     python3 ios/scripts/streetview_stim.py --export-html      # builds interactive web HUD
 """
+# What this is NOT: the app. Nothing here runs CaneKit code. The navigation is its own nearest /
+# next-waypoint approximation (not GeofenceTracker), the narration is a hand-written template (not
+# SceneDescriber, OnDeviceVLMClient or SceneVocabulary, and not faithfulness-checked), and the haptic
+# strings are labels, not the app's route or obstacle patterns. It is a demo / dataset visualiser
+# over the same Street View frames; for what the app really says use `make e2e SCENARIO=streetview`,
+# and for what on-device Vision sees use `swift scripts/vision_probe.swift scripts/streetview`.
+# Owner / callers: run by hand (added in commit d775d4b); no Makefile target, not in CI, no tests.
+# Needs: macOS with `swift` (it shells out to ios/scripts/vision_probe.swift and parses its stdout),
+# ios/scripts/streetview/frames.json, and the git-ignored JPEGs — without them vision_probe prints
+# "<file>: missing", every frame comes back with no labels ("Clear path"), and the HTML image is
+# empty with only a stderr warning per frame. Python 3 stdlib only.
+# Output: ios/build/streetview_stim/streetview_stim_db.jsonl (one record per frame) and index.html
+# (JPEGs embedded as base64 — Google's imagery: keep it local, never commit or publish it).
 
 import argparse
 import base64
+import html
 import json
 import math
 import os
@@ -28,12 +42,18 @@ import sys
 import time
 from pathlib import Path
 
+# Repo root (ios/scripts/ → ios/ → root); all paths below are absolute from it.
 ROOT = Path(__file__).resolve().parent.parent.parent
 FRAMES_DIR = ROOT / "ios" / "scripts" / "streetview"
 ROUTE_FILE = ROOT / "ios" / "CaneKit" / "Resources" / "route_isr_cif.json"
+# Git-ignored with the rest of ios/build/.
 OUT_DIR = ROOT / "ios" / "build" / "streetview_stim"
 
 # Hazard detection taxonomy (CaneKitLogic / OnDeviceVision)
+# ⚠ NOT a faithful copy: the first 14 entries equal `OnDeviceHazards.map` (OnDeviceVision.swift, also
+# copied as `hazardMap` in vision_probe.swift); "crosswalk", "curb" and "traffic_light" are additions
+# the app does not have, and unlike the app (which names a label only when LiDAR sees something
+# ahead, `lidarAhead`) this names any hit. Do not port these additions into the app from here.
 HAZARD_MAP = {
     "fence": "a fence", "stairs": "stairs", "staircase": "stairs", "scooter": "a scooter",
     "bicycle": "a bicycle", "motorcycle": "a motorcycle", "pole": "a pole",
@@ -42,11 +62,7 @@ HAZARD_MAP = {
     "crosswalk": "a pedestrian crossing", "curb": "a curb edge", "traffic_light": "traffic signal"
 }
 
-BORING_LABELS = {
-    "outdoor", "structure", "material", "blue_sky", "sky", "daytime",
-    "night_sky", "land", "people", "adult"
-}
-
+# Great-circle distance in metres between two lat/lon points in degrees.
 def haversine(lat1, lon1, lat2, lon2):
     r = 6371000.0  # Earth radius in metres
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -55,12 +71,10 @@ def haversine(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0)**2
     return 2.0 * r * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
-def bearing_deg(lat1, lon1, lat2, lon2):
-    y = math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2))
-    x = math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) - \
-        math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(math.radians(lon2 - lon1))
-    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
-
+# Runs vision_probe.swift once over FRAMES_DIR (the argument is ignored) and parses its per-frame
+# blocks ("── <file> …", "sees: id NN%, …", "text: a | b", "says: …") into
+# {file: {"sees": [...], "texts": [...], "says": str}}. ⚠ Coupled to vision_probe.swift's print
+# format; raises CalledProcessError if the probe exits non-zero (e.g. no frames.json).
 def run_vision_on_frames(frames_json_path):
     """Run swift vision probe to extract on-device Vision labels and OCR texts."""
     probe_script = ROOT / "ios" / "scripts" / "vision_probe.swift"
@@ -88,6 +102,9 @@ def run_vision_on_frames(frames_json_path):
                 results[current_file]["says"] = ""
     return results
 
+# One narration string per frame from fixed templates: distance to the target waypoint ("Arriving"
+# under 20 m), a scene sentence keyed on a few Vision identifiers, the first OCR line, and the first
+# HAZARD_MAP hit. `frame_name`, `entry` and `current_wp` are unused. Template text, not app speech.
 def synthesize_astra_commentary(frame_name, entry, vision_data, current_wp, next_wp, dist_to_next):
     """Generate Sundar Pichai / Astra-style natural multimodal narration."""
     labels = vision_data.get("sees", [])
@@ -131,11 +148,16 @@ def synthesize_astra_commentary(frame_name, entry, vision_data, current_wp, next
         
     return " ".join(lines)
 
+# CLI: --cadence seconds between frames (terminal playback), --fast (no sleeps, no screen clear).
+# --export-html / --no-export-html (BooleanOptionalAction, default on) controls index.html; the JSONL
+# is always written. HTML fields are html.escape()d. Waypoint progress: starts aiming at waypoint index 1 and advances one waypoint when a
+# frame lies inside the target's `radius_m` (default 15) — frames are not dense, so waypoints can be
+# skipped silently. The "989 m" in the HTML is hard-coded, not computed.
 def main():
     parser = argparse.ArgumentParser(description="Street View Route Stimulator & Multimodal Perception Engine")
     parser.add_argument("--cadence", type=float, default=2.0, help="Stimulation cadence in seconds per frame (default 2.0s)")
     parser.add_argument("--fast", action="store_true", help="Instant execution without playback delays")
-    parser.add_argument("--export-html", action="store_true", default=True, help="Generate interactive Web HUD")
+    parser.add_argument("--export-html", action=argparse.BooleanOptionalAction, default=True, help="Generate interactive Web HUD")
     args = parser.parse_args()
 
     print("=" * 80)
@@ -226,6 +248,7 @@ def main():
             with open(img_path, "rb") as img_f:
                 b64_img = base64.b64encode(img_f.read()).decode("utf-8")
         else:
+            print(f"⚠️ Warning: {fname} missing from {FRAMES_DIR}", file=sys.stderr)
             b64_img = ""
 
         html_items.append({
@@ -250,23 +273,28 @@ def main():
         for item in html_items:
             r = item["rec"]
             b64 = item["b64"]
-            labels_pills = "".join(f"<span class='badge'>{l}</span>" for l in r["vision_labels"])
+            safe_file = html.escape(str(r['file']))
+            safe_current = html.escape(str(r['current_place']))
+            safe_target = html.escape(str(r['target_place']))
+            safe_haptic = html.escape(str(r['haptic']))
+            safe_speech = html.escape(str(r['spoken_commentary']))
+            labels_pills = "".join(f"<span class='badge'>{html.escape(str(l))}</span>" for l in r["vision_labels"])
             cards_html += f"""
             <div class="viewpoint-card" id="vp-{r['index']}">
                 <div class="card-header">
-                    <h3>#{r['index']} · {r['file']}</h3>
+                    <h3>#{r['index']} · {safe_file}</h3>
                     <span class="heading-tag">🧭 {r['heading']}°</span>
                 </div>
                 <div class="media-row">
-                    <img src="data:image/jpeg;base64,{b64}" alt="{r['file']}" class="pano-img" />
+                    <img src="data:image/jpeg;base64,{b64}" alt="{safe_file}" class="pano-img" />
                     <div class="telemetry-box">
-                        <div class="metric"><label>Nearest Landmark:</label> <b>{r['current_place']}</b></div>
-                        <div class="metric"><label>Target Waypoint:</label> <b>{r['target_place']} ({r['distance_m']}m)</b></div>
-                        <div class="metric"><label>Haptic Signal:</label> <span class="haptic-badge">{r['haptic']}</span></div>
+                        <div class="metric"><label>Nearest Landmark:</label> <b>{safe_current}</b></div>
+                        <div class="metric"><label>Target Waypoint:</label> <b>{safe_target} ({r['distance_m']}m)</b></div>
+                        <div class="metric"><label>Haptic Signal:</label> <span class="haptic-badge">{safe_haptic}</span></div>
                         <div class="metric labels-wrap"><label>Vision Detections:</label><br/>{labels_pills}</div>
                         <div class="speech-bubble">
                             <span class="speaker-icon">🗣️</span>
-                            <div class="speech-text">"{r['spoken_commentary']}"</div>
+                            <div class="speech-text">"{safe_speech}"</div>
                         </div>
                     </div>
                 </div>

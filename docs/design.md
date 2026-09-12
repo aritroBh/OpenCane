@@ -5,7 +5,10 @@ Code twins: `ios/CaneKit/UI/Theme.swift` (phone tokens + components), `ios/CaneK
 (watch), `ios/CaneKit/Speech/SpeechQueue.swift` + `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`
 (speech rules), `ios/CaneKit/Haptics/HapticPlayer.swift` + `CueDecider.swift` (haptic patterns).
 
-**Audited against the code on 2026-09-12 (after Step 28).** Every rule below describes what ships.
+**Audited against the code on 2026-09-12 (after Step 28); §5 (speech, obstacle, navigation and control
+cues), §6 (the Settings page and its Cues card, §6.5) and §9 re-audited after Step 37 (HEAD `076fcaa`:
+`SpeechQueue`, `SpeechResume`, `CueRules`, `TorchSwitch`, `HapticsCard`, `HazardsCard`,
+`ContentView.SettingsPage`, `CaneKitUITests`).** Every rule below describes what ships.
 Where the original spec (Sep 10) and the Swift disagreed, the Swift won and this file changed; the parts
 of the original spec that were never built are kept, marked **Not built**, so nobody "fixes" the code back
 toward them by accident. From now on change a rule here and in the Swift in the same commit. Two things
@@ -207,26 +210,42 @@ Sources: `CueDecider` (obstacle cues, CaneKitLogic) → `HapticPlayer` (phone Ta
 the cane); `CueSpeechPolicy` (which obstacle cues are also spoken); `ObstacleNamer` (mesh names);
 `NavigationEngine` (waypoint lines, veer, wrist cues); `BeaconEngine` (spatial click, AirPods);
 `WatchModel` (wrist haptics); `GroundHazardDetector` + `GroundHazardPolicy` (LiDAR drop-offs, CaneKitLogic)
-and `HazardScanner` (signs, hazard watch). All speech goes through `SpeechQueue`.
+and `HazardScanner` (signs, hazard watch). All speech goes through `SpeechQueue`; where a cut line resumes
+and how long the pause between bands is are `SpeechResume` (CaneKitLogic, Step 37). How much is said is
+the Cues card's level × place, `CueRules` (CaneKitLogic `CueProfile.swift`, Step 36): it gates obstacle
+names and sign phrases and sets the head distance. **Step 36 changes speech and the head distance only —
+every haptic pattern below is identical at every Cue detail level** (the card's caption says so; torso
+taps by level are a later step, `CueLevel` doc comment). The flashlight's spoken outcomes are
+`TorchSwitch` (CaneKitLogic, Step 34).
 
 ### 5.1 Speech priorities (`SpeechQueue`, AGENTS.md hard rule 8)
 
 | Priority | What speaks at it (literal lines from the code) | TTL while queued |
 |---|---|---|
-| `.safety` (3, top) | "Head height."; LiDAR ground hazards "Two meters ahead, drop-off." / "… hole." / "… step up." / "… low obstacle."; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane." | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure |
-| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "Route start canceled."; "No route running."; "OpenCane ready."; "Obstacle detection warming up. Route will start when it is ready."; "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; "Both cameras cannot run while a route is guiding you. Stop the route first."; "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first." / "… while a route is starting. Wait for obstacle detection to be ready." (10 s; all four prefetched in `AppModel.commonLines`); headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 10 s "Phone is hot…", 8 s warm-up/default |
-| `.obstacle` (1) | Mesh names "Two meters ahead, door" (door / wall / seat / window / table); "Left." / "Right." / "One meter ahead." when the phone cannot buzz; signs "Sign: sidewalk closed."; hazard watch "Caution: 3 meters ahead, cones." | 4 s names, 6 s cue, sign and caution lines |
-| `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed."; flashlight (`TorchSwitch.Outcome.spokenLine`, all prefetched) "Flashlight on." / "Flashlight off." when the device confirms, "The flashlight did not switch on." / "… off." at the 2 s settle deadline, "The flashlight turned on." / "… off." when it changes unasked | 3 s "Describing.", 20 s description, 4 s flashlight confirmations, 12 s flashlight failures / device changes, 8 s default |
+| `.safety` (3, top) | "Head height." (`CueSpeechPolicy`); LiDAR ground hazards "Two meters ahead, drop-off." / "… hole." / "… step up." / "… low obstacle."; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane."; "Obstacle detection did not restart. Close and reopen OpenCane." (2 s after Both cameras off, only if depth is not delivering) | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure and the depth-did-not-restart line |
+| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "Route start canceled."; "No route running."; "OpenCane ready."; "Obstacle detection warming up. Route will start when it is ready."; **refusals** "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; "Both cameras cannot run while a route is guiding you. Stop the route first."; "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first." / "… while a route is starting. Wait for obstacle detection to be ready." (all four prefetched in `AppModel.commonLines`); "This phone cannot show two cameras at once."; **Both cameras** "Both cameras on. Obstacle detection, distance warnings and sign reading are paused." / "Both cameras off. Obstacle detection is restarting." / "Obstacle detection is back." / a failed start "<why> Obstacle detection is back on."; **Cues card** "Quiet cues." / "Standard cues." / "Detailed cues." / "Outdoor mode." / "Indoor mode." (`CueLevel` / `CuePlace.spokenLine`, spoken once per change, prefetched via `CueRules.allSpokenLines`); **voice feature switches** (Shortcuts "Turn a feature on or off") "Obstacle names on." plus `CueRules.namesLimitLine` when the level or place limits names ("Quiet cues name nothing." / "Standard cues name only doors, on a route." / "Indoor mode names nothing."), or "<feature> off. <consequence>"; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 15 s "Both cameras on…", 12 s failed-start line, 10 s refusals, "Both cameras off…", "…cannot show two cameras…", voice feature switches and "Phone is hot…", 8 s "Obstacle detection is back." / warm-up / default, 6 s Cues card changes |
+| `.obstacle` (1) | Mesh names "Two meters ahead, door" (door / seat / window / table; never "wall"; only with "Speak obstacle names" on **and** `CueRules.allowsName`, and load-limited, see rules); "Left." / "Right." / "One meter ahead." when the phone cannot buzz; signs "Sign: sidewalk closed." (Quiet / Indoors: only `CueRules.safetySignPhrases`); hazard watch "Caution: 3 meters ahead, cones." | 4 s names, 6 s cue and caution lines, 8 s sign lines |
+| `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed."; flashlight (`TorchSwitch.Outcome.spokenLine`, all six prefetched) "Flashlight on." / "Flashlight off." when the device confirms, "The flashlight did not switch on." / "… off." at the 2 s settle deadline (or at once on a thrown device error), "The flashlight turned on." / "… off." when it changes unasked; "This phone has no flashlight." | 3 s "Describing.", 20 s description, 4 s flashlight confirmations, 12 s flashlight failures / device changes (`Outcome.queueSeconds`), 6 s "no flashlight", 8 s default |
 
-Rules (all in `SpeechQueue`):
-- A **strictly higher** priority interrupts the line playing (at a word boundary with the system voice, at once with an ElevenLabs clip); equal or lower queues behind it, FIFO within a priority. "Head height." therefore cuts everything and nothing cuts it.
-- The interrupted line goes back to the front of its band and **resumes from the start of the clause it was cut in** after the interrupter (Step 37, owner decision 2026-09-12 "Cut in, then resume"): "Route started. … First: Leaving Townsend Hall, *Head height.* … then the path west." — never restarted from its first word. Clauses end at `. ! ? , ; :` plus a space, not after "St." / "Dr." / "U.S.". A call / Siri or dictation restarts it from the top instead (a fragment after seconds has no context). A line resumes at most 3 times and never from an earlier point; then it is dropped (Repeat recovers it). Its validity is extended to ≥ 8 s from the first cut.
-- **Pause between kinds of line:** when a line ends and the next queued line has a different priority, 0.35 s of silence comes first, so a warning and the direction it cut are heard as two things. A `.safety` line never waits, and a new line of the same priority as the one that ended ends the pause.
-- Queued lines expire (TTL above); expired lines are purged whenever a line ends, so a stale "turn left" is never spoken late.
-- Coalescing: a line identical to the one playing or already queued is dropped. **Repeat** bypasses this (`sayAgain`): it speaks the last line actually spoken plus " Next, <place>, in N meters.", interrupting an equal-or-lower line and queuing behind a higher one.
-- Phone call / Siri: the current line is re-queued, new lines queue (deduplicated) and nothing plays; on `.ended` (or after 15 s if it never arrives) the session re-activates and the queue drains in priority order.
-- Warnings never wait for the network: `.obstacle` and `.safety` lines that are not already cached use the system voice at once (and prefetch the ElevenLabs voice for next time). Other lines use a cached ElevenLabs clip, else fetch it, else fall back to the system voice.
-- Watchdog: 6 s + characters / 6 after a line starts, a missing end callback counts as the end.
+The flashlight's lines are the lowest band on purpose (it is a convenience, not guidance): a confirmation
+that waits behind a long route line for more than 4 s is dropped; the switch itself still settles.
+
+Rules (all in `SpeechQueue`; the numbers in `SpeechResume`, pinned by `SpeechResumeTests`):
+- A **strictly higher** priority interrupts the line playing (at a word boundary with the system voice, at once with an ElevenLabs clip); equal or lower queues behind it, FIFO within a priority. "Head height." therefore cuts everything and nothing cuts it (only `stopAll`, the watchdog or a call / Siri stop a `.safety` line).
+- **Cut in, then resume** (Step 37, owner decision 2026-09-12): the interrupted line goes back to the front of its band and, after the interrupter, **continues from the start of the clause it was cut in** — "Route started. … First: Leaving Townsend Hall, *Head height.* … then the path west." — never restarted from its first word.
+  - Clauses start after `. ! ? , ;` or `:` followed by whitespace, except the period of an abbreviation ("St.", "Dr.", "Ave.", "Prof." … `SpeechResume.abbreviations`) or an initialism ("U.S."). A decimal point ("2.5") is not followed by a space, so it never splits.
+  - Progress: the system voice's last `willSpeakRange` word, heard in full (the stop is at a word boundary); an ElevenLabs clip's `currentTime / duration` mapped onto the text and backed off 8 UTF-16 units (≈ 0.5 s, `mp3MarginUTF16`). The system voice then speaks the remainder; a clip seeks the whole cached file to the clause 0.25 s early (`clipLead`). Resuming early may repeat a few words; resuming late would lose an instruction, so the margins lean early.
+  - A cut inside the first clause resumes from the top (trip log `resume_from: 0`). Nothing is re-queued when only punctuation or whitespace is left, or when a clip had already finished.
+  - A line resumes **at most 3 times** (`maxResumes`) and its resume point never moves backwards (`nextResume`); a fourth cut drops it (Repeat recovers it). On its **first** cut its deadline becomes max(its TTL deadline, 8 s after the cut); later cuts keep that deadline, so a line cut again and again still goes stale.
+- A phone call / Siri (`.began`) or the voice hold (the walker dictating to OpenCane; `.safety` skips the hold) re-queues the playing line from its **last resume point** — the top for a line never cut — not from the cut clause: after seconds of something else a clause fragment has no context.
+- **Pause between kinds of line** (`SpeechResume.gapSeconds`, 0.35 s): when a line ends and the next queued line is a different band, 0.35 s of silence comes first, so a warning and the direction it cut are heard as two things. No pause before a `.safety` line, between two lines of the same band, or when nothing played before. During the pause `isSpeaking` stays true (the beacon stays ducked). A new `.safety` line — or a new line that needs no pause after the band that just ended and ties or outranks the queue head — ends the pause and speaks at once; anything else queues. **Repeat** speaks at once during the pause unless the line the pause is waiting for outranks it. `stopAll`, a call / Siri and the voice hold end the pause.
+- Queued lines expire (TTL above); expired lines are purged whenever a line ends and again after the pause, so a stale "turn left" is never spoken late. A line that starts at once plays in full.
+- Coalescing: a line identical to the one playing or already queued is dropped. **Repeat** bypasses this (`sayAgain`): it removes any queued copy, speaks the last line actually spoken plus " Next, <place>, in N meters.", interrupting an equal-or-lower line (which is *not* re-queued) and queuing behind a higher one.
+- Load policy (`SpeechLoadPolicy`, Step 30): a mesh name (load class `.ambientObstacleName`) is dropped while anything is speaking, pausing or interrupted, or within 7 s of the last admitted name; a dropped name is logged `speech_suppressed`, never queued. Every other line fails open.
+- Phone call / Siri: new lines queue (deduplicated) and nothing plays; on `.ended` (or after 15 s if it never arrives) the session is re-activated — up to 3 attempts, 1 s apart — and the queue drains in priority order.
+- Warnings never wait for the network: `.obstacle` and `.safety` lines that are not already cached use the system voice at once (and prefetch the ElevenLabs voice for next time). Other lines use a cached ElevenLabs clip, else fetch it for at most 2.5 s in total, else fall back to the system voice; within 60 s of a natural-voice failure every cache miss goes straight to the system voice.
+- Watchdog: 6 s + characters / 6 (the characters actually to be spoken — the remainder of a resumed line) after a line starts, a missing end callback counts as the end.
+- Trip log (`AppModel.start` wires the hooks): every line handed to a voice backend is `speech_dispatch {text, priority, replays, resume_from}` — `text` is always the whole line, `replays` how many times it was already resumed, `resume_from` the UTF-16 offset it started from (> 0 = resumed mid-line) — and every natural end (finished or watchdog, not a cut) is `speech_end {priority}`. Dispatched is not the same as heard. `ios/scripts/cue_audit.py` (`make audit`) turns them into `replays_resumed_mid_line`, `replays_from_line_start` and `cross_band_pause_under_0_3s` (should be 0).
 
 Old comments that say "P0 / P1 / P2" refer to the original spec: P0 ≈ `.safety` + `.nav`, P1 ≈ `.obstacle`, P2 ≈ `.scene`. The four levels above are the truth.
 
@@ -235,7 +254,8 @@ Old comments that say "P0 / P1 / P2" refer to the original spec: P0 ≈ `.safety
 Decided by `CueDecider` on every trusted depth report (~30 Hz). One cue at a time, priority **head >
 centre > left > right**. A zone switches on below its threshold and off only 0.15 m beyond it
 (hysteresis); cue *changes* are ≥ 400 ms apart; a discrete cue (left / right / head) re-fires at most
-once per second while it stays active.
+once per second while it stays active. The Cues card changes only the head distance here (Place:
+Indoors) and which names and signs are spoken; the patterns are the same at every Cue detail level.
 
 | Cue | Trigger | Felt (`HapticPlayer`) | Heard (`CueSpeechPolicy`, `.obstacle` unless noted) | Shown (phone) | Wrist (mirror) |
 |---|---|---|---|---|---|
@@ -243,10 +263,10 @@ once per second while it stays active.
 | `centerApproach(d)` | torso-centre lane < 2.0 m | Geiger loop: one transient (sharpness 0.6) repeated at 4 / d Hz, clamped 2 Hz @ 2 m → 8 Hz @ 0.5 m; intensity 0.6 @ 2 m → 1.0 @ 0.5 m | Only when the phone cannot buzz: "<distance> ahead." at most every 4 s | Torso-centre tile; cue pill CENTER (warning) | `.click` |
 | `left` | torso-left lane < 1.2 m | 2 transients 120 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Left." at most every 4 s | Torso-left tile; cue pill LEFT | `.start` |
 | `right` | torso-right lane < 1.2 m | 3 transients 100 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Right." at most every 4 s | Torso-right tile; cue pill RIGHT | `.stop` |
-| `head` | any head-row lane < 1.5 m | 2 transients 80 ms apart, intensity 1.0, sharpness 1.0; re-fires every second while the obstacle stays — **never suppressed** | Spoken even when the phone can buzz: "Head height." at `.safety`, once per obstacle episode (a new episode starts after the cue clears or another cue is spoken), no more than one per 4 s | Head-row tile; cue pill HEAD | `.failure` (reserved for head height) |
-| Mesh name | door / seat / window / table < 3 m, wall < 1.5 m at the image centre (indoors; off when thermal ≥ serious) | — | "Two meters ahead, door": on a class change or ≥ 1 m of movement, at most every 2.5 s, then at most one every 7 s while the queue is free (`SpeechLoadPolicy`); "Speak obstacle names" toggle (on by default) | — | — |
+| `head` | any head-row lane < 1.5 m outdoors, **< 1.2 m with Place = Indoors** (`CueRules.headEnterM`, pushed into `CueDecider.thresholds.head`; clears at 1.65 / 1.35 m) | 2 transients 80 ms apart, intensity 1.0, sharpness 1.0; re-fires every second while the obstacle stays — **never suppressed** | Spoken even when the phone can buzz: "Head height." at `.safety`, once per obstacle episode (a new episode starts after the cue clears or another cue is spoken), no more than one per 4 s; identical at every Cue detail level (the safety floor) | Head-row tile; cue pill HEAD | `.failure` (reserved for head height) |
+| Mesh name (`ObstacleNamer`) | door / seat / window / table < 3 m at the image centre (`SpokenPhrases.obstacleMaxDistance`); off when thermal ≥ serious. Walls are **never** named: the namer still has a 1.5 m wall limit, but no `CueRules` level allows a wall (the cane trails walls) | — | "Two meters ahead, door" (`.obstacle`, 4 s TTL): only with "Speak obstacle names" on (Haptics card, **off by default since Step 36**) **and** `CueRules.allowsName` — Detailed + Outdoors: every class but wall; Standard + Outdoors: doors only, and only while a route guides; Quiet, or Indoors at any level: nothing. On a class change or ≥ 1 m of movement, at most every 2.5 s, then at most one every 7 s and only while the queue is free (`SpeechLoadPolicy`) | — | — |
 | Ground hazard (not `CueDecider`: `GroundHazardDetector`, "Detect drop-offs" toggle, off by default) | drop-off / hole / step up / low obstacle in a 0.9 m wide corridor 1.5–3.5 m ahead: an edge against the near-field ground, confirmed on 3 of the last 5 trusted frames | 4 heavy taps 70 ms apart (intensity 1.0, sharpness 0.3), `playGroundHazard` | Always spoken, `.safety`: "Two meters ahead, drop-off." (`GroundHazardPolicy`: the same hazard in the same place, e.g. a curb you stand at, is said once, then at most every 30 s, and again once it is 1 m closer) | Hazards card LIDAR row; hazard map entry | `.click` when the phone cannot buzz or the mirror toggle is on |
-| Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (each sign at most once a minute); "Caution: 3 meters ahead, cones." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
+| Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); Cue detail Quiet or Place Indoors reads only `CueRules.safetySignPhrases` (SIDEWALK CLOSED, ROAD CLOSED, USE OTHER SIDEWALK, NO PEDESTRIANS, DO NOT ENTER, WET FLOOR, KEEP OUT, WORK ZONE, CONSTRUCTION, DETOUR, DANGER, CAUTION, PUSH BUTTON, CLOSED — i.e. every phrase except EXIT / ENTRANCE / PUSH / PULL; fed to `HazardScanner.signAllowedPhrases`); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (8 s TTL; each sign at most once a minute — a phrase filtered out by the level is not stamped, so it never silences an allowed one); "Caution: 3 meters ahead, cones." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
 | Sweeping | \|ω\| ≥ 0.6 rad/s | No new cue and no stop: the decider freezes, so a running centre loop keeps its last rate until the next trusted frame | Nothing | Obstacles pill SWEEPING (warning, spoken "Sweeping, warnings paused"); tiles keep drawing the latest values | — |
 | No depth | before the first depth frame / no LiDAR | Nothing | Nothing (at launch: "OpenCane. This phone has no LiDAR." on a non-LiDAR phone) | Tiles "—" / NO DATA; status card "Waiting for depth…" / "No LiDAR / sceneDepth on this device" | — |
 
@@ -307,6 +327,11 @@ Recenter) it ignores head yaw.
 | Haptic engine down | (cues go to the watch and to speech) | at route start, if the watch is also unreachable: "Haptics unavailable. Obstacle cues will be spoken." | ENGINE DOWN (danger) | obstacle mirror |
 | Thermal `.serious` / `.critical` | — | "Phone is hot. Door and wall names and sign reading paused." once per transition into hot (`.nav`) | Mesh classification off (so no mesh names), sign reading and hazard watch paused, the live camera view stops updating; status card "Mesh classification off (thermal)". The thermal state is only in the trip log | — |
 | Battery | — | Nothing | Nothing on screen; the trip log only | — |
+| Flashlight switch (Sense → Hazards card "Flashlight"; `AppModel.setTorch` + `TorchSwitch`, Step 34) | — | Once per outcome, `.scene`: "Flashlight on." / "Flashlight off." when the device's own `isTorchActive` report (KVO) confirms the request (4 s TTL); "The flashlight did not switch on." / "… off." when the device is not there at the 2 s settle deadline, or at once on a thrown device error (12 s); "The flashlight turned on." / "… off." when the torch changes with no request open, e.g. a thermal cut-out (12 s). A quick off→on speaks one confirmation and never "turned off" (the off's late report lands inside the on's window). "This phone has no flashlight." when there is no torch | The switch shows the request **at once** and holds it through the settle window — no snap-back (the old code read `isTorchActive` on the next line, got the stale value and needed two presses); after the deadline it shows the device state. Works mid-route and while Both cameras runs; never persisted, off at every launch. Trip log: `torch {action: request_on / request_off, active}` per press, then `torch {action: confirmed(on: true) / failed(requested: true) / changedByDevice(on: false), active, text, error?}` per spoken outcome (a silent outcome writes nothing); `unsupported` for no torch | — |
+| Cue detail / Place change (Settings → Cues, Step 36) | — | Once per change, `.nav`, 6 s: "Quiet cues." / "Standard cues." / "Detailed cues." / "Outdoor mode." / "Indoor mode."; re-selecting the current segment says nothing | The segment is selected; the caption under the pickers restates what the level × place does today (§6.5); persisted (`UserDefaults` `cueLevel` / `cuePlace`). Trip log `cue_profile {level, place, text}`; the launch `start` record carries `cue_level`, `cue_place`, `obstacle_names` | — |
+| Both cameras on / off (Sense → Hazards card "Both cameras (pauses obstacle detection)") | No obstacle cues while on: ARKit, the haptic loop, the cue decider, sign reading and front-camera head tracking are stopped | On: "Both cameras on. Obstacle detection, distance warnings and sign reading are paused." (said before the cameras change hands). Off: "Both cameras off. Obstacle detection is restarting.", then 2 s later "Obstacle detection is back." only if depth is really delivering, otherwise "Obstacle detection did not restart. Close and reopen OpenCane." at `.safety`. A start that delivers no frames puts everything back and says "<why> Obstacle detection is back on." | Back camera full frame, front camera inset bottom-trailing (a third of the width), **both upright** in the portrait-only UI however the phone was held when it started (upright confirmed on the phone, trip log 2026-09-12T22-20-53Z `back_rotation` 90 / `front_rotation` 0; started flat or sideways is `docs/stress_test_plan.md` D20): a fixed angle per camera, back 90°, front 0° (270° if 0° is unsupported), never a `RotationCoordinator` angle (`DualCameraRotation`; each one-angle-for-both fix broke one feed). The inset is not mirrored, so it agrees with the back feed on left and right. Red caption "Back camera with the front camera inset. Obstacle detection is paused." (VoiceOver reads it; the picture is hidden). Starting a route turns it off first. Trip log `both_cameras {action: start, front_rotation, back_rotation, front_capture_angle, back_capture_angle, front_size, back_size, front_portrait, back_portrait, front_mirrored, …}`, `stop`, `depth_after {depth_fps, depth_running, confirmed}`, `off_for_route` | — |
+| Both cameras refused | — | Route guiding: "Both cameras cannot run while a route is guiding you. Stop the route first."; route starting: "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; no multi-cam: "This phone cannot show two cameras at once." (all `.nav`, 10 s) | The switch snaps back off and obstacle detection is never paused. While a route guides, the caption "Both cameras cannot run while a route is guiding you. Stop the route on the Guide tab first." stays on screen for the **whole route**, whatever the switch shows (`BothCameras.state` → `.blockedByRoute`, Step 34); the Guide error line reads "Stop the route before using both cameras". The switch is disabled while a route start waits for depth and on a phone without multi-cam. Trip log `both_cameras {action: refused_route / refused_route_start / unsupported}` | — |
+| Head tracking without AirPods refused (Sense → Hazards card) | — | Route guiding: "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first."; route starting: "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready." (`.nav`, 10 s; either direction, on or off) | The switch snaps back to its old value, so the AR session is never re-run mid-route (a re-run costs ~1–2 s of obstacle frames; `FaceTrackingChange`, Step 34). Caption under the switch "Head tracking without AirPods cannot change while a route is guiding you." / "… while a route is starting." while that lasts; the switch is disabled on a phone that cannot run the front camera beside LiDAR. Never persisted. Trip log `face_tracking {action: refused_route / refused_route_start, requested}`; an accepted change logs `face_tracking {enabled, supported}` | — |
 
 **Not built** (original spec): spoken battery warnings and HOT / CRITICAL / battery pills, the
 Describe earcon, a "RECENTRED" toast, a crossing banner and "Tap Next when across", turn speech of the
@@ -329,6 +354,11 @@ push-to-talk while sound recognition owns the input (and sound recognition while
 it), so neither feature can replace the other's route observer. Navigation and LiDAR guidance
 continue; reconnecting or re-granting permission never silently re-arms it.
 
+Silence is part of the speech channel too (Step 37): the 0.35 s pause between lines of different bands
+(§5.1) is deliberate, so "Head height." and the direction it cut do not run together. It is not a stall;
+do not remove it to make speech "snappier" without re-running `make audit` on a walk
+(`cross_band_pause_under_0_3s`).
+
 **VoiceOver rule.** The `SpeechQueue` is the app's voice. The app posts exactly one
 `AccessibilityNotification.Announcement` — the destination suggestion count ("6 results", §6.3), which
 is screen state nothing speaks — so a VoiceOver user is never pushed a *cue* twice. Live values
@@ -345,17 +375,19 @@ the selected page* is the VoiceOver order; the tab bar is last on every page.
 ```
 OpenCane                                  ← large navigation title
 Guide page                                Sense page                         Settings page
-┌ Guide ──────────────────────────────┐   ┌ ✓ Depth OK ─────────────────┐   ┌ Haptics ────────────┐
-┌ This trip  |  Arrived ──────────────┐   ┌ Obstacles ──────── (TRUSTED)┐   ┌ Watch ──────────────┐
-  (§6.1 / §6.3 / §6.4; trip only while    ┌ Hazards ────────────────────┐   ┌ Mount ──────────────┐
-   navigating or after arrival)             (§6.2 / §6.5)                     ┌ This phone ─────────┐
+┌ Guide ──────────────────────────────┐   ┌ ✓ Depth OK ─────────────────┐   ┌ Cues ───────────────┐
+┌ This trip  |  Arrived ──────────────┐   ┌ Obstacles ──────── (TRUSTED)┐   ┌ Haptics ────────────┐
+  (§6.1 / §6.3 / §6.4; trip only while    ┌ Hazards ────────────────────┐   ┌ Watch ──────────────┐
+   navigating or after arrival)             (§6.2 / §6.5)                     ┌ Mount ──────────────┐
+                                                                              ┌ This phone ─────────┐
                                                                               (§6.5)
 [ walk ]  [ 3×3 grid ]  [ gear ]          ← CKTabBar, icon-only; VoiceOver "Guide" / "Sense" / "Settings"
 ```
 
 Card titles are `.isHeader`, so the headings rotor jumps the cards of the *current* page (Guide →
-This trip / Arrived on Guide; Obstacles → Hazards on Sense; Haptics → Watch → Mount → This phone
-on Settings). Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
+This trip / Arrived on Guide; Obstacles → Hazards on Sense; Cues → Haptics → Watch → Mount → This
+phone on Settings — `ContentView.SettingsPage`, Cues first since Step 36 because it is the setting a
+walker changes most). Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
 
 The tab bar is the one icon-only control: the word is the VoiceOver label and the XCUITest key
 (§9), never the only cue for a hazard. Hit target ≥ 60 pt.
@@ -516,32 +548,66 @@ the walk). **Not built**: the checkmark hero, "Describe where I am" and "Done" b
 
 ### 6.5 Settings and debug cards
 
-The Settings tab is cards of system `Toggle`s (and, since Step 36, two segmented pickers in the Cues card) (label + VoiceOver hint;
-VoiceOver announces "switch button, on / off" for free). All persist in `UserDefaults` except "Live
-camera view", which is off at every launch.
+Two pages hold the controls. **Settings** (`ContentView.SettingsPage`) is, top to bottom: **Cues**
+(two segmented pickers), **Haptics**, **Watch**, **Mount**, **This phone**. **Sense** carries the
+**Hazards** card (`HazardsCard`) under the status card and the Obstacles grid. Every switch is a system
+`Toggle` (visible label = VoiceOver label, plus a hint; VoiceOver announces "switch button, on / off"
+for free). Persistence is per control, in the Default column: the persisted ones are `UserDefaults`
+(`Settings` in `AppModel`); the ones marked **not persisted** are off at every launch on purpose (each
+can pause obstacle detection, open the microphone or burn the battery, and a launch must never start
+there — `AppModel` doc comments). Separately, after a launch that never reported itself healthy,
+`LaunchRecovery` resets its `optionalFeatureKeys` to their defaults and says so.
 
-| Card | Control (visible label = VoiceOver label) | Default | Hint |
+| Card (page) | Control (visible label = VoiceOver label) | Default | Hint (exact, from the code) |
 |---|---|---|---|
-| Cues | "Cue detail" segmented Quiet / Standard / Detailed | Detailed (= today, until a mounted trip log tunes the calmer levels) | "How much OpenCane says and taps on its own. Quiet is overhangs, drop-offs, route turns and safety signs only." Change spoken once ("Quiet cues.") |
-| Cues | "Place" segmented Outdoors / Indoors | Outdoors | "Indoors shortens the head-height distance, stops naming furniture and reads only safety signs." Change spoken once ("Indoor mode.") |
-| Mount | "Phone held upright (portrait)" | on | "Turn off if the phone is clamped sideways" |
-| Mount | "Mirror left / right" | off | "Turn on if left and right warnings feel swapped" |
-| Mount | "Audio beacon while navigating" | on | "A soft click from the direction to walk, through the AirPods" |
-| Mount | "Write trip log" | on | "Saves a JSONL log of lanes, cues and location to the Files app" |
-| Haptics | "Silence haptics" | off | "The phone stops vibrating; obstacle cues go to the watch and are spoken instead" |
-| Haptics | "Speak obstacle names" | off (Step 36) | "Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place." Walls are never named. |
-| Hazards | "Detect drop-offs" | off (until validated on the phone) | "LiDAR warns about curbs, holes and drop-offs 1.5 to 3 meters ahead" |
-| Hazards | "Read signs" | on | "Reads signs like sidewalk closed or detour, on the phone, offline" |
-| Hazards | "Hazard watch" | off (until validated on the phone) | "While walking a route, checks the path for cones, barriers and scooters every 8 seconds" |
-| Hazards | "Live camera view" | off, not persisted | "Shows what the camera sees, for a sighted helper" |
-| Watch | "Mirror obstacle cues to the watch" | off | "Also taps the wrist for every obstacle; automatic when the phone's haptic engine fails" |
+| Cues (Settings) | "Cue detail" segmented **Quiet / Standard / Detailed** (`CueLevel.title`) | **Detailed**, persisted `cueLevel` (= today's behaviour until a trip log from the mounted cane tunes the calmer levels; owner decision 2026-09-12) | "How much OpenCane says on its own. Quiet names nothing and reads only safety signs. Obstacle haptics are the same at every level for now." |
+| Cues (Settings) | "Place" segmented **Outdoors / Indoors** (`CuePlace.title`) | **Outdoors**, persisted `cuePlace` | "Indoors warns about head height from 1.2 meters instead of 1.5, names nothing and reads only safety signs." |
+| Haptics (Settings) | "Silence haptics" | off, persisted | "The phone stops vibrating; obstacle cues go to the watch and are spoken instead" |
+| Haptics (Settings) | "Speak obstacle names" | **off** since Step 36, persisted (a walker who had turned it on keeps `true`) | "Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place." |
+| Watch (Settings) | "Mirror obstacle cues to the watch" | off, persisted | "Also taps the wrist for every obstacle; automatic when the phone's haptic engine fails" |
+| Mount (Settings) | "Phone held upright (portrait)" | on, persisted | "Turn off if the phone is clamped sideways" |
+| Mount (Settings) | "Mirror left / right" | off, persisted | "Turn on if left and right warnings feel swapped" |
+| Mount (Settings) | "60 fps camera (warmer)" | off, persisted | "Smoother live view; uses more battery and heat. Obstacle cues are the same either way." |
+| Mount (Settings) | "Audio beacon while navigating" | on, persisted | "A soft click from the direction to walk, through the AirPods" |
+| Mount (Settings) | "Write trip log" | on, persisted | "Saves a JSONL log of lanes, cues and location to the Files app" |
+| Hazards (Sense) | "Detect drop-offs" | off (until validated on the phone), persisted | "LiDAR warns about curbs, holes and drop-offs 1.5 to 3.5 meters ahead" |
+| Hazards (Sense) | "Read signs" | on, persisted | "Reads signs like sidewalk closed or detour, on the phone, offline" |
+| Hazards (Sense) | "Hazard watch" | off (until validated on the phone), persisted | "While walking a route, checks the path for cones, barriers and scooters every 8 seconds" |
+| Hazards (Sense) | "Name people ahead" | on, persisted | "When you ask where am I, says how many people are ahead, which way and how far" |
+| Hazards (Sense) | "Listen for sirens and horns" | off, **not persisted**; disabled without the sound classifier | "Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default." |
+| Hazards (Sense) | "Nod to talk" | off, **not persisted**; disabled without headphone motion | "Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default." |
+| Hazards (Sense) | "Head tracking without AirPods" | off, **not persisted**; disabled when the front camera cannot run beside LiDAR | "Uses the front camera to follow your head direction, so the beacon works without AirPods. Cannot change while a route is guiding you." Refused while a route guides or starts (§5.4) |
+| Hazards (Sense) | "Live camera view" | off, **not persisted** | "Shows what the camera sees, for a sighted helper" |
+| Hazards (Sense) | "Both cameras (pauses obstacle detection)" | off, **not persisted**; disabled without multi-cam and while a route start waits for depth | "Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you." Refused while a route guides (§5.4) |
+| Hazards (Sense) | "Flashlight" | off, **not persisted** (off at every launch) | "Turns the back-camera flashlight on or off. Works while a route guides and while both cameras are on. Off at every launch." Bound to `AppModel.setTorch`: shows the request at once, settles on the device's report (§5.4) |
+
+**The Cues card** (Step 36, `SettingsPage.cueSettings`). Each picker has a visible `secondary`-font
+label above it ("Cue detail", "Place") that is hidden from VoiceOver, and the picker itself is a
+VoiceOver container labelled with that word — a segmented `Picker` neither shows nor speaks its own
+title on iOS, and without the container a swipe heard "Quiet, button" with no context. Each change is
+spoken once by the model at `.nav` ("Quiet cues.", "Indoor mode."; §5.4). Under the pickers a caption
+(`cueLevelCaption`) says what the selection does **today**, built from these sentences in order:
+- the level: "Quiet: no obstacle names; safety signs only." / "Standard: door names on a route; every
+  sign." / "Detailed: every obstacle name except walls; every sign.";
+- with Indoors: "Indoors: head height from 1.2 meters, no names, safety signs only.";
+- when "Speak obstacle names" is off and the level is not Quiet and the place is Outdoors: "Names are
+  off: turn on Speak obstacle names below to hear them.";
+- always last: "Haptics are the same at every level for now."
+
+What the rules are (`CueRules`, pinned by `CueProfileTests`): names — Detailed + Outdoors every speakable
+class but wall, Standard + Outdoors doors only while a route guides, Quiet or Indoors nothing; signs —
+Quiet or Indoors only `CueRules.safetySignPhrases`, otherwise every phrase; head distance — 1.5 m
+outdoors, 1.2 m indoors (a research hypothesis, `docs/cue_design_v2.md` §3.5). "Head height." and the
+ground-hazard warnings are identical at every level. Switching to Indoors while a head cue is active at
+1.35–1.5 m clears it (opt-in calming, noted in CHANGELOG Step 36).
 
 Debug controls (sighted teammate / developer):
-- **Haptics card**: pills ENGINE OK / ENGINE DOWN and the active cue; four test buttons "Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic" (60 pt, icon + caption, bypass the decider; centre plays the loop for 2 s); speech pills SPEAKING / QUIET and SYSTEM / ELEVENLABS; a "Speech test" big button (a scene line, then an obstacle line that interrupts it).
-- **Hazards card**: two neutral pills, the hazard watch backend (the provider name, e.g. "ON-DEVICE"; spoken "Hazard watch uses …") and "N MAPPED" (spoken "N hazards on the map"); one detection row per source that has spoken, LIDAR / SIGN / WATCH in the `pill` font and `textSecondary` followed by the last line in `body` (one VoiceOver element per row); an error line in red; "Share hazard map" (60 pt, secondary style, a `ShareLink` of this session's GeoJSON, shown once the file exists, hint "Shares a GeoJSON map of every hazard found on this walk"); under "Live camera view" a ~3 Hz camera image (hidden from VoiceOver, "Camera warming up" before the first frame, no new frames while hot or in the background).
-- **Watch card**: link pill REACHABLE / ASLEEP / APP NOT INSTALLED / NOT PAIRED / UNSUPPORTED and the last watch command; four buttons "Send left / right / cross / arrive cue to the watch" (disabled when unreachable).
+- **Haptics card**: pills ENGINE OK / ENGINE DOWN (spoken "Haptic engine running" / "… not running") and the active cue (CLEAR / CENTER / LEFT / RIGHT / HEAD, spoken "Active cue: …"); the engine's error line in red; "Silence haptics"; the caption "Test patterns" and four test buttons "Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic" (60 pt, icon + caption, bypass the decider; centre plays the loop for 2 s, hint "Plays the approach loop for two seconds", the others "Plays the pattern once"); "Speak obstacle names"; speech pills SPEAKING / QUIET and SYSTEM / ELEVENLABS (the voice pill follows what actually spoke, so a wrong key reads SYSTEM; spoken "Voice: …" or "System voice; add an ElevenLabs key for the natural voice"); a quiet grey voice-problem line when a natural-voice fetch or playback failed ("Voice problem: …"); a "Speech test" big button (hint "Speaks a scene line, then an obstacle line that interrupts it"; the scene line is cut and, per §5.1, resumes after the obstacle line — from the top here, because it is cut in its first clause); the audio-session error line in red.
+- **Hazards card**: two neutral pills, the hazard watch backend (the provider name, e.g. "ON-DEVICE"; spoken "Hazard watch uses …") and "N MAPPED" (spoken "N hazards on the map"); one detection row per source that has spoken, LIDAR / SIGN / WATCH / SOUND in the `pill` font and `textSecondary` followed by the last line in `body` (one VoiceOver element per row); an error line in red; "Share hazard map" (60 pt, secondary style, a `ShareLink` of this session's GeoJSON, shown once the file exists, hint "Shares a GeoJSON map of every hazard found on this walk"); the sound watch's status rows; under "Live camera view" ARKit's own frames on the GPU (`LiveCameraView`, 3:4, at the camera's frame rate — 30, or 60 with the Mount switch; hidden from VoiceOver; captions "Live view paused: phone is hot" / "Camera off"); the front-camera readout while head tracking without AirPods is on ("Front camera is detecting …. Head direction only; no front camera picture."); the two-camera picture and its red caption (§5.4); the grey captions that explain a refused mode, read by VoiceOver. "Both cameras self test" / "Front camera self test" appear only under the `--sensor-selftest` launch flag.
+- **Watch card**: link pill REACHABLE / ASLEEP / APP NOT INSTALLED / NOT PAIRED / UNSUPPORTED and the last watch command; the link error in red; "Mirror obstacle cues to the watch"; four buttons "Send left / right / cross / arrive cue to the watch" (disabled when unreachable).
+- **Mount card**: first row the live aim, e.g. "Camera tilt 5° down, good · 30 fps" (`MountTilt.status`; "Camera tilt: hold the cane still for a reading" before a trusted frame), then the five switches above.
 - **This phone**: "LiDAR depth", "Mesh classification (door / wall / seat)", "Logic package linked", each read as "<name>: available / not available".
-- **Debug footer**: removed (`DebugFooter.swift` is gone). fps is no longer shown; thermal and battery are in the trip log's `lanes` records; the log file is found in the Files app.
+- **Debug footer**: removed (`DebugFooter.swift` is gone). Depth fps is only on the Mount card's aim row; thermal and battery are in the trip log's `lanes` records; the log file is found in the Files app.
 
 Where the original Settings rows went: the scene-description provider is `VLM_PROVIDER` in
 `Secrets.plist` (no picker); the trip log (`canekit-*.jsonl`) and the hazard map
@@ -667,35 +733,43 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 
 `ios/CaneKitUITests/CaneKitUITests.swift` and `CaneKitVisualTour.swift` find elements by these exact
 strings. AGENTS.md rule 9: none of them may change without updating the tests in the same commit.
-Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
+Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt and mutes `SpeechQueue`).
+Today that is 11 XCUITests (10 in `CaneKitUITests`, the tour's `testTour`); the Street View "Where am I"
+test skips itself unless `make uitest-streetview` passes a frame folder. Set a simulator location first
+(AGENTS.md "Commands") or the route tests fail for want of a GPS fix.
 
 | Query | Exact string | Where it comes from | Used by |
 |---|---|---|---|
-| `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (all three); haptics / mount tests open Settings; tour |
+| `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (all three); haptics, mount and cue picker tests open Settings; tour |
 | `buttons[…]` | "Start route to CIF" | `GuideCard`, idle | every test waits for it first; tour |
-| `buttons[…]` | "Cancel route start" | `GuideCard`, while depth is warming | cancels the queued interlock request |
+| `buttons[…]` | "Navigate to CIF from here" | `GuideCard`, idle (its label is its text) | `testNavigateToCIFButtonIsOnTheIdleGuide`: exists and is enabled when idle, gone while a route runs, back after Stop (never tapped: it would request real Apple Maps directions) |
+| — | "Cancel route start" | `GuideCard`, only while a route start waits for the depth interlock | **no test uses it** (the simulator has no LiDAR, so a route starts at once); a free label, listed so nobody assumes it is covered |
 | `buttons[…]` | "Stop route" | `GuideCard`, navigating | route test, tour |
 | `buttons[…]` | "Next" | `GuideCard`, navigating | route test (advances to WP2), tour |
 | `buttons[…]` | "Repeat" | `GuideCard`, navigating / after arrival | route test (must not change the instruction; must be **absent** after a mid-route Stop), tour |
 | `buttons[…]` | "Recenter" | `GuideCard`, navigating | route test, tour |
-| `buttons[…]` | "Where am I" | `GuideCard` (becomes "Describing…" while busy) | no-key test, labels test, tour |
+| `buttons[…]` | "Where am I" | `GuideCard` (becomes "Describing…" while busy) | no-key test, Street View test, labels test, tour |
 | `buttons[…]` | "Go" | `GuideCard`, idle | empty-destination test, tour |
 | `buttons[…]` | "Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic" | `HapticsCard` (`"Test \(title.lowercased()) haptic"`) | haptics test, tour |
 | `switches[…]` | "Silence haptics" | `HapticsCard` toggle | haptics test, tour |
-| `buttons[…]` | "Standard", "Detailed", "Indoors", "Outdoors" | Settings → Cues segmented pickers (`CueLevel.title` / `CuePlace.title`, CaneKitLogic) | cue picker test (selects, then restores Detailed / Outdoors in a teardown block) |
-| `switches[…]` | "Mirror left / right" | Mount toggle | toggle test (value must change on tap) |
+| `buttons[…]` | "Standard", "Detailed", "Indoors", "Outdoors" | Settings → Cues segmented pickers (`CueLevel.title` / `CuePlace.title`, CaneKitLogic; each segment is a button whose `isSelected` is its state) | `testCuePickersChangeAndRestore`: taps Standard and Indoors and waits for `isSelected`, then taps Detailed and Outdoors and asserts both selected; a teardown block registered first puts Detailed / Outdoors back even when an assert fails, so later tests, the tour and e2e never inherit a calmer level ("Quiet" is not queried) |
+| `switches[…]` | "Mirror left / right" | Mount toggle | `testMountTogglesPersist` (value must change on a knob tap, then flipped back; persistence across a relaunch is not re-read) |
 | `switches[…]` | "Write trip log" | Mount toggle | labels test |
 | `otherElements[…]` | "Head row" | `LaneGridView` row label `"\(title) row"` | labels test |
 | `staticTexts[…]` (exact) | "Type a destination first" | `AppModel.navigate(to:)` → Guide error line | empty-destination test, suggestion test |
 | `textFields[…]` | "Destination" | `DestinationField` search field | suggestion test (types "Grainger") |
-| `buttons[…]` | "Grainger Engineering Library, campus place" | `DestinationSuggestion.voiceOverLabel` (CaneKitLogic) for a campus row with no fix | suggestion test |
+| `buttons` label BEGINSWITH … AND CONTAINS … | "Grainger Engineering Library" + "campus place" | `DestinationSuggestion.voiceOverLabel` (CaneKitLogic), "Grainger Engineering Library, campus place, …" — matched on name and kind, not the whole sentence (the row gains a detail line and, with a fix, a distance after it appears) | suggestion test (also: every button whose label contains "Urbana, IL" — a MapKit row — must sit lower on screen, and typing must clear the error line) |
 | `staticTexts` label CONTAINS[c] | "Townsend" | WP1 `say` in `route_isr_cif.json`, shown as the instruction | route test |
 | `staticTexts` label CONTAINS[c] | "Illinois Street" | WP2 `say` (WP1's line also contains it) | route test |
 | `staticTexts` label CONTAINS[c] "camera" OR BEGINSWITH | "camera" / "Scene:" | describer error "No camera frame" (the simulator has no camera) or the scene text's label "Scene: <description>"; then "Where am I" must be back. No key is needed any more (cloud → on-device fallback) | no-key test |
 
 Structural rules the tests rely on: the instruction and error lines are plain `Text`s whose label is
-their content; the Mount toggles are system `Toggle`s (the tests tap the switch knob); the Head / Torso
-rows are single elements. Labels outside this table (card titles, pill `spoken` strings, hints) are
+their content; the Mount and Haptics toggles are system `Toggle`s (the tests tap the nested switch, or
+the knob at 94 % of the width — a tap on the label centre does nothing); the Head / Torso rows are single
+elements; the Cues pickers are `.segmented` `Picker`s whose segments surface as buttons titled by
+`CueLevel.title` / `CuePlace.title` (the VoiceOver container labels "Cue detail" / "Place" are not
+queried). Settings written by a test persist in the simulator, so every test that changes one puts it
+back. Labels outside this table (card titles, pill `spoken` strings, hints) are
 free to improve, but keep them in step with §6.
 
 ---

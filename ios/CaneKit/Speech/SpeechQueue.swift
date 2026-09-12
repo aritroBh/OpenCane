@@ -1503,6 +1503,8 @@ nonisolated private final class PlayerRelay: NSObject, AVAudioPlayerDelegate, @u
 /// Async counterpart of `Result(catching:)`, so `speakNow` can await the ElevenLabs fetch and
 /// then switch on success / failure in one place.
 private extension Result where Failure == Error {
+    /// Awaits `body` on the caller's executor; a thrown error (including cancellation) becomes
+    /// `.failure`, which `speakNow` treats as a natural-voice failure only if the line is still ours.
     init(catching body: () async throws -> Success) async {
         do { self = .success(try await body()) } catch { self = .failure(error) }
     }

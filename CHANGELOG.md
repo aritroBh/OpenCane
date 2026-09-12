@@ -2,6 +2,40 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 38 — Point-blank wall safety: near-field low-confidence override and urgent proximity latch (Sat Sep 12)
+
+**Why:** The owner tested the app against a wall (photo `IMG_9283`) and observed that holding the phone
+15 cm from a flat wall reported "clear" in green tiles with dead silence, but stepping back to 0.5 m
+reported "STOP" in red tiles and urgent haptics. Trip log `canekit-2026-09-12T23-26-49Z.jsonl` proved it:
+at t=740-741s (distance 0.48m) cue was head/urgent; at t=751-785s against the wall, head=[-1, -1, -1]
+torso=[-1, -1, -1] with cue=clear. ARKit LiDAR VCSEL/SPAD saturates under 25-30 cm, tagging returns
+confidence 0 or invalid; `LaneMath` dropped all c < 1, defaulted empty cells to `.infinity`, and
+`TileLevel` + `CueDecider` treated `.infinity` as clear path. Muse review verdict: "Critical,
+fail-dangerous, ship-blocker. The gradient is inverted: walking toward a wall makes the app quieter and greener."
+
+**What changed:**
+- `LaneMath.swift`:
+  - `LaneConfig.closeOverrideThreshold = 0.35` (metres).
+  - In `sample()`: finite depths `< closeOverrideThreshold` are accepted regardless of confidence.
+    Near-field saturation is proof of obstacle presence, not clear void.
+- `CueDecider.swift`:
+  - `CueThresholds.nearDropoutHoldSeconds = 1.5` (seconds).
+  - Proximity latch: if an obstacle was in urgent proximity (< 0.7m), subsequent non-finite dropouts
+    hold the active zone rather than instantly clearing. Approach cues clamp to the near floor (0.5m)
+    so the 8 Hz alarm continues while pressed against the wall.
+- `cue_audit.py`:
+  - Parses `hazard_watch`, `describe_result`, and ground `hazard` records in trip logs.
+- Tests:
+  - `pointBlankLowConfidenceObstacleIsDetected` in `LaneMathTests`.
+  - `nearDropoutHoldsUrgentObstacleAcrossBlindZone` in `CueDeciderTests`.
+
+**Verification:**
+- `make test`: 459/459 passed. `make sim`: BUILD SUCCEEDED.
+- `make build install launch`: installed and launched live on iPhone 17 Pro Max (PID 6111).
+
+test on device: hold the phone 15 cm in front of a flat wall. The cells now report obstacle distance /
+urgent STOP in red tiles with active haptic buzz, never false green "clear".
+
 ## Step 37 — Talk floor: a direction cut by a warning resumes from its clause; a pause between the two (Sat Sep 12)
 
 **Why:** the owner said "when the app is giving directions and it's giving notifications on objects

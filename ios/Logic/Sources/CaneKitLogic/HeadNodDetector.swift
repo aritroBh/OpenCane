@@ -23,7 +23,10 @@
 //    · ⚠ Every number below is an **untuned placeholder** from the plan, not a measurement.
 //      Nothing here has been walked on the cane; AGENTS.md says "unknown, need to measure"
 //      outranks a plausible number, so treat them as such and re-measure from `head_nod` trip-log
-//      events before trusting them. Tests: HeadNodDetectorTests.swift.
+//      events before trusting them. Tests: HeadNodDetectorTests.swift (7).
+//    · Clock: `HeadPoseTracker` passes `CMDeviceMotion.timestamp` (seconds since boot) and pitch in
+//      degrees; every detected double nod is logged by `AppModel` as `head_nod` (with `pitch_deg`),
+//      including ones the app then ignores, so the numbers can be tuned from real walks.
 //
 
 import Foundation
@@ -62,7 +65,9 @@ public struct HeadNodDetector: Sendable, Equatable {
 
     /// A pitch sample the detector remembers: a running extreme or a turning point.
     private struct Point: Sendable, Equatable {
+        /// Degrees.
         var pitch: Double
+        /// Seconds on the caller's clock.
         var time: TimeInterval
     }
 
@@ -84,7 +89,8 @@ public struct HeadNodDetector: Sendable, Equatable {
     /// Creates a detector with the placeholder tuning above.
     public init() {}
 
-    /// Forget everything (AirPods disconnected, route stopped, feature switched off).
+    /// Forget everything, including the refractory. Called by `HeadPoseTracker.start()` (a half-made
+    /// nod from before must not pair up) and `stop()`. Pinned by `resetClearsAPendingFirstNod`.
     public mutating func reset() {
         extreme = nil
         direction = 0
@@ -129,7 +135,11 @@ public struct HeadNodDetector: Sendable, Equatable {
         return nodCompleted(at: now)
     }
 
-    /// Pairs completed nods and applies the refractory.
+    /// Pairs completed nods and applies the refractory. A nod inside the refractory is dropped and
+    /// does not become a first nod; otherwise it either completes the waiting pair (fire) or becomes
+    /// the new first nod (an old first nod past `pairWindowSeconds` is replaced).
+    /// - Parameter now: completion time of this nod.
+    /// - Returns: true on a fire.
     private mutating func nodCompleted(at now: TimeInterval) -> Bool {
         guard now - lastFire >= Self.refractorySeconds else { return false }
         if let first = firstNodEnd, now - first <= Self.pairWindowSeconds {

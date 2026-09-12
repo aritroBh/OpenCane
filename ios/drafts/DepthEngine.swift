@@ -8,6 +8,13 @@
 //  Threading: ARSession delegate runs on `sessionQueue`. Everything published
 //  (`report`, `statusMessage`, …) and the `onReport` callback are delivered on main.
 //
+//  STATUS: draft, NOT in any target and never compiled by the current project. The iOS 18
+//  starter's depth engine, kept as history only; do not edit it (ios/drafts/README.md).
+//  Live successors: the lane math and `LaneReport` moved to CaneKitLogic (`LaneMath.swift`,
+//  `LaneReport.swift`, unit-tested), the ARKit shell was rewritten as
+//  `ios/CaneKit/Depth/DepthEngine.swift` (main-actor owner) + `DepthFrameProcessor.swift`
+//  (nonisolated `ARSessionDelegate` on its own queue) in Steps 1–2. Tests: none.
+//
 
 import ARKit
 import CoreMotion
