@@ -142,6 +142,138 @@ private struct SensePage: View {
     }
 }
 
+/// Add / remove the family email addresses the Grok Bot routine alerts, and register the list.
+///
+/// Editing and registering are separate on purpose: typing half an address must not fire a
+/// webhook, and the bot emails every address a confirmation on the first accepted Save.
+///
+/// ⚠ The app sends no email. "Save" posts the list; the bot owns delivery, so every string here
+/// says what the *bot* did ("Grok Bot accepted…"), never that mail arrived.
+///
+/// Accessibility: the list is rows of `Text` + a Remove button labelled with the address it
+/// removes ("Remove mom@example.com"), so VoiceOver never announces four identical "Remove"
+/// buttons. Errors are spoken text, not a red border.
+private struct FamilyContactsEditor: View {
+    @Environment(AppModel.self) private var model
+    /// The address being typed. Local: it is not worth persisting a half-typed entry.
+    @State private var draft = ""
+    /// Why the last Add was refused, or nil.
+    @State private var error: String?
+    /// True while the registration POST is in flight, so Save cannot be double-tapped.
+    @State private var saving = false
+    @FocusState private var fieldFocused: Bool
+
+    // ⚠ Split into four small sub-views on purpose: as one expression the body exceeded the
+    // type-checker ("failed to produce diagnostic"), which is SwiftUI's way of saying the
+    // inference blew up. Keep each piece small when adding a row here.
+    var body: some View {
+        VStack(alignment: .leading, spacing: CKSpacing.sm) {
+            Text("Family emails")
+                .font(CKFont.body)
+                .foregroundStyle(CKColor.textPrimary)
+            addressList
+            entryRow
+            errorLine
+            saveRow
+        }
+    }
+
+    /// One row per registered address, or a line explaining the empty state.
+    @ViewBuilder private var addressList: some View {
+        if model.familyEmails.isEmpty {
+            Text("No one yet. Add an address, then Save to register it.")
+                .font(CKFont.secondary)
+                .foregroundStyle(CKColor.textSecondary)
+        } else {
+            ForEach(model.familyEmails, id: \.self) { address in
+                HStack {
+                    Text(address)
+                        .font(CKFont.secondary)
+                        .foregroundStyle(CKColor.textPrimary)
+                    Spacer()
+                    Button {
+                        model.removeFamilyEmail(address)
+                        error = nil
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(CKColor.laneUrgent)
+                    }
+                    // ⚠ the address is in the label: four rows of "Remove" are unusable.
+                    .accessibilityLabel("Remove \(address)")
+                }
+            }
+        }
+    }
+
+    /// Type an address and add it to the list.
+    private var entryRow: some View {
+        HStack(spacing: CKSpacing.sm) {
+            TextField("family@example.com", text: $draft)
+                .textFieldStyle(.plain)
+                .font(CKFont.body)
+                .foregroundStyle(CKColor.textPrimary)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.emailAddress)
+                .submitLabel(.done)
+                .focused($fieldFocused)
+                .onSubmit(add)
+                .accessibilityLabel("Family email")
+                .accessibilityHint("Type an email address, then Add. The list is registered when you press Save.")
+            Button("Add", action: add)
+                .font(CKFont.body)
+                .accessibilityHint("Adds the typed address to the list")
+        }
+    }
+
+    /// Why the last Add was refused. Words, never a red border alone (design.md §7).
+    @ViewBuilder private var errorLine: some View {
+        if let error {
+            Text(error)
+                .font(CKFont.secondary)
+                .foregroundStyle(CKColor.laneUrgent)
+        }
+    }
+
+    /// Register the list, plus the reminder that an edit has not been registered yet.
+    @ViewBuilder private var saveRow: some View {
+        CKBigButton(title: "Save family emails",
+                    systemImage: "person.crop.circle.badge.checkmark",
+                    role: .secondary,
+                    hint: "Registers the list with the OpenCane Grok Bot, which emails your family when the cane reports a fall or SOS",
+                    value: saving ? "Saving" : nil) {
+            save()
+        }
+        .disabled(saving || !model.family.isConfigured)
+
+        if model.familyContactsNeedSave {
+            Text("Not registered yet - press Save.")
+                .font(CKFont.secondary)
+                .foregroundStyle(CKColor.laneNear)
+        }
+    }
+
+    /// Registers the list once, ignoring a second tap while the first POST is in flight.
+    private func save() {
+        guard !saving else { return }
+        saving = true
+        Task {
+            await model.saveFamilyContacts()
+            saving = false
+        }
+    }
+
+    /// Adds the typed address, or shows why it was refused. Keeps focus so a typo can be retried
+    /// without hunting for the field again.
+    private func add() {
+        error = model.addFamilyEmail(draft)
+        if error == nil {
+            draft = ""
+            fieldFocused = true
+        }
+    }
+}
+
 /// Settings page: cues, haptics, watch, mount, this phone.
 private struct SettingsPage: View {
     /// Made `@Bindable` in `body` so the pickers and toggles get two-way bindings.
@@ -267,6 +399,17 @@ private struct SettingsPage: View {
             if !self.model.family.isConfigured {
                 Text("No webhook key. Add OPENCANE_GROKBOT_WEBHOOK_URL and _KEY to Secrets.plist.")
                     .font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+            }
+            FamilyContactsEditor()
+            Toggle("Add AI context", isOn: model.familyAlertsAIContext)
+                .accessibilityHint("A small model writes one sentence of context for your family from what the phone knew. The facts are sent either way.")
+                .disabled(!self.model.family.canSummarize)
+            if let name = self.model.family.summarizerName, self.model.familyAlertsAIContext {
+                Text("Context written by \(name).")
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            } else if !self.model.family.canSummarize {
+                Text("No model key, so alerts carry facts only.")
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
             CKBigButton(title: "Send test event", systemImage: "antenna.radiowaves.left.and.right",
                         role: .secondary,

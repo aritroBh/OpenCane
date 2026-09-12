@@ -50,6 +50,9 @@ public struct OpenCaneEventType: RawRepresentable, Codable, Sendable, Equatable,
     public static let sos: Self = "sos"
     /// Heartbeat / state change (route started, arrived). Quiet.
     public static let status: Self = "status"
+    /// Registers the family email list with the bot. Carries `emails` (and optionally
+    /// `send_test`) instead of a position; see `FamilyContacts`.
+    public static let familyContacts: Self = "family_contacts"
 }
 
 /// Nested `{ lat, lng }` form of a position. The flat `lat` / `lng` fields are what OpenCane
@@ -163,6 +166,10 @@ public struct OpenCaneEvent: Codable, Sendable, Equatable {
     public var batteryPct: Int?
     public var obstacle: OpenCaneObstacle?
     public var extra: [String: OpenCaneJSON]?
+    /// `family_contacts` only: the addresses the bot should alert. Absent on every other event.
+    public var emails: [String]?
+    /// `family_contacts` only: ask the bot to email each address a confirmation. Absent means no.
+    public var sendTest: Bool?
 
     /// ⚠ The wire names. These are the contract with the bot — see the file header.
     private enum CodingKeys: String, CodingKey {
@@ -173,7 +180,8 @@ public struct OpenCaneEvent: Codable, Sendable, Equatable {
         case note, message, label, user
         case caneID = "cane_id"
         case batteryPct = "battery_pct"
-        case obstacle, extra
+        case obstacle, extra, emails
+        case sendTest = "send_test"
     }
 
     public init(type: OpenCaneEventType,
@@ -192,7 +200,9 @@ public struct OpenCaneEvent: Codable, Sendable, Equatable {
                 caneID: String? = nil,
                 batteryPct: Int? = nil,
                 obstacle: OpenCaneObstacle? = nil,
-                extra: [String: OpenCaneJSON]? = nil) {
+                extra: [String: OpenCaneJSON]? = nil,
+                emails: [String]? = nil,
+                sendTest: Bool? = nil) {
         self.type = type
         self.severity = severity
         self.timestamp = timestamp
@@ -210,6 +220,8 @@ public struct OpenCaneEvent: Codable, Sendable, Equatable {
         self.batteryPct = batteryPct
         self.obstacle = obstacle
         self.extra = extra
+        self.emails = emails
+        self.sendTest = sendTest
     }
 
     /// ISO-8601 UTC text for `date`, e.g. "2026-09-12T20:30:00Z". Second resolution: the bot reads

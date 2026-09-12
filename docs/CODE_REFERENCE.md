@@ -2148,6 +2148,45 @@ are worded for that; do not "improve" them into "family notified".
 - ⚠ Struct with mutating methods: a call inside `#expect`/`#require` does not compile under
   Swift 6. The tests assign to a local first.
 
+### `Logic/Sources/CaneKitLogic/FamilyContacts.swift` — who the bot emails
+
+- `isValid(_:)` — conservative address check (one `@`, dotted domain, alphabetic TLD ≥ 2, no
+  whitespace, no `..`, ≤ 254 chars). Deliberately not RFC-complete: it only has to catch the typo
+  shapes, because the bot cannot tell a typo from a real address and `send_test` is what actually
+  proves deliverability.
+- `normalize(_:)` — trim, lowercase, drop invalid, de-duplicate keeping first, cap at
+  `maxContacts` (10). Idempotent, so an unchanged Save posts identical bytes. ⚠ Lowercasing is what
+  makes de-duplication work: "Mom@Example.com" and "mom@example.com" are one person.
+- `rejected(_:)` — the entries `normalize` will drop, so the UI can say why.
+- `registration(emails:sendTest:)` — the `family_contacts` event. `send_test` is omitted rather
+  than `false` (the contract only gives meaning to true).
+- Schema: `OpenCaneEvent.emails` / `.sendTest` (`send_test`) exist for this event only; a test
+  pins that a `fall` carries neither.
+
+### `Logic/Sources/CaneKitLogic/AlertContext.swift` — what the phone knew, and the model's prompt
+
+- `AlertContext` — navigating / destination / instruction / distanceToNextM / batteryPct /
+  thermalState / speedMps / headingDeg / activeCue / lastGroundHazard / hasFix. `extraFields()`
+  renders them into `OpenCaneEvent.extra`, omitting unknowns and CoreLocation's −1 sentinels and
+  truncating text to `maxTextLength` (160).
+- `AlertContextPrompt.text(…)` — the prompt for the cheap model. ⚠ Its bans are a safety contract,
+  not copy: never claim the walker is safe or that help is coming, never invent a street or injury,
+  never instruct the family. A small model volunteers all three unprompted.
+- `TextRequest.openAICompatible(…)` / `.anthropic(…)` — text-only bodies; responses reuse
+  `VLMResponse`. ⚠ `maxOutputTokens` is **4096** and must cover a reasoning model's thinking — at
+  200 and at 1024 the real Muse endpoint returned `content: null` with `finish_reason: "length"`,
+  silently, every time. The table of measurements is in the source.
+
+### `ios/CaneKit/Alerts/AlertSummarizer.swift` — the cheap model
+
+- `fromSecrets()` — Anthropic (`ALERT_MODEL`, default `claude-haiku-4-5-20251001`) → custom
+  OpenAI-compatible → OpenAI. Deliberately **not** the "Where am I" model: that one is a large
+  reasoning model picked for photographs, this runs on every alert.
+- ⚠ Uses `reasoning_effort` **"minimal"**, not the scene path's "low": measured, "low" costs 7.1 s
+  per alert (over `requestTimeout` 6 s) and "minimal" 2.1 s for an equally good sentence.
+- Own ephemeral `URLSession`, `waitsForConnectivity = false`. Every failure returns nil; the alert
+  then goes with facts and no `ai_context`.
+
 ### `ios/CaneKit/Alerts/GrokBotClient.swift` — transport only
 
 - `GrokBotResult` — `.accepted` / `.notConfigured` / `.rejected(status:body:)` / `.failed`, each
@@ -2168,6 +2207,21 @@ are worded for that; do not "improve" them into "family notified".
   control. They exist so those detectors have one obvious place to report to.
 - `sendTestEvent(lat:lng:)` — the debug button; posts a sample `fall` and works even while the
   feature is off, because checking the chain is what you do *before* switching it on.
+- `contextProvider` — set by `AppModel` to `familyContext`; read **synchronously on the main actor**
+  in `prepare(_:)` so the payload describes the moment the event fired, not whenever the send Task
+  ran. `deliver(_:prompt:client:)` then summarises (best effort) and POSTs off the main actor.
+- `aiContextEnabled` ← the `familyAlertsAIContext` setting (default **on**).
+- `registerContacts(_:sendTest:)` — ⚠ three deliberate differences from every other send: it
+  ignores `enabled` (registering is setup, done before alerts are switched on), it skips
+  `prepare`/`deliver` entirely (no context, and **the addresses never reach the summarizer**), and
+  it is not rate-limited (the walker pressed Save).
+
+App state: `AppModel.familyEmails` (persisted normalised), `familyContactsRegistered` (drives
+`send_test` — first accepted Save only), `familyContactsNeedSave`, `addFamilyEmail(_:)` →
+refusal reason or nil, `removeFamilyEmail(_:)`, `saveFamilyContacts()`.
+UI: `FamilyContactsEditor` in `ContentView`. ⚠ Its body is split into four sub-views because as one
+expression it blew the type-checker; keep new rows small. Remove buttons are labelled
+"Remove <address>", never four identical "Remove"s.
 
 ### Call sites
 

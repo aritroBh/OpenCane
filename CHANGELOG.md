@@ -39,6 +39,47 @@ unit-tested in `CaneKitLogic`, the app owns only transport and keys.
   webhook key is configured, and **"Send test event"**, which works even while the switch is off
   because checking the chain is what you do before a walk.
 
+**Who gets alerted:** Settings → Family alerts now has a **Family emails** list. Saving posts one
+`family_contacts` event (`emails: string[]`, plus `send_test` on the first list the bot accepts) to
+the same webhook; the bot stores it and Gmails whoever is on it when a later fall / SOS / warn
+arrives. Cane events are posted separately and unchanged, and never carry `emails` — the bot has
+the list, and every copy is one more place it could leak (pinned by a test).
+
+**The app sends no email.** It posts addresses once; the bot owns delivery. Every string in the UI
+says what the *bot* did ("Grok Bot accepted 2 addresses"), never that mail arrived — the app cannot
+know that.
+
+Registration is deliberately unlike every other send: it ignores the alerts switch (the list is
+filled in *before* alerts are turned on, and a Save that silently did nothing is the worst
+outcome), it is not rate-limited, and it skips the enrichment path entirely — **a family's email
+addresses are never put in front of the summarizer model.** Addresses are trimmed, lowercased,
+de-duplicated (so "Mom@Example.com" and "mom@example.com" are not emailed twice) and capped at 10;
+an invalid entry is refused with a reason rather than silently dropped, because a typo here costs a
+real alert later.
+
+**Context, so an alert is readable:** every event carries what the phone knew — destination,
+current instruction, metres to the next waypoint, speed, heading, battery, thermal state, active
+cue, last ground hazard, whether there was a GPS fix — in `extra`, plus `ai_context`: one sentence
+written by a cheap model (`AlertSummarizer`) from exactly those facts. "Possible fall detected on
+the route from ISR to CIF at Cross Springfield Avenue, 42 metres to the next waypoint … battery
+18%" rather than a pair of coordinates.
+
+⚠ The model never writes `note`. It is not allowed to be the only factual line in a safety alert,
+so its sentence sits in `extra.ai_context` beside the facts it was given. The prompt bans what a
+small model volunteers unprompted: claiming the walker is safe or that help is coming, inventing a
+street or an injury, telling the family what to do. Those bans are pinned by a test.
+
+**Two things the endpoint taught us, both of which fail silently:**
+
+- `max_completion_tokens` has to cover a **reasoning** model's thinking, not its answer. At 200 the
+  Muse endpoint spent 197 tokens reasoning and returned `content: null` with
+  `finish_reason: "length"`; at 1024 it spent 1021 and did the same. HTTP 200 both times, so every
+  alert would simply have carried no `ai_context` and nothing would have said why. Now 4096, with
+  the measurements in the source and a test that stops anyone "optimising" it back down.
+- `reasoning_effort` is **"minimal"** on this path, not the "low" the scene describer uses: "low"
+  costs 7.1 s per alert — past the 6 s timeout, so the summary would usually have been abandoned —
+  while "minimal" costs 2.1 s for an equally good sentence.
+
 **Two things deliberately not done:**
 
 - ⚠ **No fall detector and no SOS control exist.** `FamilyAlerts.fall(…)` / `.sos(…)` are written
@@ -61,6 +102,10 @@ Documented with a curl example in `ios/README.md §4.1`.
 into a commit, and break watch pairing on the demo phone. Restored to `com.aritro.canekit`. Swap
 ids for a personal team with the git-ignored `ios/scripts/restore-ids.sh` / `gen-local.sh`, never
 by committing the plist.
+
+Verified end to end before shipping, against the live routine: a `family_contacts` registration
+(HTTP 200, `runUuid d1b76d16`) followed by a `fall` carrying facts + `ai_context` and no addresses
+(HTTP 200, `runUuid f5e7f43a`).
 
 test on device: Settings → Family alerts → Send test event, with the phone on Wi-Fi and then in
 Airplane Mode (expect "Could not reach Grok Bot" after the one retry, ~12 s, and no crash); then
