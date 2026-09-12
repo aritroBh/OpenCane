@@ -259,33 +259,55 @@ final class AppModel {
     /// re-enter it. See the `didSet` above.
     @ObservationIgnored private var applyingBothCameras = false
 
-    /// Back-camera flashlight, as reported by the device itself (`isTorchActive` read back
-    /// after every set — never the request). Device-level torch: it touches no capture
-    /// session, so it works while ARKit runs, while both-cameras runs, and mid-route, and is
-    /// never refused the way both-cameras is. Not persisted and false at launch: a pocketed
-    /// phone with the torch on is a dead battery and a burn risk. Written only by
-    /// `setTorch(_:)`; the card binds through it, so there is no `didSet` re-entrancy dance.
+    /// Back-camera flashlight as the on-screen switch shows it: the walker's request at once
+    /// while it settles, then the device's own `isTorchActive` (`torchSwitch.displayed`).
+    /// Device-level torch: it touches no capture session, so it works while ARKit runs, while
+    /// both-cameras runs, and mid-route, and is never refused the way both-cameras is. Not
+    /// persisted and false at launch: a pocketed phone with the torch on is a dead battery and a
+    /// burn risk. Written only by `applyTorch(_:)`; the card binds through `setTorch(_:)`.
     private(set) var torchEnabled = false
 
-    /// Turn the back-camera torch on or off, then report what the device actually did.
+    /// The flashlight state machine (CaneKitLogic `TorchSwitch`): optimistic display, confirmation
+    /// by device report, failure only after its settle deadline. ⚠ It exists because reading
+    /// `isTorchActive` right after setting it returned the old value on the phone and snapped the
+    /// switch back on every press (trip log 2026-09-12T20-57-17Z; `TorchSwitchTests`).
+    @ObservationIgnored private var torchSwitch = TorchSwitch()
+    /// The back camera device the torch is set and observed on. Stored, not re-fetched: KVO holds
+    /// its target weakly and must watch the same instance the torch is set through (Step 34
+    /// review, Muse + Antigravity). Main actor only; never crosses into the KVO closure.
+    @ObservationIgnored private var torchDevice: AVCaptureDevice?
+    /// KVO on `torchDevice.isTorchActive`, installed on the first `setTorch`; kept for the app's
+    /// lifetime so a thermal cut-out with no window open is still announced.
+    @ObservationIgnored private var torchObservation: NSKeyValueObservation?
+    /// The settle-deadline task of the latest request; replaced (cancelled) by each new request.
+    @ObservationIgnored private var torchDeadline: Task<Void, Never>?
+
+    /// Turn the back-camera torch on or off; the outcome is spoken when the device confirms it
+    /// or when the settle deadline passes.
     ///
     /// The torch is a property of the camera device, not of any session: ARKit keeps its
     /// frames and the multi-cam session keeps its feeds either way, which is why this works
     /// everywhere both-cameras cannot (mid-route, with obstacle detection alive). The switch
-    /// snaps back by itself when the torch does not take (no torch hardware, lock failure),
-    /// and the trip log records the measured state, so a device run is the measurement of
-    /// whether torch + ARKit coexist on this phone.
+    /// shows the request immediately (`TorchSwitch.request`); a thrown lock or set error snaps it
+    /// back at once, a silent refusal (thermal) snaps it back at the deadline with "The flashlight
+    /// did not switch on.". The trip log records `torch {action, active, outcome}` per outcome, so
+    /// a device run measures whether torch + ARKit coexist on this phone.
     /// - Parameter on: the requested state.
-    /// Main actor. Speaks the outcome (`.scene`); logs `torch {action, active}`.
+    /// Main actor. Caller: `HazardsCard`'s Flashlight toggle.
     func setTorch(_ on: Bool) {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video,
-                                                   position: .back),
+        guard let device = torchDevice
+                ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               device.hasTorch else {
             torchEnabled = false
             speech.say("This phone has no flashlight.", .scene, ttl: 6)
             logger.event("torch", ["action": "unsupported"])
             return
         }
+        torchDevice = device
+        observeTorch(device)
+        torchSwitch.request(on, now: ProcessInfo.processInfo.systemUptime)
+        torchEnabled = torchSwitch.displayed
+        logger.event("torch", ["action": on ? "request_on" : "request_off", "active": device.isTorchActive])
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
@@ -295,21 +317,56 @@ final class AppModel {
                 device.torchMode = .off
             }
         } catch {
-            torchEnabled = false
-            speech.say("The flashlight did not switch.", .scene, ttl: 6)
-            logger.event("torch", ["action": on ? "on" : "off", "active": false,
-                                   "error": error.localizedDescription])
+            // A thrown error is a definite answer: close the window now instead of at the deadline.
+            torchDeadline?.cancel()
+            applyTorch(torchSwitch.tick(active: device.isTorchActive, now: .infinity),
+                       active: device.isTorchActive, error: error.localizedDescription)
             return
         }
-        torchEnabled = device.isTorchActive
-        // An ON request the device silently refuses (thermal cutout without a throw) must not
-        // be confirmed with "Flashlight off." — true, but answering the wrong question.
-        if on, !device.isTorchActive {
-            speech.say("The flashlight did not switch on.", .scene, ttl: 6)
-        } else {
-            speech.say(device.isTorchActive ? "Flashlight on." : "Flashlight off.", .scene, ttl: 4)
+        // ⚠ No `report` from `device.isTorchActive` here: on the line after setting it, that read is
+        // the OLD state (the measured bug), and after a quick OFF→ON it can even match the new
+        // request and confirm too early (Step 34 review). KVO confirms; the deadline decides.
+        torchDeadline?.cancel()
+        let settle = torchSwitch.configuration.settleSeconds
+        torchDeadline = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(settle))
+            guard !Task.isCancelled, let self, let device = self.torchDevice else { return }
+            let active = device.isTorchActive
+            // `.infinity`: this task IS the deadline. Comparing `systemUptime` (stops in system
+            // sleep) with a `ContinuousClock` sleep could leave the window open forever.
+            self.applyTorch(self.torchSwitch.tick(active: active, now: .infinity), active: active)
         }
-        logger.event("torch", ["action": on ? "on" : "off", "active": device.isTorchActive])
+    }
+
+    /// Install the one `isTorchActive` observer. KVO calls back on an arbitrary thread, so the
+    /// `@Sendable` closure only hops to the main actor (AGENTS.md hard rule 1). The hop re-reads
+    /// `torchDevice.isTorchActive` rather than trusting `change.newValue`: unstructured main-actor
+    /// tasks are not guaranteed FIFO, and reordered snapshots could leave the switch showing a
+    /// state the device left (Step 34 review, Muse + Antigravity). Re-reading makes every hop
+    /// apply the current truth, whatever order they run in.
+    private func observeTorch(_ device: AVCaptureDevice) {
+        guard torchObservation == nil else { return }
+        torchObservation = device.observe(\.isTorchActive, options: []) { @Sendable [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                guard let self, let device = self.torchDevice else { return }
+                let active = device.isTorchActive
+                self.applyTorch(self.torchSwitch.report(active: active,
+                                                        now: ProcessInfo.processInfo.systemUptime),
+                                active: active)
+            }
+        }
+    }
+
+    /// Publish a `TorchSwitch` outcome: update the switch, speak its fixed line at `.scene` for
+    /// `Outcome.queueSeconds` (4 s for a confirmation, 12 s for a failure or device change), log it.
+    /// `.none` only refreshes the switch. Main actor.
+    private func applyTorch(_ outcome: TorchSwitch.Outcome, active: Bool, error: String? = nil) {
+        torchEnabled = torchSwitch.displayed
+        guard let line = outcome.spokenLine else { return }
+        speech.say(line, .scene, ttl: outcome.queueSeconds)
+        var fields: [String: Any] = ["action": "\(outcome)", "active": active, "text": line]
+        if let error { fields["error"] = error }
+        logger.event("torch", fields)
     }
 
     /// Head tracking from the **front** camera instead of the AirPods (`DepthEngine`'s
@@ -340,12 +397,38 @@ final class AppModel {
     /// `faceHeadTrackingEnabled` an older build left on disk.
     var faceHeadTrackingEnabled: Bool = false {
         didSet {
+            guard !applyingFaceTracking, faceHeadTrackingEnabled != oldValue else { return }
+            // Either direction re-runs the AR session (~1–2 s without obstacle frames), so a
+            // route refuses it like the two-camera mode (`FaceTrackingChange`, LiveViewTests).
+            let change = FaceTrackingChange.decide(navigating: nav.isNavigating,
+                                                   routeStartWaiting: routeStartWaiting)
+            guard change == .apply else {
+                applyingFaceTracking = true
+                faceHeadTrackingEnabled = oldValue
+                applyingFaceTracking = false
+                // No `routeError`: that is the Guide card's route-build line and nothing clears it on
+                // this path (Step 34 review). The spoken line and the Sense caption explain it.
+                if change == .refusedRoute {
+                    speech.say("Head tracking without AirPods cannot change while a route is guiding you. Stop the route first.",
+                               .nav, ttl: 10)
+                    logger.event("face_tracking", ["action": "refused_route", "requested": !oldValue])
+                } else {
+                    speech.say("Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
+                               .nav, ttl: 10)
+                    logger.event("face_tracking", ["action": "refused_route_start", "requested": !oldValue])
+                }
+                return
+            }
             depth.setFaceTracking(faceHeadTrackingEnabled)
             if faceHeadTrackingEnabled { faceHead.start() } else { faceHead.stop() }
             logger.event("face_tracking", ["enabled": faceHeadTrackingEnabled,
                                            "supported": DepthEngine.supportsFrontCameraWithLiDAR])
         }
     }
+
+    /// True while `faceHeadTrackingEnabled`'s `didSet` writes the old value back after a refusal,
+    /// so that write does not re-enter it (the `applyingBothCameras` pattern).
+    @ObservationIgnored private var applyingFaceTracking = false
 
     /// Danger-sound recognition on the microphone (Hazards card). Default OFF, and deliberately
     /// so: it is the only feature that moves the app's audio session off `.playback`
@@ -580,6 +663,10 @@ final class AppModel {
                 "text": text, "load": load.rawValue, "reason": reason.rawValue
             ])
         }
+        // Every line handed to a voice backend, from any caller (`SpeechQueue.onDispatch`).
+        speech.onDispatch = { [weak self] text, priority, replays in
+            self?.logger.event("speech_dispatch", ["text": text, "priority": "\(priority)", "replays": replays])
+        }
         speech.configureAudioSession()       // before ARKit and before the haptic engine
         wireAudioRoute()
         wireHeadNod()
@@ -789,6 +876,13 @@ final class AppModel {
     /// `selfTestControlsVisible`).
     func startFaceTrackingSelfTest() {
         guard !selfTestRunning else { return }
+        // It re-runs the AR session twice (on now, restore at 15 s); never start it on a route, and
+        // a route begun during the 15 s defers the restore until it ends (below).
+        switch FaceTrackingChange.decide(navigating: nav.isNavigating, routeStartWaiting: routeStartWaiting) {
+        case .apply: break
+        case .refusedRoute: selfTestStatus = "Not while a route is guiding you"; return
+        case .refusedRouteStart: selfTestStatus = "Not while a route is starting"; return
+        }
         selfTestRunning = true
         selfTestStatus = "Front camera self test: 15 seconds, hold the phone facing you"
         let restore = faceHeadTrackingEnabled
@@ -810,6 +904,21 @@ final class AppModel {
                 "thermal": self.thermalName,
             ])
             // Put the walker's own setting back: a debug button must not leave the front camera on.
+            // The restore re-runs the AR session, so a route started during the test defers it
+            // until guidance ends, whichever way it ends (Stop, arrival) — polled, debug-only.
+            // Logged once, not every second (a 15-minute route would write ~900 lines — Muse,
+            // Step 34 final review); stops waiting if the task is cancelled.
+            var deferred = false
+            while FaceTrackingChange.decide(navigating: self.nav.isNavigating,
+                                            routeStartWaiting: self.routeStartWaiting) != .apply,
+                  !Task.isCancelled {
+                if !deferred {
+                    deferred = true
+                    self.selfTestStatus = "Front camera self test: restore waits for the route to end"
+                    self.logger.event("face_head_selftest", ["action": "restore_deferred_route"])
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
             self.depth.setFaceTracking(restore)
             if !restore { self.faceHead.stop() }
             self.selfTestStatus = "Front camera self test finished: \(self.faceHead.readout)"
@@ -1865,14 +1974,21 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
-        // Flashlight confirmations (`setTorch`): toggle feedback must never wait on a fetch.
-        // ⚠ Keep byte-identical to the strings in `setTorch`.
-        "Flashlight on.", "Flashlight off.",
+        // Refusals of the modes that re-run or pause ARKit (`setBothCameras`,
+        // `faceHeadTrackingEnabled`): spoken at `.nav`, so a cache miss would hold route and
+        // obstacle speech behind a fetch. ⚠ Keep byte-identical to those `speech.say` calls.
+        "Both cameras cannot run while a route is guiding you. Stop the route first.",
+        "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready.",
+        "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first.",
+        "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
         "Siren. Do not start crossing.", "Horn nearby.", "Vehicle sound nearby.",
     ]
+        // Every flashlight line (`TorchSwitch.allSpokenLines`, pinned to the outcomes by
+        // `TorchSwitchTests.allSpokenLinesMatchOutcomes`): toggle feedback never waits on a fetch.
+        + TorchSwitch.allSpokenLines
 
     /// Shared start sequence for both route sources. Order matters: prefetch → location →
     /// `nav.start` (speaks the intro) → beacon/head → recenter pending → fresh cue-speech policy

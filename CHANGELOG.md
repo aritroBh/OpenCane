@@ -2,6 +2,96 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 34 — Flashlight switch, both-cameras "does nothing", face tracking mid-route (Sat Sep 12)
+
+**Device report (owner, trip log `canekit-2026-09-12T20-57-17Z`):** "the both cameras button don't
+work" and "the flashlight slide thing is bugging".
+
+**Cause 1 — flashlight (measured, t = 106–120 s):** every press logged twice with opposite results,
+`torch on, active: false` then, on the *next* press, `on, active: true`. `setTorch` set the torch and
+read `AVCaptureDevice.isTorchActive` on the next line; iOS updates it asynchronously, so the read was
+the old state. The switch snapped back and said it failed, then the torch came on anyway, so every
+change took two presses.
+**Fix:** new pure `TorchSwitch` (CaneKitLogic) and `AppModel.setTorch` / `observeTorch` /
+`applyTorch`. The switch shows the request at once; KVO on `isTorchActive` confirms it; a 2 s settle
+deadline (a hypothesis to confirm on the phone) decides failure. Tests first: `TorchSwitchTests` (16).
+
+**Cause 2 — both cameras (measured, t = 33.7 and 84–87 s):** the voice command "set the location from
+here to Granger library" had **started a real route** (`route action: start`, 750 m). Every press
+was refused, and that refusal is correct: a spotter's picture must not pause obstacle detection
+mid-route. But `setBothCameras` snaps the switch back to off at once, and
+`BothCameras.state(enabled: false, navigating: true)` returned `.off`, so the "cannot run while a
+route is guiding you" caption was never on screen. The switch just bounced. (The spoken refusal
+left no trip-log record because direct `say` lines were never logged, so whether it was heard is
+unknown.)
+**Fix:** `.blockedByRoute` for the whole route, whatever the switch shows; the caption adds "Stop the
+route on the Guide tab first." Test first: `bothCamerasExplainTheRefusalForTheWholeRoute`.
+
+**Cause 3 — face tracking (measured, t = 80.7 s; audit item todo:194):** "Head tracking without
+AirPods" was switched on mid-route. `DepthEngine.setFaceTracking` pauses and re-runs the AR session
+(~1–2 s with no obstacle frames), with no warning.
+**Fix:** `FaceTrackingChange.decide` (CaneKitLogic). The `didSet` refuses while a route guides or
+starts: it writes the old value back, speaks why at `.nav` and logs `face_tracking
+{action: refused_*}`. The debug self test refuses too, and its 15 s restore waits for a route to end.
+Sense caption. Tests first: `LiveViewTests.faceTracking*`.
+
+**Instrumentation:** `SpeechQueue.onDispatch` → trip-log `speech_dispatch {text, priority, replays}`
+for every line handed to a voice backend, whoever called `say`. Dispatched is not the same as heard.
+
+**Audit (8 agents, 4 auditors + 4 skeptics) of every open software item in docs/todo.md:**
+- Already done, todo was stale: cloud scene gate, scene prompt, hazard watch off by default,
+  skipped waypoints, idle timer, back-camera copy.
+- Still open (not in this step):
+  1. The conversation fallthrough is not grounded in the scene context.
+  2. The hazard-watch prompt still asks for metres.
+  3. The AirPods head tracker starts without checking that headphones are connected.
+  4. `observeThermalAndBattery` runs before the audio session is configured.
+  5. The background teardown of both cameras has no background-task assertion.
+  6. The debug probe + demo-route flag clash.
+  7. Steps 27–33 never had their Muse/Antigravity reviews.
+
+**Review (31-agent adversarial workflow + Muse + Antigravity), each finding verified by hand:**
+- Fixed (agents + Muse + Antigravity independently): the first version still reported the
+  same-instant read. After a quick OFF→ON it could confirm from the stale value, and the OFF's late
+  KVO was then announced as "The flashlight turned off." A window now stays open to its deadline, and
+  reports inside it are the walker's own requests landing (`quickReversalSpeaksOnce`). No synchronous
+  report.
+- Fixed (agents + Antigravity): the deadline slept on `ContinuousClock` but compared `systemUptime`,
+  which stops in system sleep, so a window could never close. The task is the deadline and ticks with
+  `now: .infinity` (`infiniteTickAlwaysResolves`).
+- Fixed (Muse + Antigravity): KVO holds its target weakly and main-actor hops are not FIFO. The device
+  is now stored, and each hop re-reads `isTorchActive` instead of trusting `newValue`.
+- Fixed (agents + Antigravity): the failure, device-change and refusal lines were not prefetched, and
+  a cache miss holds the queue and ducks the beacon. `commonLines` now includes
+  `TorchSwitch.allSpokenLines` (pinned by `allSpokenLinesMatchOutcomes`) and the four refusal lines.
+  Failure and device-change lines wait 12 s in the queue (`queueSeconds`).
+- Fixed (agents + Muse): the self-test restore could re-run the session mid-route; it now waits.
+  `onSpoken` was renamed `onDispatch`, because it fires at dispatch, not at playback. The face
+  refusal no longer sets `routeError`, which nothing cleared. Captions cover route start. The
+  `liveCaption` doc and the design.md §5.1 table are updated.
+- Rejected, with evidence:
+  - Muse: "refusal lines can flood `.nav`". `SpeechQueue.say` coalesces a line identical to the one
+    playing or queued, so hammering the toggle leaves at most one playing and one queued.
+  - Muse: "no test for enabled + navigating". Already pinned by
+    `bothCamerasAreRefusedWhileARouteIsGuiding`.
+  - Muse #5: "optimistic display shows ON for up to 2 s before a silent refusal". This is the
+    deliberate trade for the measured snap-back, and the deadline speaks the failure.
+  - Agents: "KVO `newValue` snapshot". Refuted 2/2, and moot now that the hop re-reads.
+
+Muse re-review of the final diff: all nine fixes verified closed. One new defect: the deferred
+restore logged every second with no cancellation check. It now logs once and stops on cancellation.
+
+**Verification:** `make test` 423/423. `make sim` BUILD SUCCEEDED. `make uitest` on the iPhone 17 Pro
+Max simulator (iOS 27): 10 tests, 1 skipped (streetview, expected), 0 failures, on the post-review
+build. Not yet verified on the phone: it went unavailable mid-session.
+
+test on device: reinstall (`make run`). Sense tab: Flashlight on, off, on. Each press should move the
+switch once and say "Flashlight on." / "Flashlight off." once, with no snap-back; then tap off→on fast
+and expect one confirmation, no "turned off". Start a route, then press Both cameras: the switch
+bounces and the caption "…Stop the route on the Guide tab first." stays visible while the route runs.
+Press Head tracking without AirPods mid-route: it is refused and spoken. In the trip log, check
+`speech_dispatch` records for those refusal lines and `torch {action: confirmed(on: true)}`.
+
 ## Step 33 — Snappy tab switches: fade-in, one landing time (Sat Sep 12)
 
 **Device report:** moving between Guide / Sense / Settings feels sluggish.

@@ -93,8 +93,9 @@ public enum LiveView: Equatable, Sendable {
 public enum BothCameras: Equatable, Sendable {
     /// Nothing built, no cameras held, ARKit owns the camera as usual.
     case off
-    /// Refused because guidance is running: the walker is *walking*, and the obstacle channel is
-    /// not something a spotter's picture may switch off mid-route.
+    /// Guidance is running, so the mode is refused and its reason is on screen for the whole
+    /// route (switch on or off): the walker is *walking*, and the obstacle channel is not
+    /// something a spotter's picture may switch off mid-route.
     case blockedByRoute
     /// This phone cannot run two cameras at once (`AVCaptureMultiCamSession.isMultiCamSupported`
     /// is false), so the two-camera view is not available: **no picture at all**, just a line of
@@ -116,9 +117,37 @@ public enum BothCameras: Equatable, Sendable {
     public static func state(enabled: Bool, supported: Bool, navigating: Bool,
                              foreground: Bool = true) -> BothCameras {
         guard foreground else { return .off }
-        if navigating { return enabled ? .blockedByRoute : .off }
+        // The whole route, whatever the switch shows: `AppModel.setBothCameras` snaps a refused
+        // switch back to off at once, so keying this on `enabled` hid the reason (measured,
+        // trip log 2026-09-12T20-57-17Z; `bothCamerasExplainTheRefusalForTheWholeRoute`).
+        if navigating { return .blockedByRoute }
         guard enabled else { return .off }
         return supported ? .live : .unsupported
+    }
+}
+
+/// Whether "Head tracking without AirPods" may change right now.
+///
+/// Turning `ARWorldTrackingConfiguration.userFaceTrackingEnabled` on **or** off makes
+/// `DepthEngine.setFaceTracking` pause and re-run the AR session: ~1–2 s with no obstacle frames.
+/// Measured on the phone (trip log 2026-09-12T20-57-17Z, t = 80.7 s) it was switched on mid-route
+/// with no warning. So, like the two-camera mode, it is refused while a route guides or starts.
+/// Caller: `AppModel.faceHeadTrackingEnabled`'s `didSet` and `startFaceTrackingSelfTest`.
+/// Pinned by `LiveViewTests.faceTracking*`.
+public enum FaceTrackingChange: Equatable, Sendable {
+    /// No route: re-run the session with the new setting.
+    case apply
+    /// A route is guiding the walker: keep the old setting and say why.
+    case refusedRoute
+    /// A route is waiting for obstacle detection (`DepthReadiness`): a re-run would reset it.
+    case refusedRouteStart
+
+    /// - Parameters:
+    ///   - navigating: `NavigationEngine.isNavigating`.
+    ///   - routeStartWaiting: `AppModel.routeStartWaiting`.
+    public static func decide(navigating: Bool, routeStartWaiting: Bool) -> FaceTrackingChange {
+        if navigating { return .refusedRoute }
+        return routeStartWaiting ? .refusedRouteStart : .apply
     }
 }
 
