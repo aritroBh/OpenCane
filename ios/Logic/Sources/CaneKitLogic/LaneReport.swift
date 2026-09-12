@@ -2,7 +2,7 @@
 //  LaneReport.swift
 //  CaneKitLogic
 //
-//  What the depth pipeline publishes, ~15 Hz. Value type so it can cross actors.
+//  What the depth pipeline publishes, ~30 Hz normal / up to 60 Hz high-rate. Value type so it can cross actors.
 //
 //  Purpose: the single value `DepthEngine` hands to `AppModel` per depth frame — the lane grid,
 //  whether the frame is trustworthy (cane not sweeping), and the classified mesh face at the

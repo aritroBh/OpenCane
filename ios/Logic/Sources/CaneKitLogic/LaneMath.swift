@@ -8,7 +8,7 @@
 //  and the tests can pass plain arrays.
 //
 //  Purpose: the first step of the obstacle pipeline. `DepthFrameProcessor` (app) calls the raw
-//  entry point on every ARKit depth frame (~15 Hz); the resulting `LaneGrid` goes into a
+//  entry point on every ARKit depth frame (~30 Hz normal / up to 60 Hz high-rate); the resulting `LaneGrid` goes into a
 //  `LaneReport`, which `CueDecider` turns into haptic cues.
 //
 //  Key invariants:

@@ -9,7 +9,7 @@
 //
 //  Implements docs/design.md §6.2 (Depth grid), the lane ladder of §2, and the §4 / §7 rules
 //  "no animation on the depth grid, no colour cross-fades on lane tiles": tiles re-render at
-//  the depth engine's ~15 Hz with instant changes. Deviation from §6.2: VoiceOver gets one
+//  the depth engine's ~30 Hz normal / up to 60 Hz high-rate with instant changes. Deviation from §6.2: VoiceOver gets one
 //  element per row ("Head row", "Torso row") instead of one for the whole grid.
 //
 //  Accessibility contract: tiles are hidden; each row is one element labelled "<Row> row" with

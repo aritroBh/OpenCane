@@ -20,7 +20,7 @@
 //      fields are the ARKit clock — a different clock; correlate lane/cue records via `ar_t` and
 //      nav records via `t`.
 //    · JSON has no NaN/infinity: numbers go through `num`, and invalid objects are dropped.
-//    · `lanes` records stay throttled (`laneRate`); the depth pipeline reports at ~15 Hz.
+//    · `lanes` records stay throttled (`laneRate`); the depth pipeline reports at ~30 Hz normal / up to 60 Hz high-rate.
 //  ⚠ Do not rename `kind` values or fields without updating any log-analysis tooling
 //  (ios/scripts/e2e.py reads them); only the record assembly is unit-tested — verify the file
 //  itself by AirDropping it after a device walk.

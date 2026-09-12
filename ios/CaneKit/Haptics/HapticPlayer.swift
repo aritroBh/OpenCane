@@ -22,7 +22,7 @@
 //  anyway for a call / Siri, the interruption's `.ended` notification restarts it.
 //
 //  Threading / isolation: `@MainActor`. Every public method is called on main by `AppModel`
-//  (cue router at ~15 Hz, scene-phase hooks, settings) or the Haptics debug card. Core Haptics
+//  (cue router at ~30 Hz normal / up to 60 Hz high-rate, scene-phase hooks, settings) or the Haptics debug card. Core Haptics
 //  invokes `resetHandler` / `stoppedHandler` on its own internal queue, so those closures touch
 //  no state: they capture only Sendable values (the stop reason's raw `Int`) and hop with
 //  `Task { @MainActor in … }` (hard rule 1). The Geiger loop is an unstructured `Task` that

@@ -102,8 +102,8 @@ public struct FaceYawTracker: Sendable, Equatable {
 
     /// Seconds between face-yaw hops from the AR session's delegate queue to the main actor.
     /// The anchor updates at the camera's rate (30 or 60 Hz) but the beacon is rendered by a
-    /// 10 Hz ticker, so hopping faster than the depth pipeline publishes (15 Hz) is main-thread
-    /// work nobody reads. ⚠ `DepthEngine`'s anchor relay throttles to this; pinned by
+    /// 10 Hz ticker, so the relay intentionally caps hops at 15 Hz. ⚠ `DepthEngine`'s anchor
+    /// relay throttles to this; pinned by
     /// `faceYawPublishIntervalMatchesTheDepthRate`.
     public static let publishInterval: Double = 1.0 / 15
 

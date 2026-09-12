@@ -47,7 +47,7 @@ final class DepthEngine {
 
     // MARK: Published
 
-    /// Latest report (~15 Hz).
+    /// Latest report (~30 Hz normal / up to 60 Hz high-rate).
     /// Written by `ingest` on the main actor. Also read directly by AppModel's heading gate
     /// (`report.isTrusted`) and the Mount card's camera-tilt row.
     private(set) var report = LaneReport()
@@ -290,8 +290,9 @@ final class DepthEngine {
     /// re-runs the session with the new configuration (no tracking reset). Caller:
     /// `AppModel.updateThermal()` (off at `.serious` / `.critical`, back on when it cools).
     /// Camera at 60 fps (Mount card "60 fps camera (warmer)", off by default). Cues use 30 depth
-    /// reports/s either way; 60 fps doubles the camera's cost and heat for a smoother live view
-    /// and slightly fresher frames. Muse + Antigravity: untested over a 20-minute walk, so it
+    /// reports/s in the normal path; high-rate mode publishes up to 60 reports/s so the readiness
+    /// interlock sees every camera frame. 60 fps doubles the camera's cost and heat for a smoother
+    /// live view and slightly fresher frames. Muse + Antigravity: untested over a 20-minute walk, so it
     /// ships off until stress-plan D14 passes with it on. Re-runs the session (~1-2 s of depth).
     private(set) var highFrameRate = false
 

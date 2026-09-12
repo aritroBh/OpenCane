@@ -11,7 +11,7 @@
 //  Frames that are not trusted (cane sweeping) freeze the state and emit nothing.
 //
 //  Purpose: the haptic grammar of the obstacle channel. `AppModel` feeds every `LaneReport`
-//  (~15 Hz) with the report's timestamp and routes the `CueOutput` to `HapticPlayer`, the
+//  (~30 Hz normal / up to 60 Hz high-rate) with the report's timestamp and routes the `CueOutput` to `HapticPlayer`, the
 //  watch mirror and `CueSpeechPolicy`.
 //
 //  Key invariants:

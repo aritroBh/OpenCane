@@ -855,7 +855,7 @@ final class AppModel {
 
     // MARK: Report routing (the "cue router")
 
-    /// Every depth report lands here (~15 Hz): decide → render on the phone (step 3);
+    /// Every depth report lands here (~30 Hz normal / up to 60 Hz high-rate): decide → render on the phone (step 3);
     /// step 4 adds the ObstacleNamer, step 5 the watch mirror.
     /// Installed as `depth.onReport` in `start()`; always on the main actor.
     /// `now` is always `report.timestamp` (ARKit clock, seconds) — never wall time: the decider's

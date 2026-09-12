@@ -7,7 +7,7 @@
 //  only indoors-ish ranges (mesh classification is unreliable past ~3 m and in sunlight).
 //
 //  Threading / isolation: `@MainActor`, synchronous, no timers or callbacks. `AppModel.handle`
-//  calls `update` for every depth report (~15 Hz) on main and forwards a non-nil line to
+//  calls `update` for every depth report (~30 Hz normal / up to 60 Hz high-rate) on main and forwards a non-nil line to
 //  `SpeechQueue.say(_, .obstacle, ttl: 4)` — obstacle band, below route lines and "Head height.",
 //  so a name never cuts guidance and a 4 s TTL keeps a queued name from being spoken stale.
 //  Times are the caller's clock (`LaneReport.timestamp`, ARKit seconds), never wall time.
