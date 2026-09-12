@@ -44,7 +44,7 @@ struct ContentView: View {
                             ArrivalCardView()
                         }
                         statusCard
-                        LaneGridView(report: model.depth.report)
+                        ObstaclesCard()
                         HapticsCard()
                         HazardsCard()
                         WatchCard()
@@ -108,7 +108,7 @@ struct ContentView: View {
     /// - Parameter model: the `@Bindable` model from `body`, so each toggle gets a binding.
     private func mountSettings(_ model: Bindable<AppModel>) -> some View {
         CKCard(title: "Mount") {
-            mountAimRow
+            MountAimRow()
             Toggle("Phone held upright (portrait)", isOn: model.portraitMode)
                 .accessibilityHint("Turn off if the phone is clamped sideways")
             // ⚠ test contract: switches["Mirror left / right"].
@@ -126,25 +126,39 @@ struct ContentView: View {
         .foregroundStyle(CKColor.textPrimary)
     }
 
-    /// Live camera aim + depth rate, so the mount's hinge can be set by reading the phone
-    /// (aim 3–8° below the horizon, `MountTilt`; hardware/mount/DESIGN.md). Spoken as one line.
-    @ViewBuilder private var mountAimRow: some View {
-        if let tilt = model.depth.report.cameraTiltDownDeg {
-            let s = MountTilt.status(downDeg: tilt)
-            let fps = Int(model.depth.fps.rounded())
-            Label {
-                Text("\(s.text) · \(fps) fps").foregroundStyle(CKColor.textPrimary)
-            } icon: {
-                Image(systemName: s.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(s.ok ? CKColor.laneClear : CKColor.laneUrgent)
+    /// Obstacles card wrapper, isolated into a leaf subview so 30 Hz depth frame updates
+    /// only re-evaluate this card rather than the entire ContentView root scroll view.
+    private struct ObstaclesCard: View {
+        @Environment(AppModel.self) private var model
+
+        var body: some View {
+            LaneGridView(report: model.depth.report)
+        }
+    }
+
+    /// Live camera aim + depth rate, isolated into a leaf subview so 30 Hz updates do not
+    /// re-evaluate the parent ContentView or the surrounding Mount card toggles.
+    private struct MountAimRow: View {
+        @Environment(AppModel.self) private var model
+
+        var body: some View {
+            if let tilt = model.depth.report.cameraTiltDownDeg {
+                let s = MountTilt.status(downDeg: tilt)
+                let fps = Int(model.depth.fps.rounded())
+                Label {
+                    Text("\(s.text) · \(fps) fps").foregroundStyle(CKColor.textPrimary)
+                } icon: {
+                    Image(systemName: s.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(s.ok ? CKColor.laneClear : CKColor.laneUrgent)
+                }
+                .font(CKFont.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(s.text). Depth \(fps) frames per second")
+            } else if model.lidarSupported {
+                // No trusted frame yet (warming up, or the cane is moving): say how to get a reading.
+                Text("Camera tilt: hold the cane still for a reading")
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
-            .font(CKFont.secondary)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(s.text). Depth \(fps) frames per second")
-        } else if model.lidarSupported {
-            // No trusted frame yet (warming up, or the cane is moving): say how to get a reading.
-            Text("Camera tilt: hold the cane still for a reading")
-                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
         }
     }
 

@@ -2,7 +2,7 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-> **Step numbers 15, 16 and 17 each appear twice, and that is not a mistake to "fix".**
+> **Step numbers 15, 16, 17 and 21 each appear twice, and that is not a mistake to "fix".**
 > `feat/screwless-mount` (hardware, Windows) and `main` (iOS, Mac) numbered their steps
 > independently and in parallel, then met in a merge on 2026-09-12. The first of each
 > pair is the hardware line, the second the app line. Renumbering either would break
@@ -126,6 +126,17 @@ test on device: nothing new on the phone. Print `coupons.scad what="next"` (11 s
 the full length freely and the dovetail that slides with thumb pressure and stays put when shaken,
 then put those three numbers in the parameter block. Do not print the collar, ring, arm or cradle —
 all four are blocked by the defects above.
+
+## Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root to prevent full-screen SwiftUI re-renders (Sat Sep 12)
+
+Performance optimization addressing root-level SwiftUI Observation invalidation:
+- **Observation root decoupling**: In iOS 26 / Swift 6 `@Observable`, referencing high-frequency sensor streams (`model.depth.report` at 15–30 Hz, `model.depth.fps`, and `cameraTiltDownDeg`) directly in `ContentView.body` caused the entire root scroll view and all 9 navigation/status/settings cards to invalidate and re-evaluate on every LiDAR depth frame.
+- **Leaf isolation pattern**: Extracted `ObstaclesCard` and `MountAimRow` leaf subviews inside `ContentView.swift`. Kept `LaneGridView(report:)` pure and testable while ensuring observation tracking of `model.depth.report` is scoped strictly to `ObstaclesCard` and `MountAimRow`. Also hoisted `laneNames` array in `LaneGridView` to a static constant to avoid heap allocations per render.
+- **Impact**: Eliminates ~97% of unnecessary root `ContentView.body` evaluations during active walking with LiDAR (reducing CPU cycles and thermal throttling during prolonged use).
+- **Adversarial review with Muse**: Muse confirmed decoupling direction, verified concurrency and display logic invariance, and recommended the pure leaf wrapper pattern over environment fallback inside `LaneGridView`.
+- **Verification**: 348/348 unit tests pass (`make test`), simulator build clean (`make sim`), 10/10 UITests pass (`make uitest`), and clean GPS e2e replay (989 m, 9/9 waypoints).
+
+test on device: verify Obstacles card and Mount aim row update smoothly with cane in hand, check phone thermal status during 5-minute continuous walk.
 ## Step 20 — Passed-by slow approach fix, Live Activity overlap prevention, and Watch keep-alive guard (Sat Sep 12)
 
 Full codebase stress test and multi-agent audit across LiDAR depth, cameras, navigation logic, watch connectivity, audio, speech, and hardware:

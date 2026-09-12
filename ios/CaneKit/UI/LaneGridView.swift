@@ -30,7 +30,7 @@ struct LaneGridView: View {
     let report: LaneReport
 
     /// Column names, left → right; used for the tile captions and the spoken row value.
-    private let laneNames = ["Left", "Center", "Right"]
+    private static let laneNames = ["Left", "Center", "Right"]
 
     var body: some View {
         CKCard(title: "Obstacles") {
@@ -61,7 +61,7 @@ struct LaneGridView: View {
                 .foregroundStyle(CKColor.textSecondary)
             HStack(spacing: CKSpacing.sm) {
                 ForEach(0..<3, id: \.self) { i in
-                    LaneTile(label: laneNames[i], distance: values[i], hasData: report.depthAvailable)
+                    LaneTile(label: Self.laneNames[i], distance: values[i], hasData: report.depthAvailable)
                 }
             }
         }
@@ -77,7 +77,7 @@ struct LaneGridView: View {
     /// 4.5 m cutoff as the visible tile text).
     private func spoken(_ values: [Float]) -> String {
         guard report.depthAvailable else { return "no depth data" }
-        return zip(laneNames, values).map { name, d in
+        return zip(Self.laneNames, values).map { name, d in
             "\(name.lowercased()) \(d.isFinite && d < 4.5 ? SpokenDistance.phrase(d) : "clear")"
         }.joined(separator: ", ")
     }

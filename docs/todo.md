@@ -484,6 +484,15 @@ for 60 s so a weak network can never stall a cue.
 - [x] Device install and verification on connected iPhone 17 Pro Max
 - **test on device:** see CHANGELOG Step 20
 
+## Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root (Sat Sep 12)
+- [x] Profiled SwiftUI Observation invalidation under high-frequency LiDAR updates (15–30 Hz `model.depth.report`)
+- [x] Extracted `ObstaclesCard` and `MountAimRow` leaf subviews inside `ContentView.swift`
+- [x] Preserved pure value semantics on `LaneGridView(report:)` and hoisted `laneNames` static array
+- [x] Verified zero concurrency regressions under Swift 6 strict concurrency (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`)
+- [x] Muse adversarial review passed, adopting Muse's recommendation for leaf container over environment fallback
+- [x] Verified 348/348 Logic tests (`make test`), clean simulator build (`make sim`), 10/10 UITests (`make uitest`), and e2e replay
+- **test on device:** see CHANGELOG Step 21
+
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
