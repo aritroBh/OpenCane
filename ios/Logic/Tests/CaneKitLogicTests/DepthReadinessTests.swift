@@ -102,9 +102,14 @@ import Testing
 @Test func publishedFrameContinuityRejectsGapsAndRecovers() {
     var continuity = DepthFrameContinuity()
     continuity.begin(after: 10)
-    #expect(continuity.accepts(11))
-    #expect(!continuity.accepts(13))
-    #expect(continuity.accepts(14))
+    // `accepts` is `mutating`, and `#expect` expands its argument into a closure that captures the
+    // value immutably, so the calls have to happen here. Order matters: each one advances the anchor.
+    let next = continuity.accepts(11)
+    let afterGap = continuity.accepts(13)
+    let resumed = continuity.accepts(14)
+    #expect(next)
+    #expect(!afterGap)
+    #expect(resumed)
 }
 
 /// A transition boundary rejects buffered pre-transition reports even when their sequence is
@@ -112,7 +117,11 @@ import Testing
 @Test func publishedFrameContinuityHonorsTransitionBoundary() {
     var continuity = DepthFrameContinuity()
     continuity.begin(after: 20)
-    #expect(!continuity.accepts(20))
-    #expect(continuity.accepts(21))
-    #expect(continuity.accepts(22))
+    // Hoisted for the same reason as above: `accepts` mutates, `#expect` cannot call it.
+    let atBoundary = continuity.accepts(20)
+    let firstAfter = continuity.accepts(21)
+    let secondAfter = continuity.accepts(22)
+    #expect(!atBoundary)
+    #expect(firstAfter)
+    #expect(secondAfter)
 }
