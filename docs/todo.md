@@ -117,7 +117,13 @@ sensors did not see is ever spoken.*
 - `feat/rename-opencane` — the product is OpenCane, the code is still CaneKit
 - front-camera rotation, first attempt (0f32282) — coordinator angle, still tilted on device
 
-**Uncommitted in the main checkout (Step 16 — gate before committing):**
+**Step 16 gate GREEN (2026-09-12 ~01:00):** 347 Logic tests passed, device build + install on
+the iPhone 17 Pro Max succeeded. The gate caught one real bug from the hand-merge: `\(.$state)`
+in the SilenceHapticsIntent phrases (missing `\` escape — fixed in `99f0a37`). Branches retired.
+Still to do on the phone: siren ~1.5 s behavior, "How is OpenCane doing" order, Both-cameras
+inset re-check after reinstall.
+
+**Committed in the main checkout:**
 - `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
   inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15).
   Device build green, 316 Logic tests green, front inset verified on the phone.
@@ -135,17 +141,15 @@ sensors did not see is ever spoken.*
   **Deliberately held**: it conflicts with the people-detection work in the same files and buys
   nothing for the demo.
 
-**Branches (2026-09-12 cleanup):** 11 merged branches deleted (`all-sensors`, `detect-people`,
-`live-view-gpu`, `rename-opencane`, `voice-nav-search`, all six `fix/*`). Remaining: `main`,
-`feat/emergency-alerts` + `feat/handsfree` (retire after the Step 16 gate goes green),
-`feat/fm-image-describe` (deliberately held, conflicts with people-detection),
-`feat/multicam-depth` (worktree has uncommitted DepthEngine changes — triage separately),
-`experiment/gemma-cactus` (untracked `CactusCodec` + bench script — triage separately).
+**Branches (2026-09-12 cleanup):** 11 merged branches deleted, then `feat/emergency-alerts` +
+`feat/handsfree` retired after the Step 16 gate went green (347 Logic tests, device build +
+install). Remaining: `main`, `feat/fm-image-describe` (deliberately held, conflicts with
+people-detection), `feat/multicam-depth` (worktree has uncommitted DepthEngine changes — triage
+separately), `experiment/gemma-cactus` (untracked `CactusCodec` + bench script — triage
+separately). New remote branch `feat/screwless-mount` (teammate) — not ours, do not touch.
 
-**Worktrees:** the 11 clean ones were unregistered from git; their directories still sit in
-`~/Downloads/cane-wt-*` (sandbox cannot delete outside the repo — one `rm -rf` from your
-terminal, command below). Keep until the gate is green: `cane-wt-emergency`, `cane-wt-handsfree`
-(Step 16 supersedes both, verified identical modulo renames).
+**Worktrees:** only the 3 kept ones remain (`-emergency`/`-handsfree` backups removed with their
+branches after the gate; 11 orphan dirs deleted from `~/Downloads`).
 
 ### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
 
