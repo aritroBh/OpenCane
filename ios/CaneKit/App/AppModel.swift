@@ -1265,7 +1265,7 @@ final class AppModel {
         head.stop()
         stopTicker()
         trip.cancel()                        // synchronous: the new trip.start() must not be no-op'd
-        liveActivity.end()
+        liveActivity.end(immediate: true)
         speech.stopAll()
         logger.event("route", ["action": "restart"])
     }

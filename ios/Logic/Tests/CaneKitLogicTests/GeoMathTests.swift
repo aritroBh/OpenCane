@@ -245,6 +245,34 @@ private let line = [
     #expect(t.current == line[0])
 }
 
+/// Approaching slowly (< 1 m/s) must not pre-accumulate receding fixes before closest approach.
+@Test func passedByResetsRecedingStreakDuringSlowApproach() {
+    let t = GeofenceTracker(waypoints: line)
+    let east = -88.22374                                               // ≈ 22 m east of the line (radius 15m)
+    var now = 0.0
+    // Approach slowly from south in ~0.55 m steps (0.000005 deg lat).
+    // Because step < 1m, without the fix `d > last - 1` was always true and accumulated recedingFixes.
+    for lat in stride(from: 40.1097, through: 40.1100, by: 0.000005) {
+        #expect(t.update(fix(Coordinate(latitude: lat, longitude: east), t: now)) == nil)
+        now += 1
+    }
+    #expect(t.current == line[0])
+
+    // Now jump north past the fence threshold (lat 40.11036, d ≈ 42m >= minDistance + radius 15m = 37.1m).
+    // Without the fix, recedingFixes was carried over (> 3), so fix 0 would fire immediately!
+    // With the fix, recedingFixes was reset to 0 at closest approach, so fix 0 (count=1) and fix 1 (count=2)
+    // must return nil, and only fix 2 (count=3) fires.
+    let fix0 = t.update(fix(Coordinate(latitude: 40.11036, longitude: east), t: now))
+    #expect(fix0 == nil, "Fix 0 has only 1 receding fix; must not fire prematurely even though d >= minDistance + radius")
+
+    let fix1 = t.update(fix(Coordinate(latitude: 40.11046, longitude: east), t: now + 1))
+    #expect(fix1 == nil, "Fix 1 has only 2 receding fixes; must not fire prematurely")
+
+    let fix2 = t.update(fix(Coordinate(latitude: 40.11056, longitude: east), t: now + 2))
+    #expect(fix2 == .reached(index: 0, waypoint: line[0], isLast: false, skipped: [], passedBy: true))
+    #expect(t.current == line[1])
+}
+
 /// Watch crown / Action button Next skips the current waypoint and returns it.
 @Test func manualAdvanceSkipsWaypoint() {
     let t = GeofenceTracker(waypoints: wps)
