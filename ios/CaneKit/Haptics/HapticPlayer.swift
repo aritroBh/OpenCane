@@ -2,9 +2,9 @@
 //  HapticPlayer.swift
 //  CaneKit
 //
-//  Plays obstacle cues on the phone's Taptic Engine. The phone is clamped to the cane shaft, so
-//  these transients are what the user feels in the hand. `CueDecider` (CaneKitLogic) decides
-//  what/when; this file only renders.
+//  Plays obstacle cues (and the ground-hazard and route patterns) on the phone's Taptic Engine.
+//  The phone is clamped to the cane shaft, so these transients are what the user feels in the
+//  hand. `CueDecider` (CaneKitLogic) decides what/when; this file only renders.
 //
 //  Patterns (docs/design.md §5.2 obstacle cues, §5.3 navigation cues):
 //    centre approach   Geiger loop: one sharp tap repeated at 2 Hz (2 m) … 8 Hz (0.5 m)
