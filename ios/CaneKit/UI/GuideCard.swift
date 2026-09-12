@@ -132,8 +132,8 @@ struct GuideCard: View {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
                                 hint: "Says the arrival line again") { model.repeatInstruction() }
                 }
-                // ⚠ test contract: "Start demo route" is the first thing every UI test waits for.
-                CKBigButton(title: "Start demo route", systemImage: "figure.walk",
+                // ⚠ test contract: "Start route to CIF" is the first thing every UI test waits for.
+                CKBigButton(title: "Start route to CIF", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
                     .disabled(model.routeStartWaiting)
                 // Apple Maps walking directions from the live GPS fix to the CIF east entrance,
