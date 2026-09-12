@@ -53,7 +53,7 @@ struct HapticsCard: View {
             }
             Toggle("Speak obstacle names", isOn: $model.obstacleNamesEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Says door, wall, seat, window or table when one is straight ahead")
+                .accessibilityHint("Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place.")
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
                              tone: model.speech.isSpeaking ? .warning : .neutral,

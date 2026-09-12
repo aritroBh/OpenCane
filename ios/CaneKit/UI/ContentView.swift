@@ -135,11 +135,73 @@ private struct SettingsPage: View {
     var body: some View {
         @Bindable var model = model
         pageScroll {
+            cueSettings($model)
             HapticsCard()
             WatchCard()
             mountSettings($model)
             capabilityCard
         }
+    }
+
+    /// "Cues" card (Step 36, cue design v2): how much OpenCane volunteers, and where the walker is.
+    ///
+    /// Two segmented pickers, first on the page because they are the settings a walker changes most:
+    /// "Cue detail" (Quiet / Standard / Detailed, default Detailed = today) and "Place" (Outdoors /
+    /// Indoors). Each change is spoken once by the model ("Quiet cues.", "Indoor mode."), so a
+    /// VoiceOver user hears the effect, not just the selection. The caption under the pickers says
+    /// what the current level means in one sentence (`cueLevelCaption`).
+    /// ⚠ test contract: `testCuePickersChangeAndRestore` taps the segment titles `CueLevel.title` /
+    /// `CuePlace.title` ("Standard", "Detailed", "Indoors", "Outdoors").
+    /// - Parameter model: the `@Bindable` model from `body`.
+    private func cueSettings(_ model: Bindable<AppModel>) -> some View {
+        CKCard(title: "Cues") {
+            // A segmented picker does not show or speak its own title on iOS, so each gets a visible
+            // label and a VoiceOver container named after it; otherwise a swipe hears "Quiet, button"
+            // with no context, next to the speech pill that also says "Quiet" (Step 36 review).
+            Text("Cue detail").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .accessibilityHidden(true)
+            Picker("Cue detail", selection: model.cueLevel) {
+                ForEach(CueLevel.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Cue detail")
+            .accessibilityHint("How much OpenCane says on its own. Quiet names nothing and reads only safety signs. Obstacle haptics are the same at every level for now.")
+            Text("Place").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .accessibilityHidden(true)
+            Picker("Place", selection: model.cuePlace) {
+                ForEach(CuePlace.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Place")
+            .accessibilityHint("Indoors warns about head height from 1.2 meters instead of 1.5, names nothing and reads only safety signs.")
+            Text(cueLevelCaption)
+                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(CKFont.body)
+        .foregroundStyle(CKColor.textPrimary)
+    }
+
+    /// What the selected level × place changes **today** (Step 36 changes speech only; haptics are
+    /// the same at every level until Step 40 — the Step 36 review caught a caption promising more),
+    /// plus a reminder when names are switched off, which Standard and Detailed depend on.
+    private var cueLevelCaption: String {
+        var parts: [String]
+        switch model.cueLevel {
+        case .quiet: parts = ["Quiet: no obstacle names; safety signs only."]
+        case .standard: parts = ["Standard: door names on a route; every sign."]
+        case .detailed: parts = ["Detailed: every obstacle name except walls; every sign."]
+        }
+        if model.cuePlace == .indoors {
+            parts.append("Indoors: head height from 1.2 meters, no names, safety signs only.")
+        }
+        if !model.obstacleNamesEnabled, model.cueLevel != .quiet, model.cuePlace == .outdoors {
+            parts.append("Names are off: turn on Speak obstacle names below to hear them.")
+        }
+        parts.append("Haptics are the same at every level for now.")
+        return parts.joined(separator: " ")
     }
 
     /// "Mount" card: persisted system `Toggle`s (the settings rows of design.md §6.5).

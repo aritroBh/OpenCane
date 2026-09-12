@@ -145,6 +145,32 @@ final class CaneKitUITests: XCTestCase {
         flip(mirror)   // restore
     }
 
+    /// Settings → Cues: both segmented pickers exist, a tap selects a segment, and the test puts the
+    /// defaults back (Detailed / Outdoors) so later tests and walks start from today's behaviour.
+    /// ⚠ The segment titles are `CueLevel.title` / `CuePlace.title` (CaneKitLogic).
+    func testCuePickersChangeAndRestore() {
+        openTab("Settings")
+        // Registered first, so a failed assert below (continueAfterFailure = false) still puts the
+        // defaults back; otherwise later tests, the tour and e2e would inherit Standard / Indoors.
+        addTeardownBlock { [app] in
+            guard let app else { return }
+            if app.buttons["Detailed"].exists { app.buttons["Detailed"].tap() }
+            if app.buttons["Outdoors"].exists { app.buttons["Outdoors"].tap() }
+        }
+        let standard = app.buttons["Standard"]
+        XCTAssertTrue(standard.waitForExistence(timeout: 10), "Cue detail picker should show Standard")
+        standard.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { standard.isSelected }, "Standard should become selected")
+        let indoors = app.buttons["Indoors"]
+        XCTAssertTrue(indoors.waitForExistence(timeout: 5), "Place picker should show Indoors")
+        indoors.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { indoors.isSelected }, "Indoors should become selected")
+        app.buttons["Detailed"].tap()
+        app.buttons["Outdoors"].tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { app.buttons["Detailed"].isSelected && app.buttons["Outdoors"].isSelected },
+                      "defaults restored")
+    }
+
     /// A SwiftUI `Toggle` is exposed as a switch whose centre is the *label*; tapping there does
     /// nothing. Tap the nested switch when there is one, else the knob at the trailing edge.
     /// Keep identical to `CaneKitVisualTour.flip(_:)`.

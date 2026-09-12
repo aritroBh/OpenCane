@@ -173,7 +173,10 @@ extension AppModel {
         // below "Head height.". The core obstacle and head-height cues are not reachable from
         // here at all — `obstacleNames` only stops the *naming*, and its line says so.
         let on = isOptionEnabled(option)
-        speech.say(on ? "\(option.spokenName) on."
+        // Names on under a level or place that limits them: say so, or "on" is a silent promise
+        // (`CueRules.namesLimitLine`, Step 36 review).
+        let limit = (option == .obstacleNames && on) ? cueRules.namesLimitLine.map { " \($0)" } ?? "" : ""
+        speech.say(on ? "\(option.spokenName) on.\(limit)"
                       : "\(option.spokenName) off. \(option.offConsequence)", .nav, ttl: 10)
         logger.event("option_set", ["option": option.rawValue, "requested": enabled,
                                     "actual": isOptionEnabled(option), "by": "voice"])

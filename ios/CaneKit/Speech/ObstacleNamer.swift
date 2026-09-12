@@ -66,10 +66,14 @@ final class ObstacleNamer {
     /// - Parameters:
     ///   - r: the latest depth report (its `centerHit` is refreshed at ~4 Hz by the processor).
     ///   - now: report time in seconds (`r.timestamp`).
-    func update(_ r: LaneReport, now: TimeInterval) -> String? {
+    ///   - allows: whether the cue profile lets this class be named (`CueRules.allowsName`); a
+    ///     disallowed class is treated exactly like no hit, so allowing it later names it at once.
+    func update(_ r: LaneReport, now: TimeInterval,
+                allows: (ObstacleClass) -> Bool = { _ in true }) -> String? {
         // Nothing nameable straight ahead (or out of range): forget after a while so that
         // re-approaching the same door announces it again.
         guard r.isTrusted, let hit = r.centerHit, let name = hit.classification.spokenName,
+              allows(hit.classification),
               hit.distance.isFinite,
               hit.distance < (hit.classification == .wall ? wallMaxDistance : maxDistance) else {
             if now - lastHit > forgetAfter { lastClass = nil; lastBucket = -1 }

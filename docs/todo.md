@@ -628,7 +628,7 @@ Safety floor for every step: head haptic at every onset; "Head height." spoken a
 ground hazards (when on) speak their first confirmation; hush never touches any of them.
 
 - [x] **35** `scripts/cue_audit.py` + `make audit` — mounted?, head band wall vs overhang, cues and lines per minute, replays
-- [ ] **36** `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
+- [x] **36** `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
 - [ ] **37** Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
 - [ ] **38** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
 - [ ] **39** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
