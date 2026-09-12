@@ -4,20 +4,33 @@ Renders 1024 PNGs into the iPhone + Watch AppIcon sets.
 
 Usage: python3 ios/scripts/appicon.py
 """
+# Owner / callers: run by hand when the icon design changes (CHANGELOG.md Step 17); nothing in the
+# build calls it and the PNGs it writes are committed. Needs Pillow (`pip install pillow`) — the only
+# ios/scripts tool with a non-stdlib dependency. Overwrites both Icon-1024.png files in place; no
+# project.yml or Contents.json change is needed. It is a top-level script (runs on import).
+# Tests: none automated. Step 17 checked it by a bbox probe of the squircle cut zone (zero content
+# pixels) and masked 180 px / 60 px renders; re-check that way after moving the cane or `K`.
+# Review history: the `PAD` / `SPAD` paddings and the top-RIGHT arcs comment came from the agy round.
 from PIL import Image, ImageDraw, ImageFilter
 import os
 
+# Output size in px (App Store / single-size AppIcon set).
 S = 1024
 SS = 4  # supersample
+# Working canvas in px; everything is drawn at 4× and LANCZOS-downsampled at the end (anti-aliasing).
 W = S * SS
 
+# ios/, so the script works from any working directory.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Both AppIcon sets get the same RGB (no alpha) 1024 PNG: iPhone app, then Watch app.
 OUTS = [
     os.path.join(ROOT, "CaneKit", "Resources", "Assets.xcassets", "AppIcon.appiconset", "Icon-1024.png"),
     os.path.join(ROOT, "CaneKitWatch", "Assets.xcassets", "AppIcon.appiconset", "Icon-1024.png"),
 ]
 
 
+# RGBA layer w×h px filled with a top→bottom linear gradient between two RGB tuples. Per-pixel
+# loop: slow at 4096 px but a one-off tool.
 def vgrad(w, h, top, bottom):
     img = Image.new("RGB", (w, h), top)
     px = img.load()
@@ -29,6 +42,7 @@ def vgrad(w, h, top, bottom):
     return img.convert("RGBA")
 
 
+# Gradient layer with optional rounded corners (`radius` px, alpha mask); used for the red wraps.
 def seg(w, h, top, bottom, radius=0):
     layer = vgrad(w, h, top, bottom)
     if radius:
@@ -60,6 +74,7 @@ PAD = 8 * SS                      # vertical padding: bands stand proud, blur ha
 strip = Image.new("RGBA", (GRIP_L + RING_W + SHAFT_L + TIP_L, H + 2 * PAD), (0, 0, 0, 0))
 
 
+# Round end of the grip / tip: a gradient disc of diameter d px.
 def cap(d, top, bottom):
     """Circle end-cap of diameter d with vertical gradient."""
     layer = vgrad(d, d, top, bottom)
@@ -105,9 +120,11 @@ ANG = -60  # grip upper-left, red tip lower-right: the cane leans like it is hel
 shadow = sh.rotate(ANG, resample=Image.BICUBIC, expand=True)
 cane = strip.rotate(ANG, resample=Image.BICUBIC, expand=True)
 # pull inside the squircle: the full-size tip end sat on the mask boundary
+# (K = 0.88 cleared it with margin, Step 17; the shadow is scaled with the cane so it stays under it)
 K = 0.88
 shadow = shadow.resize((int(shadow.width * K), int(shadow.height * K)), Image.BICUBIC)
 cane = cane.resize((int(cane.width * K), int(cane.height * K)), Image.BICUBIC)
+# Centre of the rotated cane, in 1024-px units (×SS); the shadow is drawn 26 px lower.
 cx, cy = 498 * SS, 505 * SS
 base.alpha_composite(shadow, (int(cx - shadow.width / 2), int(cy - shadow.height / 2 + 26 * SS)))
 base.alpha_composite(cane, (int(cx - cane.width / 2), int(cy - cane.height / 2)))

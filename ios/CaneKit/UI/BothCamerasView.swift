@@ -27,7 +27,12 @@
 //  (module default). `AVSampleBufferDisplayLayer` is a `CALayer`, so all of this is main-actor
 //  work; nothing here touches the capture queues.
 //
-//  Caller: `HazardsCard.bothCameras`.
+//  Caller: `HazardsCard.bothCameras`, only in the `BothCameras.state == .live` branch (switch on,
+//  multi-cam supported, no route, foreground).
+//  Tests: the inset geometry is `BothCamerasLayout` in CaneKitLogic (`LiveViewTests`:
+//  `bothCamerasInsetSitsInTheBottomTrailingCorner`, `bothCamerasInsetIsClampedInAShortBox`); the
+//  view itself has no automated test (the simulator has no multi-cam session). Per-camera
+//  buffer rotation is decided in `DualCameraSession`, not here.
 //
 
 import AVFoundation
@@ -98,7 +103,9 @@ final class DualPreviewHostView: UIView {
     }
 
     /// Back camera fills the view; front camera sits in the bottom-trailing corner at
-    /// `BothCamerasLayout.insetWidthFraction` of the width, in the camera's 3:4 portrait shape.
+    /// `BothCamerasLayout.insetWidthFraction` (0.33) of the width, 10 pt from the edges, in the
+    /// camera's 3:4 portrait shape — shrunk to fit when the view is too short. CALayer frames do
+    /// not follow Auto Layout, so this runs on every bounds change.
     override func layoutSubviews() {
         super.layoutSubviews()
         back?.frame = bounds

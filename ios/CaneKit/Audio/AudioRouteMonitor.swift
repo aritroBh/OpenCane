@@ -18,8 +18,14 @@
 //
 //  Consumers: `AppModel.wireAudioRoute()` copies `headphonesConnected` into
 //  `BeaconEngine.headphonesConnected` (the beacon only plays into headphones — AGENTS.md) and
-//  speaks "<name> connected." / "Headphones disconnected. Beacon paused."; GuideCard shows the
-//  state.
+//  speaks "<name> connected." / "Headphones disconnected. Beacon paused." (and starts / stops
+//  `HeadPoseTracker`); GuideCard shows the state (beacon pill "Beacon paused", head pill "No
+//  AirPods", and the headphone pill's VoiceOver sentence naming `outputName`); `HandsFreeIntents`' status summary and
+//  `AppModel.announceChannels()` read it.
+//
+//  Tests: none (AVAudioSession, device-only). Device check: CHANGELOG Step 10 / docs/devices_setup.md
+//  — take the AirPods out mid-route: the click stops at once, "Headphones disconnected. Beacon
+//  paused." 2 s later; a phone call's receiver/HFP flap speaks nothing.
 //
 
 import AVFoundation
@@ -38,19 +44,22 @@ final class AudioRouteMonitor {
     /// Prefers the headphone port's name; otherwise the first output's name; "Speaker" if none.
     private(set) var outputName = "Speaker"
     /// Best-effort: the output name contains "AirPods" (head tracking needs Pro/Max/3rd gen; the
-    /// HeadPoseTracker reports the truth once motion data flows).
+    /// HeadPoseTracker reports the truth once motion data flows). Nothing reads it today.
     var isAirPods: Bool { outputName.localizedCaseInsensitiveContains("AirPods") }
 
-    /// Called on every change with (connected, name); the AppModel speaks the line.
+    /// Called with (connected, name) once a headphone flip has held for 2 s; the AppModel speaks the
+    /// line, logs `audioroute` and starts/stops head tracking.
     /// Fires on the main actor, only when `headphonesConnected` flips (not on every route
     /// notification, e.g. category changes), and never for the initial state read by `start()`.
     @ObservationIgnored var onChange: ((Bool, String) -> Void)?
     /// Called immediately on every raw flip (no debounce): the beacon must stop the moment the
-    /// AirPods drop, not click from the cane speaker for 2 s (review).
+    /// AirPods drop, not click from the cane speaker for 2 s (review). Main actor; AppModel copies
+    /// the value into `BeaconEngine.headphonesConnected` and nothing else.
     @ObservationIgnored var onImmediateChange: ((Bool) -> Void)?
     /// Route-change observer token; non-nil once started (makes `start()` idempotent).
     @ObservationIgnored private var observer: NSObjectProtocol?
 
+    /// Starts as "Speaker", not connected; nothing is read or observed until `start()`.
     init() {}
 
     /// Read the current route (without notifying) and begin observing route changes.
@@ -67,7 +76,11 @@ final class AudioRouteMonitor {
         }
     }
 
-    /// Re-read the route; `notify` fires `onChange` only when the headphone state actually flipped.
+    /// Re-read the route; `notify` fires `onImmediateChange` at once and schedules the debounced
+    /// `onChange` only when the headphone state actually flipped. Switching between two headphone
+    /// routes (AirPods → wired) only updates `outputName`, silently.
+    /// - Parameter notify: false for the launch read in `start()` (the launch state counts as
+    ///   announced), true for every route-change notification.
     private func refresh(notify: Bool) {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
         // No `.bluetoothHFP`: a mono call-quality route cannot carry a directional (HRTF) click.
@@ -92,7 +105,9 @@ final class AudioRouteMonitor {
         }
     }
 
-    /// Debounce state: the pending announcement and the last state actually announced.
+    /// Debounce state: the pending 2 s announcement task, cancelled and replaced by every new flip.
     @ObservationIgnored private var pending: Task<Void, Never>?
+    /// The last headphone state actually announced (seeded by `start()` with the launch state); a
+    /// flip that settles back to it before the 2 s are up says nothing.
     @ObservationIgnored private var announced: Bool?
 }

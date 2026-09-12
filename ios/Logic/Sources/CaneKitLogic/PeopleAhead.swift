@@ -23,7 +23,16 @@
 //  feeds `SceneVocabulary.isFaithful(_:facts:nouns:detected:)` so a sentence that names people
 //  is allowed through the gate. Nothing else is loosened.
 //
-//  Tests: PeopleAheadTests.swift.
+//  Callers: `OnDeviceVLMClient.describe` (on-device "Where am I": `line`, `nouns`, `summary`,
+//  `needsSpeaking`) and `SceneDescriber` (the cloud path prepends `line` unless the model sentence
+//  already carries the whole fact). `OnDeviceVision` runs the two detectors only for a scene
+//  answer and only while `AppModel.namePeopleEnabled` is on (never for the hazard watch or signs —
+//  people lines are never spoken automatically), and
+//  `DepthSnapshot.distance(inVisionBox:)` attaches the distance from the same ARKit frame.
+//  Trip log: `summary` lands in `describe_result.people` via `OnDeviceVision.lastPeople`.
+//  Isolation: stateless and nonisolated; called from whatever task runs the describe.
+//
+//  Tests: PeopleAheadTests.swift (28).
 //
 
 import Foundation
@@ -95,7 +104,8 @@ public enum SightingBearing: String, Sendable, Codable, CaseIterable {
         }
     }
 
-    /// Left, then ahead, then right, for a stable order when distances tie.
+    /// Ahead, then left, then right: the last tie-break in `groups` when kind, distance and count
+    /// all tie, so the one "in your way" is said first and the order is stable across frames.
     var order: Int {
         switch self {
         case .ahead: return 0
@@ -130,7 +140,7 @@ public struct Sighting: Sendable, Equatable {
     }
 }
 
-/// Every rule that turns sightings into one spoken line. Stateless.
+/// Every rule that turns sightings into one spoken line. Stateless, nonisolated, pure.
 public enum PeopleAhead {
 
     // MARK: Tunables (all pinned by PeopleAheadTests)
@@ -208,8 +218,9 @@ public enum PeopleAhead {
     /// The one sentence the walker hears, or nil when nothing cleared the confidence floor.
     ///
     /// Sightings are grouped by kind and direction; the nearest group is said first and carries
-    /// the distance, a second group is added without one (so the line stays under 20 words), and
-    /// anything further is dropped. People always outrank animals. Every clause is distance-first
+    /// the distance, a second group is added without one (so the line stays under 20 words) —
+    /// unless the first group had no trusted depth, in which case the second keeps its own — and
+    /// anything further is dropped (`thirdGroupIsDropped`, `aRealDistanceIsNeverDropped`). People always outrank animals. Every clause is distance-first
     /// ("About 3 meters ahead, two people"): same contract as the obstacle and ground-hazard
     /// lines — time-to-contact before identity.
     /// - Parameters:
@@ -300,11 +311,16 @@ public enum PeopleAhead {
     }
 
     /// Words of a people line that locate or qualify it without using a number, so
-    /// `needsSpeaking` can tell whether the model kept them.
+    /// `needsSpeaking` can tell whether the model kept them. Compared as whole lower-case tokens
+    /// (`SceneVocabulary.tokens`); "close" covers "very close" (`distancePhrase`).
     static let placeWords = ["ahead", "left", "right", "close"]
 
     /// A short summary for the trip log ("2 person, 1 dog"), so a walk log shows what the
     /// detectors saw and not only what was said (AGENTS.md "make the invisible visible").
+    /// Counts only sightings over their confidence floor, in `SightingKind.allCases` order, using
+    /// the raw values (hence "person", not "people"); "" when nothing cleared a floor.
+    /// Stored in `OnDeviceVision.lastPeople` (by `OnDeviceVLMClient.describe` and `SceneDescriber`)
+    /// and logged as `describe_result.people`.
     /// - Parameter sightings: this frame's detections (unfiltered).
     /// ⚠ Pinned by `logSummary`.
     public static func summary(_ sightings: [Sighting]) -> String {
@@ -320,9 +336,14 @@ public enum PeopleAhead {
 
     /// One kind in one direction: how many, and how far the nearest of them is.
     struct Group: Equatable {
+        /// Person, dog or cat (all sightings in a group share it).
         var kind: SightingKind
+        /// Left / ahead / right after the mirror swap.
         var bearing: SightingBearing
+        /// Sightings over the confidence floor in this kind + direction (≥ 1).
         var count: Int
+        /// Metres to the nearest member with a trusted LiDAR distance (`DepthSnapshot.trusted`,
+        /// 0.3…5 m); nil when no member had one — the clause then carries no number.
         var distance: Float?
     }
 
@@ -332,6 +353,14 @@ public enum PeopleAhead {
     /// People outrank a nearer animal on purpose: only two groups fit in one line, and a walker
     /// needs to know about the person. An animal close enough to trip over is already inside the
     /// LiDAR lanes' range and has buzzed the cane.
+    /// Sort keys, in order: kind priority, nearest distance (nil last), larger count, then
+    /// `SightingBearing.order`.
+    /// - Parameters:
+    ///   - sightings: this frame's detections (unfiltered).
+    ///   - mirrored: see `bearing(midX:mirrored:)`.
+    /// - Returns: every group, best first; `line` keeps the first `maxGroups`.
+    /// ⚠ Pinned by `twoGroupsNearestFirst`, `groupWithoutDepthSortsLast`,
+    ///   `nonFiniteBoxIsDroppedNotCalledAhead`, `animalsComeAfterPeople`.
     static func groups(_ sightings: [Sighting], mirrored: Bool) -> [Group] {
         var byKey: [String: Group] = [:]
         // A non-finite box centre would fall into the `ahead` band (every NaN comparison is

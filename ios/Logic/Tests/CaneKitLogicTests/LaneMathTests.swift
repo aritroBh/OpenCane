@@ -4,8 +4,18 @@
 //
 //  Purpose: pins LaneMath.swift — the LiDAR depth → 3 lanes × 2 bands reduction: portrait
 //  remap, left / right and head / torso orientation, mirroring, ground skip, confidence
-//  filtering, the 10th-percentile rule, invalid depths, padded CVPixelBuffer strides, and the
-//  debug-grid `TileLevel` colours.
+//  filtering, the 10th-percentile rule, invalid depths and padded CVPixelBuffer strides. Also pins
+//  three small types from LaneReport.swift that ride on the same pipeline: the debug-grid
+//  `TileLevel` colours, `MountTilt` (aim window 3–8° down, down-positive sign, ground usable 0–15°)
+//  and `PublishGate` (a 15 Hz cap must really publish 15 Hz from 30 / 60 Hz ARKit frames).
+//
+//  Callers: `DepthFrameProcessor` (app) runs `LaneMath.computeLanes(depth:depthBytesPerRow:…)` on
+//  every ARKit depth map, gates publication with `PublishGate` and ground hazards with
+//  `MountTilt.groundUsable`; `ContentView` shows `MountTilt.status`. Breaks these catch: lanes
+//  swapped or rotated (a wall on the left buzzing right), pavement or a 5 % noise speck read as an
+//  obstacle, NaN / 0 / row-padding bytes read as a 0 m hit, and the 10 Hz publish bug seen on the
+//  real phone. ⚠ Re-run these plus a clamped-phone device test before touching the rotation, ground
+//  skip, percentile or stride handling (CODE_REFERENCE `LaneMath.swift`).
 //
 //  Key invariants / fixtures: `portraitBuffer` builds a 256 × 192 landscape buffer from a
 //  scene-space function with the engine's remap (bufX = sceneY, bufY = bufH − 1 − sceneX).
@@ -33,6 +43,7 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
 }
 
 // Scene space in portrait: 192 wide × 256 tall. Lanes are 64 px wide; usable height 192 → bands of 96.
+// (The bottom 25 %, scene y ≥ 192, is the `groundSkipFraction` band and is never read.)
 
 /// Facing a flat wall 3 m away, every cell and the centre read 3 m.
 @Test func uniformWallReadsSameEverywhere() {

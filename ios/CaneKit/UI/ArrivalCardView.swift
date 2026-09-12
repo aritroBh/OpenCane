@@ -13,6 +13,12 @@
 //  `TripTracker.spokenSummary(destination:)`, so VoiceOver hears one sentence instead of six
 //  fragments. No XCUITest queries it (a simulator walk never arrives).
 //
+//  Owner / caller: `GuidePage` in ContentView.swift, below `GuideCard`, only while
+//  `nav.isNavigating || nav.arrived`. Data: `AppModel.trip` (`TripTracker`: distance from GPS
+//  fixes, elapsed time, steps from HealthKit or the pedometer).
+//  Tests: none automated (see above). The 950 m km switch-over and minute rounding here are
+//  display-only and untested.
+//
 
 import SwiftUI
 
@@ -23,6 +29,10 @@ struct ArrivalCardView: View {
     /// App-wide owner of `trip` (TripTracker) and `nav` (arrival state).
     @Environment(AppModel.self) private var model
 
+    /// Title flips from "This trip" to "Arrived" on arrival (`NavigationEngine.stop()` does not
+    /// clear `arrived`, so the card and its title stay until the next route starts). The step
+    /// source line maps `TripTracker.stepSource` ("HealthKit" / "Pedometer" / anything else) to
+    /// words; `trip.lastError` (e.g. a HealthKit refusal) shows in red.
     var body: some View {
         let trip = model.trip
         CKCard(title: model.nav.arrived ? "Arrived" : "This trip") {

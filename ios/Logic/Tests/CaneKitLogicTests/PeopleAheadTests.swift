@@ -11,6 +11,18 @@
 //  Boxes are written in Vision's convention: normalized, **bottom-left** origin, on the upright
 //  portrait frame.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/PeopleAhead.swift` (`bearing` with
+//  `aheadHalfWidth` 0.12, `countPhrase`, `distancePhrase` over `DepthSnapshot.trusted`, `line` with
+//  `maxGroups` 2 and confidence floors person 0.5 / animal 0.6, `nouns`, `summary`, `needsSpeaking`)
+//  plus the people-aware parts of `SceneVocabulary.isFaithful` / `mentions`. Callers:
+//  `OnDeviceVision` (builds the sightings with a per-box LiDAR distance and the people line) and
+//  `SceneDescriber` (the cloud path); both use `needsSpeaking` to decide whether a model sentence
+//  already carried the line. The mirror flag comes from `AppModel.mirrorLeftRight`.
+//  Breaks these catch: a person on the left said "ahead" (or the reverse on a mirrored
+//  mount), an invented distance, a crowd counted as "eleven", a low-confidence false "a person
+//  ahead", a real LiDAR distance left unsaid, and a model sentence that names the wrong side or
+//  number suppressing the true line.
+//
 
 import Testing
 @testable import CaneKitLogic
@@ -24,6 +36,8 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - Direction
 
+/// The three direction bands: |midX − 0.5| ≤ `aheadHalfWidth` (0.12) is "ahead", inclusive; beyond is
+/// left / right. Catches a widened band that calls a person beside the path "ahead".
 @Test func bearingBands() {
     // +/-0.12 around the centre is "ahead" (~+/-6 deg, ~one body width at 3 m).
     #expect(PeopleAhead.bearing(midX: 0.5) == .ahead)
@@ -35,6 +49,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.bearing(midX: 1.0) == .right)
 }
 
+/// `mirrored: true` (a phone clamped the other way round) swaps left and right in speech only.
 @Test func bearingHonoursMirror() {
     // A mirrored mount swaps the spoken side, never the image (the JPEG is only rotated).
     #expect(PeopleAhead.bearing(midX: 0.1, mirrored: true) == .right)
@@ -44,6 +59,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - Words
 
+/// Count wording: "a" for one, spelled two / three, "several" past three; animals pluralise too.
 @Test func countWords() {
     #expect(PeopleAhead.countPhrase(.person, count: 1) == "a person")
     #expect(PeopleAhead.countPhrase(.person, count: 2) == "two people")
@@ -56,6 +72,8 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.countPhrase(.cat, count: 1) == "a cat")
 }
 
+/// Distance wording goes through `SpokenDistance` with an "about" prefix, and only inside
+/// `DepthSnapshot.trusted` (0.3–5 m); no depth or an untrusted depth gives nil, never a number.
 @Test func distanceWords() {
     #expect(PeopleAhead.distancePhrase(2.0) == "about two meters")
     #expect(PeopleAhead.distancePhrase(3.0) == "about 3 meters")
@@ -74,27 +92,32 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - The line
 
+/// The basic line is distance-first: "About two meters ahead, a person."
 @Test func onePersonAhead() {
     #expect(PeopleAhead.line([person(at: 0.5, meters: 2)]) == "About two meters ahead, a person.")
 }
 
+/// Two bodies in the ahead band merge into one group whose distance is the nearest (3.1 → "3").
 @Test func twoPeopleWithDistance() {
     // The frame that made this feature necessary: the classifier said nothing, two bodies at 3 m.
     let s = [person(at: 0.47, meters: 3.1), person(at: 0.55, meters: 3.4)]
     #expect(PeopleAhead.line(s) == "About 3 meters ahead, two people.")
 }
 
+/// No depth (nil) or an out-of-range depth (12 m) keeps the direction and drops the distance clause.
 @Test func noDepthMeansNoNumber() {
     // Faithfulness: with no LiDAR answer the direction is still spoken, the distance never invented.
     #expect(PeopleAhead.line([person(at: 0.2)]) == "A person on your left.")
     #expect(PeopleAhead.line([person(at: 0.9, meters: 12)]) == "A person on your right.")
 }
 
+/// Five people in one band are "several people", not a count the detector cannot back.
 @Test func severalPeople() {
     let crowd = (0..<5).map { person(at: 0.45 + Float($0) * 0.01, meters: 2.2) }
     #expect(PeopleAhead.line(crowd) == "About two meters ahead, several people.")
 }
 
+/// At most `maxGroups` (2) groups; the nearest leads with the distance, the second is direction only.
 @Test func twoGroupsNearestFirst() {
     // Nearest group leads and carries the distance; the second is direction only, so the whole
     // line stays inside the describer's one-sentence budget.
@@ -102,6 +125,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.line(s) == "About one and a half meters ahead, a person, and a person on your right.")
 }
 
+/// A third group is dropped entirely, so the line stays one sentence.
 @Test func thirdGroupIsDropped() {
     let s = [person(at: 0.5, meters: 1.5), person(at: 0.9, meters: 2.5), person(at: 0.1, meters: 3.5)]
     let line = PeopleAhead.line(s) ?? ""
@@ -109,11 +133,14 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(!line.contains("left"))
 }
 
+/// A group with no depth sorts after one with a real distance.
 @Test func groupWithoutDepthSortsLast() {
     let s = [person(at: 0.1), person(at: 0.5, meters: 4)]
     #expect(PeopleAhead.line(s) == "About 4 meters ahead, a person, and a person on your left.")
 }
 
+/// When the leading (people) group has no depth, a later group's real LiDAR distance gets its own
+/// distance-first clause instead of going unsaid (adversarial review).
 @Test func aRealDistanceIsNeverDropped() {
     // People lead the line, so when the leading group has no depth the second group's real LiDAR
     // distance moves onto its own clause instead of going unsaid (adversarial review).
@@ -123,6 +150,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
             == "A person ahead and about one meter on your right, a dog.")
 }
 
+/// A NaN box is discarded; it must never fall into the "ahead" band by failing every comparison.
 @Test func nonFiniteBoxIsDroppedNotCalledAhead() {
     // Every NaN comparison is false, so a NaN centre would land in the "ahead" band — the one
     // that means "in your way" (Muse review).
@@ -133,6 +161,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.line([bad, person(at: 0.9, meters: 3)]) == "About 3 meters on your right, a person.")
 }
 
+/// People outrank animals even when the animal is nearer.
 @Test func animalsComeAfterPeople() {
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0.8, minY: 0.0, width: 0.1, height: 0.1),
                        confidence: 0.9, distance: 1.0)
@@ -141,12 +170,14 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
             == "About 3 meters ahead, a person, and a dog on your right.")
 }
 
+/// An animal on its own still gets a line (with side and distance).
 @Test func animalAloneIsSpoken() {
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0.0, minY: 0.0, width: 0.2, height: 0.2),
                        confidence: 0.8, distance: 2.0)
     #expect(PeopleAhead.line([dog]) == "About two meters on your left, a dog.")
 }
 
+/// Confidence floors: person ≥ 0.5 (inclusive), animal ≥ 0.6; below them nothing is said.
 @Test func lowConfidenceDropped() {
     // A false "a person ahead" is worse than silence.
     #expect(PeopleAhead.line([person(at: 0.5, meters: 2, confidence: 0.49)]) == nil)
@@ -156,10 +187,12 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.line([shyDog]) == nil)      // animals are held to 0.6
 }
 
+/// No sightings → nil, so the caller adds no people line at all.
 @Test func nothingDetectedIsNil() {
     #expect(PeopleAhead.line([]) == nil)
 }
 
+/// The mirror flag reaches the whole line, not just `bearing`.
 @Test func mirroredLineSwapsSides() {
     #expect(PeopleAhead.line([person(at: 0.1, meters: 2)], mirrored: true)
             == "About two meters on your right, a person.")
@@ -167,6 +200,8 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - Facts handed on
 
+/// `nouns` hands the faithfulness gate vocabulary nouns ("people", "a dog"), above the floors only;
+/// a noun missing from `SceneVocabulary.groups` could never be grounded.
 @Test func nounsAreVocabularyNouns() {
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0, minY: 0, width: 0.1, height: 0.1),
                        confidence: 0.9)
@@ -178,6 +213,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(PeopleAhead.nouns([person(at: 0.5, confidence: 0.2)]).isEmpty)
 }
 
+/// `summary` is the compact trip-log form ("2 person, 1 dog"; empty for none).
 @Test func logSummary() {
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0, minY: 0, width: 0.1, height: 0.1),
                        confidence: 0.9)
@@ -187,6 +223,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - Faithfulness (the gate the people facts must pass)
 
+/// With the scene classifier silent (`nouns` empty), detected people alone ground a model sentence.
 @Test func detectedPeopleAreFaithfulWithoutSceneLabels() {
     // The exact failure this feature exists for: the classifier returned nothing, so `nouns` is
     // empty. Before, every sentence was rejected and the walker heard only the LiDAR template.
@@ -201,6 +238,8 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                                        facts: facts, nouns: [], detected: ["people"]))
 }
 
+/// Detected people must not loosen the gate: undetected objects, invented numbers and sentences
+/// naming nothing detected are still rejected.
 @Test func detectingPeopleDoesNotLoosenAnythingElse() {
     let facts = "People detector: About two meters ahead, a person."
     // A dog that was never detected is still rejected...
@@ -218,6 +257,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 // MARK: - Does the model's sentence still need the people line?
 
+/// `needsSpeaking` is true unless the model sentence names every detected noun (not just any one).
 @Test func modelMustCarryEveryDetectedNoun() {
     let line = "About 3 meters ahead, a person, and a dog on your right."
     // Naming only the dog must NOT suppress the person: an "any noun named" test dropped the
@@ -230,6 +270,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                                        detected: ["people", "a dog"]))
 }
 
+/// …and every number in the line (digits and number words compare equal).
 @Test func modelMustCarryTheNumbers() {
     let line = "About 3 meters ahead, two people."
     // Right nouns, wrong (or missing) numbers: say the authoritative line as well.
@@ -241,6 +282,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                                        given: "2 people ahead at 3 meters.", detected: ["people"]))
 }
 
+/// …and the line's direction words, so a model that swapped the side cannot suppress the true line.
 @Test func modelMustCarryTheDirection() {
     // With no depth the line has no number, so the numbers check is vacuous: without the
     // direction words a model that swapped the side would suppress the true line and the walker
@@ -258,6 +300,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                                       detected: ["people"]))
 }
 
+/// The on-device template already contains the line verbatim, so it is not spoken twice.
 @Test func theTemplateNeverDoublesTheLine() {
     // The deterministic template already contains the line verbatim, so nothing is prepended.
     let line = "About 3 meters ahead, two people."
@@ -265,10 +308,13 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(!PeopleAhead.needsSpeaking(line, given: template, detected: ["people"]))
 }
 
+/// An empty people line never needs speaking.
 @Test func nothingDetectedNeedsNoLine() {
     #expect(!PeopleAhead.needsSpeaking("", given: "Ahead: the sidewalk and trees.", detected: []))
 }
 
+/// `SceneVocabulary.mentions` matches the merged group's identifiers (pedestrian, adult → "people")
+/// and nothing from another group.
 @Test func mentionsCountsMergedIdentifiers() {
     #expect(SceneVocabulary.mentions("Two people ahead.", noun: "people"))
     #expect(SceneVocabulary.mentions("A pedestrian is crossing.", noun: "people"))

@@ -15,9 +15,16 @@
 //      Engineering Library, 750 meters.") so a blind walker hears what was chosen and can say
 //      Stop if it is wrong.
 //
-//  Owner: called by `RouteSource.mapKit(to:from:)` / `RouteSource.walking(to:from:)` and
-//  `AppModel.beginRoute(_:announce:)` in the app; the app's `CampusDestination` AppEnum
-//  (AppIntents.swift) uses the place ids as raw values.
+//  Owner / callers (all in the app, all main actor; every type here is a stateless value):
+//    · `RouteSource.mapKit(to:from:)` — `CampusPlaces.match` first, then `DestinationPicker.pick`
+//      over the MKLocalSearch results (reached through `RouteSource.walking(to:from:)`).
+//    · `AppModel.buildRoute(to:searchLine:)` — `WalkingIntro.line(place:meters:accuracyM:)`, the
+//      announcement it hands to `AppModel.beginRoute(_:announce:)`.
+//    · `DestinationSuggestions` (Logic), `DestinationSearch` and `DestinationField` —
+//      `CampusPlaces.all` / `normalize` / `place(id:)` / `center` for the as-you-type list.
+//    · `FastPathIntentClassifier` (Logic) — "take me to …" matched against `all` by alias.
+//    · The app's `CampusDestination` AppEnum (AppIntents.swift) uses the place ids as raw values;
+//      `TakeMeToIntent` resolves a case with `CampusPlaces.place(id:)`.
 //
 //  Key invariants:
 //    · Foundation only (no MapKit / CoreLocation): candidates arrive as `PlaceCandidate`.
@@ -39,10 +46,18 @@ public struct CampusPlace: Sendable, Equatable, Identifiable {
     public let id: String
     /// Spoken / shown name ("Grainger Engineering Library"); becomes the route name
     /// "To <name>" and the arrival line "Arrived at <name>."
+    /// ⚠ `FastPathIntentClassifier` hands this *name* (not the id) to `AppModel.navigate(to:)`,
+    /// which runs `match` on it again. A name that is not itself an alias after `normalize` falls
+    /// through to a MapKit search: today "the Townsend Hall doors" → "townsend hall doors" matches
+    /// no ISR alias, so a spoken "take me to Townsend Hall" searches MapKit instead of walking to
+    /// the route file's WP1 (every other name does normalize onto one of its own aliases).
     public let name: String
     /// The entrance a walking route should end at (WGS-84).
     public let coordinate: Coordinate
-    /// Everything that should match this place, compared after `CampusPlaces.normalize`.
+    /// Everything that should match this place, compared after `CampusPlaces.normalize`. Also the
+    /// partial-match pool for `DestinationSuggestions.campusMatches` and the duplicate filter for
+    /// its MapKit rows. ⚠ No alias may belong to two places
+    /// (`everyCampusPlaceIsOnCampusAndAliasesAreUnique`): `match` returns the first hit.
     public let aliases: [String]
 
     /// Creates a gazetteer entry; only `CampusPlaces.all` (and tests) build these.
@@ -106,13 +121,15 @@ public enum CampusPlaces {
     /// GPS fix — biasing `MKLocalSearchCompleter`'s region while the walker types on the idle
     /// screen (GPS only runs during a route, design.md §6.1). It is never used as a distance
     /// origin: a distance from a guessed origin would be a made-up number.
-    /// Pinned by `campusCentreIsWithinWalkingRangeOfEveryPlace`.
+    /// Callers: `DestinationSearch` (region centre when `origin` is nil). Pinned by
+    /// `campusCentreIsWithinWalkingRangeOfEveryPlace` (DestinationSuggestionsTests.swift).
     public static let center: Coordinate = Coordinate(
         latitude: all.reduce(0) { $0 + $1.coordinate.latitude } / Double(all.count),
         longitude: all.reduce(0) { $0 + $1.coordinate.longitude } / Double(all.count))
 
     /// Words dropped wherever they appear: "the CIF" = "CIF", "Activities & Recreation" =
-    /// "Activities and Recreation" (the ampersand becomes a space).
+    /// "Activities and Recreation" (the ampersand becomes a space). Internal; read only by
+    /// `normalize`. Pinned by `campusAliasesIgnoreCasePunctuationAndThe`.
     static let fillerWords: Set<String> = ["the", "and"]
 
     /// The place whose alias equals `query` after `normalize`, or nil (then MapKit searches).
@@ -123,14 +140,18 @@ public enum CampusPlaces {
         return all.first { place in place.aliases.contains { normalize($0) == key } }
     }
 
-    /// The entry with this id (the app's `CampusDestination.rawValue`), or nil.
+    /// The entry with this id (the app's `CampusDestination.rawValue`), or nil. Callers:
+    /// `TakeMeToIntent.perform`, `DestinationField` (a tapped campus row), `DestinationSuggestions.mapRows`.
     public static func place(id: String) -> CampusPlace? {
         all.first { $0.id == id }
     }
 
     /// Comparable form of a place name: lower case, accents folded, dots and apostrophes removed
     /// ("C.I.F." → "cif"), every other non-alphanumeric character a space, `fillerWords` dropped,
-    /// single spaces. Also used by `DestinationPicker` for its name match.
+    /// single spaces. Also used by `DestinationPicker` for its name match, by
+    /// `DestinationSuggestions` (and the app's `DestinationSearch` / `DestinationField`) for the
+    /// minimum query length, and by `FastPathIntentClassifier` for its gazetteer lookup.
+    /// A query that is only filler or punctuation ("the", "?") normalizes to "".
     public static func normalize(_ text: String) -> String {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
         var cleaned = ""
@@ -144,11 +165,13 @@ public enum CampusPlaces {
     }
 }
 
-/// One MKLocalSearch result reduced to what the picker needs (the app builds these).
+/// One MKLocalSearch result reduced to what the picker needs. Built by `RouteSource.mapKit(to:from:)`
+/// from each `MKMapItem` (Foundation-only here, so the picker is testable without MapKit).
 public struct PlaceCandidate: Sendable, Equatable {
-    /// The result's name ("Grainger Engineering Library", or an address line).
+    /// The result's name ("Grainger Engineering Library", or an address line); the app falls back
+    /// to the typed query when MapKit gives no name. Becomes the route's place name when picked.
     public var name: String
-    /// Where the result is.
+    /// Where the result is (WGS-84, the map item's location).
     public var coordinate: Coordinate
     /// Creates a candidate from a MapKit result's name and coordinate.
     public init(name: String, coordinate: Coordinate) {
@@ -171,6 +194,12 @@ public enum DestinationPicker {
     /// (after `CampusPlaces.normalize`) are preferred; the nearest preferred one wins, else the
     /// nearest one in range (a typed address rarely matches MapKit's spelling of it).
     /// Called by `RouteSource.mapKit(to:from:)`.
+    /// - Parameters:
+    ///   - candidates: MapKit's results in MapKit's order (the order is ignored).
+    ///   - origin: the walker's GPS fix — never a guessed point (no distance from `CampusPlaces.center`).
+    ///   - query: what the walker typed or said; an empty query prefers nothing.
+    ///   - maxDistanceM: straight-line range in metres (default `DestinationPicker.maxDistanceM`).
+    /// - Returns: an index into `candidates`, or nil (the app then throws `destinationNotFound`).
     public static func pick(_ candidates: [PlaceCandidate], near origin: Coordinate, query: String,
                             maxDistanceM: Double = maxDistanceM) -> Int? {
         let words = CampusPlaces.normalize(query).split(separator: " ").map(String.init)
@@ -200,6 +229,11 @@ public enum WalkingIntro {
     /// Worded conditionally — weak GPS also happens in urban canyons, not only indoors.
     /// Called by `AppModel.buildRoute` with `PlannedRoute.placeName` / `walkingMeters` /
     /// the fix accuracy.
+    /// - Parameters:
+    ///   - place: the spoken place name (gazetteer `name` or the picked MapKit name).
+    ///   - meters: MapKit's walking distance; negative / non-finite → no distance clause.
+    ///   - accuracyM: horizontal accuracy (m) of the fix the route was planned from; nil, non-finite
+    ///     or ≤ `weakAccuracyM` adds nothing. The weak clause is only added when a distance is spoken.
     public static func line(place: String, meters: Double, accuracyM: Double? = nil) -> String {
         guard let d = distancePhrase(meters) else { return "Walking to \(place)." }
         guard let accuracy = accuracyM, accuracy.isFinite, accuracy > weakAccuracyM else {

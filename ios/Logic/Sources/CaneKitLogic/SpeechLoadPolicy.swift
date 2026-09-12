@@ -12,13 +12,26 @@
 //  sleeping or stacking stale work behind a route instruction. The app owns effects; this file is
 //  Foundation-only and clock-injected for deterministic tests.
 //
-//  Owner: `SpeechQueue` calls `admit` immediately after trimming a line and before queue insertion.
-//  Tests: `SpeechLoadPolicyTests.swift`.
+//  Why (Step 30, docs/auditory-load.md): blind-navigation research says to emit discontinuously and
+//  only on critical events, and headphone audio masks the traffic a walker listens to. Mesh
+//  obstacle names are the one optional, unsolicited, high-frequency channel, so they are the one
+//  channel this policy rations; nothing a walker must hear is ever dropped here. Open: tune the 7 s
+//  window from trip logs (`speech_suppressed`) with a blind / O&M-trained tester.
+//
+//  Owner: `SpeechQueue` (app, main actor) holds one `loadPolicy` and calls `admit` inside `say`,
+//  immediately after trimming a line and before queue insertion, with `isBusy` = speaking (the
+//  pause between bands included) or interrupted; `stopAll()` calls `reset()`. The only producer of
+//  `.ambientObstacleName` is `AppModel`'s obstacle-name path (`ObstacleNamer` line, TTL 4 s). A
+//  suppressed line goes to `SpeechQueue.onSuppressed`, logged by `AppModel` as `speech_suppressed`
+//  (`text`, `load`, `reason`).
+//  Isolation: nonisolated `Sendable` value; mutated only by its main-actor owner.
+//  Tests: `SpeechLoadPolicyTests.swift` (7).
 //
 
 import Foundation
 
-/// The load class supplied by a speech producer.
+/// The load class supplied by a speech producer (`SpeechQueue.say(load:)`, default `.normal`).
+/// Raw values are logged as `speech_suppressed.load`.
 public enum SpeechLoadClass: String, Sendable, Equatable {
     /// Route, safety, explicit-request, status, or other speech that must remain fail-open.
     case normal
@@ -26,7 +39,8 @@ public enum SpeechLoadClass: String, Sendable, Equatable {
     case ambientObstacleName
 }
 
-/// Why an optional environmental line was not admitted.
+/// Why an optional environmental line was not admitted. Raw values are logged as
+/// `speech_suppressed.reason` and counted by `ios/scripts/cue_audit.py` (`suppressed`).
 public enum SpeechSuppressionReason: String, Sendable, Equatable {
     /// Another optional environmental line was admitted too recently.
     case calmWindow
@@ -53,7 +67,8 @@ public struct SpeechLoadPolicy: Sendable, Equatable {
 
     /// Numeric tuning for the optional narration channel.
     public struct Configuration: Sendable, Equatable {
-        /// Minimum seconds between admitted optional obstacle-name lines.
+        /// Minimum seconds between admitted optional obstacle-name lines. [H] 7 s — a calibration
+        /// hypothesis, not a measurement (see the file header).
         public let minimumAmbientGap: TimeInterval
 
         /// Creates a configuration, clamping negative or non-finite gaps to a safe zero or default.
@@ -65,7 +80,8 @@ public struct SpeechLoadPolicy: Sendable, Equatable {
 
     /// The configuration used by this policy instance.
     public let configuration: Configuration
-    /// The last clock value at which an optional line was admitted.
+    /// The last clock value (caller's seconds) at which an optional line was admitted; −∞ so the
+    /// first name is always admitted (`firstObstacleNameIsAdmitted`).
     private var lastAmbientAt: TimeInterval = -.infinity
 
     /// Creates a policy with the calm default or an injected test/calibration gap.
@@ -83,7 +99,10 @@ public struct SpeechLoadPolicy: Sendable, Equatable {
     ///   - kind: the producer's load class.
     ///   - now: a monotonic-ish caller timestamp in seconds.
     ///   - isBusy: whether another line, interruption, or pending audio session owns the channel.
-    /// - Returns: `.speak` or a diagnostic suppression reason.
+    /// - Returns: `.speak` or a diagnostic suppression reason. Checks run invalid time → busy →
+    ///   calm window, so a busy drop never reports `.calmWindow`.
+    /// Pinned by `normalSpeechIsNeverSuppressed`, `obstacleNamesInsideCalmWindowAreDropped`,
+    /// `calmWindowBoundaryIsInclusive`, `busyDropDoesNotConsumeTheClock`, `nonFiniteTimeIsRejected`.
     public mutating func admit(_ kind: SpeechLoadClass, now: TimeInterval,
                                isBusy: Bool) -> SpeechLoadDecision {
         guard kind == .ambientObstacleName else { return .speak }
@@ -96,7 +115,8 @@ public struct SpeechLoadPolicy: Sendable, Equatable {
         return .speak
     }
 
-    /// Forget the previous optional narration timestamp, normally at a route/session boundary.
+    /// Forget the previous optional narration timestamp. Called by `SpeechQueue.stopAll()` (route
+    /// stop and other full-queue clears). Pinned by `resetClearsTheClock`.
     public mutating func reset() {
         lastAmbientAt = -.infinity
     }

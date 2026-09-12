@@ -13,6 +13,13 @@
 //    · `keepsDepth` is only ever true for the two verdicts that really keep depth — a future
 //      design would read that flag and nothing else.
 //
+//  Also pins `MultiCamCost.needsFrameRateReduction` / `reducedFramesPerSecond` (the shipped mode's
+//  hardware-cost rule). Callers: `MultiCamDepthProbe` (app; writes the verdict and `sentence` to the
+//  trip log as `multicam_depth`) and `DualCameraSession` (cost check before running the session).
+//  Breaks these catch: a log that claims depth-in-multi-cam works when it cannot pair with the
+//  front camera, a "higher than ARKit" claim at exactly 256×192, a sentence implying something was
+//  run, and a NaN or ≤ 1.0 hardware cost triggering a needless reconfiguration.
+//
 
 import Testing
 @testable import CaneKitLogic

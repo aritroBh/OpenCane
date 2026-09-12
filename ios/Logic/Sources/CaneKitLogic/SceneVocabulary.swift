@@ -10,12 +10,25 @@
 //  portal, machine, structure, material), and orders what is said by usefulness to a cane user
 //  (a crosswalk before grass).
 //
-//  Used by OnDeviceVLMClient (template sentence and the facts handed to Apple's on-device model).
-//  Tests: SceneVocabularyTests.swift (fixtures are the real Street View labels).
+//  It is also the faithfulness gate for the on-device model's sentence (`isFaithful`: no invented
+//  objects, no invented numbers) and the shared number / token / stem helpers other gates use.
+//
+//  Callers: `OnDeviceVLMClient` (app: `narrationNouns` for the facts and the template sentence,
+//  `isFaithful` on Apple's on-device model, `mentionsDistance` for the LiDAR prefix);
+//  `SceneDescriber` (cloud path: `narrationNouns` + `readableTexts` as gate evidence,
+//  `mentionsDistance`); `CloudSceneGate` (`numbersAreGrounded`, `numbers`, `tokens`,
+//  `numberWords`); `PeopleAhead` (`mentions`, `numbers`, `tokens`); `HazardWatchPolicy` in
+//  Hazards.swift (`tokens`, `stem`).
+//  Isolation: stateless and nonisolated; the tables are immutable `static let`s.
+//  Tests: SceneVocabularyTests.swift (16; fixtures are the real Street View labels), plus the
+//  people cases in PeopleAheadTests and the shared number rule in CloudSceneGateTests.
 //
 
 import Foundation
 
+/// Vision scene-classifier identifiers → the few spoken nouns a cane user can act on, plus the
+/// faithfulness rules a model sentence must pass before it may be spoken. Stateless.
+/// ⚠ Add a `Group` for a new useful identifier; never pass raw identifiers to speech (AGENTS.md).
 public enum SceneVocabulary {
 
     /// Maximum number of scene-classifier nouns used in one calm spoken scene answer. People and
@@ -25,8 +38,13 @@ public enum SceneVocabulary {
 
     /// One spoken noun, its rank (lower is said first) and every Vision identifier that means it.
     struct Group: Sendable {
+        /// Usefulness to a walker; lower is said first. Ties break on classifier confidence.
         let rank: Int
+        /// The words spoken, with their article ("a crosswalk", "the street", "cars"). Also a
+        /// public contract: `PeopleAhead` / `SightingKind.vocabularyNoun` name groups by this.
         let noun: String
+        /// Lower-case Vision identifiers merged into `noun`; their `_`-separated parts also count as
+        /// synonyms for the faithfulness gate (`synonyms(of:)`).
         let ids: [String]
     }
 
@@ -52,7 +70,8 @@ public enum SceneVocabulary {
         Group(rank: 6, noun: "a parking lot", ids: ["parking_lot"]),
         // Things that move or block
         // Slip hazards rank with things that move or block (Muse, Step 12: ice was dropped behind
-        // "the street" and "cars" when only three nouns are said).
+        // "the street" and "cars" when only three nouns were said; narration now says two —
+        // `narrationMaxItems` — which makes the rank matter more, not less).
         Group(rank: 7, noun: "ice", ids: ["ice"]),
         Group(rank: 7, noun: "snow", ids: ["snow"]),
         Group(rank: 7, noun: "a puddle", ids: ["puddle"]),
@@ -105,9 +124,15 @@ public enum SceneVocabulary {
     }()
 
     /// Distinct spoken nouns for `labels`, most useful first, at most `max`.
+    /// Identifiers are lower-cased before lookup; unknown ones are dropped; sorted by `rank`, then
+    /// by confidence (higher first); a noun reached by two identifiers is said once.
     /// - Parameters:
     ///   - labels: Vision identifiers with confidence (any order).
-    ///   - minConfidence: labels below this are ignored.
+    ///   - max: most nouns returned (3 by default; scene narration asks for `narrationMaxItems`).
+    ///   - minConfidence: labels below this are ignored (0.3; `OnDeviceVision` already dropped
+    ///     everything under its own 0.25 floor).
+    /// - Returns: spoken noun phrases, e.g. ["a crosswalk", "the street"].
+    /// Pinned by `synonymsCollapseAndHypernymsDrop`, `crossingInformationComesFirst`.
     public static func nouns(_ labels: [(name: String, confidence: Float)], max: Int = 3,
                              minConfidence: Float = 0.3) -> [String] {
         let known = labels
@@ -130,6 +155,10 @@ public enum SceneVocabulary {
     /// The general `nouns` API remains available to faithfulness and diagnostics callers that need
     /// the full candidate set. Scene narration uses this narrower, two-item default so a truthful
     /// frame does not become an exhausting inventory. Pinned by `narrationKeepsOnlyTheTopTwoRankedNouns`.
+    /// - Parameters:
+    ///   - labels: Vision identifiers with confidence.
+    ///   - max: cap (default `narrationMaxItems`); ≤ 0 returns [] rather than trapping.
+    /// - Returns: at most `max` nouns, same order as `nouns`.
     public static func narrationNouns(_ labels: [(name: String, confidence: Float)],
                                       max: Int = narrationMaxItems) -> [String] {
         guard max > 0 else { return [] }
@@ -137,6 +166,8 @@ public enum SceneVocabulary {
     }
 
     /// "a crosswalk, the street and cars" (Oxford-free, spoken).
+    /// - Parameter nouns: spoken nouns in the order to say them.
+    /// - Returns: "" for none, the noun alone for one, else "a, b and c".
     public static func list(_ nouns: [String]) -> String {
         switch nouns.count {
         case 0: return ""
@@ -162,6 +193,11 @@ public enum SceneVocabulary {
     ///   - facts: the plain-text facts it was given.
     ///   - nouns: spoken nouns from the scene classifier (`SceneVocabulary.nouns`).
     ///   - detected: spoken nouns from the dedicated detectors (`PeopleAhead.nouns`).
+    /// - Returns: true only when every rule passes; false sends the caller to the template.
+    /// ⚠ Pinned by `modelSentencesMustBeFaithfulToTheFacts`,
+    ///   `streetViewModelNonsenseIsRejectedAndOCRJunkFiltered`, `inventedObjectsAreRejected`,
+    ///   `inventedHazardWordsAreRejected`, `factWordsAreAllowedAndDistanceIsANumber`,
+    ///   `detectedPeopleAreFaithfulWithoutSceneLabels` (PeopleAheadTests).
     public static func isFaithful(_ sentence: String, facts: String, nouns: [String],
                                   detected: [String] = []) -> Bool {
         let words = tokens(sentence)
@@ -206,6 +242,10 @@ public enum SceneVocabulary {
 
     /// True when `sentence` states a distance that `lidar` (the depth fact) gives — by number, not
     /// by the substring "meter" ("parking meters" and "kilometers" matched that; review of f5413b8).
+    /// Callers prepend the LiDAR line only when this is false, so a distance is never said twice.
+    /// - Parameters:
+    ///   - sentence: the model's (already gated) sentence.
+    ///   - lidar: the LiDAR fact line ("1.4 meters ahead, obstacle."); "" shares no number.
     public static func mentionsDistance(_ sentence: String, from lidar: String) -> Bool {
         !numbers(in: sentence).isDisjoint(with: numbers(in: lidar))
     }
@@ -217,12 +257,15 @@ public enum SceneVocabulary {
     /// - Parameters:
     ///   - sentence: the model's sentence.
     ///   - noun: a spoken noun from `groups` ("people", "a dog").
+    /// Pinned by `mentionsCountsMergedIdentifiers` (PeopleAheadTests).
     public static func mentions(_ sentence: String, noun: String) -> Bool {
         let terms = Set(synonyms(of: noun).map(stem))
         return tokens(sentence).contains { terms.contains(stem($0)) }
     }
 
-    /// Lower-case word and digit tokens ("1.5" → "1", "5").
+    /// Lower-case word and digit tokens ("1.5" → "1", "5"). Splits on anything that is neither a
+    /// letter nor a number, so "drop-off" is two tokens. Use `numbers(in:)` for numbers — these
+    /// tokens break decimals apart on purpose.
     static func tokens(_ s: String) -> [String] {
         s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
     }
@@ -252,7 +295,9 @@ public enum SceneVocabulary {
         return out
     }
 
-    /// Number words the model or `SpokenDistance` might use, as digits.
+    /// Number words the model or `SpokenDistance` might use, as digits. Compound words
+    /// ("twenty-one") are not composed: they read as "20" and "1", which is still fail-closed
+    /// because both must appear in the facts. `CloudSceneGate` also reads this table.
     static let numberWords: [String: String] = [
         "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
         "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
@@ -290,6 +335,10 @@ public enum SceneVocabulary {
     /// Recognized text worth showing the language model: at least one run of 3+ letters, and
     /// letters make up most of it. On the Street View frames Vision "read" junk like "11", "J.I",
     /// "£xJ" off road markings, and the model turned "11" into "11 meters to the edge".
+    /// - Parameter texts: recognized text lines (callers pre-filter at confidence ≥ 0.5).
+    /// - Returns: the lines with a run of ≥ 3 letters-or-digits and ≥ 60 % letters (whitespace
+    ///   ignored), in their original order.
+    /// Pinned by `streetViewModelNonsenseIsRejectedAndOCRJunkFiltered`, `blankWallsTeensAndMisreadsAreHandled`.
     public static func readableTexts(_ texts: [String]) -> [String] {
         texts.filter { t in
             let chars = t.filter { !$0.isWhitespace }
@@ -304,6 +353,12 @@ public enum SceneVocabulary {
     }
 
     /// The template sentence's scene part: "Ahead: a crosswalk, the street and cars." or nil.
+    /// Goes through `narrationNouns`, so `max` ≤ 0 gives nil. `OnDeviceVLMClient.template` passes
+    /// `max: narrationMaxItems` (two nouns); the default 3 is what the Street View tests pin.
+    /// - Parameters:
+    ///   - labels: Vision identifiers with confidence.
+    ///   - max: most nouns said.
+    /// - Returns: the sentence, or nil when nothing nameable was detected (the caller then says so).
     public static func sentence(_ labels: [(name: String, confidence: Float)], max: Int = 3) -> String? {
         let n = narrationNouns(labels, max: max)
         return n.isEmpty ? nil : "Ahead: \(list(n))."

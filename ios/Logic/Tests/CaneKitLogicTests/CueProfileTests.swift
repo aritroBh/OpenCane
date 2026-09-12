@@ -8,10 +8,20 @@
 //  furniture the cane finds anyway (research P1/P7), a Quiet profile that drops a safety sign, and
 //  a persisted raw value that renames and resets every walker's choice.
 //
+//  Sources pinned: `ios/Logic/Sources/CaneKitLogic/CueProfile.swift` (`CueLevel`, `CuePlace`,
+//  `CueRules`) and the `allowedPhrases` filter on `SignPolicy` in `Hazards.swift`. Callers:
+//  `AppModel.cueLevel` / `cuePlace` / `cueRules` (persisted, spoken on change, lines prefetched via
+//  `AppModel.commonLines`), which applies `headEnterM` to `CueDecider.thresholds.head`, passes
+//  `allowsName` to `ObstacleNamer` and `allowedSignPhrases` to `HazardScanner.signAllowedPhrases`
+//  (→ `SignPolicy.allowedPhrases`); `HandsFreeIntents` sets them by voice. Uses the public API only
+//  (`import CaneKitLogic`, not `@testable`).
+//
 
 import CaneKitLogic
 import Testing
 
+/// `CueRules` truth table: level × place × navigating → which obstacle names may be spoken, which
+/// sign phrases may be read, the head-height entry distance, and the fixed spoken lines.
 @Suite("Cue profile")
 struct CueProfileTests {
 
@@ -118,6 +128,9 @@ struct CueProfileTests {
     }
 }
 
+/// `SignPolicy.allowedPhrases` (set from `CueRules.allowedSignPhrases`): a filtered phrase is
+/// neither spoken nor stamped in the repeat limiter, and never shadows an allowed phrase in the
+/// same frame. `nil` = every phrase, the pre-Step-36 behaviour.
 @Suite("Sign phrase filter")
 struct SignPhraseFilterTests {
 

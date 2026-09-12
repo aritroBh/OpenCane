@@ -11,6 +11,10 @@
 //    · The raw value string is `"nodToTalk"`, matching the `HandsFreeOption` case name exactly.
 //    · A nod phrase with no on/off verb is not a setting change (falls through to the cloud).
 //
+//  Breaks these catch: a renamed option string (the coordinator's `HandsFreeOption(rawValue:)`
+//  lookup silently fails and the switch never moves), the AirPods / headphones status rule eating
+//  "head nod", and a question about the feature toggling it.
+//
 
 import Testing
 @testable import CaneKitLogic

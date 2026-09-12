@@ -29,11 +29,19 @@
 //    · `probe_e_audio_session` — what `.playAndRecord` does to the audio route (the sound-watch
 //      feature needs an input; AGENTS.md hard rule 7 says the app has one `.playback` session, so
 //      the cost of changing it is measured here rather than guessed).
+//    · `probe_f_sound_labels` — which `SoundAlerts.candidateLabels` the built-in sound classifier
+//      really has on this phone (matched / missing / road-like identifiers).
+//    · `probe_warning` — only if the app never became active within 60 s: the camera records
+//      that follow are not valid.
 //
-//  Safety: it runs only under `CANEKIT_SENSOR_PROBE=1`, only before `DepthEngine.start()`, on its
-//  own `ARSession` that is paused and released at the end, and it restores the `.playback` audio
-//  session before returning. Nothing here is compiled out, but nothing here runs on a normal
-//  launch either. It never speaks and never buzzes.
+//  Safety: it runs only under `CANEKIT_SENSOR_PROBE=1` / `--sensor-probe`, only before
+//  `DepthEngine.start()`, on its own `ARSession` that is paused (and its delegate cleared) at the
+//  end, and it restores the `.playback` audio session before returning. Nothing here is compiled
+//  out, but nothing here runs on a normal launch either. The probe itself never speaks and never
+//  buzzes; `AppModel.start()` announces "Sensor probe running…" before and "Sensor probe
+//  finished…" after, because obstacle detection is off for the whole run (≈ 24–36 s plus capture
+//  start/stop: five 4 s dwells, two 2 s settles, and one retry dwell each for a0 / a / b when a
+//  case saw no frames).
 //
 //  Threading / isolation: `@MainActor` (module default). ARKit and AVFoundation call back on their
 //  own queues, so the two delegates are `nonisolated` relay classes holding a `Mutex`
@@ -41,8 +49,14 @@
 //  to a global queue through `CaptureHandoff` (DualCameraSession.swift), whose only job is to
 //  carry a non-Sendable AVFoundation object across that hop.
 //
-//  Caller: `AppModel.start()`. Results: `ios/CaneKit/Depth/SensorProbe.swift` writes them to the
-//  trip log; pull it with `xcrun devicectl device copy from … --domain-type appDataContainer`.
+//  Caller: `AppModel.start()`. Results: every record goes through `onEvent`, which `AppModel`
+//  wires to `TripLogger.event` (kinds `probe_*`); pull the trip log with
+//  `xcrun devicectl device copy from … --domain-type appDataContainer`.
+//  Findings it produced (quoted elsewhere, so re-run it before changing those claims): face
+//  tracking beside LiDAR costs nothing measurable (60.0 fps with and without, `capturedImage`
+//  still the rear 1920×1440) → `DepthEngine.setFaceTracking`; a multi-cam session beside ARKit
+//  starves ARKit to 8 frames per 4 s → `DualCameraSession` pauses ARKit.
+//  Tests: none (hardware measurement); `SoundAlertsTests` pins the label list case (f) checks.
 //
 
 import ARKit
@@ -88,6 +102,8 @@ final class SensorProbe {
     /// Counting delegate for `session`.
     private let watcher = ProbeSessionWatcher()
 
+    /// Creates an idle probe (the `ARSession` exists but is not run). `AppModel.start()` creates
+    /// one only when `isEnabled`, sets `onEvent`, then awaits `run()`.
     init() {}
 
     /// Run every case in order and leave the phone exactly as it was found (AR session paused,
@@ -150,7 +166,11 @@ final class SensorProbe {
                       extra: ["config_user_face_tracking_enabled": config.userFaceTrackingEnabled])
     }
 
-    /// The app's normal configuration, optionally with the front camera also tracking a face.
+    /// The app's normal depth configuration (`DepthEngine.makeConfiguration`'s frame semantics,
+    /// gravity alignment, no planes), optionally with the front camera also tracking a face.
+    /// ⚠ Not identical to the app's: no mesh reconstruction and no chosen video format (ARKit's
+    /// default format runs), so the probe's frames/s are a like-for-like face-tracking delta, not
+    /// the app's exact load.
     /// - Parameter face: request `userFaceTrackingEnabled` (ignored where unsupported).
     private static func worldConfiguration(face: Bool) -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
@@ -406,7 +426,8 @@ final class SensorProbe {
         emit(kind, fields)
     }
 
-    /// Run `config` for the dwell and hand back its counters.
+    /// Run `config` for the dwell and hand back its counters. Resets the watcher first; does not
+    /// pause the session afterwards (the next case's `run` replaces the configuration).
     private func runDwell(on config: ARConfiguration, options: ARSession.RunOptions) async -> ProbeSessionWatcher.Counts {
         watcher.reset()
         session.run(config, options: options)
@@ -433,8 +454,9 @@ final class SensorProbe {
         }
     }
 
-    /// Poll until the app is `.active`, for at most 60 s. Returns immediately in the normal case
-    /// (the probe is started from the root view's `.task`, i.e. on screen).
+    /// Poll until the app is `.active` (every 500 ms, at most 120 polls = 60 s). Returns
+    /// immediately in the normal case (`AppModel.start()` runs from the root view's `.task`, i.e.
+    /// on screen); on timeout it emits `probe_warning` and the probe carries on regardless.
     private func waitForForeground() async {
         for _ in 0..<120 {
             if UIApplication.shared.applicationState == .active { return }
@@ -541,12 +563,15 @@ private nonisolated final class ProbeSessionWatcher: NSObject, ARSessionDelegate
         var depthFrames = 0
         /// `ARFaceAnchor`s seen in `didAdd` / `didUpdate`.
         var faceAnchors = 0
-        /// Size of `ARFrame.capturedImage`; identifies which camera the one image comes from.
+        /// Width (px) of `ARFrame.capturedImage` in the latest frame; with `imageHeight` it
+        /// identifies which camera the one image comes from (logged as `captured_image`).
         var imageWidth = 0
+        /// Height (px) of the latest `capturedImage`.
         var imageHeight = 0
         /// `ARFrame.timestamp` of the first and the last frame of the dwell. The frame rate is
         /// measured between them, so `session.run`'s 1–2 s camera start-up is not averaged in.
         var firstFrameTime: Double?
+        /// `ARFrame.timestamp` of the latest frame of the dwell (see `firstFrameTime`).
         var lastFrameTime: Double?
         /// A sample of the face anchor's forward axis (world x, z), so the head-yaw maths can be
         /// sanity-checked against a real anchor.
@@ -557,6 +582,7 @@ private nonisolated final class ProbeSessionWatcher: NSObject, ARSessionDelegate
         var interruptions = 0
     }
 
+    /// The counters, written on `SensorProbe.queue` and read on the main actor.
     private let counts = Mutex(Counts())
 
     /// Zero the counters before a new configuration's dwell (main actor).
@@ -616,9 +642,12 @@ private nonisolated final class ProbeSessionWatcher: NSObject, ARSessionDelegate
 /// queue and read from the main actor.
 private nonisolated final class ProbeCaptureNotes: @unchecked Sendable {
 
+    /// Readable event lines in arrival order (`capture_events` in the record).
     private let lines = Mutex<[String]>([])
 
     /// Subscribe to the three notifications that say why a capture session did not work.
+    /// `queue: nil`, so each block runs on the posting thread — which is why every write goes
+    /// through the `Mutex` and nothing main-actor is touched.
     /// - Returns: the observer tokens; the caller removes them.
     func observe(_ capture: AVCaptureSession) -> [NSObjectProtocol] {
         let center = NotificationCenter.default
@@ -642,10 +671,15 @@ private nonisolated final class ProbeCaptureNotes: @unchecked Sendable {
     /// Everything recorded so far (main actor).
     func snapshot() -> [String] { lines.withLock { $0 } }
 
+    /// Record one line (any thread).
     private func append(_ line: String) { lines.withLock { $0.append(line) } }
 
     /// `AVCaptureSession.InterruptionReason` raw value → its case name, so the log is readable
-    /// without the header. 5 is the one this probe is looking for.
+    /// without the header. Raw values (iOS 27 SDK `AVCaptureSession.h`): 1 not available in
+    /// background, 2 audio device in use, 3 video device in use by another client (e.g. ARKit
+    /// holding the camera), 4 multiple foreground apps, 5 system pressure, 6 sensitive-content
+    /// mitigation. For this probe's camera-contention question 3 and 5 are the telling ones; a 1
+    /// means the record was taken in the wrong app state. -1 = no reason in the notification.
     private static func reasonName(_ raw: Int) -> String {
         switch AVCaptureSession.InterruptionReason(rawValue: raw) {
         case .videoDeviceNotAvailableInBackground: return "videoDeviceNotAvailableInBackground"
@@ -664,7 +698,9 @@ private nonisolated final class ProbeCaptureNotes: @unchecked Sendable {
 /// "images actually arrived". One delegate object per camera name.
 private nonisolated final class ProbeCaptureCounter: @unchecked Sendable {
 
+    /// Sample buffers per camera name, incremented on `SensorProbe.queue`.
     private let counts = Mutex<[String: Int]>([:])
+    /// Strong references to the per-camera delegates (the outputs hold them weakly).
     private let delegates = Mutex<[String: ProbeOutputDelegate]>([:])
 
     /// A retained delegate for `name` ("front" / "back"); `AVCaptureVideoDataOutput` holds its
@@ -684,8 +720,11 @@ private nonisolated final class ProbeCaptureCounter: @unchecked Sendable {
 /// Minimal `AVCaptureVideoDataOutputSampleBufferDelegate` that only counts. The sample buffer is
 /// never retained or copied: the question is whether frames arrive at all.
 private nonisolated final class ProbeOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+    /// Called once per delivered buffer, on the capture queue (increments the camera's count).
     private let onFrame: @Sendable () -> Void
+    /// - Parameter onFrame: the per-buffer counter closure from `ProbeCaptureCounter.delegate(for:)`.
     init(onFrame: @escaping @Sendable () -> Void) { self.onFrame = onFrame }
+    /// Capture queue (`SensorProbe.queue`): count the buffer and let it go.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         onFrame()

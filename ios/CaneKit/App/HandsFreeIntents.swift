@@ -53,6 +53,15 @@
 //    · ⚠ Four App Shortcuts are added to `CaneKitShortcuts` in `AppIntents.swift`, taking it to
 //      the limit of ten. Anything new after this is a plain `AppIntent`, not an `AppShortcut`.
 //
+//  Threading / isolation: every `perform()` and every `AppModel` extension method is main actor
+//  (target default; `perform()` is also marked `@MainActor`). The enums are value types.
+//
+//  Tests: the words and thresholds are pure and pinned in CaneKitLogic — `StatusSummaryTests`
+//  (every status clause and `hapticsLine`), `QuestionPromptTests` (question cleaning),
+//  `CueProfileTests` (`namesLimitLine`, appended by `setOption` when names go on under a limiting
+//  level or place), `HeadNodDetectorTests` (the untuned `nodToTalk` gesture). The intents
+//  themselves cannot be driven by XCUITest; verify phrases on the phone.
+//
 
 import AppIntents
 import CaneKitLogic
@@ -71,13 +80,15 @@ extension AppModel {
     ///
     /// Each clause is spoken as its own line rather than one long sentence on purpose: an
     /// obstacle warning then cuts a single clause and the rest stay queued behind it, instead of
-    /// the whole report being interrupted and restarted from the top (`SpeechQueue.say` re-queues
-    /// an interrupted line once).
+    /// the whole report being cut mid-way (`SpeechQueue.say` re-queues a pre-empted line to resume
+    /// from the clause it was cut in, at most `SpeechResume.maxResumes` = 3 times — Step 37).
     ///
     /// Priority `.scene` and a 20 s TTL: the answer is information, never a warning, so anything
     /// the sensors say outranks it, and a clause still waiting after 20 s of warnings is stale
-    /// enough to drop.
-    /// Callers: `StatusIntent` (Siri / Shortcuts / the Action button).
+    /// enough to drop. The battery clause is omitted when the level is unknown (simulator).
+    /// Logs `status_spoken {text}` with the whole report as one sentence.
+    /// Callers: `StatusIntent` (Siri / Shortcuts / the Action button). `ConversationCoordinator`
+    /// builds its own `StatusFacts` for voice status questions rather than calling this.
     func speakStatus() {
         let facts = StatusFacts(
             lidarSupported: lidarSupported,
@@ -106,7 +117,12 @@ extension AppModel {
     /// sentence back (`SceneDescriber.ask`, `.scene` priority, `CloudSceneGate` on the reply).
     /// - Parameter question: what the walker said; Siri's transcription arrives unedited and is
     ///   cleaned by `QuestionPrompt.clean`.
-    /// Callers: `AskSceneIntent`.
+    /// - Returns: false when nothing was sent — a wordless question (spoken "I did not catch a
+    ///   question.") or a description already in flight ("Still describing the previous scene.").
+    ///   Without a cloud model the question is downgraded to a plain description, which still
+    ///   returns true. The outcome is logged later as `describe_result` with `question`.
+    /// Logs `ask {question, provider}` first, so a question that never produced an answer is visible.
+    /// Callers: `AskSceneIntent`, `ConversationCoordinator` (scene questions by voice).
     @discardableResult
     func askAboutScene(_ question: String) -> Bool {
         logger.event("ask", ["question": question,
@@ -121,8 +137,10 @@ extension AppModel {
     /// are going. The line is `StatusSummary.hapticsLine`, so the wording is the same one the
     /// status report and `announceChannels` use — one fact, one sentence, everywhere.
     /// - Parameter silenced: true to silence the cane.
-    /// Callers: `SilenceHapticsIntent`; the on-screen "Silence haptics" toggle still writes
-    /// `hapticsSilenced` directly (it is visible, so it needs no spoken confirmation).
+    /// Logs `haptics_silenced {silenced, by: "voice"}`.
+    /// Callers: `SilenceHapticsIntent`, `ConversationCoordinator` ("silence the cane" by voice);
+    /// the on-screen "Silence haptics" toggle still writes `hapticsSilenced` directly (it is
+    /// visible, so it needs no spoken confirmation).
     func setHapticsSilenced(_ silenced: Bool) {
         hapticsSilenced = silenced
         // `.nav`, not `.scene`: this is a statement about which safety channel is live, the same
@@ -144,7 +162,10 @@ extension AppModel {
     /// - Parameters:
     ///   - option: which feature.
     ///   - enabled: the new state.
-    /// Callers: `SetOptionIntent` (Shortcuts / the Action button; not an App Shortcut).
+    /// Logs `option_set {option, requested, actual, by: "voice"}` — `actual` differing from
+    /// `requested` is a synchronous refusal.
+    /// Callers: `SetOptionIntent` (Shortcuts / the Action button; not an App Shortcut),
+    /// `ConversationCoordinator` (fast-path settings by voice).
     func setOption(_ option: HandsFreeOption, enabled: Bool) {
         switch option {
         case .dropOffs: groundHazardsEnabled = enabled
@@ -166,8 +187,8 @@ extension AppModel {
         // here that a refused feature cannot be announced as on first (AGENTS.md rule 1).
         //
         // ⚠ Turning one of these OFF also says what stops, and is spoken at `.nav`, not `.scene`
-        // (review round 1: "voice can silence warning subsets mid-walk"). Four of the seven are
-        // warning channels, and a one-word "off" that a `.scene` line could drop behind other
+        // (review round 1: "voice can silence warning subsets mid-walk"). Four of the eight options
+        // (drop-offs, hazard watch, obstacle names, sirens) are warning channels, and a one-word "off" that a `.scene` line could drop behind other
         // speech is not enough acknowledgement for switching a warning channel off. `.nav` is the
         // same priority `announceChannels` uses for exactly this kind of statement, and still
         // below "Head height.". The core obstacle and head-height cues are not reachable from
@@ -183,7 +204,8 @@ extension AppModel {
     }
 
     /// The live value of an optional feature, read back after `setOption` so the spoken line is
-    /// what happened rather than what was asked for.
+    /// what happened rather than what was asked for. Main actor; a plain property read, no side
+    /// effects. Callers: `setOption` (twice: the spoken line and the `actual` log field).
     /// - Parameter option: which feature.
     /// - Returns: whether it is on right now.
     func isOptionEnabled(_ option: HandsFreeOption) -> Bool {
@@ -206,6 +228,7 @@ extension AppModel {
 /// carry the state ("Turn cane haptics off in OpenCane") — an App Shortcut phrase can interpolate
 /// an `AppEnum`, never a `Bool` or a `String`.
 enum SwitchState: String, AppEnum {
+    // `on` = the feature (or, for `SilenceHapticsIntent`, the cane buzz) runs; `off` = it does not.
     case on, off
 
     /// Parameter type name in Shortcuts.
@@ -233,6 +256,14 @@ enum SwitchState: String, AppEnum {
 /// hands busy most wants to switch on by voice. ⚠ Its gesture detector is untuned
 /// (`HeadNodDetector`, HeadNodDetectorTests) and the feature ships off, unpersisted.
 enum HandsFreeOption: String, AppEnum {
+    // Each case maps to one `AppModel` switch (`setOption` / `isOptionEnabled`), and its raw value
+    // is written to the trip log as `option_set.option`:
+    //   `dropOffs` → `groundHazardsEnabled` (persisted, default off) · `signs` → `signsEnabled`
+    //   (persisted, default on) · `hazardWatch` → `hazardWatchEnabled` (persisted, default off) ·
+    //   `namePeople` → `namePeopleEnabled` (persisted, default on) · `obstacleNames` →
+    //   `obstacleNamesEnabled` (persisted, default off since Step 36) · `beacon` → `beaconEnabled`
+    //   (persisted, default on) · `sirens` → `dangerSoundsEnabled` (not persisted, can refuse
+    //   itself) · `nodToTalk` → `nodToTalkEnabled` (not persisted, untuned).
     case dropOffs, signs, hazardWatch, namePeople, obstacleNames, beacon, sirens, nodToTalk
 
     /// Parameter type name in Shortcuts.
@@ -266,11 +297,12 @@ enum HandsFreeOption: String, AppEnum {
 
     /// What the walker stops getting when this feature goes off, said out loud with the "off".
     ///
-    /// ⚠ Four of these seven are warning channels, and "off" on its own is not an acknowledgement a
+    /// ⚠ Four of these eight are warning channels (drop-offs, hazard watch, obstacle names,
+    /// sirens), and "off" on its own is not an acknowledgement a
     /// blind walker can act on — they cannot see which switch moved, and the difference between
     /// "the cane stopped buzzing because I turned something off" and "the cane stopped buzzing
     /// because it broke" is the whole safety question. `obstacleNames` gets the most important line
-    /// of the seven: turning it off leaves the cane buzzing, and the walker has to know that.
+    /// of the eight: turning it off leaves the cane buzzing, and the walker has to know that.
     var offConsequence: String {
         switch self {
         case .dropOffs: "Curbs, drop-offs and holes will not be announced."
@@ -376,7 +408,7 @@ struct SilenceHapticsIntent: AppIntent {
 // These are ordinary `AppIntent`s. They appear in the Shortcuts app as actions and can be put on
 // the Action button by building a one-step shortcut around them; what they do not get is an
 // automatic Siri phrase, because the ten App Shortcut slots are full. See the file header for why
-// these two lost and the other three won.
+// these two (and `NavigateToCIFIntent` in AppIntents.swift) lost and the four above won.
 
 /// Shortcuts / Action button "Recenter": tells the app the walker is now facing the way to walk,
 /// so the audio beacon renders from there.
@@ -404,7 +436,7 @@ struct RecenterIntent: AppIntent {
 /// Shortcuts / Action button "Turn <feature> on/off": the Hazards-card switches, by voice.
 ///
 /// Not an App Shortcut because these are configuration — chosen before a walk, not during one —
-/// and because giving each of seven features its own phrase would need seven of the ten slots.
+/// and because giving each of the eight features its own phrase would need eight of the ten slots.
 /// A walker who wants one of them on the Action button builds a one-step shortcut around this
 /// intent with the feature already filled in, which is also how it becomes a single press.
 struct SetOptionIntent: AppIntent {
@@ -441,6 +473,10 @@ struct SetOptionIntent: AppIntent {
 /// directly in iOS Settings > Action Button > Shortcut with no user-built shortcut, and answers
 /// to "Talk to OpenCane" via Siri. An empty query (an Action button press) toggles push-to-talk
 /// listening in the app; a filled one is answered conversationally at `.scene` priority.
+///
+/// Why it is an App Shortcut at all (Step 29): as a plain `AppIntent` it never appeared in the
+/// Action button's picker, so "the Action button still isn't working" was literally true;
+/// `NavigateToCIFIntent` gave up its slot for it.
 struct TalkToOpenCaneIntent: AppIntent {
     /// Shown in Shortcuts and the Action button picker.
     static let title: LocalizedStringResource = "Talk to OpenCane"
@@ -451,10 +487,16 @@ struct TalkToOpenCaneIntent: AppIntent {
     /// Direct Action button presses bring OpenCane to the screen immediately.
     static let openAppWhenRun: Bool = true
 
-    /// What the walker wants to ask or command.
+    /// What the walker wants to ask or command. Optional on purpose: nil / blank means "start (or
+    /// submit) push-to-talk", which is what a bare Action button press sends.
     @Parameter(title: "Query", requestValueDialog: "How can OpenCane help?")
     var query: String?
 
+    /// Waits for the model, then either toggles push-to-talk (`AppModel.toggleVoiceInput(source:
+    /// "actionButton")`, logged `voice_toggle`) for a blank query, or hands a typed / dictated
+    /// query to `AppModel.handleSpokenQuery(_:)` and awaits `ConversationCoordinator.handleQuery`
+    /// (which returns at once, silently, if a previous query is still being processed).
+    /// Throws `IntentSupport.NotReady` if the model never appears within 2 s.
     @MainActor
     func perform() async throws -> some IntentResult {
         let model = try await IntentSupport.model()

@@ -7,8 +7,21 @@
 # Post-generate fixes:
 #   1. Secrets.plist — copied from Secrets.example.plist if missing so a fresh clone builds.
 #   2. XcodeGen #1613 — on Xcode 26+ the watch app must live in the parent app's Watch/ folder
-#      with the right dstSubfolderSpec; 2.46.0 emits a copy phase Xcode 26 rejects. The sed below
-#      rewrites it. Set PATCH_WATCH_EMBED=0 to skip if a newer XcodeGen already does it right.
+#      with the right dstSubfolderSpec; 2.46.0 emits a copy phase Xcode 26 rejects. The embedded
+#      python3 block below rewrites it in the Watch copy phase ONLY (it was a whole-file sed until
+#      2026-09-11, which also broke the widget embed), then asserts both embed phases and exits 1 if
+#      either is wrong. Set PATCH_WATCH_EMBED=0 to skip if a newer XcodeGen already does it right
+#      (the assertions are skipped with it, and with WATCH=0).
+#
+# Callers: `make gen` and `make run` (ios/Makefile); CI's sim-build job runs `WATCH=0 scripts/gen.sh`.
+# AGENTS.md hard rule 5: CaneKit.xcodeproj is generated and git-ignored — edit project.yml, never the
+# pbxproj, and regenerate only when project.yml or the file list changed.
+# Needs: xcodegen on PATH (exit 1 with a hint otherwise), python3 for the patch.
+# Env: WATCH (default 1; 0 = phone-only), PATCH_WATCH_EMBED (default 1).
+# Tests: none automated; the embed-phase assertions at the end are its self-check. Verify a change
+# with `make sim` and, for the watch / widget, an install on the phone (CaneKit.app must contain
+# PlugIns/CaneKitWidget.appex and Watch/CaneKitWatch.app).
+# ⚠ Never prints or reads key values: it only copies Secrets.example.plist when Secrets.plist is absent.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +30,8 @@ PATCH_WATCH_EMBED="${PATCH_WATCH_EMBED:-1}"
 
 command -v xcodegen >/dev/null || { echo "xcodegen not found: brew install xcodegen" >&2; exit 1; }
 
-# 1. Secrets
+# 1. Secrets — copy only if missing, so real keys are never overwritten (a fresh clone and CI get
+#    the all-empty example; the app degrades gracefully without keys, AGENTS.md hard rule 4).
 mkdir -p CaneKit/Resources
 if [ ! -f CaneKit/Resources/Secrets.plist ]; then
   cp Secrets.example.plist CaneKit/Resources/Secrets.plist
@@ -29,6 +43,12 @@ SPEC=project.yml
 if [ "$WATCH" = "0" ]; then
   SPEC=.project.phone-only.yml
   # Drop the "- target: CaneKitWatch / embed: true" dependency and the whole CaneKitWatch target.
+  # ⚠ The patterns match project.yml's exact indentation (2-space target / scheme keys, 6-space
+  # dependency item, 8-space `embed:`); reformatting project.yml silently breaks WATCH=0 and CI.
+  # The first pass drops EVERY 2-space `CaneKitWatch:` block — the target and also the scheme,
+  # which is currently the last block in the file, so it runs to EOF. That makes the first pass's
+  # last `/^  CaneKitWatch:$/ { next }` rule unreachable and the second (schemes-only) pass a
+  # no-op today; both are harmless belt and braces.
   awk '
     /^      - target: CaneKitWatch$/ { skip_dep=1; next }
     skip_dep && /^        embed: true$/ { skip_dep=0; next }
@@ -46,12 +66,14 @@ if [ "$WATCH" = "0" ]; then
   echo "gen.sh: phone-only spec written to $SPEC"
 fi
 
+# Writes ios/CaneKit.xcodeproj (overwriting any previous one); set -e aborts on a spec error.
 xcodegen generate --spec "$SPEC" --project . --quiet
 echo "gen.sh: generated CaneKit.xcodeproj from $SPEC"
 
 # 2. Watch embed fix (XcodeGen #1613)
 PBX=CaneKit.xcodeproj/project.pbxproj
 if [ "$WATCH" = "1" ] && [ "$PATCH_WATCH_EMBED" = "1" ]; then
+  # Single quotes: `$(CONTENTS_FOLDER_PATH)` is the literal Xcode build variable, not a subshell.
   if grep -q 'dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";' "$PBX"; then
     # Keep the Watch/ destination but use the "products directory" subfolder spec (16) that
     # Xcode 26 accepts for WatchKit apps; see the XcodeGen issue for the two variants.
@@ -92,5 +114,7 @@ PATCH
   fi
 fi
 
+# Remove the temp phone-only spec. (With WATCH=1 the test is false; set -e ignores a failing
+# non-final command of an && list, so the script still reaches "done" and exits 0.)
 [ "$WATCH" = "0" ] && rm -f "$SPEC"
 echo "gen.sh: done"

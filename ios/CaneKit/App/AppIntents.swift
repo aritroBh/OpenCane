@@ -23,8 +23,9 @@
 //      warnings, "Where am I") only runs while the app is frontmost, and guidance without the
 //      obstacle channel must never start silently in the background.
 //    · Every shortcut phrase must contain `\(.applicationName)` (App Shortcuts requirement), and
-//      an app may register at most 10 App Shortcuts (this file registers 6; the other 4 are the
-//      hands-free ones in `HandsFreeIntents.swift`).
+//      an app may register at most 10 App Shortcuts. All ten are registered in this file's
+//      `CaneKitShortcuts`: six use intents defined here, four use the hands-free intents defined in
+//      `HandsFreeIntents.swift` (Talk to OpenCane, Status, Ask, Cane haptics).
 //    · ⚠ `\(.applicationName)` is resolved by the system from the bundle's **display name**
 //      (`CFBundleDisplayName`, set in `ios/project.yml` → OpenCane), never from the target or
 //      module name. That is why the phrases below need no edit when the product is renamed:
@@ -36,6 +37,12 @@
 //      somewhere in OpenCane", where Siri asks "Where do you want to go?" for the String.
 //    · ⚠ `CampusDestination` raw values are `CampusPlaces` ids (CaneKitLogic,
 //      `campusPlaceIdsArePinned`): add a gazetteer place in both, same id.
+//
+//  Tests: no automated test runs an intent (Siri and the Action button cannot be driven from
+//  XCUITest). What is pinned: the gazetteer ids behind `CampusDestination`
+//  (`CampusPlacesTests.campusPlaceIdsArePinned`) and the model methods the intents forward to,
+//  through the on-screen buttons that share them (`ios/CaneKitUITests/CaneKitUITests.swift`).
+//  After editing phrases, verify on the phone (Shortcuts app re-index; say the phrase).
 //
 
 import AppIntents
@@ -110,6 +117,11 @@ struct NavigateToCIFIntent: AppIntent {
 /// ⚠ Raw values are `CampusPlaces` ids (CaneKitLogic, pinned by `campusPlaceIdsArePinned`);
 /// `CampusPlaces.place(id:)` turns a case into the entrance coordinate.
 enum CampusDestination: String, AppEnum {
+    // One case per gazetteer place (raw value = `CampusPlace.id`): `cif` the Campus Instructional
+    // Facility east entrance (the bundled route's last waypoint), `isr` Townsend Hall / ISR (the
+    // route's start), `grainger` Grainger Engineering Library, `illiniUnion` the Illini Union,
+    // `siebel` Siebel Center, `mainLibrary` the Main Library, `arc` the Activities and Recreation
+    // Center. Entrances other than CIF / ISR are OSM entrance nodes, not yet walked (AGENTS.md).
     case cif, isr, grainger, illiniUnion, siebel, mainLibrary, arc
 
     /// Parameter type name in Shortcuts.
@@ -221,7 +233,8 @@ struct StopRouteIntent: AppIntent {
     }
 }
 
-/// Shared helpers for the intents above.
+/// Shared helpers for the intents above (and the hands-free intents in `HandsFreeIntents.swift`).
+/// Main actor by the target default; `model()` is explicitly `@MainActor`.
 enum IntentSupport {
     /// Thrown when the SwiftUI scene has not created `AppModel` within the wait window; Siri
     /// speaks the localized message instead of silently doing nothing.

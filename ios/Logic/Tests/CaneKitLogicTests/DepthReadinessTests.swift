@@ -4,6 +4,19 @@
 //
 //  Pins the route-start ARKit/LiDAR interlock without requiring a camera or device.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/DepthReadiness.swift` (`DepthReadiness`: 3
+//  consecutive trusted frames with normal tracking and scene depth, frames ≤ `maxFrameGap` apart,
+//  a 5 s request bound; `DepthFrameContinuity`: exact sequence increments after a transition
+//  boundary). Callers: `DepthEngine` and `AppModel` (app), which hold a route start until `.ready`
+//  (Step 22, hardened in Step 25).
+//  Breaks these catch: a route starting on a cold session whose first frames are missing,
+//  untrusted or limited-tracking (obstacle warnings silently absent for the first steps); a
+//  previously-ready run surviving an interruption; a wait that never times out; a healthy 30 Hz
+//  start being delayed; and the newest-only frame stream counting reports across a dropped
+//  sequence or from before a reconfiguration as fresh evidence.
+//  ⚠ `accepts(_:)` is `mutating`: call it into a local before `#expect` (AGENTS.md; inlining it
+//  breaks the build, Step 27).
+//
 
 import Testing
 @testable import CaneKitLogic

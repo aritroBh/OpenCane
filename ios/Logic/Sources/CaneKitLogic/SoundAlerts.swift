@@ -90,7 +90,17 @@
 //      break the siren's agreement run before it ever completed.
 //    · The same kind is not repeated inside `repeatInterval`, so standing at a busy corner does
 //      not turn into a stream of speech over the route instructions.
-//  Tests: SoundAlertsTests.swift.
+//
+//  Owners / callers: `SoundWatcher` (app, `ios/CaneKit/Audio/`, main actor) owns one
+//  `SoundAlertPolicy`, filters `SoundAlerts.labels` against `knownClassifications`, picks each
+//  window's candidate with `SoundAlerts.best(of:)` and calls `onAlert`; `AppModel.wireSounds()`
+//  speaks `spokenLine` at `.nav` / `.obstacle` with `speechTTL`. `SensorProbe` reads
+//  `candidateLabels`. `MicrophoneStart` is shared by `SoundWatcher` and `VoiceInputEngine`
+//  (push-to-talk) for the input-format settle. The feature ("Listen for sirens and horns") is off
+//  by default; its session lifetime rules are `SoundRecognitionGuard`.
+//  Isolation: everything here is a nonisolated value or a stateless enum; `SoundAlertPolicy` is
+//  held in one main-actor `var` by `SoundWatcher`.
+//  Tests: SoundAlertsTests.swift (38, including the six `SoundRecognitionGuard` scenarios).
 //
 
 import Foundation
@@ -138,6 +148,7 @@ public enum DangerSound: String, Sendable, CaseIterable {
     /// not an instruction, and the classifier is nowhere near sure enough to direct anyone on them.
     /// ⚠ These strings are prefetched by the natural voice (`AppModel.commonLines`); changing one
     /// without changing that list costs a synthesis round-trip on the first play.
+    /// Pinned by `spokenLinesAreThePrefetchedOnes`, `theSirenLineGovernsStartingToCrossAndNeverSaysStop`.
     public var spokenLine: String {
         switch self {
         case .siren: return "Siren. Do not start crossing."
@@ -280,12 +291,15 @@ public enum SoundAlerts {
     ]
 
     /// Every candidate identifier, sorted — what `SensorProbe` checks against the phone and what
-    /// `SoundWatcher` filters at start-up.
+    /// `SoundWatcher` filters at start-up. No identifier is in two kinds
+    /// (`candidateLabelsAreTheWholeTableWithoutDuplicates`).
     public static var candidateLabels: [String] {
         labels.values.flatMap { $0 }.sorted()
     }
 
     /// The kind a label belongs to, or nil when the label is not a danger sound.
+    /// Exact, case-sensitive match against `labels` (Apple's identifiers are lower snake_case).
+    /// Pinned by `measuredLabelsMapToTheRightKind`, `everydaySoundsAreNotDangerSounds`.
     /// - Parameter label: an identifier from `SNClassificationResult.classifications`.
     public static func kind(for label: String) -> DangerSound? {
         for (kind, names) in labels where names.contains(label) { return kind }
@@ -347,17 +361,20 @@ public enum SoundAlerts {
 /// the owner passes `now` in seconds and writes the mutated copy back.
 public struct SoundAlertPolicy: Sendable, Equatable {
 
-    /// How many consecutive agreeing windows each kind needs — the number is `DangerSound`'s own
-    /// (`requiredWindows`), not the policy's, because the right answer differs by the *shape* of
-    /// the sound: a siren is continuous and can afford a third window, a honk is not and cannot.
-    ///
-    /// This used to be one policy-wide `var requiredWindows = 2`. It was made per kind when the
-    /// siren line became an instruction spoken in the route band: the extra 0.5 s of confirmation
-    /// is the cheapest false-positive defence available, and it may not be charged to horns.
-    /// ⚠ Pinned by `sirenNeedsThreeWindowsAndHornStillNeedsTwo`.
+    // Design note (not a property — kept where the old one was): how many consecutive agreeing
+    // windows each kind needs is `DangerSound`'s own number (`requiredWindows`), not the policy's,
+    // because the right answer differs by the *shape* of the sound: a siren is continuous and can
+    // afford a third window, a honk is not and cannot.
+    //
+    // This used to be one policy-wide `var requiredWindows = 2`. It was made per kind when the
+    // siren line became an instruction spoken in the route band: the extra 0.5 s of confirmation
+    // is the cheapest false-positive defence available, and it may not be charged to horns.
+    // ⚠ Pinned by `sirenNeedsThreeWindowsAndHornStillNeedsTwo`.
 
-    /// The kind the current run of windows agrees on, and how many windows long it is.
+    /// The kind the current run of windows agrees on; nil after a window that broke the run.
     private var pending: DangerSound?
+    /// How many consecutive windows (including this one) have agreed on `pending`. Not reset when
+    /// a line is announced, so a siren that stays audible is held by `repeatInterval`, not re-armed.
     private var pendingCount = 0
     /// When each kind was last announced (seconds), so `repeatInterval` is per kind.
     private var lastSpoken: [DangerSound: Double] = [:]
@@ -397,8 +414,10 @@ public struct SoundAlertPolicy: Sendable, Equatable {
         return kind
     }
 
-    /// Forget the run and every repeat timer (route start / stop, the switch going off), so a new
-    /// walk never inherits the last walk's silence window.
+    /// Forget the run and every repeat timer, so a new listening session never inherits the last
+    /// one's silence window. `SoundWatcher` calls it when the analyser starts and in its stop path
+    /// (switch off, background, failure) — not at route start or stop. Pinned by
+    /// `resetClearsTheRunAndTheTimers`.
     public mutating func reset() {
         pending = nil
         pendingCount = 0
@@ -416,7 +435,11 @@ public struct SoundAlertPolicy: Sendable, Equatable {
 /// true a quarter of a second later. Installing a tap with such a format is not an option either:
 /// `AVAudioEngine` traps on an invalid format, so the check itself must stay.
 ///
-/// The numbers live here (AGENTS.md hard rule 3) and are pinned by `SoundAlertsTests`.
+/// The numbers live here (AGENTS.md hard rule 3) and are pinned by `SoundAlertsTests`
+/// (`onlyAFullySettledInputFormatIsUsable`, `theInputFormatIsRetriedExactlyOnce`,
+/// `theRetryLoopReadsTheFormatExactlyFormatAttemptsTimes`, `theWholeRetryBudgetStaysUnderHalfASecond`).
+/// Callers: `SoundWatcher` (sound alerts) and `VoiceInputEngine.startEngine` (push-to-talk), which
+/// hit the same first-read race when they move the session to `.playAndRecord`.
 /// They are deliberately tiny: this is a settling delay, not a retry loop around a broken
 /// microphone. A genuinely refused or missing input still fails, just ~0.25 s later.
 public enum MicrophoneStart {

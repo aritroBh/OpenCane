@@ -15,18 +15,37 @@
 //    · Results of `mutating` calls are bound to locals (`r1`, `first`, …) and then checked
 //      with `#expect`, rather than calling the mutating method inside the macro.
 //
+//  Callers of the pinned code: `NavigationEngine` (app) builds a `TurnSettle` on every waypoint
+//  advance; `AppModel` owns the `StraightWalkDetector` (auto-recenter) and `CueSpeechPolicy`
+//  (obstacle cue → spoken line, `phoneCannotBuzz` = haptic engine down or silenced);
+//  `WatchModel` owns the `CrownAccumulator`. Breaks these catch: a spurious "Veer" at a corner
+//  (the old leg released too early by one jittery fix, a curb wait, or a pause short of a
+//  crossing), a beacon that clicks during "Listen for traffic", a head-height warning repeated
+//  every second under a branch, side cues spoken while the phone can still buzz, and a sleeve
+//  brushing the crown skipping waypoints. ⚠ The nine settle tests and the three CueSpeechPolicy
+//  tests are named in CODE_REFERENCE ⚠ lines; re-run them before touching those rules.
+//
 
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
 // Corner at the origin of a small local grid; 1e-5° latitude ≈ 1.11 m.
+/// The turn waypoint every `TurnSettle` below is anchored on (40.11, −88.224).
 private let corner = Coordinate(latitude: 40.11000, longitude: -88.22400)
+/// A point `m` metres due south of `corner` (the approach side).
 private func south(_ m: Double) -> Coordinate { Coordinate(latitude: 40.11000 - m / 111_195, longitude: -88.22400) }
+/// A point `m` metres due north of `corner` (along the new leg, bearing 0°).
 private func north(_ m: Double) -> Coordinate { Coordinate(latitude: 40.11000 + m / 111_195, longitude: -88.22400) }
+/// A `GeoFix` at `c` and time `t` (s); defaults are a good walking fix (1.2 m/s, 5 m accuracy).
+/// Speed 0 or −1 = standing / unknown, which the settle rules treat as not moving.
 private func fix(_ c: Coordinate, t: Double, speed: Double = 1.2, acc: Double = 5) -> GeoFix {
     GeoFix(coordinate: c, accuracy: acc, speed: speed, timestamp: t)
 }
+/// A fresh `TurnSettle` at `corner` with a 12 m fence: `held` is the previous leg's bearing (270°,
+/// nil = none), `next` the new leg's (0°), `start` the distance when the fence was entered (12 m),
+/// `crossing` a street crossing (beacon silent until the curb), `released` a release time already
+/// set (a manual Next or passed-by advance).
 private func settle(crossing: Bool = false, held: Double? = 270, next: Double? = 0, start: Double = 12,
                     released: Double? = nil) -> TurnSettle {
     TurnSettle(anchor: corner, radiusM: 12, heldBearing: held, nextBearing: next,

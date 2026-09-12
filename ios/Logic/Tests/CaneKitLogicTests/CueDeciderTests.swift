@@ -10,10 +10,21 @@
 //  Key invariants / fixtures: `report(head:torso:trusted:)` builds a depth-available report;
 //  4 m means "clear" for every lane used here. Distances metres, times seconds.
 //
+//  Caller of the pinned code: `AppModel` (one `CueDecider`, fed every `LaneReport` with
+//  `now = report.timestamp`, the AR clock) → `HapticPlayer` / `CueSpeechPolicy`. These numbers are
+//  the spec'd haptic grammar: re-run all 14 plus a cane walk before changing any of them
+//  (CODE_REFERENCE `CueDecider.swift` ⚠). Breaks these catch: a flickering centre loop at the 2 m
+//  edge, the hand being hit by rapid cue changes, a doorway edge re-tapping inside 1 s, the wrong cue
+//  winning when several lanes are blocked, a sweep frame firing or stopping a cue, and a cue before
+//  the first LiDAR frame.
+//
 
 import Testing
 @testable import CaneKitLogic
 
+/// A `LaneReport` with the given head / torso lane depths (metres, [left, centre, right];
+/// `.infinity` = no return), `centerDepth` infinite, `depthAvailable` true and `isTrusted` as given
+/// (false = a mid-sweep frame the decider must freeze on).
 private func report(head: [Float] = [.infinity, .infinity, .infinity],
                     torso: [Float] = [.infinity, .infinity, .infinity],
                     trusted: Bool = true) -> LaneReport {

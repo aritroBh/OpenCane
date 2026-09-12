@@ -10,7 +10,8 @@
 This is a native SwiftUI app in Swift 6 with strict concurrency (main-actor default isolation). It
 builds against iOS 26 / watchOS 26 and uses Apple frameworks only, with no third-party packages.
 The hardware is an iPhone 17 Pro Max on iOS 27 (LiDAR, Action button, Camera Control) clamped to a
-non-metal 28.75 mm cane, plus AirPods Pro and an Apple Watch. For the demo everything runs
+non-metal stick (27.65 mm, measured by the bore rings on 2026-09-12; a broom handle stands in for the
+cane), plus AirPods Pro and an Apple Watch. For the demo everything runs
 **untethered on the phone**. The Mac only signs and installs.
 
 | Target / package | What it is | Bundle ID (frozen) |
@@ -27,22 +28,27 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–28 have landed. The Logic target contains 372 tests (`@Test` annotations); the earlier simulator,
-XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while the current Step 28
-full run needs the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods,
-watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
-[`CHANGELOG.md`](../CHANGELOG.md) are the source of truth.
+**Status (HEAD `076fcaa`).** Steps 0–37 have landed; the latest are Step 34 (flashlight switch,
+both-cameras refusal), Step 35 (cue design v2 research + `scripts/cue_audit.py`), Step 36 (cue
+detail Quiet / Standard / Detailed × Outdoors / Indoors, obstacle names off by default), the
+per-camera rotation fix, and Step 37 (talk floor: a direction cut by a warning resumes from its
+clause). The Logic package has **457 `@Test` annotations in 34 test files**. Step 37 recorded
+`make test` 457/457, `make sim` green, `make e2e` PASS, and `make uitest` 11 run / 10 passed /
+1 skipped / 0 failures, and it was installed on the phone. The next steps (38–45) are the rest of
+cue design v2 in [`docs/todo.md`](../docs/todo.md); device testing of each step's "test on device"
+line is the open work. [`docs/todo.md`](../docs/todo.md) and [`CHANGELOG.md`](../CHANGELOG.md) are
+the source of truth.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `CaneKit/` | The phone app: `App/` (`AppModel` owns every engine; App Intents), `Depth/`, `Haptics/`, `Speech/`, `Audio/`, `Navigation/`, `Scene/`, `Trip/`, `Watch/`, `UI/`, `Resources/` (`route_isr_cif.json`, assets, your git-ignored `Secrets.plist`) |
+| `CaneKit/` | The phone app: `App/` (`AppModel` owns every engine; App Intents and hands-free intents), `Conversation/` (voice input, conversational assistant), `Depth/`, `Haptics/`, `Speech/`, `Audio/` (beacon, sound watcher), `Navigation/`, `Scene/`, `Trip/`, `Watch/`, `UI/`, `Resources/` (`route_isr_cif.json`, assets, your git-ignored `Secrets.plist`) |
 | `CaneKitWatch/`, `CaneKitWidget/`, `CaneKitUITests/` | The targets above |
 | `Shared/LiveActivity/` | `NavActivityAttributes`, compiled into the app and the widget |
-| `Logic/` | `CaneKitLogic`: `LaneMath`, `LaneReport`, `CueDecider`, `GeoMath`, `NavSupport`, `Waypoint`, `WatchMessage`, `VLMCodec` + `Tests/` |
+| `Logic/` | `CaneKitLogic`, 37 source files. Depth and obstacles: `LaneMath`, `LaneReport`, `DepthSnapshot`, `DepthReadiness`, `MultiCamDepth`, `CueDecider`, `PeopleAhead`, `Hazards`. Cues and speech: `CueProfile` (`CueRules`), `SpeechResume`, `SpeechLoadPolicy`, `SpokenPhrases`, `UtteranceEnd`, `VoicePrefetch`. Navigation: `GeoMath`, `CourseSmoother`, `NavSupport`, `Waypoint`, `CampusPlaces`, `DestinationSuggestions`. Scene: `VLMCodec`, `SceneVocabulary`, `CloudSceneGate`. Hands-free and conversation: `ConversationModels`, `ConversationPrompt`, `FastPathIntentClassifier`, `HeadNodDetector`, `QuestionPrompt`, `StatusSummary`. Devices and app state: `WatchMessage`, `HeadYawSources`, `SoundAlerts`, `SoundRecognitionGuard`, `TorchSwitch`, `LiveView`, `LaunchRecovery`, `TripLogRecord`. Plus `Tests/` |
 | `project.yml` | XcodeGen spec. `CaneKit.xcodeproj` is generated and git-ignored. |
-| `Makefile`, `scripts/` | `gen.sh` (project generation), `test.sh` (logic tests), `e2e.py` (GPS-replay end-to-end) |
+| `Makefile`, `scripts/` | `gen.sh` (project generation), `test.sh` (logic tests), `e2e.py` (GPS-replay end-to-end), `cue_audit.py` (cue load of one trip log, `make audit`), `vision_probe.swift` / `sign_probe.swift` (on-device Vision and sign-reading range against Street View frames), `streetview/` (`frames.json` + git-ignored JPEGs), `appicon.py` (renders the app icon) |
 | `Secrets.example.plist` | Template for `CaneKit/Resources/Secrets.plist` |
 | `local.mk` | Git-ignored, and you create it: `TEAM` and `DEVICE` for device builds |
 | `stretch/`, `drafts/` | Not in any target (old ESP32 BLE client, iOS 18 starter files). Leave them alone. |
@@ -51,9 +57,9 @@ watch) is the open work. [`docs/todo.md`](../docs/todo.md) and
 
 ## 1. Day-0 checklist
 
-These steps are done once per Mac and per phone. On the build Mac, Xcode 27 RC (27A266a) and
-XcodeGen 2.46.0 are already installed. Apple ID, Developer Mode and `local.mk` are still open in
-`docs/todo.md`.
+These steps are done once per Mac and per phone. On the build Mac they are done: Xcode 27 RC
+(27A266a) and XcodeGen 2.46.0 are installed, `ios/local.mk` exists, and the app has been installed
+on the phone with `make run` (CHANGELOG Steps 35 and 37). A second Mac or phone needs all of them.
 
 1. Install **Xcode 27 RC** (developer.apple.com/download; ~15 GB installed). The phone runs iOS 27,
    so Xcode 26 cannot deploy to it. The deployment target stays **iOS 26 / watchOS 26**.
@@ -118,21 +124,38 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 372 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools. |
+| `make test` | `scripts/test.sh`: the 457 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools; never touches the simulator or xcodebuild. Extra arguments pass through to `swift test` only when you call `scripts/test.sh` directly (e.g. `scripts/test.sh --filter SpeechResume`). |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
 | `make run` | `gen` + `build` + `install` + `launch`. Use this for the phone. |
 | `make sim` | Build for the iOS simulator (no LiDAR, haptics or watch there) |
-| `make sim17` | Create the **iPhone 17 Pro Max / iOS 27** simulator. Run it once, because Xcode 27 only pre-creates iPhone 18s. |
+| `make sim17` | Create the **iPhone 17 Pro Max / iOS 27** simulator (`xcrun simctl create`). Run it once: Xcode 27 does not create that device by default. |
 | `make sim-grant` | Boot the simulator and pre-grant location + motion so no system alert races a test's first tap. `uitest`, `tour` and `e2e` run it for you. |
-| `make uitest` | The XCUITests (`CaneKitUITests`) on the iPhone 17 Pro Max simulator |
-| `make tour` | Screenshot every screen state (`CaneKitVisualTour`) → PNGs in `build/shots/` |
-| `make e2e` | GPS-replay end-to-end through the real app (`scripts/e2e.py`). `SCENARIO=all` (default, ~20 min), `clean`, `missed_fence`, `gps_jitter` or `wrong_turn`. It asserts on the app's JSONL trip log. The report and logs go to `build/e2e/`. |
+| `make uitest` | The whole `CaneKitUITests` target (both XCTest classes, 11 tests) on the iPhone 17 Pro Max simulator. Set a simulator location first (below). |
+| `make uitest-streetview` | Only `testWhereAmIDescribesAStreetViewFrame`, with `TEST_RUNNER_CANEKIT_FRAME_DIR` pointing at `STREETVIEW` (default `scripts/streetview`), so Street View frames stand in for the camera. Needs the git-ignored JPEGs. |
+| `make tour` | Screenshot every screen state (`CaneKitVisualTour`) → PNGs in `SHOTS` (default `build/shots/`) |
+| `make e2e` | Runs `sim` and `sim-grant`, then GPS-replay end-to-end through the real app (`scripts/e2e.py`). `SCENARIO=all` (default, ~20 min: `clean`, `missed_fence`, `gps_jitter`, `wrong_turn`), one of those four, or `streetview` (not in `all`; needs the local JPEGs). It asserts on the app's JSONL trip log. The report and logs go to `build/e2e/`. Always muted. Run it alone: it is a real-time replay. |
+| `make audit` | `scripts/cue_audit.py --selftest`, then the cue load of one walk: `make audit LOG=path/to/canekit-….jsonl`, or with no `LOG` it pulls the newest trip log off the phone named by `DEVICE` in `local.mk` (plugged in, unlocked, trusted). Read-only; no simulator. Reports mounted vs handheld, head band wall vs overhang, cues and spoken lines per minute, replays and resumes. |
 | `make devices` | `xcrun devicectl list devices` (to find `DEVICE`) |
 | `make clean` | Delete `build/`, `CaneKit.xcodeproj` and `Logic/.build` |
 
-The simulator targets use `SIM ?= iPhone 17 Pro Max`. You can override it per call or in `local.mk`.
+Make variables: `SIM ?= iPhone 17 Pro Max` (simulator targets), `SCENARIO ?= all` (`e2e`), `LOG`
+(`audit`), `SHOTS ?= build/shots` (`tour`), `STREETVIEW ?= scripts/streetview`
+(`uitest-streetview`), `CONFIG ?= Debug`, `SCHEME ?= CaneKit`. Override any of them per call or in
+`local.mk`.
+
+**Simulator location.** `make uitest` and `make tour` need a GPS fix on the simulator, or the route
+tests fail for want of one (AGENTS.md, Commands). Set it on the booted simulator before the run:
+
+```sh
+xcrun simctl list devices | grep "iPhone 17 Pro Max"      # the UDID in parentheses
+xcrun simctl location <udid> set 40.1140,-88.2249
+```
+
+`make e2e` does not need this: `scripts/e2e.py` sets and clears the location itself for every
+scenario.
+
 The watch app rides inside the phone app and installs through the Watch app on the phone
 (Automatic App Install on, or Available Apps → **OpenCane** → Install — the Watch app lists the
 display name, not the target name).
@@ -164,7 +187,9 @@ Permissions are declared in `project.yml` and prompted on first use:
 - **Motion** and **HealthKit** are requested at route start.
 - **Health** is requested again on the watch.
 - **Camera + LiDAR** are used for obstacles.
-- **Speech recognition + microphone** are reserved.
+- **Speech recognition + microphone** are requested the first time voice input is used
+  (`VoiceInputEngine`: Action button / "Talk to OpenCane"); the **microphone** alone is also
+  requested when "Listen for sirens and horns" is turned on (`SoundWatcher`).
 
 Every purpose string names the app **OpenCane**, because that is the name the system shows next to
 it in the prompt and in Settings ("Turn on Camera for OpenCane"). They live in `project.yml`; edit
@@ -179,16 +204,33 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 372 Swift Testing tests. They cover lane extraction on
-  synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
-  math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
-  VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy, the crown gesture,
-  and the bounded ARKit/LiDAR route-start freshness gate (cold start, interruption/recovery,
-  timeout, fast warm-up and stale report gaps).
-- **UI (`make uitest`):** 7 XCUITests (one skipped unless `make uitest-streetview`) drive the real screens: start, Next, Repeat, Recenter and
-  Stop on the demo route; Where am I without a key; the haptic test buttons and the Silence toggle;
-  a mount toggle; VoiceOver labels; and the empty-destination error. Accessibility labels are a
-  test contract (`AGENTS.md` rule 9).
+- **Unit tests (`Logic/`, no device):** 457 Swift Testing `@Test` annotations in 34 files under
+  `Logic/Tests/CaneKitLogicTests/`. By layer, file names without the `Tests.swift` suffix (count per
+  file in parentheses):
+  - Depth and obstacles: `LaneMath` (15), `DepthSnapshot` (14), `DepthReadiness` (7, the bounded
+    route-start LiDAR gate), `MultiCamDepth` (8), `CueDecider` (14, hysteresis / rate limit / Geiger),
+    `PeopleAhead` (28), `Hazard` (46, ground profile, signs, hazard watch, GeoJSON map).
+  - Cues and speech: `CueProfile` (15), `SpeechResume` (15), `SpeechLoadPolicy` (7), `SpokenPhrases`
+    (12), `UtteranceEnd` (7), `VoicePrefetch` (5), `NavSupport` (19, turn settling, straight-walk,
+    spoken-cue policy, crown gesture).
+  - Navigation: `GeoMath` (26, skip-ahead, passed-by, arrival gate), `CourseSmoother` (3), `Route`
+    (4, MapKit steps → waypoints and the shipped route file), `CampusPlaces` (11),
+    `DestinationSuggestions` (14).
+  - Scene: `VLMCodec` (11), `SceneVocabulary` (16), `CloudSceneGate` (15).
+  - Hands-free and conversation: `ConversationLogic` (13), `NodToTalkFastPath` (2), `HeadNodDetector`
+    (7), `QuestionPrompt` (6), `StatusSummary` (12).
+  - Devices and app state: `WatchMessage` (3), `HeadYawSources` (18), `SoundAlerts` (38),
+    `TorchSwitch` (16), `LiveView` (22), `LaunchRecovery` (6), `TripLogRecord` (2).
+
+  Count them yourself with `grep -rhoE "^\s*@Test" Logic/Tests | wc -l`. Verify a run by its exit
+  code and `error:` lines, never through `tail` (AGENTS.md, Step 27 trap).
+- **UI (`make uitest`):** 11 XCTest methods. `CaneKitUITests` has 10: start, Next, Repeat, Recenter
+  and Stop on the demo route; Where am I without a key; Where am I on a Street View frame (skipped
+  unless `make uitest-streetview`); the haptic test buttons and the Silence toggle; mount toggles
+  persist; the Cues pickers change and restore; VoiceOver labels; the Navigate-to-CIF button on the
+  idle Guide; the empty-destination error; and campus suggestions while typing. `CaneKitVisualTour`
+  has 1 (`testTour`). The last recorded run (Step 37): 11 run, 10 passed, 1 skipped, 0 failures.
+  Accessibility labels are a test contract (`AGENTS.md` rule 9).
 - **Visual (`make tour`):** one PNG per screen state in `build/shots/`, for review by eye.
 - **End-to-end (`make e2e`):** replays the ISR → CIF route in the simulator with
   `xcrun simctl location`. The app auto-starts the route under `CANEKIT_DEMO_ROUTE=1`. Assertions
@@ -205,9 +247,22 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
 - **Device only (manual, following each step's "test on device" line in `CHANGELOG.md`):** LiDAR
   scale, haptic feel through the clamp, beacon left/right and head-tracking sign, wrist-down watch
   taps, geofence timing, VLM latency and thermal.
-- **Reproducibility:** `TripLogger` writes a JSONL log to the app's Documents folder (lanes, cues,
-  GPS, heading, thermal, battery, speech). Get it off the phone with the Files app or AirDrop. Film
-  every outdoor test with a second phone.
+- **Reproducibility:** `TripLogger` writes one `canekit-<ISO 8601 stamp>.jsonl` per session to the
+  app's Documents folder (lanes with `tilt`, cues, GPS, heading, thermal, battery, speech dispatches
+  and ends, `cue_profile`, hazards). The hazard map is `Documents/hazards/hazards-<session>.geojson`.
+  Film every outdoor test with a second phone. Get the log off the phone in any of three ways:
+  - Files app → On My iPhone → OpenCane (`UIFileSharingEnabled`), then AirDrop.
+  - `make audit` pulls the newest log and measures it (it prints where it saved the copy).
+  - By hand, with the phone plugged in, unlocked and trusted (`DEVICE` from `make devices`):
+    ```sh
+    xcrun devicectl device info files --device <DEVICE> \
+      --domain-type appDataContainer --domain-identifier com.aritro.canekit --subdirectory Documents
+    xcrun devicectl device copy from --device <DEVICE> \
+      --domain-type appDataContainer --domain-identifier com.aritro.canekit \
+      --source Documents/canekit-<stamp>.jsonl --destination ./canekit-<stamp>.jsonl
+    ```
+  In the simulator the same files are under
+  `$(xcrun simctl get_app_container booted com.aritro.canekit data)/Documents/`.
 - **Go / no-go before a blindfolded ISR → CIF walk.** Any miss means a sighted demo only.
   - GPS accuracy ≤ 20 m for 30 s at the ISR door. Fences and veer cues pause above 20 m, and the
     app says so.
@@ -221,6 +276,25 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
   - A route start speaks the warm-up state and waits for trusted LiDAR depth; on a fast healthy
     session, the three-frame bar clears in well under a quarter second after the first good reports.
   - A spotter is assigned and the kill-word ("stop") is rehearsed.
+
+### Automation environment variables
+
+The app reads these at launch (`ProcessInfo.processInfo.environment`). In the simulator pass them
+with the `SIMCTL_CHILD_` prefix (`SIMCTL_CHILD_CANEKIT_MUTE=1 xcrun simctl launch booted
+com.aritro.canekit`); for XCUITests set them in `app.launchEnvironment`, or as `TEST_RUNNER_…` in
+xcodebuild's environment (the Makefile does this). None of them is set on a normal launch.
+
+| Variable | Effect | Set by |
+|---|---|---|
+| `CANEKIT_MUTE=1` | `SpeechQueue.muted`: speech keeps its timing and trip-log records but makes no sound, and the beacon stays silent. Automation must never make noise on the Mac (AGENTS.md "How we engineer" 4). | `scripts/e2e.py` |
+| `CANEKIT_UITEST=1` | Everything `CANEKIT_MUTE` does, plus `AppModel.start()` skips the location permission request. | `CaneKitUITests`, `CaneKitVisualTour` |
+| `CANEKIT_DEMO_ROUTE=1` (or the `--demo-route` argument) | Starts the bundled ISR → CIF route at launch. The argument exists because `devicectl` launches on a device sometimes dropped environment variables. | `scripts/e2e.py`, manual replays |
+| `CANEKIT_FRAME_DIR=<dir>` | Simulator only: `FrameReplay` uses the Street View frame nearest the GPS position as the camera (needs `frames.json` in `<dir>`). | `make uitest-streetview`, `e2e.py --scenario streetview` |
+| `CANEKIT_HAZARD_WATCH=1` | Turns the hazard watch on without touching the UI. | `e2e.py --scenario streetview` |
+| `CANEKIT_DESCRIBE_EVERY_WAYPOINT=1` | Asks "Where am I" at the start and at every waypoint. | `e2e.py --scenario streetview` |
+| `CANEKIT_SHOTS=<dir>` | Where `CaneKitVisualTour` writes its PNGs (test runner side). | `make tour` |
+| `CANEKIT_SENSOR_PROBE=1` (or `--sensor-probe`) | Debug: a one-shot "what can run with LiDAR" measurement before `DepthEngine` starts; results are `probe_*` trip-log records. | by hand |
+| `CANEKIT_SENSOR_SELFTEST=1` (or `--sensor-selftest`) | Debug: shows the sensor self-test buttons on the Hazards card. Never in the demo build. | by hand |
 
 ## 6. Gotchas
 
@@ -242,7 +316,8 @@ changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 2
   `docs/devices_setup.md`, untethered demo step 4). Keep
   a power bank on the strap, since ARKit + LiDAR run ≈ 3–4 h.
 - **Thermal.** `.serious` or worse turns off mesh classification, and with it the obstacle names.
-  Lanes and haptics never stop.
+  Lanes and haptics never stop. (Obstacle names are also off by default since Step 36, and the cue
+  level decides which ones are spoken when they are on.)
 - **xcodebuild hangs after "Test Suite … passed".** Seen with `make tour` / `make uitest-streetview`
   when old test-runner processes were left on the simulator (hours old). The tests themselves had
   passed. Fix: `xcrun simctl shutdown all`, then rerun. `make e2e` relaunches the app itself and is

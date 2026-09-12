@@ -20,6 +20,14 @@
 //  Key invariant: every rejection here is a sentence the walker never hears; they hear the
 //  on-device description instead, which only says what the sensors saw.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/CloudSceneGate.swift` (`check` → verdict with a
+//  trip-log `note`, `sanitized` → the sentence or nil) plus the shared number predicate
+//  `SceneVocabulary.numbersAreGrounded`. Caller: `SceneDescriber` (app) runs `check` on every cloud
+//  reply. Breaks these catch, rule by rule (a–f): a count spoken as fact, an invented or
+//  clock-face distance, a street / room / building name the camera never read, any "the way is
+//  clear" promise (including paraphrases found by the adversarial probe), a paragraph instead of
+//  one ≤ 20-word sentence, and — the other half of the bar — an ordinary description being mangled.
+//
 
 import Foundation
 import Testing

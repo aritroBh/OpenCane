@@ -4,11 +4,20 @@
 //
 //  Pins CourseSmoother: jittery GPS must not look like a turn, a real turn must show up.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/CourseSmoother.swift` (15 m trail / 5-fix ends,
+//  accuracy-gated). Caller: `NavigationEngine` (app), which feeds the smoothed course into the
+//  `OffCourseDetector` veer decision while walking (Step 11 "jitter-proof veer").
+//  Breaks these catch: a per-fix GPS course reaching the veer cue again (±6 m jitter at walking
+//  pace fires "Veer right." constantly), a smoother so sluggish a real 90° turn never shows, and a
+//  course computed from 40 m fixes or from a couple of metres of travel.
+//  Must pass on Linux CI (`swift:6.2`), hence the hand-rolled `LCG` instead of a seeded RNG.
+//
 
 import Foundation
 import Testing
 @testable import CaneKitLogic
 
+/// Local grid origin on the UIUC campus; `at(north:east:)` offsets from here.
 private let origin = Coordinate(latitude: 40.1100, longitude: -88.2240)
 
 /// Metres north/east of the origin → coordinate.
@@ -19,7 +28,9 @@ private func at(north: Double, east: Double) -> Coordinate {
 
 /// Deterministic pseudo-random jitter in [-a, a] (no Foundation RNG seeding on Linux needed).
 private struct LCG {
+    /// Generator state; the fixed seed 42 makes every run (macOS and Linux) see the same jitter.
     var state: UInt64 = 42
+    /// Advances the 64-bit LCG (Knuth MMIX constants) and maps its top 53 bits to [-a, a] metres.
     mutating func next(_ a: Double) -> Double {
         state = state &* 6364136223846793005 &+ 1442695040888963407
         return (Double(state >> 11) / Double(1 << 53) * 2 - 1) * a

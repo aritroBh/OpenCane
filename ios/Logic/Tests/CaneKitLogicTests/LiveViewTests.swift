@@ -10,6 +10,19 @@
 //  Key invariants: the view never renders faster than the camera delivers frames (a 60 Hz
 //  render of a 30 fps camera only adds heat), and hot always wins over running.
 //
+//  Also pins, from the same file: `BothCameras.state` (the "Both cameras" front + back mode: off
+//  by default, refused for the whole route, off in the background, honest without multi-cam),
+//  `BothCamerasLayout.insetRect` (the front inset's corner and clamping), `FaceTrackingChange.decide`
+//  (front-camera head tracking re-runs the AR session, so a route refuses it) and
+//  `DualCameraRotation` (per-camera portrait-up angle, measured three times on the owner's phone).
+//  Callers: `HazardsCard` / `LiveCameraView` (`LiveView`, `BothCameras`), `BothCamerasView`
+//  (layout), `DualCameraSession` (rotation), `AppModel` (`FaceTrackingChange`, `setBothCameras`),
+//  `DepthEngine` (`CameraRate`).
+//  Breaks these catch: a preview that adds heat and pauses obstacle warnings, a frozen or black
+//  frame shown as live, a refusal caption that vanishes while the refusal still holds (trip log
+//  2026-09-12T20-57-17Z), obstacle frames lost mid-route to a camera-mode change, and a sideways
+//  back feed or tilted front inset (three device regressions, see the rotation MARK).
+//
 
 import Testing
 @testable import CaneKitLogic

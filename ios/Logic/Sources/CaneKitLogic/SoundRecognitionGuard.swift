@@ -12,6 +12,23 @@
 //  that the guard is idle, so a burst of route notifications cannot thrash the audio session or
 //  repeat a spoken failure.
 //
+//  Why (Step 28, "sound recognition fails safe across its whole microphone lifetime"): the
+//  microphone is untrusted unless route and analyser stay healthy for the entire run. A switch to
+//  Bluetooth hands-free (HFP) drops AirPods to phone-call quality and degrades the HRTF beacon
+//  (AGENTS.md hard rule 7); a revoked permission delivers silence that sounds exactly like "no
+//  sirens"; and a permission grant that lands after the walker turned the switch off must not start
+//  the microphone behind an "off" switch. Each is one testable decision here. The AirPods HFP route
+//  itself is still device-unmeasured: this is graceful degradation, not a primary safety sensor.
+//
+//  Owner: `SoundWatcher` (app, main actor) holds one `SoundRecognitionGuard` (`lifecycle`) and turns
+//  each `.stop(reason)` into teardown + one spoken `failureMessage(for:)`. `SpeechQueue` builds the
+//  `SoundRecognitionRoute` snapshots (`microphoneRoute(_:)`) and reports route changes through
+//  `onMicrophoneRouteChanged`. Isolation: nonisolated `Sendable` values; mutated only on main.
+//  Tests: SoundAlertsTests.swift (`midSessionHFPInputDegradationStopsRecognition`,
+//  `analyzerThrowStopsOnce`, `permissionRevokedMidSessionStopsRecognition`,
+//  `permissionRaceCancellationInvalidatesLateGrant`, `rapidRouteFlappingFailsOnceAndStaysIdle`,
+//  `startupInputRouteSettlesWithoutDisablingTheFeature`).
+//
 
 import Foundation
 
@@ -41,6 +58,13 @@ public struct SoundRecognitionRoute: Equatable, Sendable {
     /// phone-call quality.
     public let outputIsHFP: Bool
 
+    /// Creates a snapshot.
+    /// - Parameters:
+    ///   - output: output port description (identity compared verbatim by `routeChanged`).
+    ///   - input: input port description.
+    ///   - inputQuality: classified by the adapter from the port type.
+    ///   - outputIsHFP: the adapter's exact port-type bit; nil derives it from `output` containing
+    ///     "BluetoothHFP" (test fixtures).
     public init(output: String, input: String, inputQuality: SoundInputQuality,
                 outputIsHFP: Bool? = nil) {
         self.output = output
@@ -100,19 +124,29 @@ public struct SoundRecognitionGuard: Equatable, Sendable {
 
     /// Lifecycle state visible to tests and the adapter's ownership checks.
     public enum State: Equatable, Sendable {
+        /// Nothing holds the microphone; every late callback is `.ignored`.
         case idle
+        /// The system permission prompt is up; only a resolution carrying this generation counts.
         case awaitingPermission(generation: UInt64)
+        /// Permission granted, session and tap being set up. `route` is nil until `sessionStarted`
+        /// records the baseline; route notifications before that are ignored.
         case starting(generation: UInt64, route: SoundRecognitionRoute?)
+        /// The analyser is live against this route baseline; any identity change stops it.
         case running(route: SoundRecognitionRoute)
     }
 
+    /// Current lifecycle state (starts `.idle`).
     public private(set) var state: State = .idle
+    /// Last generation token handed out (wrapping add); a new one per permission request or start,
+    /// so a callback from an abandoned attempt can never match the current one.
     private var nextGeneration: UInt64 = 0
 
+    /// Creates an idle guard.
     public init() {}
 
     /// Begins an asynchronous microphone-permission request and returns its generation token.
     /// A second request while one is already pending is ignored, preventing duplicate callbacks.
+    /// - Returns: the token to pass back to `permissionResolved`, or nil when not idle.
     public mutating func beginPermissionRequest() -> UInt64? {
         guard case .idle = state else { return nil }
         nextGeneration &+= 1
@@ -161,6 +195,8 @@ public struct SoundRecognitionGuard: Equatable, Sendable {
     }
 
     /// Marks the analyser/tap live after the input format has become usable.
+    /// A route that is still not `isUsable` here stops with `.inputRouteDegraded` (HFP either side)
+    /// or `.inputUnavailable`; this is the last gate before the classifier is trusted.
     public mutating func recognitionStarted(route: SoundRecognitionRoute) -> SoundRecognitionDecision {
         guard case .starting = state else { return .ignored }
         guard route.isUsable else {

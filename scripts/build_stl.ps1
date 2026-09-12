@@ -10,6 +10,9 @@
     STLs land in hardware/mount_screwless/stl/, which is gitignored.
     Never commit an STL - the .scad file is the source of truth and the
     STL is a build artifact that goes stale the moment a parameter moves.
+    The one exception is hardware/3d_print_files/stl/ (un-ignored in
+    .gitignore): a hand-copied, committed snapshot of this output for
+    people at a printer. Copy it again after every rebuild you ship.
 
     WHICH OPENSCAD
     The 2021.01 release that winget installs has no Manifold backend and
@@ -26,6 +29,20 @@
     To get a snapshot: download the portable zip from
     https://files.openscad.org/snapshots/ and unzip it into
     %USERPROFILE%\Tools\.
+
+    WHAT IT COVERS
+    hardware/mount_screwless/screwless_mount.scad (part=...), its
+    coupons.scad (what=...) and hardware/cane_tip/ball_tip.scad (part=...).
+    NOT the screwed hardware/mount/ design or the legacy cad/ drafts.
+    Ball-tip STLs also land in mount_screwless/stl/.
+
+    CALLERS / TESTS
+    Run by hand on the Windows CAD machine (Windows PowerShell 5.1).
+    slice_gcode.ps1 reads its output by file name; verify_mount.ps1 step 5
+    counts shells in collar/ring/arm/cradle.stl. No tests of its own: an
+    exit code only says OpenSCAD exited, and OpenSCAD exits non-zero for
+    EMPTY geometry and zero for disconnected solids (AGENTS.md "Hardware /
+    OpenSCAD"), so run verify_mount.ps1 after a rebuild, not just this.
 
 .PARAMETER Part
     Render one part instead of all of them.
@@ -56,7 +73,10 @@ param(
     [double]$PoleD = 0
 )
 
+# Any cmdlet error aborts the script. Native exe exit codes are NOT covered
+# by this; they are checked by hand through $LASTEXITCODE below.
 $ErrorActionPreference = 'Stop'
+# Repo root = parent of scripts/, so the script works from any directory.
 $repo    = Split-Path -Parent $PSScriptRoot
 $srcDir  = Join-Path $repo 'hardware\mount_screwless'
 $outDir  = Join-Path $srcDir 'stl'
@@ -65,6 +85,10 @@ $couponScad  = Join-Path $srcDir 'coupons.scad'
 $tipScad     = Join-Path $repo 'hardware/cane_tip/ball_tip.scad'
 
 # ---------------------------------------------------------------- locate
+# Returns { Path; Fast }. Fast = a snapshot or an explicit $env:OPENSCAD,
+# which are assumed to have the Manifold backend (--backend=manifold is
+# passed for them); the winget 2021.01 release is Fast = $false. Throws
+# when none is found. verify_mount.ps1 carries a copy of this search.
 function Find-OpenScad {
     if ($env:OPENSCAD -and (Test-Path $env:OPENSCAD)) {
         return [pscustomobject]@{ Path = $env:OPENSCAD; Fast = $true }
@@ -95,6 +119,9 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 # the exe ever sees them, so `part="collar"` arrives as `part=collar` and
 # OpenSCAD renders nothing. Escaping them as \" is what survives. Do not
 # "tidy" these back into plain quotes.
+# One row per exportable part: output base name, source .scad, and the
+# single -D that selects the part inside that file. ValidateSet on -Part
+# must list the same names.
 $targets = @(
     @{ Name = 'collar';  Scad = $mainScad;   Def = 'part=\"collar\"' },
     @{ Name = 'ring';    Scad = $mainScad;   Def = 'part=\"ring\"'   },
@@ -133,9 +160,12 @@ $poleDef = if ($PoleD -gt 0) { @('-D', ('pole_d=' + $PoleD.ToString([Globalizati
 # and the lock render byte-identical for any cane, and the arm is nominal.
 function Uses-PoleD($t) { $PoleD -gt 0 -and $t.Name -in @('collar', 'ring') }
 
+# Count of parts that failed to export; non-zero makes the script exit 1.
 $fail = 0
 foreach ($t in $targets) {
     $stl = Join-Path $outDir ("{0}{1}.stl" -f $t.Name, $(if (Uses-PoleD $t) { $poleTag } else { '' }))
+    # Delete the old STL first, so a failed render cannot leave a stale file
+    # that the Test-Path check below would mistake for success.
     if (Test-Path $stl) { Remove-Item $stl -Force }
     Write-Host ("  {0,-9} -> {1}" -f $t.Name, (Split-Path -Leaf $stl)) -NoNewline
     $sw = [Diagnostics.Stopwatch]::StartNew()

@@ -4,6 +4,15 @@
 //
 //  Pins the two rules that decide whether the first cue of a walk is instant or late.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/VoicePrefetch.swift` (`queue(_:isCached:)`,
+//  `isFatal(status:)`, `maxConcurrent`). Callers: `ElevenLabsVoice.prefetch` (app; requests
+//  `queue`'s output with at most `maxConcurrent` in flight and cancels the batch on a fatal status)
+//  and `SpeechQueue.prefetch` (route lines first, then the re-appended `backgroundLines`).
+//  Breaks these catch: a `Set`-based dedupe that synthesizes waypoint 9 before waypoint 1 (the first
+//  cue then misses the cache — the one cue prefetch exists for), paying twice for a cached or
+//  repeated line, a wrong key producing twenty rejected requests before a demo, and a concurrency
+//  bump that rate-limits the live line a walker is waiting for.
+//
 
 import Foundation
 import Testing

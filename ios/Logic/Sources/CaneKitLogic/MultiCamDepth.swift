@@ -31,7 +31,17 @@
 //      camera answers nothing.
 //    · Depth resolution is compared against ARKit's own `sceneDepth` (256×192) by pixel count, so
 //      "higher than ARKit" is a measured comparison and not a recollection of a slide.
-//  Tests: MultiCamDepthTests.swift.
+//    · `MultiCamCost` (bottom of the file) is the one part that *does* run: `DualCameraSession`
+//      asks it whether the two-camera session is over its hardware budget.
+//
+//  Owners / callers: `MultiCamDepthProbe.measure()` (app, `ios/CaneKit/Depth/`, nonisolated) fills
+//  `MultiCamDepthFindings`; `AppModel.logMultiCamDepthProbe()` runs it detached once per launch and
+//  writes one `multicam_depth` trip-log record (`verdict`, `keeps_depth`, `answer`, …).
+//  `DualCameraSession.reduceFrameRateIfOverBudget(_:)` reads `MultiCamCost`.
+//  Isolation: the package has no default actor isolation, so every type here is nonisolated and
+//  `Sendable`; the probe calls it off the main actor.
+//  Tests: MultiCamDepthTests.swift (8: one per verdict branch, the 256×192 boundary, the
+//  "could" wording of every sentence, and the two `MultiCamCost` cases).
 //
 
 import Foundation
@@ -53,7 +63,8 @@ public struct MultiCamDepthFindings: Sendable, Equatable {
     /// …and its height (0 when there are none).
     public let bestDepthHeight: Int
 
-    /// Memberwise init (the probe fills these in from AVFoundation).
+    /// Memberwise init (the probe fills these in from AVFoundation; tests build them by hand).
+    /// No validation: a negative or zero size simply reads as "no depth" in `verdict(_:)`.
     public init(multiCamSupported: Bool, frontPlusDepthDeviceSets: Int,
                 depthCapableMultiCamFormats: Int, bestDepthWidth: Int, bestDepthHeight: Int) {
         self.multiCamSupported = multiCamSupported
@@ -65,6 +76,8 @@ public struct MultiCamDepthFindings: Sendable, Equatable {
 }
 
 /// The answer to "front + back + depth, without ARKit?" for one phone.
+/// ⚠ Raw values are written verbatim to the `multicam_depth` trip-log record (`verdict`); renaming a
+/// case breaks comparison with earlier logs.
 public enum MultiCamDepthVerdict: String, Sendable, Equatable, CaseIterable {
     /// The phone cannot run two cameras at once at all, so the question is moot.
     case multiCamUnsupported
@@ -96,6 +109,11 @@ public enum MultiCamDepth {
     public static let arkitSceneDepthHeight = 192
 
     /// The measured answer.
+    ///
+    /// Checks run in order of what makes the question moot: no multi-cam at all, then no depth
+    /// format that is also multi-cam capable, then no device set pairing depth with the front
+    /// camera. Only then is resolution compared, by pixel count (width × height) strictly greater
+    /// than 256 × 192 — equal counts as "at or below" (`depthEqualToARKitResolutionIsNotHigher`).
     /// - Parameter findings: what `MultiCamDepthProbe` read off the device.
     /// - Returns: the verdict; `keepsDepth` is the bit that matters for a future design.
     public static func verdict(_ findings: MultiCamDepthFindings) -> MultiCamDepthVerdict {
@@ -110,7 +128,9 @@ public enum MultiCamDepth {
 
     /// One readable line for the trip log, so the record answers the question in words as well as
     /// in flags. Deliberately says "could" — nothing has been *run* in that configuration.
+    /// Pinned by `everyVerdictHasASentenceThatOnlyClaimsPossibility`.
     /// - Parameter findings: the same measurement passed to `verdict(_:)`.
+    /// - Returns: one sentence, logged as the record's `answer` field.
     public static func sentence(_ findings: MultiCamDepthFindings) -> String {
         let depth = "\(findings.bestDepthWidth)x\(findings.bestDepthHeight)"
         switch verdict(findings) {
@@ -137,6 +157,11 @@ public enum MultiCamDepth {
 /// documented remedy is to lower the frame rate through
 /// `AVCaptureDeviceInput.videoMinFrameDurationOverride`, so the numbers for that live here with a
 /// test rather than inline in `DualCameraSession`.
+///
+/// Measured on the iPhone 17 Pro Max the cost was 0.26 with both feeds, so the cut has never fired
+/// there; it exists so a hotter or older phone degrades to a slower picture instead of a black one.
+/// Caller: `DualCameraSession.reduceFrameRateIfOverBudget(_:)` (sets `frameRateReduced`, logged).
+/// Pinned by `hardwareCostOverOneNeedsTheFrameRateCut`, `unreadableHardwareCostChangesNothing`.
 public enum MultiCamCost {
 
     /// The budget. At or below this the session may run; above it, it will not.
@@ -148,6 +173,8 @@ public enum MultiCamCost {
     public static let reducedFramesPerSecond: Int = 24
 
     /// Whether the two-camera session needs its frame rate cut before it can run.
+    /// Strictly above `maximumHardwareCost` (exactly 1.0 may run); a NaN or infinite reading
+    /// changes nothing rather than degrading a session on garbage.
     /// - Parameter hardwareCost: `AVCaptureMultiCamSession.hardwareCost` after configuration.
     public static func needsFrameRateReduction(hardwareCost: Double) -> Bool {
         guard hardwareCost.isFinite else { return false }
