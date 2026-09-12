@@ -353,6 +353,23 @@ import Testing
     #expect(MicrophoneStart.retryDelay(afterAttempt: 5) == nil)
 }
 
+/// Walking the retry loop the way both callers do (`attempt + 1` until `retryDelay` is nil) reads
+/// the format exactly `formatAttempts` times and always terminates; a caller that started at a
+/// negative attempt gets no retry at all.
+/// ⚠ Pins the loop shape shared by `SoundWatcher.startEngine(attempt:)` and
+/// `VoiceInputEngine.startListening(attempt:)`.
+@Test func theRetryLoopReadsTheFormatExactlyFormatAttemptsTimes() {
+    var attempt = 0
+    var reads = 0
+    while true {
+        reads += 1
+        guard MicrophoneStart.retryDelay(afterAttempt: attempt) != nil else { break }
+        attempt += 1
+    }
+    #expect(reads == MicrophoneStart.formatAttempts)
+    #expect(MicrophoneStart.retryDelay(afterAttempt: -1) == nil)
+}
+
 /// The whole retry budget has to stay inside the time a switch may take to answer. A blind user
 /// gets no visual "working…" state, so anything past about half a second reads as a dead control.
 @Test func theWholeRetryBudgetStaysUnderHalfASecond() {
@@ -377,16 +394,24 @@ private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
                                                     inputQuality: .usable)
     #expect(!alreadyCallQuality.isUsable)
     var outputGuard = SoundRecognitionGuard()
-    #expect(outputGuard.beginStart())
-    #expect(outputGuard.sessionStarted(route: alreadyCallQuality) == .stop(.inputRouteDegraded))
+    // Hoisted: `#expect` expands its argument into a closure that captures
+    // the guard immutably, so mutating calls run here first, in order.
+    let g1 = outputGuard.beginStart()
+    #expect(g1)
+    let g2 = outputGuard.sessionStarted(route: alreadyCallQuality) == .stop(.inputRouteDegraded)
+    #expect(g2)
 
     var guardState = SoundRecognitionGuard()
-    #expect(guardState.beginStart())
-    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let g3 = guardState.beginStart()
+    #expect(g3)
+    let g4 = guardState.sessionStarted(route: healthySoundRoute)
+    #expect(g4 == .continueRunning)
+    let g5 = guardState.recognitionStarted(route: healthySoundRoute)
+    #expect(g5 == .continueRunning)
     let degraded = SoundRecognitionRoute(output: "Speaker", input: "BluetoothHFP",
                                          inputQuality: .hfp)
-    #expect(guardState.routeChanged(degraded) == .stop(.inputRouteDegraded))
+    let g6 = guardState.routeChanged(degraded) == .stop(.inputRouteDegraded)
+    #expect(g6)
     #expect(guardState.state == .idle)
 
     // Two devices can advertise the same A2DP type; UID/name are retained in the snapshot so the
@@ -398,38 +423,56 @@ private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
     let deviceB = SoundRecognitionRoute(output: "BluetoothA2DP[uid-b|AirPods B]",
                                          input: "BuiltInMic[uid-mic|iPhone]",
                                          inputQuality: .usable)
-    #expect(deviceGuard.beginStart())
-    #expect(deviceGuard.sessionStarted(route: deviceA) == .continueRunning)
-    #expect(deviceGuard.recognitionStarted(route: deviceA) == .continueRunning)
-    #expect(deviceGuard.routeChanged(deviceB) == .stop(.outputRouteChanged))
+    let g7 = deviceGuard.beginStart()
+    #expect(g7)
+    let g8 = deviceGuard.sessionStarted(route: deviceA)
+    #expect(g8 == .continueRunning)
+    let g9 = deviceGuard.recognitionStarted(route: deviceA)
+    #expect(g9 == .continueRunning)
+    let g10 = deviceGuard.routeChanged(deviceB) == .stop(.outputRouteChanged)
+    #expect(g10)
 }
 
 /// SoundAnalysis failures are hard stops, not diagnostic-only state. The second callback after a
 /// stop is ignored, so a late relay error cannot speak a duplicate failure or re-touch AVAudio.
 @Test func analyzerThrowStopsOnce() {
     var guardState = SoundRecognitionGuard()
-    #expect(guardState.beginStart())
-    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.analyzerFailed() == .stop(.analyzerFailed))
-    #expect(guardState.analyzerFailed() == .ignored)
+    let g11 = guardState.beginStart()
+    #expect(g11)
+    let g12 = guardState.sessionStarted(route: healthySoundRoute)
+    #expect(g12 == .continueRunning)
+    let g13 = guardState.recognitionStarted(route: healthySoundRoute)
+    #expect(g13 == .continueRunning)
+    let g14 = guardState.analyzerFailed() == .stop(.analyzerFailed)
+    #expect(g14)
+    let g15 = guardState.analyzerFailed()
+    #expect(g15 == .ignored)
 
     var interruptedGuard = SoundRecognitionGuard()
-    #expect(interruptedGuard.beginStart())
-    #expect(interruptedGuard.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(interruptedGuard.recognitionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(interruptedGuard.interruptionBegan() == .stop(.interrupted))
-    #expect(interruptedGuard.interruptionBegan() == .ignored)
+    let g16 = interruptedGuard.beginStart()
+    #expect(g16)
+    let g17 = interruptedGuard.sessionStarted(route: healthySoundRoute)
+    #expect(g17 == .continueRunning)
+    let g18 = interruptedGuard.recognitionStarted(route: healthySoundRoute)
+    #expect(g18 == .continueRunning)
+    let g19 = interruptedGuard.interruptionBegan() == .stop(.interrupted)
+    #expect(g19)
+    let g20 = interruptedGuard.interruptionBegan()
+    #expect(g20 == .ignored)
 }
 
 /// Permission revocation during an active run takes the feature down while leaving the rest of the
 /// app alone. Re-granting permission does not implicitly restart a switch the user did not re-arm.
 @Test func permissionRevokedMidSessionStopsRecognition() {
     var guardState = SoundRecognitionGuard()
-    #expect(guardState.beginStart())
-    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.permissionRevoked() == .stop(.permissionRevoked))
+    let g21 = guardState.beginStart()
+    #expect(g21)
+    let g22 = guardState.sessionStarted(route: healthySoundRoute)
+    #expect(g22 == .continueRunning)
+    let g23 = guardState.recognitionStarted(route: healthySoundRoute)
+    #expect(g23 == .continueRunning)
+    let g24 = guardState.permissionRevoked() == .stop(.permissionRevoked)
+    #expect(g24)
     #expect(!guardState.isActive)
 }
 
@@ -437,9 +480,12 @@ private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
 /// a later Allow callback is inert and cannot start a microphone behind the visible switch.
 @Test func permissionRaceCancellationInvalidatesLateGrant() {
     var guardState = SoundRecognitionGuard()
-    let generation = try! #require(guardState.beginPermissionRequest())
-    #expect(guardState.cancel() == .cancelPendingStart)
-    #expect(guardState.permissionResolved(granted: true, generation: generation) == .ignored)
+    let pending = guardState.beginPermissionRequest()
+    let generation = try! #require(pending)
+    let gCancel = guardState.cancel()
+    #expect(gCancel == .cancelPendingStart)
+    let g25 = guardState.permissionResolved(granted: true, generation: generation)
+    #expect(g25 == .ignored)
     #expect(guardState.state == .idle)
 }
 
@@ -447,33 +493,47 @@ private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
 /// all later notifications are ignored until an explicit user restart.
 @Test func rapidRouteFlappingFailsOnceAndStaysIdle() {
     var guardState = SoundRecognitionGuard()
-    #expect(guardState.beginStart())
-    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let g26 = guardState.beginStart()
+    #expect(g26)
+    let g27 = guardState.sessionStarted(route: healthySoundRoute)
+    #expect(g27 == .continueRunning)
+    let g28 = guardState.recognitionStarted(route: healthySoundRoute)
+    #expect(g28 == .continueRunning)
     let hfp = SoundRecognitionRoute(output: "Speaker", input: "BluetoothHFP",
                                     inputQuality: .hfp)
-    #expect(guardState.routeChanged(hfp) == .stop(.inputRouteDegraded))
+    let g29 = guardState.routeChanged(hfp) == .stop(.inputRouteDegraded)
+    #expect(g29)
     let backToHealthy = healthySoundRoute
-    #expect(guardState.routeChanged(backToHealthy) == .ignored)
-    #expect(guardState.routeChanged(hfp) == .ignored)
+    let g30 = guardState.routeChanged(backToHealthy)
+    #expect(g30 == .ignored)
+    let g31 = guardState.routeChanged(hfp)
+    #expect(g31 == .ignored)
 
     var missingInputGuard = SoundRecognitionGuard()
-    #expect(missingInputGuard.beginStart())
-    #expect(missingInputGuard.sessionStarted(route: healthySoundRoute) == .continueRunning)
-    #expect(missingInputGuard.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let g32 = missingInputGuard.beginStart()
+    #expect(g32)
+    let g33 = missingInputGuard.sessionStarted(route: healthySoundRoute)
+    #expect(g33 == .continueRunning)
+    let g34 = missingInputGuard.recognitionStarted(route: healthySoundRoute)
+    #expect(g34 == .continueRunning)
     let missingInput = SoundRecognitionRoute(output: "Speaker", input: "none",
                                               inputQuality: .unavailable)
-    #expect(missingInputGuard.routeChanged(missingInput) == .stop(.inputUnavailable))
+    let g35 = missingInputGuard.routeChanged(missingInput) == .stop(.inputUnavailable)
+    #expect(g35)
 }
 
 /// The normal cold start may expose an input-less route for a fraction of a second. That startup
 /// settle is allowed once; the analyser still cannot become live until a usable route arrives.
 @Test func startupInputRouteSettlesWithoutDisablingTheFeature() {
     var guardState = SoundRecognitionGuard()
-    #expect(guardState.beginStart())
+    let g36 = guardState.beginStart()
+    #expect(g36)
     let pending = SoundRecognitionRoute(output: "Speaker", input: "none",
                                         inputQuality: .unavailable)
-    #expect(guardState.sessionStarted(route: pending) == .continueRunning)
-    #expect(guardState.routeChanged(healthySoundRoute) == .continueRunning)
-    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let g37 = guardState.sessionStarted(route: pending)
+    #expect(g37 == .continueRunning)
+    let g38 = guardState.routeChanged(healthySoundRoute)
+    #expect(g38 == .continueRunning)
+    let g39 = guardState.recognitionStarted(route: healthySoundRoute)
+    #expect(g39 == .continueRunning)
 }

@@ -8,7 +8,7 @@ is done by **speaking**, or by **one press of the Action button**. Nothing here 
 > the *display* name, so what you say is "… in OpenCane".
 
 If you only read one thing: say **"How is OpenCane doing"** to hear whether the app is actually
-working, and set the **Action button** to **Where am I** (steps at the bottom).
+working, and set the **Action button** to **Talk to OpenCane** (steps at the bottom).
 
 ---
 
@@ -24,7 +24,7 @@ shortcuts, not ours. Several wordings work for each command; the first one liste
 | **"How is OpenCane doing"** — or "OpenCane status", "Is OpenCane working", "Check OpenCane" | The spoken version of the whole screen: obstacle detection, GPS, AirPods, cane haptics, route, battery. Always in that order. |
 | **"Take me to Grainger in OpenCane"** (CIF, ISR, Grainger, the Illini Union, Siebel, the Main Library, the ARC) | Walks you there from where you are. |
 | **"Take me somewhere in OpenCane"** | Siri asks where; say any place ("Starbucks on Green Street"). |
-| **"Navigate to CIF from here in OpenCane"** | Walking directions to the CIF east entrance, wherever you start. |
+| **"Talk to OpenCane"** — or "Speak to OpenCane" | Opens the app and starts listening. Ask anything below, or "Take me to CIF", "How is my battery?", "What is in front of me?". This is also the Action button target (section 3). |
 | **"Start my route in OpenCane"** — or the legacy phrase "Start the demo route in OpenCane" | The recorded ISR Townsend Hall → CIF route. |
 | **"Repeat in OpenCane"** — or "OpenCane say that again" | Says the current instruction again. |
 | **"Next waypoint in OpenCane"** | Skips to the next instruction. |
@@ -35,11 +35,11 @@ shortcuts, not ours. Several wordings work for each command; the first one liste
 Before the route starts the app already says out loud which channels are live, and it speaks when
 the AirPods connect or disconnect. You do not have to ask for those.
 
-### Two more commands, in the Shortcuts app
+### Three more commands, in the Shortcuts app
 
 These exist but do not have a Siri phrase of their own — Apple allows an app only **ten** automatic
 phrases and the list above uses all ten. They are in the **Shortcuts** app under OpenCane, and you
-can put either of them on the Action button (section 3):
+can put any of them on the Action button (section 3) by first making a one-step shortcut around it:
 
 - **Recenter the beacon** — sets the way you are facing now as the beacon's "straight ahead". The
   watch has a Recenter button, and the app re-zeroes itself after a few seconds of walking
@@ -50,6 +50,9 @@ can put either of them on the Action button (section 3):
   are still felt on the cane, but not named."). It reads the state back from the app rather than
   from what you asked for, so a feature that refuses to start — a denied microphone, for instance —
   is never announced as on.
+- **Navigate to CIF from here** — walking directions to the CIF east entrance, wherever you start
+  (the Guide card button does the same thing). Its Siri phrase moved to "Take me to CIF in
+  OpenCane" when its shortcut slot went to "Talk to OpenCane".
 
 ---
 
@@ -88,20 +91,28 @@ the pavement.
 2. **Action Button**
 3. Swipe left or right through the list of actions until you reach **Shortcut**
 4. Tap **Choose a Shortcut**
-5. Pick **OpenCane** → **Where am I**
+5. Pick **OpenCane** → **Talk to OpenCane**
 
 That is the whole path.
 (Apple Support, ["Run shortcuts with the Action button"](https://support.apple.com/guide/shortcuts/run-shortcuts-with-the-action-button-apdfea15680b/ios).)
 
-**Which one to bind: "Where am I."** It is the only command that is useful at every moment of a
-walk, with or without a route running, and it is the one you want *now* rather than after a Siri
-round trip. "Status check" is the second choice if you are debugging the kit rather than walking
-with it.
+Press once: OpenCane opens and starts listening (you feel the tick). Ask ("Take me to CIF",
+"How is my battery?", "What is in front of me?"). Press again — or just stop talking — and it
+answers. "Talk to OpenCane" is an App Shortcut, so it is in the picker with no setup.
 
-All ten OpenCane shortcuts appear in that picker with no setup, because they are App Shortcuts. The
-two extra actions in section 1 (Recenter, Turn a feature on or off) do **not** appear there
-directly — to put one of those on the Action button, first make a one-step shortcut in the
-Shortcuts app that runs it, then choose that shortcut in step 5.
+**Which one to bind: "Talk to OpenCane."** It covers everything the other shortcuts do —
+status, scene questions, places, posts — conversationally, with no wake word and no screen.
+"Where am I" is the second choice if you want one fixed command that never needs the
+microphone: it is useful at every moment of a walk, with or without a route running.
+
+All ten OpenCane shortcuts appear in that picker with no setup, because they are App Shortcuts.
+The Shortcuts-app-only actions (Recenter, Turn a feature on or off, Navigate to CIF from here)
+do **not** appear there directly — to put one of those on the Action button, first make a
+one-step shortcut in the Shortcuts app that runs it, then choose that shortcut in step 5.
+
+If **Talk to OpenCane** is missing from the picker after reinstalling: open the Apple Shortcuts
+app once (this forces iOS to re-index the app's shortcuts), then repeat step 5. A phone restart
+is the last resort — the shortcut list is cached by the system, not by OpenCane.
 
 ### ⚠ The Action button and the lock screen
 

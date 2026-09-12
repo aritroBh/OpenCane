@@ -258,7 +258,10 @@ final class SoundWatcher {
             // switch off while it is up. Fence the continuation on both generations so "off then
             // Allow" cannot start the microphone behind a switch that says off.
             guard let permissionGeneration = lifecycle.beginPermissionRequest() else { return }
-            AVAudioApplication.requestRecordPermission { [weak self] granted in
+            // ⚠ Explicit `@Sendable`: the header block is unannotated and "may be called in a
+            // different thread context" (AVAudioApplication.h). The generation is a `UInt64`
+            // (`SoundRecognitionGuard`, Sendable), so the fenced continuation stays safe.
+            AVAudioApplication.requestRecordPermission { @Sendable [weak self] granted in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let decision = self.lifecycle.permissionResolved(granted: granted,

@@ -42,6 +42,7 @@ screen layout and button labels, where the shipped code (and the tests that pin 
 | [`docs/route_isr_cif.md`](route_isr_cif.md) | You are editing `route_isr_cif.json` or re-recording the route on foot. It covers the evidence for every waypoint, OSM node IDs, and which points are still unverified. |
 | [`docs/todo.md`](todo.md) | You want to know what is still open. This is the strict build checklist; tick it in the same commit. |
 | [`docs/stress_test_plan.md`](stress_test_plan.md) | You are planning device and field tests: the next-24-hours schedule, bench tests D1–D18, failure injection F1–F12, the go/no-go checklist and the demo run sheet. |
+| [`docs/auditory-load.md`](auditory-load.md) | You are adding or tuning any automatic sound. What the research says about blind auditory overload, what OpenCane already does, and the open questions for tester walks. |
 | [`docs/ideas.md`](ideas.md) | You want the reasoning: the verdict, the pushbacks, the pitch script, prior art and the numbers. **§9 is the current decision (phone-only, buy nothing).** §3–4 (ESP32 grip, buy list) are history. |
 
 ### Hardware

@@ -183,9 +183,14 @@ final class TripTracker {
     }
 
     /// Live pedometer updates from `start`; they only set `steps` until HealthKit has reported.
+    /// ⚠ The handler must stay `@Sendable`: `CMPedometerHandler` is not `NS_SWIFT_SENDABLE`
+    /// (CMPedometer.h), so without it the closure is inferred `@MainActor` under the module's
+    /// default isolation and the runtime traps (`swift_task_isCurrentExecutor` →
+    /// `_dispatch_assert_queue_fail`) when CoreMotion calls it on `CMPedometerUpdateQueue`
+    /// (crash 2026-09-11 21:50). The body only extracts Sendable values before hopping to main.
     private func startPedometer(from start: Date) {
         guard CMPedometer.isStepCountingAvailable() else { return }
-        pedometer.startUpdates(from: start) { [weak self] data, error in
+        pedometer.startUpdates(from: start) { @Sendable [weak self] data, error in
             let count = data?.numberOfSteps.intValue
             let message = error?.localizedDescription
             Task { @MainActor [weak self] in

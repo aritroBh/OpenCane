@@ -311,8 +311,19 @@ public enum VLMResponse {
 // MARK: - Spoken distances (shared with obstacle names)
 
 /// Metres → natural spoken words, rounded to the nearest half metre. Used by
-/// `CueSpeechPolicy` ("Ahead, …"), the app's `ObstacleNamer` and the debug grid's labels.
+/// `CueSpeechPolicy` ("One meter ahead."), the app's `ObstacleNamer` ("One meter ahead, door")
+/// and the debug grid's labels.
 public enum SpokenDistance {
+    /// "One meter", "Two meters", "Half a meter" — `phrase` with its first letter upper-cased,
+    /// for the distance-first warning lines ("Two meters ahead, door."). `.capitalized` is wrong
+    /// here: it title-cases every word ("One And A Half Meters"). Empty stays empty.
+    /// - Parameter phrase: a `phrase(_:)` result.
+    /// - Returns: the same words with the first character upper-cased.
+    public static func leadingCapitalized(_ phrase: String) -> String {
+        guard let first = phrase.first else { return phrase }
+        return String(first).uppercased() + phrase.dropFirst()
+    }
+
     /// "very close", "half a meter", "one meter", "one and a half meters", "two meters", "3 meters"…
     /// - Parameter meters: distance in metres.
     /// - Returns: the phrase; "" for a non-finite distance. Pinned by `spokenDistances`.

@@ -148,8 +148,12 @@ final class PhoneWatchLink {
     /// `sendMessage` without a reply handler. Optimistically bumps `messagesSent` and clears
     /// `lastError`; a failure arrives later on a WatchConnectivity queue and hops to main to
     /// set `lastError` (only the error's text crosses — `Error` is not Sendable).
+    /// ⚠ `@Sendable` is required: WCSession's `errorHandler` block is not `NS_SWIFT_SENDABLE`
+    /// (WCSession.h), so without it the closure is inferred `@MainActor` and the runtime traps
+    /// when WatchConnectivity invokes it on its own queue (same mechanism as the 2026-09-11
+    /// pedometer crash; the watch side already does this in `WatchModel.send`).
     private func deliver(_ dict: [String: Any], session: WCSession) {
-        session.sendMessage(dict, replyHandler: nil) { [weak self] error in
+        session.sendMessage(dict, replyHandler: nil) { @Sendable [weak self] error in
             let text = error.localizedDescription
             Task { @MainActor [weak self] in self?.lastError = text }
         }

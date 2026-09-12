@@ -185,8 +185,8 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
 
 /// The spoken line uses the shared distance phrasing.
 @Test func groundHazardLine() {
-    #expect(GroundHazard(kind: .dropOff, distance: 2.0, delta: -0.2).spokenLine == "Drop-off ahead, two meters.")
-    #expect(GroundHazard(kind: .pothole, distance: 1.5, delta: -0.2).spokenLine == "Hole ahead, one and a half meters.")
+    #expect(GroundHazard(kind: .dropOff, distance: 2.0, delta: -0.2).spokenLine == "Two meters ahead, drop-off.")
+    #expect(GroundHazard(kind: .pothole, distance: 1.5, delta: -0.2).spokenLine == "One and a half meters ahead, hole.")
 }
 
 // MARK: SignPolicy
@@ -248,11 +248,29 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     #expect(h22 != nil)   // outside the 30 s window
 }
 
+/// A hazard-watch model is advisory, not a clearance sensor. This catches a reply that would
+/// otherwise be prefixed with "Caution:" and spoken as if the model had proven the path safe.
+@Test func hazardWatchReassuranceIsRejected() {
+    var p = HazardWatchPolicy()
+
+    #expect(p.line(forReply: "The path is clear.", now: 0) == nil)
+    #expect(p.line(forReply: "No obstacles ahead.", now: 1) == nil)
+}
+
+/// The cloud watch may only turn a known path-hazard word into a caution. This catches a generic
+/// VLM sentence such as "A dragon is nearby" being wrapped in authoritative-sounding speech.
+@Test func hazardWatchUnknownObjectsAreRejected() {
+    var p = HazardWatchPolicy()
+
+    #expect(p.line(forReply: "A dragon is ahead, 2 meters.", now: 0) == nil)
+    #expect(p.line(forReply: "A cone is ahead, 2 meters.", now: 1) != nil)
+}
+
 // MARK: HazardGeoJSON
 
 /// The hazard map is a valid FeatureCollection with lon/lat order and the spoken text.
 @Test func hazardMapIsValidGeoJSON() throws {
-    let r = HazardRecord(kind: "pothole", text: "Hole ahead, two meters.", latitude: 40.1105,
+    let r = HazardRecord(kind: "pothole", text: "Two meters ahead, hole.", latitude: 40.1105,
                          longitude: -88.2240, accuracy: 6, time: 1_789_000_000, photo: "hazard-1.jpg")
     let data = try HazardGeoJSON.encode([r])
     let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]

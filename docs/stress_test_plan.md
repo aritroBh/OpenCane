@@ -360,10 +360,10 @@ goes on the bug list with its log file name and video timestamp.
   east door, a chair, a table and a window. Then 2 approaches to the door with a sweep. Then stand
   10 s at 2 m.
 - **Expect.**
-  - Mesh lookups at about 4 Hz give "door ahead, two meters" once the object is closer than
+  - Mesh lookups at about 4 Hz give "Two meters ahead, door" once the object is closer than
     **3.0 m**. Walls are named only closer than **1.5 m**.
-  - A class is named again only when it changes or after moving a full metre ("door ahead, one
-    meter"), and never more often than every 2.5 s.
+  - A class is named again only when it changes or after moving a full metre ("One meter ahead,
+    door"), and never more often than every 2.5 s.
   - A class is forgotten 2 s after it leaves the centre. The line is dropped if it waits more than
     4 s (TTL).
   - Mesh is off at thermal `serious`.
@@ -381,8 +381,8 @@ goes on the bug list with its log file name and video timestamp.
 
 ### D7 Speech queue, priorities, Repeat: bench · Aritro
 - **Steps and expected results.**
-  - (a) Haptics card → **Speech test**. The scene line is cut at a word boundary by "Door ahead, one
-    meter.", then the scene line replays from its start **once**.
+  - (a) Haptics card → **Speech test**. The scene line is cut at a word boundary by "One meter
+    ahead, door.", then the scene line replays from its start **once**.
   - (b) Start route to CIF and make a head-height cue during the intro. "Head height." cuts in
     and the intro replays once. A second cut during that replay drops the intro (max 1 replay).
   - (c) Press **Repeat** mid-line. The last line restarts at once, followed by " Next, \<place\>, in
@@ -638,7 +638,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
     so offline still gets a sentence; "Scene description failed." only when that fails too. Any
     route or obstacle line cuts in over a description.
   - (e) Every 8 s while walking: the cloud gets 2.5 s per frame, then the on-device model answers. A reply about a frame older than ~4 m of walking (min(5 s, 4 m ÷ speed)) is
-    dropped; one older than 2 s keeps the hazard but loses its distance ("Caution: cones ahead.").
+    dropped; one older than 2 s keeps the hazard but loses its distance ("Caution: cones.").
 - **Pass.**
   - Median from the press to the first word of the description: **≤ 6 s on Wi-Fi, ≤ 10 s on LTE**.
   - ≥ 4/5 descriptions name a correct salient object with no invented hazard.
@@ -697,7 +697,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
   ("Listen for traffic") until **2 consecutive stationary fixes ≤ 10 m from the node**, then clicks
   point across the street. No veer (speed ≤ 0.5), no waypoint advance (speed gate), no
   auto-recenter within 15 m after the crossing. With "Detect drop-offs" on, the curb is announced
-  once ("Drop-off ahead, …" + 4 heavy taps), then at most every 30 s while it stays in the same
+  once ("Two meters ahead, drop-off" + 4 heavy taps), then at most every 30 s while it stays in the same
   place, and again when you shuffle 1 m closer.
 - **Pass.** During the 90 s: **0 `waypoint`, 0 "Veer", 0 auto `recenter`**, and at most 4 ground
   hazard lines plus one per 1 m shuffle (`hazard` {source: ground}). Once released, the click

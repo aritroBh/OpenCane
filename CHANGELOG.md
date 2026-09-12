@@ -2,6 +2,188 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 33 — Snappy tab switches: fade-in, one landing time (Sat Sep 12)
+
+**Device report:** moving between Guide / Sense / Settings feels sluggish.
+
+**Cause (static analysis — no per-frame body costs found):** the switch ran a *symmetric*
+cross-fade (`.transition(.opacity)`), which keeps both full pages mounted inside the
+animation: two ScrollViews composing at once, plus Sense's SceneKit preview
+teardown/setup when Sense is on either side. On top of that the pill travelled on a
+0.32 s spring while the page faded in 0.2 s, so the capsule was still moving after the
+page had landed — two finish lines reads as lag. Card bodies are static (no
+DateFormatter/JSON/sort-in-body, no appear-time loads), Guide reads nav state at
+1–10 Hz, and only the visible page is in the tree, so the transition itself was the
+whole problem.
+
+**Fix (`ContentView`, `TabBar`, design.md §4):** incoming page fades in over 0.16 s
+(`ContentView.pageFade`, ease-out); the outgoing page is removed instantly
+(`.asymmetric(insertion: .opacity, removal: .identity)`), so two pages never compose.
+Pill travel is now a 0.16 s spring (`pillTravel()`, bounce 0.08) — pill and page land
+together. Reduce Motion unchanged (instant swap). No label, layout, or hierarchy
+changes: the XCUITest contract (Guide/Sense/Settings, mount toggles) is untouched.
+
+**Verification:** `make sim` still sandbox-blocked here (SwiftPM cache denied, incl. the
+HOME-redirect retry), so no device/sim timing was measured — the 0.16 s value is a
+calibration to confirm on the phone, not a measured optimum. Skeptic review not run
+(change is 6 lines of animation-only code + doc sync; `CODE_REFERENCE.md` and
+design.md §4 updated in the same step).
+
+test on device: reinstall; tap Guide→Sense→Settings→Guide slowly (each page should be
+fully landed the instant the pill stops — no trailing slide, no flash of the old page);
+then switch rapidly 10× (no stutter, no stuck half-faded page); with "Live camera view"
+on, switch to and from Sense (heaviest teardown/setup path); enable Reduce Motion and
+repeat (instant swaps). If the fade still feels slow, lower `pageFade`/`pillTravel` to
+0.12; if pages flash white, raise to 0.2.
+
+## Step 32 — Front+back answer + Flashlight toggle (Sat Sep 12)
+
+**Device question:** why no BeReal-style dual camera, and where is the flashlight?
+
+**Dual camera already exists and works** — Hazards card → "Both cameras (pauses obstacle
+detection)": front + back at once via `AVCaptureMultiCamSession` (measured 246 front /
+244 back buffers, hardware cost 0.26 on this phone). Two measured reasons it is not
+"just on": (1) ARKit can never deliver two pictures (`ARFrame` has one `capturedImage`;
+Apple DTS 677731) — a second pipeline is mandatory; (2) running both pipelines starves
+ARKit (measured 30 → 8 frames/4 s + interruption), so obstacle detection would look alive
+and be two seconds stale. Hence paused-ARKit + refusal while a route guides ("Both
+cameras cannot run while a route is guiding you. Stop the route first."). If that refusal
+line is what was heard, the feature is working as designed — BeReal has no LiDAR safety
+channel to protect. Future: `MultiCamDepthProbe` already measures whether depth can ride
+along in multi-cam (trip-log `multicam_depth`); if its verdict keeps depth, both-cameras
+could one day keep the safety channel alive.
+
+**Flashlight is new** (`AppModel.setTorch`, Hazards card toggle): back-camera device torch,
+so it works mid-route, with ARKit alive, and inside both-cameras mode — everywhere the
+dual view cannot go. Off at every launch, never persisted (pocket heater risk). The switch
+reports the measured device state (`isTorchActive` read back), never the request: if the
+torch does not take — including torch+ARKit coexistence, which is now a device-run
+measurement in the `torch` trip-log record — the switch snaps back and says so.
+
+**Verification:** app typechecks clean vs sim SDK (Logic untouched). `make sim/run`
+sandbox-blocked here. Skeptic review **passed with 2 fix-ups, both applied**: an ON request
+the device silently refuses now says "The flashlight did not switch on." instead of the
+misleading "Flashlight off.", and the two toggle confirmations joined `commonLines` so
+they never wait on a fetch (byte-parity pinned in the comment, DangerSound precedent). No
+state, persistence, isolation, or test-contract blockers.
+
+test on device: reinstall; dark room → Hazards card → Flashlight on (light + "Flashlight
+on."); start a route with it on (allowed — obstacle warnings continue); Both cameras +
+Flashlight together; trip log `torch {action, active}` must read active:true in all three.
+
+## Step 31 — Crispy answers: instant voice, "set location", Sift/Granger, exit-first (Sat Sep 12)
+
+**Device report:** answers take too long; "set location" failed; route should guide out of the
+building; blindfold walk to Grainger/Siebel imminent.
+
+**Latency (research: voice-agent bar is ~800 ms; batch TTS costs 1–2 s vs ~400 ms
+streamed).** Every conversational answer paid a full ElevenLabs batch fetch because novel
+text never hits the cache — on top of the LLM round trip. Fix: `say(immediate:)` speaks
+answers at once in the system voice and prefetches the natural voice for next time (route
+lines stay prefetched ElevenLabs — the fetch is only skipped where the cache can never
+hit). Applied to fast-path, cloud, fallback and error answers plus "I did not catch
+that.". Already-fast path kept: `eleven_flash_v2_5` model, 1.5 s utterance silence left
+alone on purpose (cutting it clips slow/halting speakers — accessibility beats 0.5 s).
+
+**"Set location" failed:** only take/route/navigate/go/walk prefixes existed, so it fell
+through to the cloud round trip. Added "set destination/location/my-destination, change
+destination" prefixes (fast path, offline). Marker intents ("set a post") match earlier
+and are unaffected.
+
+**Sift/Granger:** the recogniser hears "Sift" for Siebel and "Granger" for Grainger — both
+are gazetteer aliases now (whole-alias match only; "Sifting" still falls to MapKit).
+
+**Exit-first:** MapKit routes built from a weak fix (accuracy > 25 m) now announce
+"Walking to X, N meters. GPS is weak. If you are inside, head for the exit first."
+(`WalkingIntro`, tested; worded conditionally because urban canyons fake it too; demo
+route already guides out via WP1).
+
+**Verification:** 396/396 Logic tests green (3 new cases); app typechecks clean vs sim SDK.
+`make sim/run` still sandbox-blocked here — reinstall from a normal terminal before the
+walk. Independent skeptic review **passed with 3 minor fix-ups, all applied and verified
+here**: requeue now carries `immediate` (a cut answer used to lose its fetch-skip on
+resume), the egress clause is conditional (weak GPS is not proof of indoors), and two
+stale `1,722` budget comments now read `1,718`. No safety or routing-contract blockers.
+
+test on device: reinstall; "Talk to OpenCane → how is my battery" must answer fast, in one
+voice, with no instruction talking over you; "set location to Sift" → "Walking to the
+Siebel Center…"; start a route indoors → exit-first clause; walk it blindfolded to
+Grainger — trip log must show `voice_toggle`, `conv_turn` latencies, no `field_kind`.
+
+## Step 30 — Speech holds while the walker talks + auditory-load research (Sat Sep 12)
+
+**Device report:** pressing Talk to OpenCane did not stop the instructions — route and
+obstacle lines kept playing over the dictation. Root cause: voice input muted the beacon
+but never touched `SpeechQueue`, so the speech channel kept speaking (and the recogniser
+could hear the app's own voice in the mic).
+
+**Fix:** `SpeechQueue.setVoiceHold(_:)`, owned by `VoiceInputEngine` (set where
+`isListening` flips, cleared in `cleanupAudioPipeline` on every exit — submit, cancel,
+fail, permission wait). While held, lines below `.safety` queue with their TTLs instead
+of playing; `.safety` ("Head height.", ground hazards) speaks straight through — a curb
+cannot wait for the conversation. The playing line is cut and re-queued under the usual
+one-replay rule; explicit Repeat still speaks at once. On release the queue purges
+expired lines and plays the head: a short chat lets still-valid guidance through, a long
+one finds it expired — no burst either way. The failure line, "I did not catch that.",
+and the answer all speak after the release, so they play at once.
+
+**Research (docs/auditory-load.md):** blind-navigation literature says emit discontinuously
+and only on critical events (PMC 10781372), headphone audio masks traffic/echolocation
+(MDPI 2026), and the walker should control the amount per situation (Springer 2025).
+Checked OpenCane against each point: people lines only speak inside scene answers (never
+automatic), signs are per-phrase once-a-minute, hazard watch is off by default, every
+channel has a toggle. Deliberately **not** done: a global sign cap (could eat "SIDEWALK
+CLOSED"). Open: tune the 7 s calm window from trip logs with a blind/O&M-trained tester.
+
+**Verification:** 395/395 Logic tests green; app target typechecks clean vs the sim SDK.
+`make sim/run` still sandbox-blocked here — device build already proven by the
+user (`BUILD SUCCEEDED`, seq 2356). Independent read-only skeptic review: _pending at
+write time, findings go here_.
+
+test on device: reinstall; start a route; press Talk mid-guidance and keep talking — no
+route/obstacle line may speak over you; have someone trigger a head-height cue (or trust
+`.safety`) to confirm it still breaks through; stop talking — the answer speaks first,
+then at most one still-valid held line.
+
+## Step 29 — Action Button opens OpenCane for real + distance-first warnings (Sat Sep 12)
+
+**Why the Action Button "still isn't working" (root cause).** `TalkToOpenCaneIntent` was a plain
+`AppIntent`, never registered in `CaneKitShortcuts` — so it never appeared in Settings → Action
+Button → Shortcut, and Step 24's device-test line ("open Settings → … → Talk to OpenCane")
+described a picker entry that did not exist. Fixed by registering it as an App Shortcut
+("Talk to OpenCane", Siri: "Talk to OpenCane" / "Speak to OpenCane"). The ten-slot list stays
+full by demoting `NavigateToCIFIntent` to a plain intent: same destination as "Take me to CIF
+in OpenCane" (the gazetteer CIF entry *is* route WP9), Guide card button and Shortcuts-app
+action unchanged. `toggleVoiceInput(source:)` now logs `voice_toggle {source}` so an unanswered
+press is visible in the trip log.
+
+**Distance-first warnings (blind-perspective reorder).** Every warning line now leads with the
+time-to-contact, then the identity: "Two meters ahead, door." (was "door ahead, two meters"),
+"One meter ahead." (approach), "Two meters ahead, drop-off." (ground hazards),
+"About 3 meters ahead, two people." (people), "1.4 meters ahead, obstacle." (LiDAR facts), and
+the hazard-watch prompt asks the model for distance first. The gates stay order-free
+(`numbersAreGrounded` compares number sets — pinned by a new both-orders test), and the
+prefetch enumeration follows the templates, so the natural voice cache stays warm (1,718 chars,
+down 4).
+
+**Verification:** 395/395 Logic tests green (`swift test --disable-sandbox`; `--disable-sandbox`
+is needed because this shell denies SwiftPM's inner `sandbox-exec`, and `HOME=/tmp/ckhome`
+redirects its caches). App target typechecks clean against the simulator SDK with the new Logic
+module. `make sim` / `make run` are **blocked in this sandbox** (`sandbox-exec: Operation not
+permitted` inside xcodebuild's package resolution; escalation unavailable) — run them from a
+normal terminal before the walk. Same sandbox blocks `muse exec` (no credentials), `agy`
+(no socket), and `graphify update`. An independent read-only skeptic review of this diff
+**passed**: no safety/route suppression, no prefetch mismatch, 10/10 shortcuts unique and named,
+no test/UI contradiction, no isolation issue. Its one REAL finding (three stale doc-example
+strings: `CODE_REFERENCE` HazardPrompt quote, `SpokenDistance` + `SpeechLoadPolicy` examples)
+is fixed in this step. Two skeptic-flagged spots were **rejected with evidence** and left alone:
+`docs/todo.md:17`, `TEAM_HANDOFF.md:57`, `ideas.md:91,249` quote what the walker actually heard
+on past walks — rewriting them would falsify measurement history, not fix a doc.
+
+test on device: from a normal terminal `cd ios && make run`; then Settings → Action Button →
+Shortcut → Talk to OpenCane (if missing, open the Shortcuts app once to re-index, then retry);
+press → tick → "how is my battery" → press again → answer; walk past a doorway and confirm the
+order is "N meters ahead, door"; check the trip log for `voice_toggle {source: actionButton}`.
 ## Step 28 — Sound recognition fails safe across its whole microphone lifetime (Sat Sep 12)
 
 The optional "Listen for sirens and horns" path now treats its microphone as untrusted unless the

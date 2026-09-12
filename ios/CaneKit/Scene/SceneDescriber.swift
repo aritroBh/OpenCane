@@ -67,7 +67,7 @@ final class SceneDescriber {
     /// Where progress, result and error lines are spoken (all `.scene`).
     @ObservationIgnored private let speech: SpeechQueue
     /// The client's side channel, shared with `AppModel` and the depth engine. It carries the
-    /// LiDAR line the depth engine keeps up to date ("Obstacle ahead at 1.4 meters.") — the gate's
+    /// LiDAR line the depth engine keeps up to date ("1.4 meters ahead, obstacle.") — the gate's
     /// only source of a legitimate distance, and the prefix spoken in front of a cloud sentence,
     /// which is forbidden to give numbers — and, written from here, the depth grid of the very
     /// frame being described, so a person found in the image can be given a real distance.
@@ -89,11 +89,12 @@ final class SceneDescriber {
         providerName = client.name
     }
 
-    /// One description at a time. Speaks progress and the result (or a spoken error).
+    /// One description at a time. Speaks the result (or a spoken error); the Action Button tick and
+    /// the disabled UI state provide progress without adding another spoken line.
     ///
-    /// Flow: speak "Describing." (3 s TTL), wait ≤ 3 s for a fresh camera frame (the paused frame
-    /// is dropped on background), encode a ≤ 1024 px JPEG off main, send it to the client (cloud
-    /// with on-device fallback, or on-device only; never nil), speak the sentence (20 s TTL).
+    /// Flow: wait ≤ 3 s for a fresh camera frame (the paused frame is dropped on background), encode
+    /// a ≤ 1024 px JPEG off main, send it to the client (cloud with on-device fallback, or on-device
+    /// only; never nil), speak the sentence (20 s TTL).
     /// Failures speak "Camera warming up. Try again." or "Scene description failed.".
     /// Caller: `AppModel.describeScene()` (button, watch, Action button, Camera Control).
     /// Every outcome, for the trip log (AppModel → `describe_result`): the sentence spoken, or the
@@ -103,7 +104,8 @@ final class SceneDescriber {
     @ObservationIgnored var onResult: ((_ text: String?, _ error: String?, _ ms: Int?, _ frame: String,
                                         _ gate: String, _ cloudText: String) -> Void)?
 
-    func describe() {
+    @discardableResult
+    func describe() -> Bool {
         run(question: nil)
     }
 
@@ -122,12 +124,13 @@ final class SceneDescriber {
     /// - Parameter question: what the walker said. Empty or wordless input is refused out loud
     ///   rather than sent to the model as a blank question.
     /// Caller: `AppModel.askAboutScene(_:)` (Siri / Shortcuts / the Action button).
-    func ask(_ question: String) {
+    @discardableResult
+    func ask(_ question: String) -> Bool {
         guard let cleaned = QuestionPrompt.clean(question) else {
             speech.say("I did not catch a question.", .scene, ttl: 6)
-            return
+            return false
         }
-        run(question: cleaned)
+        return run(question: cleaned)
     }
 
     /// The shared body of "Where am I" (`question == nil`) and "Ask OpenCane" (a question).
@@ -136,8 +139,12 @@ final class SceneDescriber {
     /// question fired while a description is in flight is dropped, exactly as a double press on the
     /// watch already was.
     /// - Parameter question: the cleaned question, or nil for a plain scene description.
-    private func run(question: String?) {
-        guard !isDescribing else { return }
+    @discardableResult
+    private func run(question: String?) -> Bool {
+        guard !isDescribing else {
+            speech.say("Still describing the previous scene.", .scene, ttl: 6)
+            return false
+        }
         let client = self.client
         // A question needs a model that can read it. The on-device describer ignores the prompt
         // entirely and answers with a scene description, so answering "is there a bench?" with it
@@ -159,8 +166,6 @@ final class SceneDescriber {
         // back afterwards — and the no-cloud downgrade is precisely the run somebody will be trying
         // to explain.
         lastQuestion = requested ?? ""
-        speech.say(question == nil ? "Describing." : "Asking.", .scene, ttl: 3)
-
         Task { [weak self] in
             guard let self else { return }
             defer { self.isDescribing = false }
@@ -184,6 +189,10 @@ final class SceneDescriber {
             // "a person ahead, about two meters" — and stays empty rather than guessing.
             self.context.setDepth(depth)
             self.context.setPeopleHandled(false)
+            // AppModel keeps refreshing the shared text while a cloud request is in flight. Keep
+            // the LiDAR sentence from this same image beside the captured JPEG instead of pairing
+            // the answer with a later frame's distance.
+            let capturedLidar = self.context.get()
             let started = Date()
             do {
                 // The question path asks the cloud client DIRECTLY (see `VLMClient.cloudPrimary`):
@@ -192,7 +201,7 @@ final class SceneDescriber {
                     let raw = try await cloud.describe(jpeg: jpeg,
                                                        prompt: QuestionPrompt.text(for: question))
                     self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
-                    let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg)
+                    let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg, lidar: capturedLidar)
                     self.lastDescription = text
                     // ttl 10, not 20 like a plain description: the frame is already one cloud
                     // round-trip old when this line is spoken, and the walker may have kept
@@ -208,7 +217,7 @@ final class SceneDescriber {
                 self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                 // Only a cloud sentence needs the gate; an on-device one is already faithful.
                 var (text, gate) = answer.source == .cloud
-                    ? await self.grounded(answer.text, jpeg: jpeg)
+                    ? await self.grounded(answer.text, jpeg: jpeg, lidar: capturedLidar)
                     : (answer.text, "on-device")
                 // People come AFTER the gate, deliberately. A cloud primary answers without ever
                 // reaching the on-device client, so the body detectors would not have run — the
@@ -233,6 +242,7 @@ final class SceneDescriber {
                 self.onResult?(nil, error.localizedDescription, nil, frameName, "error", "")
             }
         }
+        return true
     }
 
     /// Turns a cloud sentence into something the sensors can back, and says what happened.
@@ -247,10 +257,9 @@ final class SceneDescriber {
     ///   · a refused sentence is replaced by the on-device description (the client's own fallback),
     ///     so "Where am I" still answers; with no fallback client the deterministic template does.
     /// - Returns: what to speak, and the gate note for the trip log.
-    private func grounded(_ cloud: String, jpeg: Data) async -> (String, String) {
-        let lidar = context.get()
+    private func grounded(_ cloud: String, jpeg: Data, lidar: String) async -> (String, String) {
         let seen = await OnDeviceVision.detect(jpeg: jpeg)
-        let nouns = SceneVocabulary.nouns(seen.labels, max: 5)
+        let nouns = SceneVocabulary.narrationNouns(seen.labels)
         // Same confidence floor and junk filter the on-device facts use: Vision "read" "11" and
         // "J.I" off road markings, and junk text must not licence a name in the sentence.
         let ocr = SceneVocabulary.readableTexts(seen.texts.filter { $0.confidence >= 0.5 }.map(\.text))
@@ -281,10 +290,9 @@ final class SceneDescriber {
     ///   - cloud: the model's raw answer.
     ///   - jpeg: the frame it answered about, re-used for the gate's Vision evidence.
     /// - Returns: what to speak, and the gate note for the trip log.
-    private func groundedAnswer(_ cloud: String, jpeg: Data) async -> (String, String) {
-        let lidar = context.get()
+    private func groundedAnswer(_ cloud: String, jpeg: Data, lidar: String) async -> (String, String) {
         let seen = await OnDeviceVision.detect(jpeg: jpeg)
-        let nouns = SceneVocabulary.nouns(seen.labels, max: 5)
+        let nouns = SceneVocabulary.narrationNouns(seen.labels)
         let ocr = SceneVocabulary.readableTexts(seen.texts.filter { $0.confidence >= 0.5 }.map(\.text))
         let verdict = CloudSceneGate.check(cloud, lidar: lidar, ocr: ocr, detectedNouns: nouns)
         guard let safe = verdict.sentence else {

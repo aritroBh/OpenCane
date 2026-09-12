@@ -78,6 +78,18 @@ public enum FastPathIntentClassifier {
             }
         }
 
+        // 5b. Settings: Nod to talk (`HandsFreeOption.nodToTalk`). Checked before the AirPods
+        //     status rule below, whose "head tracking" trigger would otherwise swallow "head nod".
+        //     Pinned by `NodToTalkFastPathTests`.
+        if cleaned.contains("nod to talk") || cleaned.contains("head nod") || cleaned.contains("nodding") {
+            if cleaned.contains("turn off") || cleaned.contains("disable") || cleaned.contains("stop") {
+                return .updateSetting(option: "nodToTalk", enabled: false)
+            }
+            if cleaned.contains("turn on") || cleaned.contains("enable") || cleaned.contains("start") {
+                return .updateSetting(option: "nodToTalk", enabled: true)
+            }
+        }
+
         // 6. Status: Battery
         if cleaned.contains("battery") || cleaned.contains("charge") || cleaned.contains("power level") {
             return .answerStatus(aspect: .battery)
@@ -137,8 +149,11 @@ public enum FastPathIntentClassifier {
             return .answerHistory(metric: .hazardsEncountered, windowSeconds: nil)
         }
 
-        // 14. Campus Navigation via Gazetteer
-        for prefix in ["take me to ", "route to ", "navigate to ", "go to ", "walk to "] {
+        // 14. Campus Navigation via Gazetteer ("set location to X" is how walkers say it on
+        // the phone — a recogniser hears "set", not "take", half the time).
+        for prefix in ["take me to ", "route to ", "navigate to ", "go to ", "walk to ",
+                       "set destination to ", "set location to ", "change destination to ",
+                       "set my destination to "] {
             if cleaned.hasPrefix(prefix) {
                 let target = String(cleaned.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 let normalized = CampusPlaces.normalize(target)
@@ -157,5 +172,16 @@ public enum FastPathIntentClassifier {
         }
 
         return nil
+    }
+
+    /// Whether a query the fast path left over is about what the camera can see, so that with no
+    /// cloud model (`VLMClient.cloudPrimary == nil`) it can still be answered by `askAboutScene`
+    /// instead of the "I need a network model" line. Caller: `ConversationCoordinator.handleQuery`.
+    /// ponytail: plain substring match; "see" also hits "seen"/"seems". Upgrade path is
+    /// word-boundary matching if a real transcript is misrouted.
+    public static func isSceneQuestion(_ query: String) -> Bool {
+        let lower = query.lowercased()
+        return ["in front", "ahead", "around me", "see", "look", "scene", "describe", "is there",
+                "sign", "read", "what is this", "what's this"].contains { lower.contains($0) }
     }
 }

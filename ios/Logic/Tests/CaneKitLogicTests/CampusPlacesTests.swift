@@ -51,8 +51,10 @@ private func east(_ m: Double) -> Coordinate {
         ("Illinois Street Residence Halls", "isr"),
         ("Grainger", "grainger"), ("grainger library", "grainger"),
         ("Grainger Engineering Library", "grainger"),
+        ("Granger", "grainger"), ("granger library", "grainger"),
         ("the Illini Union.", "illiniUnion"), ("Illini Union", "illiniUnion"), ("the union", "illiniUnion"),
         ("Siebel", "siebel"), ("Siebel Center", "siebel"), ("Siebel Center for Computer Science", "siebel"),
+        ("Sift", "siebel"), ("sift center", "siebel"),
         ("Main Library", "mainLibrary"), ("the main library", "mainLibrary"), ("Main Stacks", "mainLibrary"),
         ("ARC", "arc"), ("the A.R.C.", "arc"), ("Activities and Recreation Center", "arc"),
         ("Activities & Recreation Center", "arc"),
@@ -155,4 +157,21 @@ private func east(_ m: Double) -> Coordinate {
     #expect(WalkingIntro.line(place: "X", meters: 1960) == "Walking to X, 2 kilometers.")
     #expect(WalkingIntro.line(place: "X", meters: -1) == "Walking to X.")
     #expect(WalkingIntro.line(place: "X", meters: .nan) == "Walking to X.")
+}
+
+/// A weak fix means indoors: the exit comes before any turn. A good fix, a missing fix, or a
+/// non-finite accuracy leaves the line untouched.
+@Test func weakGpsAddsAnExitFirstClause() {
+    #expect(WalkingIntro.line(place: "Grainger Engineering Library", meters: 747, accuracyM: 8)
+            == "Walking to Grainger Engineering Library, 750 meters.")
+    #expect(WalkingIntro.line(place: "Grainger Engineering Library", meters: 747, accuracyM: 25)
+            == "Walking to Grainger Engineering Library, 750 meters.")
+    #expect(WalkingIntro.line(place: "Grainger Engineering Library", meters: 747, accuracyM: 65)
+            == "Walking to Grainger Engineering Library, 750 meters. GPS is weak. If you are inside, head for the exit first.")
+    #expect(WalkingIntro.line(place: "X", meters: 100, accuracyM: nil)
+            == "Walking to X, 100 meters.")
+    #expect(WalkingIntro.line(place: "X", meters: 100, accuracyM: .nan)
+            == "Walking to X, 100 meters.")
+    #expect(WalkingIntro.line(place: "X", meters: 100, accuracyM: -1)
+            == "Walking to X, 100 meters.")
 }

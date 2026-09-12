@@ -21,7 +21,10 @@ final class ConversationCoordinator {
 
     // MARK: - Published State
     private(set) var history = ConversationHistory()
-    private(set) var markers: [WalkMarker] = []
+    /// Posts dropped by voice or by the `drop_marker` tool, persisted across launches by `PostStore`.
+    var markers: [WalkMarker] { store.markers }
+    /// Documents/posts/posts.json; both marker paths go through `dropPost(name:)`.
+    let store = PostStore()
     private(set) var isProcessing: Bool = false
     private(set) var lastResponse: String?
 
@@ -73,22 +76,55 @@ final class ConversationCoordinator {
             history.append(turn: turn)
             lastResponse = response
 
-            // Only speak if the underlying effect did not already announce itself (e.g. setHapticsSilenced, stopRoute)
+            // Only speak if the underlying effect did not already announce itself (e.g. setHapticsSilenced, stopRoute).
+            // `immediate`: conversational answers are novel text, so a TTS fetch would stall
+            // every answer on the network — system voice now, natural voice prefetched.
             if !alreadySpoken {
-                model.speech.say(response, .scene, ttl: 12)
+                model.speech.say(response, .scene, ttl: 12, immediate: true)
             }
             model.logger.event("conv_turn", ["query": query, "fast_path": true, "response": response, "already_spoken": alreadySpoken])
             return
         }
 
-        // 2. Build Telemetry Context & Prompt
+        // Scene questions use the dedicated camera path even when a cloud conversation client is
+        // configured. That path binds the answer to the captured frame, LiDAR facts, Vision nouns
+        // and the CloudSceneGate; the generic assistant must not turn a scene question into an
+        // ungrounded conversational paragraph. `SceneDescriber` speaks the eventual answer.
+        if FastPathIntentClassifier.isSceneQuestion(query) {
+            let accepted = model.askAboutScene(query)
+            turn.agentResponse = accepted ? "Checking the scene ahead."
+                                          : "Still describing the previous scene."
+            history.append(turn: turn)
+            lastResponse = turn.agentResponse
+            model.logger.event("conv_turn", [
+                "query": query, "fast_path": false, "scene_path": true,
+                "response": turn.agentResponse ?? ""
+            ])
+            return
+        }
+
+        // 2. No cloud key in Secrets.plist: the on-device client drops a conversational prompt and
+        //    answers with a scene description, which is a wrong answer to anything else. So a scene
+        //    question goes to the describer (which explains the downgrade itself, see
+        //    `SceneDescriber.ask`), and everything else gets one honest line pointing at what the
+        //    fast path can answer offline. Pinned by `sceneQuestionDetection` (ConversationLogicTests).
+        guard let targetClient = client.cloudPrimary else {
+            let response = "I need a network model for that. Try asking about the scene, battery, GPS, or your route."
+            model.speech.say(response, .scene, ttl: 12, immediate: true)
+            turn.agentResponse = response
+            history.append(turn: turn)
+            lastResponse = response
+            model.logger.event("conv_turn", ["query": query, "fast_path": false, "cloud": false, "response": response])
+            return
+        }
+
+        // 3. Build Telemetry Context & Prompt
         let context = buildContext()
         let prompt = ConversationPrompt.buildUserPrompt(query: query, context: context, history: history)
 
-        // 3. Dispatch to LLM via cloudPrimary (avoids on-device FallbackVLMClient prompt dropping)
+        // 4. Dispatch to the cloud LLM
         let tStart = Date()
         do {
-            let targetClient = client.cloudPrimary ?? client
             // Encode JPEG concurrently off main thread to prevent UI stalls
             let jpeg = await Task.detached { [weak processor = model.depth.processor] in
                 processor?.jpegSnapshot()
@@ -99,7 +135,7 @@ final class ConversationCoordinator {
 
             let parsed = ConversationResponseParser.parse(rawText: rawReply)
 
-            // 4. Execute tool call if requested by model
+            // 5. Execute tool call if requested by model
             var toolHandledSpeech = false
             if let invocation = parsed.toolCall {
                 toolHandledSpeech = executeTool(invocation)
@@ -111,13 +147,15 @@ final class ConversationCoordinator {
             history.append(turn: turn)
             lastResponse = parsed.spokenResponse
 
-            // Spoken at .scene priority so obstacle warnings always take priority (skip if tool already spoke)
+            // Spoken at .scene priority so obstacle warnings always take priority (skip if tool already spoke).
+            // `immediate`: the reply is novel text, so skip the TTS fetch wait (see `speakNow`).
             if !toolHandledSpeech {
-                model.speech.say(parsed.spokenResponse, .scene, ttl: 15)
+                model.speech.say(parsed.spokenResponse, .scene, ttl: 15, immediate: true)
             }
             model.logger.event("conv_turn", [
                 "query": query,
                 "fast_path": false,
+                "cloud": true,
                 "response": parsed.spokenResponse,
                 "latency_ms": latency
             ])
@@ -126,7 +164,7 @@ final class ConversationCoordinator {
             turn.agentResponse = fallback
             history.append(turn: turn)
             lastResponse = fallback
-            model.speech.say(fallback, .scene, ttl: 8)
+            model.speech.say(fallback, .scene, ttl: 8, immediate: true)
             model.logger.event("conv_error", ["query": query, "error": error.localizedDescription])
         }
     }
@@ -180,11 +218,7 @@ final class ConversationCoordinator {
             return ("Route stopped.", true) // stopRoute() already speaks "Route stopped." at .nav
 
         case .recordMarker(let name):
-            let coord = model.location.fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)
-            let marker = WalkMarker(name: name, coordinate: coord, timestamp: Date().timeIntervalSince1970)
-            markers.append(marker)
-            model.logger.event("marker_dropped", ["name": name, "lat": coord.latitude, "lon": coord.longitude])
-            return ("\(name) marked at current location.", false)
+            return (dropPost(name: name), false)
 
         case .answerHistory(let metric, _):
             switch metric {
@@ -226,10 +260,8 @@ final class ConversationCoordinator {
             model.stopRoute()
             return true // model.stopRoute() announces "Route stopped." at .nav
         case .dropMarker:
-            let name = invocation.arguments["name"] ?? "Marker \(markers.count + 1)"
-            let coord = model.location.fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)
-            markers.append(WalkMarker(name: name, coordinate: coord, timestamp: Date().timeIntervalSince1970))
-            return false
+            dropPost(name: invocation.arguments["name"] ?? "Marker \(markers.count + 1)")
+            return false // the model's spoken_response confirms; the store holds the post
         case .queryScene:
             let question = invocation.arguments["question"] ?? "Describe the scene ahead"
             model.askAboutScene(question)
@@ -250,6 +282,30 @@ final class ConversationCoordinator {
         default:
             return false
         }
+    }
+
+    /// The one place a post is recorded: fast path (`.recordMarker`) and LLM tool (`.dropMarker`) both
+    /// land here so the store, the trip log and the wording cannot drift apart. No fix → still
+    /// recorded at (0, 0) so the name is not lost, and the confirmation says "GPS weak" so the
+    /// walker knows the spot is not pinned. Returns the confirmation sentence.
+    @discardableResult
+    private func dropPost(name: String) -> String {
+        let fix = appModel?.location.fix
+        let coord = fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)
+        let persisted = store.append(WalkMarker(name: name, coordinate: coord,
+                                                 timestamp: Date().timeIntervalSince1970))
+        var fields: [String: Any] = [
+            "name": name, "lat": coord.latitude, "lon": coord.longitude,
+            "has_fix": fix != nil, "persisted": persisted
+        ]
+        if let error = store.lastError { fields["error"] = error }
+        appModel?.logger.event("marker_dropped", fields)
+        if !persisted {
+            return fix != nil
+                ? "\(name) marked for this session, but could not be saved."
+                : "\(name) marked for this session. GPS weak and could not be saved."
+        }
+        return fix != nil ? "\(name) marked at current location." : "\(name) marked. GPS weak."
     }
 
     // MARK: - Context Gathering

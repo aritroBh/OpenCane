@@ -39,13 +39,13 @@ import Testing
 }
 
 /// The classes that are never announced (none, floor, ceiling) must not appear in the set: their
-/// `spokenName` is nil, and prefetching "ahead, one meter" would waste quota on a line nobody says.
+/// `spokenName` is nil, and prefetching "One meter ahead, …" for one would waste quota on a line nobody says.
 @Test func silentObstacleClassesAreNotPrefetched() {
     for cls in [ObstacleClass.none, .floor, .ceiling] {
         #expect(cls.spokenName == nil)
     }
     #expect(SpokenPhrases.obstacleNameLines.allSatisfy { line in
-        ObstacleClass.allCases.contains { $0.spokenName.map { line.hasPrefix("\($0) ahead") } ?? false }
+        ObstacleClass.allCases.contains { $0.spokenName.map { line.hasSuffix("ahead, \($0)") } ?? false }
     })
 }
 
@@ -145,14 +145,15 @@ import Testing
 /// The whole point of enumerating rather than cross-producting: the one-time ElevenLabs spend
 /// must stay a small fraction of the 10,000-character monthly free tier. Fails loudly if a new
 /// templated family is added without doing the arithmetic.
-/// Breakdown at the time of writing: 777 (32 obstacle names) + 84 (4 approach cues)
-/// + 290 (18 signs) + 571 (20 ground hazards) = 1,722 characters.
+/// Breakdown at the time of writing: 777 (32 obstacle names) + 80 (4 approach cues)
+/// + 290 (18 signs) + 571 (20 ground hazards) = 1,718 characters. The distance-first reorder
+/// is 4 characters cheaper ("Ahead, X." → "X ahead." drops one comma per approach line).
 @Test func spokenPhrasesStayInsideTheCharacterBudget() {
     let total = SpokenPhrases.characterCount(SpokenPhrases.warningLines)
-    #expect(total == 1_722, "warning-line cost changed: \(total) characters")
+    #expect(total == 1_718, "warning-line cost changed: \(total) characters")
     #expect(total <= SpokenPhrases.warningCharacterBudget)
     #expect(SpokenPhrases.characterCount(SpokenPhrases.obstacleNameLines) == 777)
-    #expect(SpokenPhrases.characterCount(SpokenPhrases.approachLines) == 84)
+    #expect(SpokenPhrases.characterCount(SpokenPhrases.approachLines) == 80)
     #expect(SpokenPhrases.characterCount(SpokenPhrases.signLines) == 290)
     #expect(SpokenPhrases.characterCount(SpokenPhrases.groundHazardLines) == 571)
     #expect(SpokenPhrases.warningLines.count == 74)

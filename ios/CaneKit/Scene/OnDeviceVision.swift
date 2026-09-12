@@ -275,8 +275,8 @@ nonisolated enum OnDeviceHazards {
 
 // MARK: - LiDAR context shared with the describer
 
-/// The latest LiDAR facts the app knows ("Obstacle ahead at 1.4 meters. Drop-off ahead, two
-/// meters."), written by AppModel on the main actor, read by the on-device client off-main.
+/// The latest LiDAR facts the app knows ("1.4 meters ahead, obstacle. Two meters ahead,
+/// drop-off."), written by AppModel on the main actor, read by the on-device client off-main.
 /// Also the channel for the two settings and the one grid the describer needs but the
 /// `VLMClient` protocol (jpeg in, sentence out) has nowhere to carry.
 nonisolated final class SceneContext: Sendable {
@@ -342,7 +342,7 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         let hazardMode = prompt == HazardPrompt.text
         // One LiDAR snapshot, taken as close to the frame as possible, for the facts, the prefix
         // and the template alike. Reading it again after the model replied (~0.7 s later) mixed
-        // two moments on the real phone: "Obstacle ahead at half a meter… looks like a table. A
+        // two moments on the real phone: "Half a meter ahead, obstacle… looks like a table. A
         // door is one meter ahead." (first iPhone run; the facts had said door, one meter).
         let lidar = context.get()
         let d0 = await OnDeviceVision.detect(jpeg: jpeg, readText: !hazardMode,
@@ -363,7 +363,7 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         // was detected, invents no numbers); otherwise the deterministic template speaks.
         if let sentence = await Self.phrase(facts),
            SceneVocabulary.isFaithful(sentence, facts: facts,
-                                      nouns: SceneVocabulary.nouns(d.labels, max: 5),
+                                      nouns: SceneVocabulary.narrationNouns(d.labels),
                                       detected: detected) {
             var out = sentence
             // A detected person is a fact, like the LiDAR distance: unless the model's sentence
@@ -374,7 +374,7 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
             }
             // The LiDAR fact is the safety-relevant one: say it first, as the template does,
             // unless the model already gave its distance (Claude review workflow: the model
-            // dropped "Obstacle ahead at 1.4 meters" entirely).
+            // dropped "1.4 meters ahead, obstacle" entirely).
             if !lidar.isEmpty, !SceneVocabulary.mentionsDistance(sentence, from: lidar) { return lidar + " " + out }
             return out
         }
@@ -407,15 +407,15 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         var lines: [String] = []
         if !lidar.isEmpty { lines.append("Depth sensor: \(lidar)") }
         if let people { lines.append("People detector: \(people)") }
-        let things = SceneVocabulary.nouns(d.labels, max: 5)
+        let things = SceneVocabulary.narrationNouns(d.labels)
         if !things.isEmpty { lines.append("Camera sees: " + things.joined(separator: ", ")) }
-        // Only text that looks like words: Street View OCR junk ("11", "J.I") became invented
-        // distances in the model's sentence.
-        // …and only text the sign rule would allow: a far lone word stays out of the prompt too.
-        let policy = SignPolicy()
-        let nearby = d.seenTexts.filter { $0.confidence >= 0.5 && policy.mayMention($0) }.map(\.text)
-        let signs = SceneVocabulary.readableTexts(nearby).prefix(3)
-        if !signs.isEmpty { lines.append("Visible text: " + signs.map { "\"\($0)\"" }.joined(separator: ", ")) }
+        // One sign phrase at most: the sign policy already joins stacked safety words and rejects
+        // storefront/OCR noise. Passing three raw lines invited the model to turn text into a
+        // second scene inventory.
+        var policy = SignPolicy()
+        if let sign = policy.line(for: d.seenTexts, now: 0) {
+            lines.append("Visible text: \"\(sign)\"")
+        }
         return lines.isEmpty ? "Nothing detected." : lines.joined(separator: "\n")
     }
 
@@ -426,9 +426,10 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         // detected. Distance: 0 meters." — so: name what is there, numbers only from the facts.
         let session = LanguageModelSession(instructions: """
             You tell a blind pedestrian what is around them using ONLY the facts given. One \
-            sentence, under 20 words. Name the listed things in plain words, in the order given. \
-            Mention a distance only if the facts give one, and use exactly that number. Never add \
-            an object or a number that is not in the facts. Never say "no hazards". No preamble.
+            sentence, under 20 words. Mention at most two listed scene items, choosing the most \
+            useful or actionable ones and omitting background detail. Mention a distance only if \
+            the facts give one, and use exactly that number. Never add an object or a number that is \
+            not in the facts. Never say "no hazards". No preamble.
             """)
         guard let response = try? await session.respond(to: facts,
                                                         options: GenerationOptions(temperature: 0.2)) else { return nil }
@@ -436,7 +437,7 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         return text.isEmpty ? nil : text
     }
 
-    /// Deterministic fallback: "Obstacle ahead at 1.4 meters. Two people ahead, about 3 meters.
+    /// Deterministic fallback: "1.4 meters ahead, obstacle. About 3 meters ahead, two people.
     /// Ahead: a crosswalk, the street and cars. Sign: detour." Scene words come from
     /// `SceneVocabulary` (plain nouns, crossing first).
     ///
@@ -451,7 +452,9 @@ nonisolated struct OnDeviceVLMClient: VLMClient {
         var parts: [String] = []
         if !lidar.isEmpty { parts.append(lidar) }
         if let people { parts.append(people) }
-        if let scene = SceneVocabulary.sentence(d.labels) { parts.append(scene) }
+        if let scene = SceneVocabulary.sentence(d.labels, max: SceneVocabulary.narrationMaxItems) {
+            parts.append(scene)
+        }
         var policy = SignPolicy()
         // Sized text, like the sign scanner: a tiny far "EXIT" must not be read here either.
         if let sign = policy.line(for: d.seenTexts, now: 0) { parts.append(sign) }

@@ -105,7 +105,7 @@ XcodeGen 2.46.0 are already installed. Apple ID, Developer Mode and `local.mk` a
 | One audio session | Mixing `.playback` / `.playAndRecord` / HFP flips AirPods routes | `.playback`, mode `.default`, `[.duckOthers]`, no Bluetooth options. TTS uses the app session. Haptics use `CHHapticEngine(audioSession: nil)`. |
 | XcodeGen project | 2.46.0 embeds the watch app in `Watch/` (bug #1613, Xcode 26+) | `scripts/gen.sh` patches the pbxproj after generating. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
 
-Also: mesh classification ("door ahead") is an **indoor** feature. LiDAR range is ~5 m and
+Also: mesh classification ("Two meters ahead, door") is an **indoor** feature. LiDAR range is ~5 m and
 sunlight kills it. Outdoors the product is the lanes (distance only). Demo doors are at the ISR
 lobby and the CIF entrance.
 

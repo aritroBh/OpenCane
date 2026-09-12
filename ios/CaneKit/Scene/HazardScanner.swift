@@ -8,7 +8,7 @@
 //      sign per minute (CaneKitLogic.SignPolicy).
 //    · Hazard watch (every 8 s while walking a route): one frame to the vision model — the cloud
 //      provider when a key is set, else the on-device client — asking only for path hazards;
-//      "NONE" stays silent, a hazard becomes "Caution: cones ahead, 3 meters."
+//      "NONE" stays silent, a hazard becomes "Caution: 3 meters ahead, cones."
 //      (CaneKitLogic.HazardWatchPolicy).
 //  Ground hazards (drop-offs, potholes, curbs) come from LiDAR in DepthFrameProcessor, not here.
 //

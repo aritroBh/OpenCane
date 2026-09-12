@@ -24,6 +24,23 @@ struct ConversationLogicTests {
         #expect(marker.timestamp == 1700000000)
     }
 
+    /// Pins the on-disk shape of Documents/posts/posts.json (PostStore writes `[WalkMarker]` with
+    /// a plain JSONEncoder): a fixed UUID and a (0, 0) "GPS weak" post must both survive the trip.
+    @Test("[WalkMarker] survives a JSON round-trip with its UUID")
+    func walkMarkerJSONRoundTrip() throws {
+        let id = UUID(uuidString: "6BA7B810-9DAD-11D1-80B4-00C04FD430C8")!
+        let posts = [
+            WalkMarker(id: id, name: "Townsend Door", coordinate: Coordinate(latitude: 40.1138, longitude: -88.2249), timestamp: 1700000000),
+            WalkMarker(name: "Marker 2", coordinate: Coordinate(latitude: 0, longitude: 0), timestamp: 1700000060)
+        ]
+
+        let data = try JSONEncoder().encode(posts)
+        let decoded = try JSONDecoder().decode([WalkMarker].self, from: data)
+
+        #expect(decoded == posts)
+        #expect(decoded[0].id == id)
+    }
+
     @Test("ConversationHistory respects maxTurns ring buffer limit")
     func historyRingBuffer() {
         var history = ConversationHistory(maxTurns: 3)
@@ -98,6 +115,9 @@ struct ConversationLogicTests {
         #expect(FastPathIntentClassifier.classify(query: "take me to CIF") == .startRoute(destination: "the CIF east entrance"))
         #expect(FastPathIntentClassifier.classify(query: "route to Grainger") == .startRoute(destination: "Grainger Engineering Library"))
         #expect(FastPathIntentClassifier.classify(query: "navigate to Townsend Hall") == .startRoute(destination: "the Townsend Hall doors"))
+        #expect(FastPathIntentClassifier.classify(query: "set location to Grainger") == .startRoute(destination: "Grainger Engineering Library"))
+        #expect(FastPathIntentClassifier.classify(query: "set destination to Sift") == .startRoute(destination: "the Siebel Center"))
+        #expect(FastPathIntentClassifier.classify(query: "take me to Granger Library") == .startRoute(destination: "Grainger Engineering Library"))
     }
 
     @Test("FastPath leaves open-ended and visual queries for LLM")
@@ -106,6 +126,24 @@ struct ConversationLogicTests {
         #expect(FastPathIntentClassifier.classify(query: "is there a bench on my left") == nil)
         #expect(FastPathIntentClassifier.classify(query: "read that sign") == nil)
         #expect(FastPathIntentClassifier.classify(query: "tell me about this building") == nil)
+    }
+
+    /// With no cloud key the coordinator can only answer what the camera sees; this decides which
+    /// of the queries the fast path left over go to `askAboutScene` and which get the "I need a
+    /// network model" line. ⚠ Pins `ConversationCoordinator.handleQuery`'s no-cloud branch.
+    @Test("Scene questions are told apart from ones that need a network model")
+    func sceneQuestionDetection() {
+        #expect(FastPathIntentClassifier.isSceneQuestion("what is in front of me"))
+        #expect(FastPathIntentClassifier.isSceneQuestion("Is there a bench on my left?"))
+        #expect(FastPathIntentClassifier.isSceneQuestion("read that sign"))
+        #expect(FastPathIntentClassifier.isSceneQuestion("describe the scene"))
+        #expect(FastPathIntentClassifier.isSceneQuestion("what do you see ahead"))
+        #expect(FastPathIntentClassifier.isSceneQuestion("what's around me"))
+
+        #expect(!FastPathIntentClassifier.isSceneQuestion("what time is it"))
+        #expect(!FastPathIntentClassifier.isSceneQuestion("tell me a joke"))
+        #expect(!FastPathIntentClassifier.isSceneQuestion("how long until the bus comes"))
+        #expect(!FastPathIntentClassifier.isSceneQuestion(""))
     }
 
     @Test("ConversationPrompt formats telemetry and enforces safety rules")

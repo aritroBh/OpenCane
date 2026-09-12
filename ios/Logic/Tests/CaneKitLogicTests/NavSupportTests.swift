@@ -194,7 +194,7 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     let r21 = p.line(for: .right, phoneCannotBuzz: true, now: 0.5)
     #expect(r21?.tier == .obstacle)
     let r22 = p.line(for: .centerApproach(distance: 1.0), phoneCannotBuzz: true, now: 1)
-    #expect(r22?.text == "Ahead, one meter.")
+    #expect(r22?.text == "One meter ahead.")
     let r23 = p.line(for: .left, phoneCannotBuzz: true, now: 2)
     #expect(r23 == nil)   // per-kind limiter
 }

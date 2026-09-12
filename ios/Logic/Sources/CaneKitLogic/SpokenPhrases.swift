@@ -67,7 +67,12 @@ public enum SpokenPhrases {
 
     // MARK: Templates (the single source of truth for each line's wording)
 
-    /// The obstacle-name line: "door ahead, one meter" (no full stop — the namer never added one).
+    /// The obstacle-name line: "One meter ahead, door" (no full stop — the namer never added one).
+    ///
+    /// Distance first, object second, on purpose: a blind walker needs the time-to-contact before
+    /// the identity — the distance decides whether to stop now, the noun only says what stopped
+    /// them. If speech is cut off mid-line (an interrupting route cue), the part already heard is
+    /// the urgent one.
     ///
     /// Called by `ObstacleNamer.update` (the app) *and* by `obstacleNameLines` below, which is why
     /// the prefetched string cannot drift from the spoken one.
@@ -78,10 +83,11 @@ public enum SpokenPhrases {
     /// - Returns: the line to speak.
     public static func obstacleLine(name: String, distance: Float) -> String {
         let phrase = SpokenDistance.phrase(distance)
-        return phrase.isEmpty ? "\(name) ahead" : "\(name) ahead, \(phrase)"
+        return phrase.isEmpty ? "\(name) ahead"
+            : "\(SpokenDistance.leadingCapitalized(phrase)) ahead, \(name)"
     }
 
-    /// The centre-approach cue line: "Ahead, one and a half meters."
+    /// The centre-approach cue line: "One and a half meters ahead."
     ///
     /// Called by `CueSpeechPolicy.line(for:phoneCannotBuzz:now:)` *and* by `approachLines` below.
     /// Only spoken when the phone cannot buzz (haptic engine down or silenced); otherwise the
@@ -90,7 +96,7 @@ public enum SpokenPhrases {
     ///   `CueThresholds.centerNear` by `CueDecider`.
     /// - Returns: the line to speak.
     public static func approachLine(distance: Float) -> String {
-        "Ahead, \(SpokenDistance.phrase(distance))."
+        "\(SpokenDistance.leadingCapitalized(SpokenDistance.phrase(distance))) ahead."
     }
 
     // MARK: Bucket sampling
@@ -200,7 +206,7 @@ public enum SpokenPhrases {
     ///
     /// The free tier is 10,000 characters *per month* in total, so a careless cross-product
     /// (say, five nouns × every 0.1 m step, or a "Caution: …" template crossed with distances)
-    /// could spend a month's quota in one launch. `warningLines` is 1,722 characters today —
+    /// could spend a month's quota in one launch. `warningLines` is 1,718 characters today —
     /// 17 % of a month, paid once because every line is cached on disk forever after its first
     /// synthesis. The budget is deliberately close to that: adding a whole new templated family
     /// should fail a test and be a decision, not a surprise on the bill.
