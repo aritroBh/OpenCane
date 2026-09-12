@@ -1,0 +1,179 @@
+//
+//  ConversationLogicTests.swift
+//  CaneKitLogicTests
+//
+//  Unit tests for the conversational assistant, memory history, fast-path intent classifier,
+//  and response parser. Pure Foundation logic using Swift Testing.
+//
+
+import CaneKitLogic
+import Foundation
+import Testing
+
+@Suite("Conversational Agent Logic")
+struct ConversationLogicTests {
+
+    @Test("WalkMarker stores coordinate, name, and timestamp")
+    func walkMarkerCreation() {
+        let coord = Coordinate(latitude: 40.1138, longitude: -88.2249)
+        let marker = WalkMarker(name: "Townsend Entrance", coordinate: coord, timestamp: 1700000000)
+
+        #expect(marker.name == "Townsend Entrance")
+        #expect(marker.coordinate.latitude == 40.1138)
+        #expect(marker.coordinate.longitude == -88.2249)
+        #expect(marker.timestamp == 1700000000)
+    }
+
+    @Test("ConversationHistory respects maxTurns ring buffer limit")
+    func historyRingBuffer() {
+        var history = ConversationHistory(maxTurns: 3)
+        #expect(history.turns.isEmpty)
+
+        for i in 1...5 {
+            history.append(turn: ConversationTurn(
+                timestamp: Double(i),
+                userQuery: "Query \(i)",
+                agentResponse: "Response \(i)"
+            ))
+        }
+
+        #expect(history.turns.count == 3)
+        #expect(history.turns[0].userQuery == "Query 3")
+        #expect(history.turns[1].userQuery == "Query 4")
+        #expect(history.turns[2].userQuery == "Query 5")
+
+        history.updateLastResponse("Updated 5", tools: [
+            ToolInvocation(tool: .queryStatus, arguments: [:], resultSummary: "ok")
+        ], latencyMs: 150)
+
+        #expect(history.turns[2].agentResponse == "Updated 5")
+        #expect(history.turns[2].toolsInvoked.count == 1)
+        #expect(history.turns[2].latencyMs == 150)
+
+        history.clear()
+        #expect(history.turns.isEmpty)
+    }
+
+    @Test("FastPath classifies settings toggles instantly")
+    func fastPathSettings() {
+        #expect(FastPathIntentClassifier.classify(query: "silence cane") == .silenceCane(silenced: true))
+        #expect(FastPathIntentClassifier.classify(query: "quiet cane please") == .silenceCane(silenced: true))
+        #expect(FastPathIntentClassifier.classify(query: "unsilence cane") == .silenceCane(silenced: false))
+        #expect(FastPathIntentClassifier.classify(query: "cane haptics on") == .silenceCane(silenced: false))
+
+        #expect(FastPathIntentClassifier.classify(query: "turn off beacon") == .updateSetting(option: "beacon", enabled: false))
+        #expect(FastPathIntentClassifier.classify(query: "beacon on") == .updateSetting(option: "beacon", enabled: true))
+
+        #expect(FastPathIntentClassifier.classify(query: "detect dropoffs") == .updateSetting(option: "dropOffs", enabled: true))
+        #expect(FastPathIntentClassifier.classify(query: "turn off drop offs") == .updateSetting(option: "dropOffs", enabled: false))
+    }
+
+    @Test("FastPath classifies status, stops, and telemetry")
+    func fastPathStatusAndStop() {
+        #expect(FastPathIntentClassifier.classify(query: "stop") == .stopRoute)
+        #expect(FastPathIntentClassifier.classify(query: "stop navigating") == .stopRoute)
+        #expect(FastPathIntentClassifier.classify(query: "stop route") == .stopRoute)
+
+        #expect(FastPathIntentClassifier.classify(query: "battery level") == .answerStatus(aspect: .battery))
+        #expect(FastPathIntentClassifier.classify(query: "are my airpods connected") == .answerStatus(aspect: .headphones))
+        #expect(FastPathIntentClassifier.classify(query: "how far to next point") == .answerStatus(aspect: .route))
+        #expect(FastPathIntentClassifier.classify(query: "how is OpenCane doing") == .answerStatus(aspect: .all))
+    }
+
+    @Test("FastPath parses voice markers and trends")
+    func fastPathMarkersAndTrends() {
+        let marker1 = FastPathIntentClassifier.classify(query: "set a post here")
+        #expect(marker1 == .recordMarker(name: "Marker"))
+
+        let marker2 = FastPathIntentClassifier.classify(query: "set a post called Townsend Door")
+        #expect(marker2 == .recordMarker(name: "Townsend Door"))
+
+        #expect(FastPathIntentClassifier.classify(query: "how many steps have I walked") == .answerHistory(metric: .steps, windowSeconds: nil))
+        #expect(FastPathIntentClassifier.classify(query: "distance walked so far") == .answerHistory(metric: .distanceWalked, windowSeconds: nil))
+        #expect(FastPathIntentClassifier.classify(query: "any hazards on this walk") == .answerHistory(metric: .hazardsEncountered, windowSeconds: nil))
+    }
+
+    @Test("FastPath resolves campus destinations via gazetteer")
+    func fastPathCampusNavigation() {
+        #expect(FastPathIntentClassifier.classify(query: "take me to CIF") == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "route to Grainger") == .startRoute(destination: "Grainger Engineering Library"))
+        #expect(FastPathIntentClassifier.classify(query: "navigate to Townsend Hall") == .startRoute(destination: "the Townsend Hall doors"))
+    }
+
+    @Test("FastPath leaves open-ended and visual queries for LLM")
+    func fastPathDelegatesOpenEnded() {
+        #expect(FastPathIntentClassifier.classify(query: "what is in front of me") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "is there a bench on my left") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "read that sign") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "tell me about this building") == nil)
+    }
+
+    @Test("ConversationPrompt formats telemetry and enforces safety rules")
+    func promptConstruction() {
+        let ctx = ConversationContext(
+            currentDestination: "Campus Instructional Facility",
+            nextWaypointName: "Turn right onto Springfield",
+            distanceToNextMeters: 45,
+            isNavigating: true,
+            batteryPercent: 88,
+            headphonesConnected: true,
+            headphoneName: "AirPods Pro",
+            distanceWalkedM: 320,
+            steps: 450
+        )
+
+        var history = ConversationHistory()
+        history.append(turn: ConversationTurn(timestamp: 100, userQuery: "Where are we?", agentResponse: "Walking to CIF."))
+
+        let prompt = ConversationPrompt.buildUserPrompt(query: "How many steps?", context: ctx, history: history)
+
+        #expect(prompt.contains("Campus Instructional Facility"))
+        #expect(prompt.contains("Turn right onto Springfield"))
+        #expect(prompt.contains("450"))
+        #expect(prompt.contains("AirPods Pro"))
+        #expect(prompt.contains("User: Where are we?"))
+        #expect(prompt.contains("CRITICAL RULES"))
+    }
+
+    @Test("ConversationResponseParser decodes structured JSON tools and spoken response")
+    func responseParserJSON() {
+        let raw = """
+        ```json
+        {
+          "tool": "navigate_to",
+          "args": {"destination": "Grainger Library"},
+          "spoken_response": "Starting walking route to Grainger Library."
+        }
+        ```
+        """
+
+        let parsed = ConversationResponseParser.parse(rawText: raw)
+        #expect(parsed.toolCall != nil)
+        #expect(parsed.toolCall?.tool == .navigateTo)
+        #expect(parsed.toolCall?.arguments["destination"] == "Grainger Library")
+        #expect(parsed.spokenResponse == "Starting walking route to Grainger Library.")
+    }
+
+    @Test("ConversationResponseParser sanitizes false safety reassurance")
+    func responseParserReassuranceSanitization() {
+        let raw = """
+        {
+          "tool": null,
+          "spoken_response": "The path is clear and safe to walk."
+        }
+        """
+
+        let parsed = ConversationResponseParser.parse(rawText: raw)
+        #expect(parsed.toolCall == nil)
+        // Reassurance words ("clear", "safe") must be sanitized
+        #expect(parsed.spokenResponse.contains("Caution: unable to confirm"))
+    }
+
+    @Test("ConversationResponseParser handles unstructured plain text gracefully")
+    func responseParserPlainTextFallback() {
+        let raw = "You have walked 450 steps so far."
+        let parsed = ConversationResponseParser.parse(rawText: raw)
+        #expect(parsed.toolCall == nil)
+        #expect(parsed.spokenResponse == "You have walked 450 steps so far.")
+    }
+}

@@ -99,6 +99,21 @@ struct GuideCard: View {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
 
+            // Conversational assistant push-to-talk button
+            CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
+                        systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
+                        role: model.voiceInput.isListening ? .destructive : .secondary,
+                        hint: "Tap to speak a command, ask a question, or set a post",
+                        value: model.voiceInput.isListening ? "listening" : nil) {
+                model.toggleVoiceInput()
+            }
+            if let response = model.conversation.lastResponse, !response.isEmpty {
+                Text(response)
+                    .font(CKFont.body)
+                    .foregroundStyle(CKColor.textPrimary)
+                    .accessibilityLabel("Assistant: \(response)")
+            }
+
             if model.nav.isNavigating {
                 // Two per row: three-up hyphenates "Recenter" on a 17 Pro Max at default type size.
                 // ⚠ test contract: "Repeat", "Next", "Recenter", "Stop route".

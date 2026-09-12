@@ -158,7 +158,7 @@ public enum StatusSummary {
     /// Obstacle detection: the channel that stops the walker hitting things, so it is spoken first.
     /// A running session with no frames arriving gets its own wording — that state looks exactly
     /// like a clear path from the outside and must never be reported as "on".
-    static func obstacleLine(_ f: StatusFacts) -> String {
+    public static func obstacleLine(_ f: StatusFacts) -> String {
         guard f.lidarSupported else { return "This phone has no depth sensor, so there are no obstacle warnings." }
         guard f.obstacleDetectionRunning else { return "Obstacle detection is off." }
         guard f.depthFps >= minDepthFps else { return "Obstacle detection is running but no depth frames are arriving." }
@@ -168,7 +168,7 @@ public enum StatusSummary {
     /// GPS: whether a route can be followed at all, and how well. The accuracy number is
     /// CoreLocation's own; `weakGPSAccuracyM` is the same threshold at which the waypoint fences
     /// stop firing, so "GPS good" and "the fences are working" mean the same thing.
-    static func gpsLine(_ f: StatusFacts) -> String {
+    public static func gpsLine(_ f: StatusFacts) -> String {
         if f.locationDenied { return "Location permission is denied, so no route can run." }
         guard f.gpsFix else { return "No GPS fix yet." }
         guard f.gpsAccuracyM >= 0 else { return "GPS fix with unknown accuracy." }
@@ -181,7 +181,7 @@ public enum StatusSummary {
     /// Audio: where speech is coming out, and whether the beacon can use head direction.
     /// Losing the AirPods is the most common real failure on a walk and the least visible one —
     /// speech simply moves to the phone speaker under the walker's arm.
-    static func audioLine(_ f: StatusFacts) -> String {
+    public static func audioLine(_ f: StatusFacts) -> String {
         guard f.headphonesConnected else {
             return "No headphones. Speech is on the phone speaker and the beacon is paused."
         }
@@ -195,7 +195,7 @@ public enum StatusSummary {
     /// Haptics: whether the cane can buzz, and — when it cannot — where the obstacle cues went
     /// instead. Saying only "silenced" would leave the walker unsure whether cues still exist;
     /// `announceChannels` makes the same promise at route start and this keeps it.
-    static func hapticsLine(_ f: StatusFacts) -> String {
+    public static func hapticsLine(_ f: StatusFacts) -> String {
         hapticsLine(healthy: f.hapticsHealthy, silenced: f.hapticsSilenced,
                     watchReachable: f.watchReachable)
     }
@@ -220,7 +220,7 @@ public enum StatusSummary {
     /// Route: whether guidance is running, and if so the line the walker is following. The
     /// instruction is repeated here on purpose — "is a route running" and "which one" are the same
     /// question when you cannot see the card.
-    static func routeLine(_ f: StatusFacts) -> String {
+    public static func routeLine(_ f: StatusFacts) -> String {
         guard f.routeRunning else { return "No route running." }
         let instruction = f.routeInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         var line = instruction.isEmpty ? "Route running." : "Route running: \(sentenceCased(instruction))"
@@ -234,7 +234,7 @@ public enum StatusSummary {
     /// Battery: omitted entirely when unknown (the simulator reports −1) rather than spoken as a
     /// wrong number. A walk that ends because the phone died is a safety failure, so the low case
     /// says so in words and not only in digits.
-    static func batteryLine(_ f: StatusFacts) -> String? {
+    public static func batteryLine(_ f: StatusFacts) -> String? {
         guard f.batteryPercent >= 0 else { return nil }
         return f.batteryPercent <= lowBatteryPercent
             ? "Battery low, \(f.batteryPercent) percent."

@@ -9,6 +9,29 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 24 — Audio tap Swift 6 isolation fix, Action Button PTT toggle, and session coordination (Sat Sep 12)
+
+Fixed physical-device voice-input crash paths:
+
+- Moved Core Audio tap installation into nonisolated relay helpers so realtime callbacks do not
+  inherit MainActor isolation under Swift 6.
+- Added microphone-format settling validation and reused the voice audio engine safely across PTT
+  sessions.
+- Made the Action Button toggle listening on/off with tactile confirmation and coordinated playback
+  restoration with the optional sound watcher.
+
+test on device: open Settings → Action Button → Shortcut → Talk to OpenCane; press Action Button,
+feel the haptic tick, speak “set a post here”, then press Action Button again to submit.
+
+## Step 23 — Conversational voice assistant with Action Button trigger, marker drops, and context memory (Sat Sep 12)
+
+Integrated the hands-free assistant, deterministic fast paths, walk markers, rolling context, and
+low-priority conversational speech. Added the follow-up fixes for cloud-primary routing, detached
+JPEG encoding, stale recognition callbacks, double-speak suppression, and query reentrancy.
+
+test on device: trigger Action Button or tap the mic; say “set a post here named curb”, verify the
+confirmation, ask “how is my battery”, then say “take me to CIF”.
+
 ## Step 22 — Gate route start on fresh trusted LiDAR depth (Sat Sep 12)
 
 Added the camera-transition interlock for route guidance:
