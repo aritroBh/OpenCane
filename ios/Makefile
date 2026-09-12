@@ -35,7 +35,7 @@ APP     = $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/CaneKit.app
 BUNDLE  = com.aritro.canekit
 XCB     = xcodebuild -project CaneKit.xcodeproj -scheme $(SCHEME) -configuration $(CONFIG) -derivedDataPath $(DERIVED)
 
-.PHONY: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant e2e uitest-streetview
+.PHONY: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant e2e uitest-streetview audit
 
 gen:
 	scripts/gen.sh
@@ -100,6 +100,13 @@ tour: sim-grant
 SCENARIO ?= all
 e2e: sim sim-grant
 	python3 scripts/e2e.py --sim "$(SIM)" --scenario $(SCENARIO)
+
+# Cue load of one walk (scripts/cue_audit.py, Step 35): mounted or handheld, head band wall vs
+# overhang, cues and spoken lines per minute, replays. LOG=path, or no LOG to pull the newest trip
+# log off the phone in local.mk. Read-only; no simulator.
+audit:
+	python3 scripts/cue_audit.py --selftest
+	python3 scripts/cue_audit.py $(if $(LOG),"$(LOG)",--pull)
 
 sim17:
 	xcrun simctl create "iPhone 17 Pro Max" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max com.apple.CoreSimulator.SimRuntime.iOS-27-0
