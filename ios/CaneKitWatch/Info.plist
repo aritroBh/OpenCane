@@ -34,7 +34,7 @@
 		<string>mindfulness</string>
 	</array>
 	<key>WKCompanionAppBundleIdentifier</key>
-	<string>com.aritro.canekit</string>
+	<string>com.tejaschakrapani.canekit</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key>
 	<false/>
 </dict>

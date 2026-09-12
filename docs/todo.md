@@ -601,7 +601,7 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
 - **test on device:** see CHANGELOG Step 27
 
-## Step 28 — Cane events → Grok Bot family alerts (Sat Sep 12)
+## Step 34 — Cane events → Grok Bot family alerts (Sat Sep 12)
 - [x] `GrokBotEvent.swift` (Logic): `OpenCaneEvent` + `OpenCaneEventType` (open, so an unknown type
       decodes) + `OpenCaneJSON` for `extra`; `CodingKeys` asserted as bytes — they are the bot's contract
 - [x] `FamilyAlertPolicy.swift` (Logic): breadcrumb 120 s, obstacle 60 s and ≤ 1.2 m, low battery once
@@ -623,7 +623,7 @@ for 60 s so a weak network can never stall a cue.
       Siri phrase, all three of which already have plumbing
 - [ ] Confirm on the phone that a `warn` actually reaches a family member's SMS (bot side, not ours)
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
-- **test on device:** see CHANGELOG Step 28
+- **test on device:** see CHANGELOG Step 34
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab

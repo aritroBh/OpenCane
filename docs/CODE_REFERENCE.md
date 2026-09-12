@@ -22,7 +22,7 @@ wins wherever the two disagree.
 - [Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)](#module-speech-audio-scene-ioscanekitspeech-ioscanekitaudio-ioscanekitscene)
 - [Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity](#module-navigation-trip--gps-waypoint-engine-turn-settling-route-sources-trip-logtracker-live-activity)
 - [Module `watch-widget-shared`](#module-watch-widget-shared)
-- [Module `family-alerts` — cane events → the Grok Bot routine (Step 28)](#module-family-alerts--cane-events--the-grok-bot-routine-step-28)
+- [Module `family-alerts` — cane events → the Grok Bot routine (Step 34)](#module-family-alerts--cane-events--the-grok-bot-routine-step-34)
 - [Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI](#module-ui-tests-build--phone-ui-xcuitests-xcodegen-build-ci)
 
 ## Data flow
@@ -2085,7 +2085,7 @@ Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps
 
 ---
 
-## Module `family-alerts` — cane events → the Grok Bot routine (Step 28)
+## Module `family-alerts` — cane events → the Grok Bot routine (Step 34)
 
 Cane detections become one JSON event POSTed to the Grok Bot routine **"OpenCane cane events"**
 (folder `opencane-cane-events`), which decides whether to text family. Same split as the VLM path:
