@@ -60,7 +60,9 @@ For the demo everything runs **untethered on the phone**; the Mac only signs and
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start demo route,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
-   Type a destination first) must not change without updating the tests in the same commit.
+   Type a destination first, Destination, and a campus suggestion's label "Grainger Engineering
+   Library, campus place" — `DestinationSuggestion.voiceOverLabel`) must not change without updating
+   the tests in the same commit.
 10. **Every commit**: `cd ios && make test` green (Logic), `make sim` green, and for UI changes
     `make uitest` + `make tour` on the **iPhone 17 Pro Max / iOS 27** simulator (`make sim17` creates
     it once). Run the Muse review (`muse exec`, read-only, from a scratch dir) on the diff. Commit message
@@ -190,6 +192,14 @@ app container's Documents folder.
   across the corner) and is reset after every veer cue (so a corrected walker is not told again).
 - The arrival hint ("You are close to …, press Next to finish") is clock-driven from the 10 Hz
   ticker (`NavigationEngine.tick`), because CoreLocation stops sending fixes while you stand still.
+- The destination box suggests places as you type (Step 14): the campus gazetteer first, *always*
+  above MapKit's rows and badged CAMPUS, because `MKLocalSearchCompleter` answers "Grainger" with an
+  industrial supply store and the walker cannot see that. Campus rows match partial text; the
+  gazetteer's own `CampusPlaces.match` stays whole-alias only on purpose (a partial name must reach
+  MapKit). Completer rows never show a distance — a completion carries no coordinate, so there is
+  nothing to measure. Tapping a row does not open a new code path: it calls the same
+  `AppModel.navigate(to:)` / `navigate(to place:)` Siri uses, so "Walking to <place>, N meters." is
+  still spoken before guidance. The row count is the app's only VoiceOver announcement (design.md §5.5).
 - "Take me to …" (typed field or Siri) checks the campus gazetteer (`CampusPlaces`: CIF, ISR,
   Grainger, Illini Union, Siebel, Main Library, ARC) before MapKit, then walks to the *nearest*
   MKLocalSearch result within 3 km (a name containing every typed word preferred), never MapKit's

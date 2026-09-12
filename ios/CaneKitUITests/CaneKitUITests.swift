@@ -205,4 +205,31 @@ final class CaneKitUITests: XCTestCase {
         go.tap()
         XCTAssertTrue(app.staticTexts["Type a destination first"].waitForExistence(timeout: 5))
     }
+
+    /// Typing offers campus places straight away and clears a stale error line.
+    ///
+    /// The gazetteer half of the suggestion list needs no network and no GPS fix, so it is the
+    /// half a simulator can prove: "Grainger" must offer the campus library as a VoiceOver button
+    /// (MKLocalSearch's own answer for that word is an industrial supply store in another town).
+    /// The row is not tapped: that would start a real Apple Maps route.
+    ///
+    /// ⚠ test contract: text field "Destination" and the suggestion row's VoiceOver label
+    /// "<place>, campus place" (`DestinationSuggestion.voiceOverLabel`, CaneKitLogic).
+    func testTypingOffersCampusSuggestionsAndClearsTheError() {
+        let go = app.buttons["Go"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()                                     // empty → error line
+        let error = app.staticTexts["Type a destination first"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+
+        let field = app.textFields["Destination"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("Grainger")
+
+        // No fix in the simulator, so the label carries no distance.
+        let suggestion = app.buttons["Grainger Engineering Library, campus place"]
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "campus places must be offered first")
+        XCTAssertFalse(error.exists, "typing clears the previous attempt's error line")
+    }
 }

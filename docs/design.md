@@ -132,6 +132,7 @@ the two dangerous states are also the two darkest fills.
 | `warning` | `#FBBF24` | `#FFB000` | SWEEPING, VEER LEFT / RIGHT N°, GPS ±N M (> 15 m), GPS WEAK, the active cue (CENTER / LEFT / RIGHT / HEAD), SPEAKING, NO AIRPODS, BEACON PAUSED |
 | `danger` | = `laneUrgent` | = HC urgent | Stop route fill, ENGINE DOWN pill, error lines (as text colour) |
 | `neutral` | = `surfaceRaised` | — | GPS SEARCHING / OFF / DENIED, cue CLEAR, QUIET, SYSTEM voice, watch ASLEEP / NOT PAIRED, BEACON OFF / IDLE, HEAD TRACKED / COMPASS ONLY, last watch command. Text in `textPrimary` (the only non-ink pill) |
+| `accent` (pill tone) | = `accent` | — | The **CAMPUS** badge on a destination suggestion (§6.3). Not a state: it marks a hand-verified gazetteer entrance. Text in `onAccent`; accent never carries hazard meaning |
 
 ### Appearance policy
 - The app follows the system appearance (`UIUserInterfaceStyle Automatic`). **For the demo, set the phone to Dark Mode** (dark room; the screen must not light the judges' faces) and run under Guided Access.
@@ -166,8 +167,8 @@ All shapes use `.continuous` corners. Watch buttons use radius 14.
 
 Touch targets (`CKMetrics`): `CKBigButton` is ≥ 72 pt tall, full width or half width (two per row with
 `lg` between them). Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
-buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s and the destination `TextField` keep their
-system size (≥ 44 pt, HIG). Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
+buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s keep their system size (≥ 44 pt, HIG); the destination search field
+and every destination suggestion row are `touchTarget` (60 pt) like the buttons beside them. Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
 (`WKSpacing.touchTarget`: 48 pt pushed the bottom row off a 46 mm screen). Pills are 32 pt tall and not
 interactive.
 
@@ -315,8 +316,9 @@ phone speaker on the cane (the only way the phone speaker is used). The original
 open-ear rule was superseded by AirPods Pro (docs/ideas.md §7); the app cannot choose the AirPods noise
 mode, so keep traffic audible with Transparency (a recommendation, not enforced).
 
-**VoiceOver rule.** The `SpeechQueue` is the app's voice. The app never posts
-`AccessibilityNotification.Announcement`, so a VoiceOver user is never pushed a cue twice. Live values
+**VoiceOver rule.** The `SpeechQueue` is the app's voice. The app posts exactly one
+`AccessibilityNotification.Announcement` — the destination suggestion count ("6 results", §6.3), which
+is screen state nothing speaks — so a VoiceOver user is never pushed a *cue* twice. Live values
 carry `.updatesFrequently` so touching them reads the current state.
 
 ---
@@ -356,12 +358,12 @@ While a route runs                                  Idle (before a route / after
 │ side. No crossing needed. Listen for … │          │ [ ◉ Where am I                       ] │
 │ 120 m                (↱ VEER RIGHT 40°)│          │ [ ⟲ Repeat                           ] │ ← only after arrival
 │ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ [ ▶ Start demo route                 ] │
-│ [ ◉ Where am I                       ] │          │ [Or type a destination     ] [ Go ]    │
-│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ Type a destination first               │ ← error line
-│ [ ⌖ Recenter                         ] │          └────────────────────────────────────────┘
-│ (BEACON 40%) (HEAD TRACKED)            │
-│ [ ■ Stop route                       ] │
-└────────────────────────────────────────┘
+│ [ ◉ Where am I                       ] │          │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
+│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
+│ [ ⌖ Recenter                         ] │          │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
+│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Grainger Industrial Supply        ] │
+│ [ ■ Stop route                       ] │          │ ⚠ Type a destination first             │ ← only after a
+└────────────────────────────────────────┘          └────────────────────────────────────────┘   failed attempt
 ```
 
 - Instruction: the *upcoming* waypoint's `say` ("Arrived: <say>" after arrival, "No route" when idle), `instruction` font, wraps without limit — the spotter reads it over the walker's shoulder.
@@ -385,9 +387,12 @@ While a route runs                                  Idle (before a route / after
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
 | 13 | Stop route | "Stop route" | hint "Ends guidance" | button |
 | — | Start demo route (idle) | "Start demo route" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
-| — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | return key "Go" submits | text field |
-| — | Go (idle) | "Go" | hint "Builds a walking route with Apple Maps"; disabled while building | button |
-| — | Error line | the error text ("Type a destination first", "No GPS fix yet", route / location errors) | — | static text |
+| — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
+| — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
+| — | Suggestion row (0–6, campus places first) | "&lt;place>, campus place, 400 meters away, &lt;address>" | hint "Starts walking guidance to this place" | button |
+| — | Go (idle) | "Go" | hint "Builds a walking route with Apple Maps to what you typed"; disabled while building | button |
+| — | Done (bar above the keyboard) | "Done" | hint "Hides the keyboard" | button |
+| — | Error line | the error text ("Type a destination first", "No GPS fix yet", route / location errors); a warning glyph sits beside it, hidden from VoiceOver | — | static text |
 
 Focus order is the visual order. Nothing uses `accessibilitySortPriority`.
 
@@ -432,11 +437,28 @@ The route picker is three controls in the idle Guide card:
 - **Navigate to CIF from here** — the same destination for a walker who is not at ISR: `MKDirections`
   walking from the live fix to the route file's *last waypoint as a bare coordinate*
   (40.11242, −88.22788, the CIF east entrance). No search, so MapKit can never pick a different "CIF".
-- A destination `TextField` + **Go** — the campus gazetteer (`CampusPlaces`: CIF, ISR, Grainger, Illini
-  Union, Siebel, Main Library, ARC → entrance coordinates) first; only when nothing matches,
-  `MKLocalSearch` (`regionPriority = .required`, points of interest + addresses) in a ±3 km region around
-  the walker, and the **nearest** result in range wins — names containing every typed word preferred —
-  never MapKit's first answer. Waypoints at each step end, 15 m fences, 20 m arrival.
+- A destination **search field + suggestion list + Go** (`UI/DestinationField.swift`) — the campus
+  gazetteer (`CampusPlaces`: CIF, ISR, Grainger, Illini Union, Siebel, Main Library, ARC → entrance
+  coordinates) first; only when nothing matches, `MKLocalSearch` (`regionPriority = .required`, points
+  of interest + addresses) in a ±3 km region around the walker, and the **nearest** result in range wins
+  — names containing every typed word preferred — never MapKit's first answer. Waypoints at each step
+  end, 15 m fences, 20 m arrival.
+
+  **The suggestion list** (Step 14). Typing offers up to six rows from two sources, merged by
+  `CaneKitLogic.DestinationSuggestions`: campus places (partial-name matching, nearest first when there
+  is a fix, at most three) always come **first** and carry a `CAMPUS` badge and a "On campus · 400 m"
+  line, because MKLocalSearch answers "Grainger" with an industrial supply store and a blind walker
+  cannot see that the wrong row is on top. MapKit rows come from one `MKLocalSearchCompleter`,
+  debounced 0.25 s, region-biased to the fix (or the campus centre when GPS is not running), and a row
+  that is only another spelling of a campus place is dropped. A **map row never shows a distance**: a
+  completer result carries no coordinate, so there is nothing to measure. Tapping a row starts guidance
+  at once — no second tap on Go — through `AppModel.navigate(to:)` / `navigate(to place:)`, the same
+  entry points Siri uses, so "Walking to \<place>, N meters." is still spoken first and Stop still
+  abandons a search in flight. The row count is posted as a VoiceOver announcement whenever it changes
+  (§5.5); the field is 60 pt with a magnifying glass, a clear (x) button and the secondary-button fill,
+  the keyboard has a **Done** bar, dragging the page or tapping outside dismisses it, and focusing the
+  field scrolls the Guide card to the top so nothing is hidden behind the keyboard. The error line
+  ("Type a destination first") appears only after a failed attempt and is cleared by the next keystroke.
 
 The last two share `AppModel.buildRoute`. Every MapKit route says **"Walking to \<place>, N meters."**
 (`WalkingIntro`: nearest 10 m, tenths of a kilometre above 1 km) before guidance starts, so a blind walker
@@ -635,7 +657,9 @@ Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt).
 | `switches[…]` | "Mirror left / right" | Mount toggle | toggle test (value must change on tap) |
 | `switches[…]` | "Write trip log" | Mount toggle | labels test |
 | `otherElements[…]` | "Head row" | `LaneGridView` row label `"\(title) row"` | labels test |
-| `staticTexts[…]` (exact) | "Type a destination first" | `AppModel.startMapKitRoute()` → Guide error line | empty-destination test |
+| `staticTexts[…]` (exact) | "Type a destination first" | `AppModel.navigate(to:)` → Guide error line | empty-destination test, suggestion test |
+| `textFields[…]` | "Destination" | `DestinationField` search field | suggestion test (types "Grainger") |
+| `buttons[…]` | "Grainger Engineering Library, campus place" | `DestinationSuggestion.voiceOverLabel` (CaneKitLogic) for a campus row with no fix | suggestion test |
 | `staticTexts` label CONTAINS[c] | "Townsend" | WP1 `say` in `route_isr_cif.json`, shown as the instruction | route test |
 | `staticTexts` label CONTAINS[c] | "Illinois Street" | WP2 `say` (WP1's line also contains it) | route test |
 | `staticTexts` label CONTAINS[c] "camera" OR BEGINSWITH | "camera" / "Scene:" | describer error "No camera frame" (the simulator has no camera) or the scene text's label "Scene: <description>"; then "Where am I" must be back. No key is needed any more (cloud → on-device fallback) | no-key test |
@@ -649,7 +673,7 @@ free to improve, but keep them in step with §6.
 
 ## 10. Open design gaps (code ≠ intent, not yet fixed)
 
-- Error lines use `laneUrgent` as text colour: fine on dark cards (6.4:1) but 2.8:1 on the white light-mode card, below WCAG AA. An ink-on-`danger` pill or `textPrimary` + a symbol would fix it.
+- Error lines use `laneUrgent` as text colour: fine on dark cards (6.4:1) but 2.8:1 on the white light-mode card, below WCAG AA. **Fixed for the Guide's route error line** (Step 14: `textPrimary` text plus a `danger` warning glyph); the describer error line on Guide and the Hazards card's error line still use red text.
 - The lane-ladder contrast ratios quoted in `Theme.swift` / `CODE_REFERENCE.md` comments (11.4 / 15.2 / 8.9 / 7.1) are overstated; the recomputed values are in §2.
 - The watch cuts a long instruction after two lines (≈ 70 % scale) — Repeat is the recovery.
 - The Live Activity glyph's VoiceOver label is the raw kind string ("turnLeft", "straight").

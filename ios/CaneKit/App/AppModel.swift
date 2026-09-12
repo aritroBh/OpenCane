@@ -785,6 +785,13 @@ final class AppModel {
         navigate(to: destinationQuery)
     }
 
+    /// Drop the route error line ("Type a destination first", "No GPS fix yet", a MapKit error).
+    /// Called by `DestinationField` on every keystroke: an error about the *previous* attempt
+    /// must not sit under a box the walker is already retyping (it reads as a permanent state).
+    func clearRouteError() {
+        routeError = nil
+    }
+
     /// Walking route from the current fix to a spoken or typed place: the campus gazetteer
     /// first, then the nearest reasonable MKLocalSearch result (`RouteSource.mapKit(to:from:)`).
     /// Called by `startMapKitRoute()` and `TakeMeToIntent` (Siri "Take me somewhere in

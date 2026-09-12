@@ -8,13 +8,15 @@
 //
 //  Implements docs/design.md §6.1 (Guide: instruction, hero distance, bearing word, big
 //  buttons), §6.3 (route picker, reduced to "Start demo route", "Navigate to CIF from here" and
-//  a destination field) and the
+//  a destination field — the field, its live suggestion list and "Go" live in
+//  `DestinationField.swift`) and the
 //  "Off-bearing > 25°" row of §5. Button titles differ from the §6.1 VoiceOver table on purpose
 //  (short words that fit two-up on a 17 Pro Max); the XCUITests pin the shipped words.
 //
 //  Accessibility contract — everything the XCUITests drive lives here (AGENTS.md rule 9):
 //    ⚠ test contract buttons: "Start demo route", "Navigate to CIF from here", "Stop route",
-//      "Repeat", "Next", "Recenter", "Where am I", "Go" (queried as `app.buttons[label]`).
+//      "Repeat", "Next", "Recenter", "Where am I" (queried as `app.buttons[label]`); "Go" is in
+//      `DestinationField`.
 //    ⚠ test contract texts: the instruction `Text` must stay a plain static text whose label is
 //      its content (tests match "Townsend" / "Illinois Street" from route_isr_cif.json); the
 //      error line must stay a plain `Text` (tests match "Type a destination first" exactly and
@@ -35,6 +37,9 @@ struct GuideCard: View {
     /// Hero distance size: 64 pt at default text size, scaled with `.largeTitle`, clamped to 80
     /// at the call site so the buttons are never pushed off-screen (design.md §1, §8).
     @ScaledMetric(relativeTo: .largeTitle) private var hero = 64
+    /// The root scroll view's proxy, handed on to `DestinationField` so that focusing the search
+    /// box scrolls the Guide card above the keyboard. nil in previews (then nothing scrolls).
+    var scroller: ScrollViewProxy? = nil
 
     var body: some View {
         @Bindable var model = model
@@ -137,33 +142,27 @@ struct GuideCard: View {
                             hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
                             value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
                     .disabled(model.isBuildingRoute)
-                HStack(spacing: CKSpacing.sm) {
-                    TextField("Or type a destination", text: $model.destinationQuery)
-                        .textFieldStyle(.roundedBorder)
-                        .font(CKFont.body)
-                        .submitLabel(.go)
-                        .onSubmit { model.startMapKitRoute() }
-                        .accessibilityLabel("Destination")
-                    // ⚠ test contract: "Go" (testDestinationFieldRejectsEmptyQuery taps it empty).
-                    Button {
-                        model.startMapKitRoute()
-                    } label: {
-                        // Explicit padding + fixedSize: the HStack must never squeeze this label.
-                        Text("Go")
-                            .font(CKFont.body.weight(.semibold))
-                            .padding(.horizontal, CKSpacing.lg)
-                            .frame(minWidth: 64, minHeight: CKMetrics.touchTarget)
-                    }
-                        .buttonStyle(CKBigButtonStyle(role: .secondary))
-                        .fixedSize(horizontal: true, vertical: false)
-                        .disabled(model.isBuildingRoute)
-                        .accessibilityLabel("Go")
-                        .accessibilityHint("Builds a walking route with Apple Maps")
-                }
+                // Search box + live suggestions + "Go" (⚠ test contract: the "Go" button and the
+                // "Destination" field live in DestinationField now).
+                DestinationField(scroller: scroller)
             }
-            // ⚠ test contract: plain Text; shows AppModel's "Type a destination first" verbatim.
+            // ⚠ test contract: the error text itself stays a plain `Text` whose accessibility
+            // label is its content ("Type a destination first"); the warning glyph beside it is
+            // hidden from VoiceOver. Only shown after something actually failed — every keystroke
+            // in the destination field clears `routeError`.
             if let err = model.routeError ?? model.location.lastError {
-                Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+                HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(CKColor.danger)
+                        .accessibilityHidden(true)
+                    // `textPrimary`, not red text: red on the white light-mode card is 2.8:1
+                    // (design.md §10). The glyph carries the alarm, the words carry the meaning.
+                    Text(err)
+                        .font(CKFont.secondary)
+                        .foregroundStyle(CKColor.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
