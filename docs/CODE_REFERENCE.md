@@ -492,6 +492,10 @@ Pure ranking behind the Guide card's "as you type" suggestions. Foundation only;
 
 `DangerSound` (siren/horn/vehicle) carries `spokenLine`, `minimumConfidence` (siren 0.60, horn 0.60, vehicle 0.75), `requiredWindows` (siren 3, else 2, at the ~0.5 s window hop), `repeatInterval` (15/12/30 s), `speechTTL` (15/4/6 s — siren equals its repeat interval so it survives the `.nav` queue instead of expiring unheard behind a crossing instruction) and `selectionRank` (siren 2 > horn 1 > vehicle 0). `SoundUrgency` (ambient/emergency) decides the speech band in `AppModel.wireSounds` (emergency → `.nav`, ambient → `.obstacle`, never `.safety`). `SoundAlerts.best(of:)` picks the most urgent kind clearing its own gate (never the raw highest confidence, so traffic noise cannot shadow a siren); `SoundAlertPolicy.update(kind:confidence:now:)` needs consecutive agreeing windows and resets on a below-gate window. `MicrophoneStart` owns the input-format settle (one retry, whole budget < 0.5 s). Tests: `SoundAlertsTests.swift` (incl. `spokenLinesAreThePrefetchedOnes`, `anEmergencySirenIsNotShadowedByTheAmbientTrafficClass`).
 
+### `SoundRecognitionGuard.swift` — microphone recognition lifetime policy
+
+`SoundInputQuality` classifies a route input as `.usable`, `.hfp` or `.unavailable`; `SoundRecognitionRoute` is the Sendable output/input snapshot produced by `SpeechQueue` and faked by Logic tests, including an `outputIsHFP` guard so an already-degraded output cannot pass startup. `SoundRecognitionGuard` tracks the permission-request generation, startup route baseline and running route. A route output move (UID/name included, not only port type), HFP/missing-input transition, analyzer/engine failure, interruption begin or permission revocation returns one `.stop(SoundRecognitionFailure)` decision and moves to idle; later flapping callbacks are `.ignored`. The only startup exception is `none → usable` while the analyzer is still starting, allowing the existing single 0.25 s input-format retry. `permissionPollInterval` is 0.5 s for the app adapter. Tests: `SoundAlertsTests.swift` (`midSessionHFPInputDegradationStopsRecognition`, `analyzerThrowStopsOnce`, `permissionRevokedMidSessionStopsRecognition`, `permissionRaceCancellationInvalidatesLateGrant`, `rapidRouteFlappingFailsOnceAndStaysIdle`, `startupInputRouteSettlesWithoutDisablingTheFeature`).
+
 ### `QuestionPrompt.swift` / `StatusSummary.swift` — hands-free content (Step 16)
 
 Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswerable questions) / `.text(for:)` (the model prompt); `StatusFacts` (gathered by `AppModel` at speak time) → `StatusSummary.lines` / `.sentence` (fixed six-clause order: obstacle detection, GPS, audio, haptics, route, battery) / `.hapticsLine` (shared with `announceChannels` so one fact has one sentence everywhere). Tests: `QuestionPromptTests.swift`, `StatusSummaryTests.swift`.
@@ -672,7 +676,7 @@ Three files: the `@main` entry, the `AppModel` that owns every engine and all se
 | `hazards` | `HazardScanner` | 11 | Built in `init` as `HazardScanner(processor: depth.processor, watchClient: client)` (same client as the describer). `signsEnabled`, `watchEnabled`, `paused`, `onHazard`, `isNavigating`, `currentSpeed`, `start/stop`, `watchProvider`, `lastSign`, `lastCaution`, `lastError`. |
 | `hazardLog` | `HazardLog` | 11 | `record(kind:text:fix:jpeg:)`, `records`, `fileURL`, `fileWritten`, `lastError`. |
 | `conversation` | `ConversationCoordinator` | 23 | Handles fast-path commands, LLM fallback tool calling, drop-marker posts, and status queries. |
-| `voiceInput` | `VoiceInputEngine` | 23 | Push-to-talk `SFSpeechRecognizer` using `SpeechQueue.setMicrophoneEnabled` (never `.allowBluetoothHFP`). |
+| `voiceInput` | `VoiceInputEngine` | 23 | Push-to-talk `SFSpeechRecognizer` using the `SpeechQueue.MicrophoneOwner.voiceInput` lease through `setMicrophoneEnabled(_:owner:)` (never `.allowBluetoothHFP`; rejected while sound recognition owns the input). |
 | `decider` | `CueDecider` (`@ObservationIgnored private let`, CaneKitLogic) | 3 | Pure cue state machine; `update(_:now:) -> CueOutput?`, `reset()`. |
 | `namer` | `ObstacleNamer` (`@ObservationIgnored private let`) | 4 | Mesh-class → "door ahead, two meters"; `update(_:now:) -> String?`, `reset()`. |
 
@@ -1083,7 +1087,7 @@ Cross-module contract (`AppModel.handle(_:)`, ~30 Hz): `.fire(cue)` → `haptics
 Owner of everything the user *hears* that is not a haptic: the single speech queue and its two TTS backends, the headphone-route monitor, the spatial-audio beacon and the AirPods head-yaw it needs, the "Where am I" camera→VLM→speech path plus the key plumbing behind it, and (Step 11) the camera hazard scanner and the on-device vision stack that works with no key and no network. Everything in this module is instantiated once by `AppModel` (`ios/CaneKit/App/AppModel.swift`); nothing here talks to ARKit, haptics or the watch directly (the scanner only reads `DepthFrameProcessor.jpegSnapshot`). The pure rules that decide *what* reaches this module (`CueSpeechPolicy`, `StraightWalkDetector`, `TurnSettle`) live in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`; the sign / hazard-reply rules (`SignPolicy`, `HazardWatchPolicy`, `HazardPrompt`) in `Hazards.swift`.
 
 Verification handles used below:
-- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (366 current `@Test` annotations). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`), `HazardTests.swift` (sign phrases, hazard-watch replies) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker`, `ObstacleNamer`, `HazardScanner` or `OnDeviceVision` is unit-tested — they are device-only (or simulator-only via FrameReplay).
+- **`make test`** → `ios/scripts/test.sh` → `swift test` in `ios/Logic` (372 current `@Test` annotations). Tests touching this module: `ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift` (request/response codecs, `SpokenDistance`), `HazardTests.swift` (sign phrases, hazard-watch replies), `SoundAlertsTests.swift` (sound alert thresholds plus the recognition lifetime guard) and `NavSupportTests.swift` (`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz` — which cues `AppModel` hands to `SpeechQueue`; `straightWalkNeedsThreeSteadyFixesCountingTheFirst`, `straightWalkRestartsOnATurnAStopOrAHeadTurn` — when `HeadPoseTracker.recenter()` auto-fires; the `settle…`/`crossingSilencesTheBeaconAndReleasesAtTheCurb` tests — what bearing reaches the beacon). Nothing in `SpeechQueue`, `BeaconEngine`, `AudioRouteMonitor`, `HeadPoseTracker`, `ObstacleNamer`, `HazardScanner` or `OnDeviceVision` is unit-tested — they are device-only (or simulator-only via FrameReplay).
 - **UI tests** (`make uitest` → `sim-grant` first, simulator; `CANEKIT_UITEST=1` also mutes speech via `SpeechQueue.muted`): `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (no camera in the simulator → "No camera frame" or a "Scene:" answer, button back); `testWhereAmIDescribesAStreetViewFrame` (`make uitest-streetview`: on-device describer over a Street View frame); `testGuideStartsAndStopsDemoRoute` (Repeat exists, does not advance the route, disappears after Stop — the `sayAgain` path, audio not asserted).
 - **`make e2e`** (`ios/scripts/e2e.py`, launched with `CANEKIT_MUTE=1`) asserts on what `SpeechQueue` was asked to say, via the trip log.
 - **`swift ios/scripts/vision_probe.swift ios/scripts/streetview`** runs the same Vision requests, sign phrases and hazard map as `OnDeviceVision` on the Mac.
@@ -1093,7 +1097,7 @@ Verification handles used below:
 
 ### `ios/CaneKit/Speech/SpeechQueue.swift`
 
-Purpose: the one voice of the app — a priority queue over two TTS backends (ElevenLabs mp3 via `AVAudioPlayer`, else `AVSpeechSynthesizer`) sharing one `AVAudioSession`, with interrupted-line replay and phone-call/Siri interruption handling.
+Purpose: the one voice of the app — a priority queue over two TTS backends (ElevenLabs mp3 via `AVAudioPlayer`, else `AVSpeechSynthesizer`) sharing one `AVAudioSession`, with interrupted-line replay and phone-call/Siri interruption handling. It is also the sole owner of the temporary `.playAndRecord` microphone transition used by `SoundWatcher` and `VoiceInputEngine`, with an explicit owner lease that rejects concurrent microphone users.
 
 #### Types
 
@@ -1102,6 +1106,8 @@ Purpose: the one voice of the app — a priority queue over two TTS backends (El
 | `SpeechPriority` | `enum: Int, Comparable, Sendable` | `scene = 0 < obstacle = 1 < nav = 2 < safety = 3`. Higher raw value wins. `<` compares `rawValue`. |
 | `SpeechQueue` | `@MainActor @Observable final class` | The queue + backend switch. |
 | `SpeechQueue.Pending` | `private struct` | `text`, `priority`, `expires: TimeInterval` (reference-date seconds, `.infinity` = never), `sequence: Int` (FIFO key), `var replays: Int = 0` (times this line was already cut and resumed). |
+| `SoundRecognitionRoute` / `SoundInputQuality` | `CaneKitLogic`, `Sendable` | UID/name-bearing output/input route snapshot, HFP-output bit and input-quality classification shared with the microphone guard. |
+| `SpeechQueue.MicrophoneOwner` | `enum: String, Equatable, Sendable` | Explicit lease owner (`soundRecognition` or `voiceInput`); the shared session rejects concurrent microphone users. |
 | `CallbackBox` | `nonisolated private final class, @unchecked Sendable` | Holds `onEnd: (@Sendable (ObjectIdentifier) -> Void)?`; written once in `init`, then read-only. |
 | `DelegateRelay` | `nonisolated private final class: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable` | `didFinish` and `didCancel` both call `box.onEnd?(ObjectIdentifier(utterance))`. |
 | `PlayerRelay` | `nonisolated private final class: NSObject, AVAudioPlayerDelegate, @unchecked Sendable` | `audioPlayerDidFinishPlaying` and `audioPlayerDecodeErrorDidOccur` both call `onEnd()`. |
@@ -1178,6 +1184,28 @@ Invariants a future editor must keep:
 - ⚠ Do not change priorities, the re-queue/replay rule, the obstacle/safety no-network rule, the 2.5 s deadline / 60 s breaker, the interruption re-arm or the watchdog without the CHANGELOG Step 10 device checks ("Speech that is never lost or looped": Repeat on the watch mid-line, "Head height." once with haptics silenced, phone call mid-route) and `docs/design.md` §5 (crossing/arrival/head = P0, obstacle names = P1).
 
 ---
+
+### `ios/CaneKit/Audio/SoundWatcher.swift` — optional microphone sound recognition
+
+`SoundWatcher` is `@MainActor @Observable`, owned by `AppModel.sounds`, and runs Apple's
+`SNClassifySoundRequest` through `AVAudioEngine.inputNode` and a serial `SoundAnalysisPump`. It
+uses the `SpeechQueue.MicrophoneOwner.soundRecognition` lease through
+`setMicrophoneEnabled(_:owner:)` for the temporary `.playAndRecord` session, then drives
+`CaneKitLogic.SoundRecognitionGuard` with Sendable route snapshots and lifecycle events. The
+guarded route observer covers the complete session: any output move, HFP input, missing input,
+engine configuration/stop, analyzer failure, interruption begin or mid-session permission loss
+tears down the tap/analyser, attempts `.playback` restoration (one bounded retry), turns the switch off and calls the existing
+`AppModel.wireSounds` speech/UI failure path. Relay and observer callbacks carry a per-run
+generation token, and old-device-unavailable route reasons force a stop even if the sampled route
+has recovered. A 0.5 s permission poll is canceled on every stop;
+the only startup route exception is `none → usable` while the existing one 0.25 s input-format
+retry is pending. Playback restore retries once and surfaces a failure if it still cannot reach
+`.playback`; repeated route flaps after the first failure are ignored by the pure guard. The shared
+microphone lease rejects `VoiceInputEngine` overlap.
+`SoundResultsRelay` carries only label/confidence or a formatted error from SoundAnalysis's queue;
+it never touches main-actor state directly. Device checks remain required because the AirPods HFP
+case and microphone quality are not measured in the simulator. Tests: `SoundAlertsTests.swift`
+(`SoundRecognitionGuard` lifecycle scenarios).
 
 ### `ios/CaneKit/Speech/ObstacleNamer.swift`
 
@@ -1415,7 +1443,7 @@ Purpose: spike — Camera Control button (iPhone 16+) and volume buttons via `AV
 
 ## Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity
 
-Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController,HazardLog}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`, `CourseSmoother`, `HazardRecord`/`HazardGeoJSON`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport,CourseSmoother,Hazards}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests,CourseSmootherTests,HazardTests}.swift` (this module's tests are part of the current 366-annotation suite; `make test` / `ios/scripts/test.sh`; `logic-tests` job in `.github/workflows/ci.yml`, manual for now). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
+Files: `ios/CaneKit/Navigation/{LocationService,NavigationEngine,RouteSource}.swift`, `ios/CaneKit/Trip/{TripLogger,TripTracker,LiveActivityController,HazardLog}.swift`, `ios/CaneKit/Resources/route_isr_cif.json`, `docs/route_isr_cif.md`, plus `TurnSettle` in `ios/Logic/Sources/CaneKitLogic/NavSupport.swift`. All app classes are `@MainActor @Observable final class` (app target default `SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in `ios/project.yml`); the pure decision logic they wrap (`GeofenceTracker`, `OffCourseDetector`, `GeoMath`, `Route`/`Waypoint`, `RouteBuilder`, `TurnSettle`, `StraightWalkDetector`, `CourseSmoother`, `HazardRecord`/`HazardGeoJSON`) lives in `ios/Logic/Sources/CaneKitLogic/{GeoMath,Waypoint,NavSupport,CourseSmoother,Hazards}.swift` (SwiftPM package, no default isolation: value types are `Sendable`, `GeofenceTracker`/`OffCourseDetector` are non-Sendable classes owned by the engine) and is tested by `ios/Logic/Tests/CaneKitLogicTests/{GeoMathTests,RouteTests,NavSupportTests,CourseSmootherTests,HazardTests}.swift` (this module's tests are part of the current 372-annotation suite; `make test` / `ios/scripts/test.sh`; `logic-tests` job in `.github/workflows/ci.yml`, manual for now). Everything here is wired together by `AppModel.wireNavigation()` / `beginRoute()` / `stopRoute()` / `autoRecenterIfWalkingStraight(_:)` in `ios/CaneKit/App/AppModel.swift`.
 
 ### Data flow (who calls whom)
 
@@ -2385,7 +2413,7 @@ Regenerate with `scripts/gen.sh`; `CaneKit.xcodeproj` is git-ignored and never h
 
 ### ios/scripts/test.sh
 
-Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (366 current `@Test` annotations; use the command below rather than maintaining a stale per-file count). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
+Runs the `CaneKitLogic` Swift Testing suite from `ios/Logic` (372 current `@Test` annotations; use the command below rather than maintaining a stale per-file count). If `xcode-select -p` points at `Xcode.app`: `exec swift test "$@"`. Otherwise (Command Line Tools only) adds `-Xswiftc -Fsystem <CLT Frameworks>`, `-disable-cross-import-overlays`, and linker `-F`/`-rpath` so Swift Testing links (tests use only core Testing + Foundation).
 
 ### ios/Makefile (run from `ios/`)
 

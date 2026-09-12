@@ -360,3 +360,120 @@ import Testing
     #expect(total > 0)
     #expect(total <= 0.5)
 }
+
+// MARK: - Recognition lifetime guard
+
+private let healthySoundRoute = SoundRecognitionRoute(output: "Speaker",
+                                                       input: "BuiltInMic",
+                                                       inputQuality: .usable)
+
+/// A route that changes to Bluetooth HFP while recognition is active stops immediately, even when
+/// the output name has not changed. The input quality is part of the guard because a phone-call
+/// microphone can degrade before Core Audio publishes a different output port.
+/// ⚠ Pins `SoundRecognitionGuard.routeChanged`, driven by `SpeechQueue` notifications.
+@Test func midSessionHFPInputDegradationStopsRecognition() {
+    let alreadyCallQuality = SoundRecognitionRoute(output: "BluetoothHFP[airpods-a]",
+                                                    input: "BuiltInMic",
+                                                    inputQuality: .usable)
+    #expect(!alreadyCallQuality.isUsable)
+    var outputGuard = SoundRecognitionGuard()
+    #expect(outputGuard.beginStart())
+    #expect(outputGuard.sessionStarted(route: alreadyCallQuality) == .stop(.inputRouteDegraded))
+
+    var guardState = SoundRecognitionGuard()
+    #expect(guardState.beginStart())
+    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let degraded = SoundRecognitionRoute(output: "Speaker", input: "BluetoothHFP",
+                                         inputQuality: .hfp)
+    #expect(guardState.routeChanged(degraded) == .stop(.inputRouteDegraded))
+    #expect(guardState.state == .idle)
+
+    // Two devices can advertise the same A2DP type; UID/name are retained in the snapshot so the
+    // second device is still an output-route change and cannot silently replace the beacon path.
+    var deviceGuard = SoundRecognitionGuard()
+    let deviceA = SoundRecognitionRoute(output: "BluetoothA2DP[uid-a|AirPods A]",
+                                         input: "BuiltInMic[uid-mic|iPhone]",
+                                         inputQuality: .usable)
+    let deviceB = SoundRecognitionRoute(output: "BluetoothA2DP[uid-b|AirPods B]",
+                                         input: "BuiltInMic[uid-mic|iPhone]",
+                                         inputQuality: .usable)
+    #expect(deviceGuard.beginStart())
+    #expect(deviceGuard.sessionStarted(route: deviceA) == .continueRunning)
+    #expect(deviceGuard.recognitionStarted(route: deviceA) == .continueRunning)
+    #expect(deviceGuard.routeChanged(deviceB) == .stop(.outputRouteChanged))
+}
+
+/// SoundAnalysis failures are hard stops, not diagnostic-only state. The second callback after a
+/// stop is ignored, so a late relay error cannot speak a duplicate failure or re-touch AVAudio.
+@Test func analyzerThrowStopsOnce() {
+    var guardState = SoundRecognitionGuard()
+    #expect(guardState.beginStart())
+    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.analyzerFailed() == .stop(.analyzerFailed))
+    #expect(guardState.analyzerFailed() == .ignored)
+
+    var interruptedGuard = SoundRecognitionGuard()
+    #expect(interruptedGuard.beginStart())
+    #expect(interruptedGuard.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(interruptedGuard.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(interruptedGuard.interruptionBegan() == .stop(.interrupted))
+    #expect(interruptedGuard.interruptionBegan() == .ignored)
+}
+
+/// Permission revocation during an active run takes the feature down while leaving the rest of the
+/// app alone. Re-granting permission does not implicitly restart a switch the user did not re-arm.
+@Test func permissionRevokedMidSessionStopsRecognition() {
+    var guardState = SoundRecognitionGuard()
+    #expect(guardState.beginStart())
+    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.permissionRevoked() == .stop(.permissionRevoked))
+    #expect(!guardState.isActive)
+}
+
+/// Turning the switch off while the permission prompt is up invalidates that prompt's generation;
+/// a later Allow callback is inert and cannot start a microphone behind the visible switch.
+@Test func permissionRaceCancellationInvalidatesLateGrant() {
+    var guardState = SoundRecognitionGuard()
+    let generation = try! #require(guardState.beginPermissionRequest())
+    #expect(guardState.cancel() == .cancelPendingStart)
+    #expect(guardState.permissionResolved(granted: true, generation: generation) == .ignored)
+    #expect(guardState.state == .idle)
+}
+
+/// Rapid route flapping cannot thrash start/stop or spam cues: the first degraded event wins and
+/// all later notifications are ignored until an explicit user restart.
+@Test func rapidRouteFlappingFailsOnceAndStaysIdle() {
+    var guardState = SoundRecognitionGuard()
+    #expect(guardState.beginStart())
+    #expect(guardState.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let hfp = SoundRecognitionRoute(output: "Speaker", input: "BluetoothHFP",
+                                    inputQuality: .hfp)
+    #expect(guardState.routeChanged(hfp) == .stop(.inputRouteDegraded))
+    let backToHealthy = healthySoundRoute
+    #expect(guardState.routeChanged(backToHealthy) == .ignored)
+    #expect(guardState.routeChanged(hfp) == .ignored)
+
+    var missingInputGuard = SoundRecognitionGuard()
+    #expect(missingInputGuard.beginStart())
+    #expect(missingInputGuard.sessionStarted(route: healthySoundRoute) == .continueRunning)
+    #expect(missingInputGuard.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+    let missingInput = SoundRecognitionRoute(output: "Speaker", input: "none",
+                                              inputQuality: .unavailable)
+    #expect(missingInputGuard.routeChanged(missingInput) == .stop(.inputUnavailable))
+}
+
+/// The normal cold start may expose an input-less route for a fraction of a second. That startup
+/// settle is allowed once; the analyser still cannot become live until a usable route arrives.
+@Test func startupInputRouteSettlesWithoutDisablingTheFeature() {
+    var guardState = SoundRecognitionGuard()
+    #expect(guardState.beginStart())
+    let pending = SoundRecognitionRoute(output: "Speaker", input: "none",
+                                        inputQuality: .unavailable)
+    #expect(guardState.sessionStarted(route: pending) == .continueRunning)
+    #expect(guardState.routeChanged(healthySoundRoute) == .continueRunning)
+    #expect(guardState.recognitionStarted(route: healthySoundRoute) == .continueRunning)
+}

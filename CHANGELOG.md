@@ -2,6 +2,44 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 28 — Sound recognition fails safe across its whole microphone lifetime (Sat Sep 12)
+
+The optional "Listen for sirens and horns" path now treats its microphone as untrusted unless the
+route and analyzer remain healthy for the entire run. `SoundRecognitionGuard` in `CaneKitLogic` is
+the pure state machine: it fences permission callbacks by generation, records input/output route
+snapshots, permits only the bounded startup `none → usable` settle, and emits one stop decision for
+output moves, HFP/missing input, analyzer/engine failure, interruption or permission revocation.
+`SoundAlertsTests` adds six fake-route/lifecycle cases, including rapid-flapping and cold-start
+settling (plus output-HFP and same-port-type device assertions). `SpeechQueue` remains the only
+AVAudioSession owner, but its explicit microphone lease rejects concurrent push-to-talk/sound users
+and its route observer now inspects UID/name-bearing input and output ports; `SoundWatcher` tears down the tap/analyzer, restores
+`.playback`, disables only sound alerts and uses the existing `AppModel.onFailure` speech + Hazards
+card path. A 0.5 s permission poll covers Settings revocation, and all notification/task tokens are
+removed on every stop/failure. Relay and observer callbacks are generation-fenced, and an
+old-device-unavailable notification is acted on even if the route has already recovered by callback
+delivery. Restore failures are retried once and surfaced explicitly instead of being discarded. The
+normal navigation, LiDAR and speech/haptic safety paths continue uninterrupted.
+
+The existing open-finding list in `docs/todo.md` is checked off for the route guard, analyzer death,
+permission race and first-read input-format settle. The AirPods HFP route and microphone quality
+remain **device-unmeasured**, so this is graceful degradation (sound alerts off, route guidance on),
+not a claim that the optional classifier is a primary safety sensor.
+
+**Verification:** Logic sources type-check with the available Swift compiler; changed app/Logic
+files pass Swift parse and `git diff --check`. Full `make test` is blocked in this environment by
+the installed Swift 5.9 toolchain versus the package's Swift 6 tools version; `make sim`, UI/tour,
+Muse, Antigravity and `graphify update .` likewise require the Xcode 27/tooling installations
+documented in `TEAM_BRIEF.md` (the generated project, review binaries and graphify CLI are absent).
+
+test on device: enable "Listen for sirens and horns" with AirPods connected and confirm a healthy
+route keeps the beacon in its normal quality; disconnect or force an AirPods HFP transition during
+recognition and confirm within one second that sound alerts stop, the switch turns off, the app says
+why and navigation continues. Throw an analyzer/engine failure in the debug harness and confirm the
+microphone session returns to `.playback`. Revoke microphone permission in Settings mid-session and
+confirm clean cancellation with no orange recording dot. Start the permission prompt, toggle the
+switch off, then tap Allow and confirm no microphone starts. Rapidly connect/disconnect AirPods and
+confirm one failure cue rather than start/stop thrash.
+
 ## Step 25 — The arm went through the phone: the screwless mount simulated, redesigned, and re-sliced (Sat Sep 12, evening)
 
 Windows-side hardware pass over `hardware/mount_screwless/`, prompted by a printed ring that

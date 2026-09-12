@@ -557,7 +557,7 @@ final class AppModel {
             }
         }
         voiceInput.shouldRestorePlaybackSession = { [weak self] in
-            !(self?.sounds.isRunning ?? false)
+            !(self?.sounds.ownsMicrophoneSession ?? false)
         }
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy,

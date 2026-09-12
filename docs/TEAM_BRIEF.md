@@ -5,11 +5,12 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## Status right now (Sat 2026-09-12) — read this first
 
-- **Main contains Steps 0–25**, including the camera-transition depth interlock and the merged
-  conversational voice assistant / Action Button work. The current checkout has **366 Logic test
+- **Main contains Steps 0–28**, including the camera-transition depth interlock, sound-recognition
+  lifetime guard and the merged
+  conversational voice assistant / Action Button work. The current checkout has **372 Logic test
   annotations**; run them with Swift 6/Xcode 27.
 - **The local review environment cannot rerun the full gates:** its Xcode 15.1 / Swift 5.9.2 is
-  older than the package's Swift tools 6.0, and XcodeGen/CoreSimulator/Muse/Antigravity are not
+  older than the package's Swift tools 6.0, and XcodeGen/CoreSimulator/Muse/Antigravity/graphify are not
   installed. Do not describe the historical green runs below as current verification.
 - **Historical physical-phone desk test (before this merge):**
   - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
@@ -22,12 +23,16 @@ The short version for Sagar and Aarav. The full picture is in
 - **Merged current features:** Siri/Action Button voice control, campus route search, live camera
   view, on-device scene description, and the depth readiness interlock. Experimental Gemma work
   remains outside the shipped targets.
+- **Step 28 safety hardening:** optional sound recognition now watches both route input/output,
+  interruption and permission health for its full lifetime; any degradation disables only sound
+  alerts, restores `.playback`, and speaks the existing failure cue. The AirPods HFP path still
+  needs the device checklist below.
 - **The live checklist is `docs/todo.md` → "TONIGHT".** Every item is ticked only after it was
   verified.
 
 ## Setup checklist for tonight (do these in order)
 
-1. **Pull:** `git pull`, then `cd ios && make test` (366 Logic tests, Swift 6/Xcode 27).
+1. **Pull:** `git pull`, then `cd ios && make test` (372 Logic tests, Swift 6/Xcode 27).
 2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
    `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
    `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
@@ -51,10 +56,10 @@ The short version for Sagar and Aarav. The full picture is in
 
 ## State of things
 
-- The current source has 366 Logic tests plus the UI tests and replays described below. Historical
+- The current source has 372 Logic tests plus the UI tests and replays described below. Historical
   simulator/device results remain useful evidence but must be rerun after this merge with Xcode 27.
-- **The Step 25 interlock has not been device-validated in this checkout yet.** That is the next
-  safety task;
+- **The Step 25 camera interlock and Step 28 microphone guard have not been device-validated in
+  this checkout yet.** The next safety task is the AirPods / permission checklist;
   [`stress_test_plan.md`](stress_test_plan.md) has the checklist and the schedule.
 - Until the phone tests pass, the blindfolded walk is a no-go. A sighted demo is always the fallback.
 
