@@ -73,8 +73,8 @@ this environment. The Xcode 27 device/simulator gates remain explicitly pending.
 
 test on device: while a two-camera view is active, request Start route to CIF, confirm the warm-up
 status and Cancel route start button, cancel once, then retry and wait for automatic start; background
-the app mid-route, resume, and confirm guidance stays paused until three fresh trusted depth frames
-arrive; toggle 60 fps and verify the trip log shows contiguous `frame_seq` values.
+the app mid-route, confirm the spoken obstacle-warning pause, resume, and verify fresh depth reports
+return before obstacle cues resume; toggle 60 fps and verify the trip log shows contiguous `frame_seq` values.
 
 ## Step 24 — Audio tap Swift 6 isolation fix, Action Button PTT toggle, and session coordination (Sat Sep 12)
 
