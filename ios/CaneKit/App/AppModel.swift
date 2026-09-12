@@ -553,11 +553,17 @@ final class AppModel {
         switch phase {
         case .active:
             haptics.resume()
-            depth.resume()
             beacon.resumeIfNeeded()          // the engine can die across a screen lock (Muse M4)
-            hazards.start()
             if dangerSoundsEnabled { sounds.start() }
-            if faceHeadTrackingEnabled { faceHead.start() }
+            // ⚠ Everything ARKit-backed — depth, the hazard scanner, the face anchor — resumes in
+            // `resumeARKitAfterCameraWork()`, **not** here. Going to the background enqueues the
+            // two-camera teardown on the serialised chain (`serializeBothCameras`, below), and a
+            // lock followed by a quick unlock used to call `depth.resume()` while
+            // `AVCaptureMultiCamSession` was still running: both pipelines then fought for the same
+            // cameras and ARKit lost, exactly as the branch's own probe measured
+            // (`probe_c_multicam`: ~30 fps per 4 s window collapsing to 8, with interruptions).
+            // Lanes that look alive and are two seconds stale are the worst thing this app can do.
+            resumeARKitAfterCameraWork()
         case .inactive:
             break
         case .background:
@@ -601,6 +607,55 @@ final class AppModel {
         @unknown default:
             break
         }
+    }
+
+    /// Bring the ARKit-backed safety path back on `.active`, **after** any two-camera work that is
+    /// still in flight has finished.
+    ///
+    /// The teardown enqueued by `.background` runs on the serialised chain, so it can still be
+    /// running when the walker unlocks a second later. Resuming ARKit then puts the AR session and
+    /// a live `AVCaptureMultiCamSession` on the same cameras, and ARKit is the one that starves
+    /// (measured: 30 fps → 8). So the resume waits for the chain — *without* blocking the main
+    /// actor, and without waiting at all in the normal case: `bothCamerasWork` is nil unless
+    /// two-camera work is genuinely outstanding (`serializeBothCameras` clears it when the last
+    /// queued piece finishes), so an ordinary lock/unlock with the mode off resumes synchronously,
+    /// in the same turn of the run loop as before. Nothing here can delay a warning that the
+    /// system could otherwise have given: while the capture session holds the cameras there is no
+    /// depth to warn from.
+    private func resumeARKitAfterCameraWork() {
+        guard let work = bothCamerasWork else {
+            resumeARKitPipelines()
+            return
+        }
+        Task { @MainActor [weak self] in
+            await work.value
+            self?.resumeARKitPipelines()
+        }
+    }
+
+    /// The three engines that need ARKit frames, in the order the two-camera off path uses.
+    /// `resume()` keeps the world map and does not reset tracking; the hazard scanner and the face
+    /// anchor have nothing to read until it has. Idempotent: each engine ignores a second start.
+    ///
+    /// ⚠ Refuses while the two-camera session is still running, and that is the whole point. A
+    /// scene phase can go `.inactive` → `.active` with no `.background` in between (a notification
+    /// pulled down and dismissed, a control-centre peek), and there is then no queued camera work
+    /// for `resumeARKitAfterCameraWork()` to wait on — but the mode may still be switched on, with
+    /// `AVCaptureMultiCamSession` holding both cameras on purpose. `DepthEngine.resume()` only
+    /// guards on `!isRunning`, so it would happily restart the AR session on top of the capture
+    /// session: ARKit starved to 8 fps (`probe_c_multicam`), lanes that look alive and are two
+    /// seconds stale, and a walker trusting them. Staying paused is not a lost safety channel here
+    /// — the walker switched it off themselves and was told so out loud — and it comes back the
+    /// moment the switch goes off (`setBothCameras(false)`) or the app is backgrounded (the
+    /// teardown is queued, and the next `.active` waits for it and then lands here again).
+    private func resumeARKitPipelines() {
+        guard !bothCameras.isRunning else {
+            logger.event("both_cameras", ["action": "arkit_resume_skipped_session_running"])
+            return
+        }
+        depth.resume()
+        hazards.start()
+        if faceHeadTrackingEnabled { faceHead.start() }
     }
 
     // MARK: Report routing (the "cue router")
@@ -846,8 +901,15 @@ final class AppModel {
         }
     }
 
-    /// The chain of outstanding start/stop work for the two-camera session.
+    /// The chain of outstanding start/stop work for the two-camera session, or nil when nothing
+    /// is in flight. `scenePhaseChanged(.active)` reads it to decide whether resuming ARKit has to
+    /// wait, so it **must** go back to nil when the chain drains — see `serializeBothCameras`.
     @ObservationIgnored private var bothCamerasWork: Task<Void, Never>?
+
+    /// Bumped once per `serializeBothCameras` call, so the task that finishes can tell whether it
+    /// was the last one queued (and may therefore clear `bothCamerasWork`) or whether newer work
+    /// is already chained behind it.
+    @ObservationIgnored private var bothCamerasGeneration = 0
 
     /// Run one piece of two-camera work **after** whatever is already in flight.
     ///
@@ -858,9 +920,18 @@ final class AppModel {
     /// - Parameter body: main-actor work that starts or stops the session.
     private func serializeBothCameras(_ body: @escaping @MainActor () async -> Void) {
         let previous = bothCamerasWork
-        bothCamerasWork = Task { @MainActor in
+        bothCamerasGeneration &+= 1
+        let generation = bothCamerasGeneration
+        bothCamerasWork = Task { @MainActor [weak self] in
             await previous?.value
             await body()
+            // Clear the handle only if nothing newer was queued behind us. Without this the handle
+            // stays non-nil for the life of the app after the first use, and every later unlock
+            // would take `scenePhaseChanged`'s "wait for the camera work" path and resume ARKit one
+            // run-loop hop late for no reason. With it, "camera work is in flight" is a fact rather
+            // than a memory.
+            guard let self, self.bothCamerasGeneration == generation else { return }
+            self.bothCamerasWork = nil
         }
     }
 

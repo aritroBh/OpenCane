@@ -88,7 +88,7 @@ public enum LiveView: Equatable, Sendable {
 /// inside a SwiftUI body.
 ///
 /// Precedence, strictest first: not in the foreground → off; a route is running → blocked; the
-/// switch is off → off; the phone cannot do multi-cam → `backOnly`; else `live`.
+/// switch is off → off; the phone cannot do multi-cam → `unsupported`; else `live`.
 /// Tests: LiveViewTests.swift (`bothCameras…`).
 public enum BothCameras: Equatable, Sendable {
     /// Nothing built, no cameras held, ARKit owns the camera as usual.
@@ -96,8 +96,15 @@ public enum BothCameras: Equatable, Sendable {
     /// Refused because guidance is running: the walker is *walking*, and the obstacle channel is
     /// not something a spotter's picture may switch off mid-route.
     case blockedByRoute
-    /// This phone cannot run two cameras at once, so only the back camera is shown, with a message.
-    case backOnly
+    /// This phone cannot run two cameras at once (`AVCaptureMultiCamSession.isMultiCamSupported`
+    /// is false), so the two-camera view is not available: **no picture at all**, just a line of
+    /// text saying so. ARKit is never paused on this path, so the obstacle channel is untouched and
+    /// the separate "Live camera view" still shows the back camera from ARKit's own frames.
+    /// ⚠ This case was called `backOnly` and was documented as "only the back camera is shown".
+    /// Nothing ever showed a back camera here — `DualCameraSession.start()` returns before opening
+    /// one and there is no single-camera fallback — and the card's caption promised a picture that
+    /// could not appear. Rename it back only together with a fallback that really exists.
+    case unsupported
     /// Front and back camera previews, both live. ARKit is paused.
     case live
 
@@ -111,7 +118,7 @@ public enum BothCameras: Equatable, Sendable {
         guard foreground else { return .off }
         if navigating { return enabled ? .blockedByRoute : .off }
         guard enabled else { return .off }
-        return supported ? .live : .backOnly
+        return supported ? .live : .unsupported
     }
 }
 

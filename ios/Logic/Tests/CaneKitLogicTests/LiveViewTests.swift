@@ -85,10 +85,11 @@ import Testing
                               foreground: false) == .off)
 }
 
-/// A phone without `AVCaptureMultiCamSession` degrades to the back camera and a message — it
-/// never shows one feed as though it were two.
-@Test func bothCamerasDegradeWithoutMultiCamSupport() {
-    #expect(BothCameras.state(enabled: true, supported: false, navigating: false) == .backOnly)
+/// A phone without `AVCaptureMultiCamSession` gets an honest refusal and no picture — it never
+/// shows one feed as though it were two, and it never promises a back-camera fallback that the
+/// app does not implement (`DualCameraSession.start()` opens no camera on this path).
+@Test func bothCamerasRefuseWithoutMultiCamSupport() {
+    #expect(BothCameras.state(enabled: true, supported: false, navigating: false) == .unsupported)
 }
 
 /// The normal case: switch on, multi-cam available, no route → both pictures.

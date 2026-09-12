@@ -159,8 +159,12 @@ struct HazardsCard: View {
             EmptyView()
         case .blockedByRoute:
             liveCaption("Both cameras cannot run while a route is guiding you.")
-        case .backOnly:
-            liveCaption("This phone cannot show two cameras at once.")
+        case .unsupported:
+            // No picture on this path, and the caption says exactly that: the app has no
+            // single-camera fallback, and `AppModel.setBothCameras` refuses before pausing
+            // anything, so obstacle detection keeps running. (The `.unsupported` case was called
+            // `backOnly` and was documented as showing the back camera; nothing ever did.)
+            liveCaption("This phone cannot show two cameras at once, so the two-camera view is not available.")
         case .live:
             VStack(alignment: .leading, spacing: CKSpacing.sm) {
                 BothCamerasView(session: model.bothCameras)

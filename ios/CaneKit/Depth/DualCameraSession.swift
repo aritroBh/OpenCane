@@ -57,9 +57,20 @@
 //  Key invariants:
 //    · `start()` never runs while ARKit is running: `AppModel` pauses depth first. This class does
 //      not touch the AR session itself — one owner per session (`DepthEngine`).
-//    · Unsupported hardware degrades to the back camera alone plus a spoken/visible message; it
-//      never silently shows one feed as if it were two.
-//    · `stop()` always tears the session down, even after a failed `start()`.
+//    · Unsupported hardware gets **no picture and an honest refusal**, not a back-camera
+//      consolation prize. With `AVCaptureMultiCamSession.isMultiCamSupported` false the switch is
+//      disabled on the Hazards card, `AppModel.setBothCameras` refuses *before* it pauses anything
+//      (ARKit keeps running, and the separate "Live camera view" still shows the back camera from
+//      ARKit's own frames), and every line of copy says the same thing: "This phone cannot show
+//      two cameras at once."
+//      ⚠ `lastError` here used to end "…so only the back camera is shown" while the code returned
+//      without opening a single camera — a promise the code does not keep, which is worse than a
+//      refusal. If a real single-camera fallback is ever built, change the words back with it.
+//    · `stop()` always tears the session down, even after a failed `start()` — and `start()`
+//      itself tears down on **every** failure path once the session object exists. `start()` opens
+//      with `guard session == nil`, so a failed start that left the object behind would turn every
+//      later attempt to switch the mode on into a silent no-op, with a dead session still holding
+//      the camera inputs.
 //    · No `AVCaptureVideoPreviewLayer`, ever (see above).
 //
 
@@ -101,6 +112,28 @@ final class DualCameraSession {
     private(set) var hardwareCost: Float = 0
     /// `systemPressureCost` at the last reading, same purpose.
     private(set) var systemPressureCost: Float = 0
+    /// Which cameras `start()` managed to open, kept **across the teardown** that now follows a
+    /// failed start. `frontConnected` / `backConnected` are the live truth and go false in
+    /// `stop()`, because after a teardown nothing is connected; these two remember what came up
+    /// before the session refused to run, which is the difference between "no camera opened" and
+    /// "both cameras opened and the session would not start" in the trip log.
+    @ObservationIgnored private(set) var frontOpened = false
+    @ObservationIgnored private(set) var backOpened = false
+
+    /// Buffers actually handed to a display layer's renderer since the last `start()`.
+    ///
+    /// This is *not* `front_frames` + `back_frames`: those count what the cameras delivered to the
+    /// relay, this counts what reached the picture. The two numbers differ by exactly the frames
+    /// this class threw away, which is the evidence that separates "the cameras are not running"
+    /// from "the cameras are running and the view is black" — the bug that used to be here (see
+    /// `render(_:into:)`). `@ObservationIgnored`: it changes ~60 times a second and no view reads
+    /// it, so it must never invalidate the Hazards card.
+    @ObservationIgnored private(set) var enqueuedFrames = 0
+    /// How many times a renderer was flushed back to life (`requiresFlushToResumeDecoding`, or
+    /// `status == .failed`). Normally 0; a climbing count is a decoder that keeps dying, which
+    /// looks identical to a dead camera on screen and would otherwise be invisible.
+    @ObservationIgnored private(set) var rendererFlushes = 0
+
     /// True when `hardwareCost` came in over budget and the frame rate was cut to
     /// `MultiCamCost.reducedFramesPerSecond` to make the session runnable (Apple's documented
     /// remedy). Logged; the walker is not told, because nothing safety-related reads these frames.
@@ -151,16 +184,27 @@ final class DualCameraSession {
     /// `addOutputWithNoConnections` plus explicit `AVCaptureConnection`s is the only way to drive
     /// two feeds from one session; the implicit connections `addInput` makes would wire only the
     /// first camera.
-    /// A failure at any step leaves `lastError` set and the session torn down.
+    /// A failure at any step leaves `lastError` set and the session torn down — *every* path,
+    /// including "the session did not start", because of the `guard session == nil` on the first
+    /// line (see the file header's invariants).
     func start() async {
         guard session == nil else { return }
         lastError = nil
         backConnected = false
         frontConnected = false
         frameRateReduced = false
+        enqueuedFrames = 0
+        rendererFlushes = 0
+        frontOpened = false
+        backOpened = false
 
         guard Self.isSupported else {
-            lastError = "This phone cannot run two cameras at once, so only the back camera is shown."
+            // Say what actually happens, which is nothing. This line used to end "…so only the
+            // back camera is shown" and the next statement was `return`: no camera was opened, no
+            // fallback existed, and the walker was promised a picture that could never appear.
+            // `AppModel` refuses this mode before it pauses ARKit, so the safety path is untouched
+            // and "Live camera view" still shows the back camera from ARKit's frames.
+            lastError = "This phone cannot show two cameras at once, so the two-camera view is not available."
             return
         }
         let session = AVCaptureMultiCamSession()
@@ -177,6 +221,8 @@ final class DualCameraSession {
             || connect(.front, device: .builtInWideAngleCamera, name: "front",
                        to: frontLayer, in: session)
         session.commitConfiguration()
+        backOpened = backConnected
+        frontOpened = frontConnected
 
         guard backConnected || frontConnected else {
             lastError = lastError ?? "No camera could be opened for the two-camera view."
@@ -189,7 +235,16 @@ final class DualCameraSession {
         hardwareCost = session.hardwareCost
         systemPressureCost = session.systemPressureCost
         if !isRunning {
-            lastError = "The two-camera session refused to run (hardware cost \(String(format: "%.2f", hardwareCost)))."
+            // Tear the session down instead of leaving a zombie behind. `start()` begins with
+            // `guard session == nil else { return }`, so a session that was assigned and then
+            // failed to run (system pressure, camera contention, cost over budget) made **every
+            // later attempt to turn the mode on return immediately and do nothing**, while the dead
+            // session still held both camera inputs — for the rest of the app's life, with the
+            // walker having paid for it by pausing ARKit. `stop()` never touches `lastError`, but
+            // it does reset the connection flags, so the message is re-applied after it.
+            let why = "The two-camera session refused to run (hardware cost \(String(format: "%.2f", hardwareCost)))."
+            await stop()
+            lastError = why
         } else if !frontConnected {
             lastError = "Only the back camera is available, so the front camera is not shown."
         }
@@ -207,7 +262,21 @@ final class DualCameraSession {
             await Self.stopRunning(session)
             session.beginConfiguration()
             for connection in session.connections { session.removeConnection(connection) }
-            for output in session.outputs { session.removeOutput(output) }
+            for output in session.outputs {
+                // Clear the delegate **before** the output is removed and `relays` is emptied
+                // below. An `AVCaptureVideoDataOutput` that still has a delegate and a callback
+                // queue can call into the relay while this teardown runs on the main actor, with
+                // the relay about to be deallocated and its layer flushed — the long-standing
+                // AVFoundation teardown rule ("set the delegate and queue to nil before you
+                // release the output, to avoid deadlocks"). ⚠ That sentence is *not* in the
+                // iOS 27 SDK's AVCaptureVideoDataOutput.h nor in the current online reference
+                // (both checked, 2026-09-11): it is legacy wording, so treat it as belt and
+                // braces rather than a documented guarantee. What is documented is that nil is
+                // the one allowed value for the queue here ("may not be NULL, except when setting
+                // the sampleBufferDelegate to nil"), and that this is what stops delivery.
+                (output as? AVCaptureVideoDataOutput)?.setSampleBufferDelegate(nil, queue: nil)
+                session.removeOutput(output)
+            }
             for input in session.inputs { session.removeInput(input) }
             session.commitConfiguration()
         }
@@ -252,7 +321,15 @@ final class DualCameraSession {
         // leave an orphan input holding a camera and make the second attempt's `canAddInput` fail.
         func giveUp(_ message: String, output: AVCaptureVideoDataOutput? = nil) -> Bool {
             lastError = message
-            if let output, session.outputs.contains(output) { session.removeOutput(output) }
+            if let output {
+                // Same order as `stop()`: the delegate goes first, because the line below drops
+                // `relays[name]` — the only strong reference to the relay — while this output may
+                // still be wired to it. The output is passed on **every** failure path that has
+                // built one, including "output could not be added", where it never entered the
+                // session and would otherwise be released with its delegate still set.
+                output.setSampleBufferDelegate(nil, queue: nil)
+                if session.outputs.contains(output) { session.removeOutput(output) }
+            }
             session.removeInput(input)
             relays[name] = nil
             return false
@@ -272,7 +349,7 @@ final class DualCameraSession {
         relays[name] = relay
         output.setSampleBufferDelegate(relay, queue: captureQueue)
         guard session.canAddOutput(output) else {
-            return giveUp("\(label) camera output could not be added.")
+            return giveUp("\(label) camera output could not be added.", output: output)
         }
         session.addOutputWithNoConnections(output)
         let connection = AVCaptureConnection(inputPorts: [port], output: output)
@@ -298,16 +375,57 @@ final class DualCameraSession {
     ///
     /// `AVSampleBufferDisplayLayer` is a `CALayer`, so the enqueue happens on main — but the pixels
     /// never touch the CPU: the renderer takes the `CMSampleBuffer` straight to the GPU, which is
-    /// what makes two feeds at once affordable. A renderer that needs a flush gets one rather than
-    /// staying dead, and a renderer that is not ready drops the frame.
+    /// what makes two feeds at once affordable. A renderer that is *broken* is flushed back to life
+    /// and then fed this very frame; a renderer that merely says it is busy is fed anyway.
+    ///
+    /// ⚠ There is deliberately **no** `guard renderer.isReadyForMoreMediaData else { return }`
+    /// here, and there must never be one again. It was here, and while the flag reads false it
+    /// throws every frame on the floor: the buffer is dropped, nothing re-delivers it, and the
+    /// layer keeps showing whatever it showed last — black, if that is nothing. Whether this
+    /// phone's renderer really holds the flag false (a layer that has never been enqueued and has
+    /// no timebase running is the usual suspect) has **not** been reproduced on the device; what
+    /// has been verified is that the guard is wrong in principle, from the iOS 27 SDK header
+    /// `AVQueuedSampleBufferRendering.h` (the source developer.apple.com is generated from), which
+    /// describes the flag as belonging to the *pull* protocol, for sources that can outrun the
+    /// renderer — not to live push:
+    ///   · "An object conforming to AVQueuedSampleBufferRendering keeps track of the occupancy
+    ///     levels of its internal queues **for the benefit of clients that enqueue sample buffers
+    ///     from non-real-time sources** — i.e., clients that can supply sample buffers faster than
+    ///     they are consumed, and so need to decide when to hold back."
+    ///   · "**It is safe to call enqueueSampleBuffer: when readyForMoreMediaData is NO**, but it
+    ///     is a bad idea to enqueue sample buffers without bound."
+    ///   · "To help with control of the non-real-time supply of sample buffers, such clients can
+    ///     use -requestMediaDataWhenReadyOnQueue:usingBlock …", and "This property is not key
+    ///     value observable" — i.e. the supported way to use it is the pull loop this class does
+    ///     not run.
+    /// Nothing here is a non-real-time source: the buffers arrive from the camera at its own frame
+    /// rate, each carries `kCMSampleAttachmentKey_DisplayImmediately` (documented in the same
+    /// header as "the decoded image will be displayed as soon as possible, **replacing all
+    /// previously enqueued images** regardless of their timestamps", so they cannot pile up), and
+    /// `DualCameraFrameRelay` already holds the supply to one frame in flight. "Without bound",
+    /// the only thing the flag protects against, cannot happen.
+    ///
+    /// What *is* still guarded is the renderer being unable to decode at all, where enqueueing
+    /// really would be pointless — and both conditions are documented as recoverable by a flush:
+    ///   · `requiresFlushToResumeDecoding`: "clients must first reset the video renderer by calling
+    ///     flush" (`AVSampleBufferVideoRenderer.h`).
+    ///   · `status == .failed`: "To resume rendering sample buffers using the video renderer after
+    ///     a failure, clients must first reset the status to AVQueuedSampleBufferRenderingStatus-
+    ///     Unknown. This can be achieved by invoking -flush on the video renderer." (same header.)
+    /// Flushing and then enqueueing means a renderer that died — app backgrounded, decoder
+    /// resources taken away — comes back on the next camera buffer (~33 ms) instead of staying
+    /// black until the mode is switched off and on again.
     /// - Parameters:
     ///   - handoff: the sample buffer, carried across the queue hop.
     ///   - layer: the layer for that camera.
     private func render(_ handoff: CaptureHandoff<CMSampleBuffer>, into layer: AVSampleBufferDisplayLayer) {
         let renderer = layer.sampleBufferRenderer
-        if renderer.requiresFlushToResumeDecoding { renderer.flush() }
-        guard renderer.isReadyForMoreMediaData else { return }
+        if renderer.requiresFlushToResumeDecoding || renderer.status == .failed {
+            renderer.flush()
+            rendererFlushes += 1
+        }
         renderer.enqueue(handoff.value)
+        enqueuedFrames += 1
     }
 
     /// Apple: a multi-cam session whose `hardwareCost` exceeds 1.0 will not run, and the documented
@@ -353,7 +471,10 @@ final class DualCameraSession {
 
     /// Numbers for the trip log: what the two cameras cost and whether they are really both live.
     /// `front_frames` / `back_frames` are the honest answer — a connection that was made but never
-    /// delivered a buffer reads as 0 here, which a preview layer could not have shown.
+    /// delivered a buffer reads as 0 here, which a preview layer could not have shown. `enqueued`
+    /// is the second half of that answer: frames the cameras delivered *and* this class handed to
+    /// a renderer. Camera frames climbing while `enqueued` stays at 0 is a black view with live
+    /// cameras, which is exactly what the old `isReadyForMoreMediaData` guard produced.
     /// Read by `AppModel` when the mode is switched on and off.
     var diagnostics: [String: Any] {
         [
@@ -361,8 +482,16 @@ final class DualCameraSession {
             "running": isRunning,
             "front": frontConnected,
             "back": backConnected,
+            // What came up during configuration; survives the teardown after a failed start.
+            "front_opened": frontOpened,
+            "back_opened": backOpened,
             "front_frames": relays["front"]?.frameCount ?? 0,
             "back_frames": relays["back"]?.frameCount ?? 0,
+            // Frames that reached a renderer, and renderer resurrections. `enqueued` far below
+            // `front_frames + back_frames` means frames arrived and were dropped before the
+            // picture — the failure mode that made this view black (see `render(_:into:)`).
+            "enqueued": enqueuedFrames,
+            "renderer_flushes": rendererFlushes,
             "hardware_cost": Double((hardwareCost * 100).rounded() / 100),
             "system_pressure_cost": Double((systemPressureCost * 100).rounded() / 100),
             "frame_rate_reduced": frameRateReduced,
