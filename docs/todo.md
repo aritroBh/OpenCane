@@ -100,31 +100,56 @@ sensors did not see is ever spoken.*
   agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
   do the same for any new one, or install only from the main checkout.
 
-### Branch state (updated 2026-09-11 ~20:15)
+### Branch state (updated 2026-09-12 morning)
 
-**Merged into main and verified (243 Logic tests, simulator build clean, `make uitest` green):**
+**Merged into main and verified (316 Logic tests, simulator build clean, `make uitest` green):**
 - the destination-search rework + its accessibility fix
 - `fix/cloud-scene-gate` — the cloud sentence is gated, and Muse Spark can actually answer
   (`max_tokens` 120 → 1024 and `reasoning_effort: "low"`; it was spending the whole budget
   reasoning and returning nothing after 11 s)
 - `feat/detect-people` — people and animals named with direction and a LiDAR-measured distance
 - the widget-embed fix: **the Live Activity had never been in any installed build**
+- `fix/voice-consistency` — 74 warning lines prefetched so warnings stop alternating voices
+- `fix/veer-gap-regression` — a veer episode is continuous evidence, not continuous samples
+- `fix/launch-crash` — no optional feature may keep the app from starting (the Hazards-toggle crash)
+- `fix/sound-watch-hardening` — six confirmed microphone defects fixed, incl. the crash
+- `feat/all-sensors` + safety fixes — both cameras, front-camera head yaw, danger sounds, all off by default
+- `feat/rename-opencane` — the product is OpenCane, the code is still CaneKit
+- front-camera rotation, first attempt (0f32282) — coordinator angle, still tilted on device
+
+**Step 16 gate GREEN (2026-09-12 ~01:00):** 347 Logic tests passed, device build + install on
+the iPhone 17 Pro Max succeeded. The gate caught one real bug from the hand-merge: `\(.$state)`
+in the SilenceHapticsIntent phrases (missing `\` escape — fixed in `99f0a37`). Branches retired.
+Still to do on the phone: siren ~1.5 s behavior, "How is OpenCane doing" order, Both-cameras
+inset re-check after reinstall.
+
+**Committed in the main checkout:**
+- `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
+  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15).
+  Device build green, 316 Logic tests green, front inset verified on the phone.
+- Emergency sirens — `SoundAlerts.swift` + tests (verbatim), `SoundWatcher` + `AppModel`
+  wireSounds/commonLines (merged, renames kept).
+- Hands-free — `HandsFreeIntents.swift`, `QuestionPrompt` / `StatusSummary` + tests,
+  `docs/handsfree.md` (new); `AppIntents` 10-shortcut list, `VLMClient.cloudPrimary`,
+  `SceneDescriber` ask path, `describe_result` question field (merged).
+- `CHANGELOG.md` (Step 16), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
+  QuestionPrompt/StatusSummary, HandsFreeIntents, cloudPrimary sections; AppIntents rewritten;
+  stale 8/12 s timeouts and 243-test count fixed).
 
 **Committed on a branch, not yet merged:**
-- `fix/voice-consistency` — 74 warning lines (1,722 characters, 17.2 % of the monthly free tier)
-  prefetched so warnings stop alternating between Bella and Apple's voice. It also fixes a bug the
-  first attempt introduced: the launch batch was cancelled by the first warning the walker heard,
-  so most of the set was never synthesized.
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
   **Deliberately held**: it conflicts with the people-detection work in the same files and buys
   nothing for the demo.
 
-**Uncommitted work in worktrees — these are the only copies:**
-- `/Users/aritro/Downloads/cane-wt-veer` — the veer safety fix
-- `/Users/aritro/Downloads/cane-wt-all-sensors` — both-cameras mode, front-camera head tracking,
-  microphone sound recognition (~800 lines). ⚠ **Do not merge all-sensors without care**: it adds
-  to `AppModel`'s safety path, touches `Info.plist` and `project.yml`, and its sound watcher wants
-  `.playAndRecord`, which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
+**Branches (2026-09-12 cleanup):** 11 merged branches deleted, then `feat/emergency-alerts` +
+`feat/handsfree` retired after the Step 16 gate went green (347 Logic tests, device build +
+install). Remaining: `main`, `feat/fm-image-describe` (deliberately held, conflicts with
+people-detection), `feat/multicam-depth` (worktree has uncommitted DepthEngine changes — triage
+separately), `experiment/gemma-cactus` (untracked `CactusCodec` + bench script — triage
+separately). New remote branch `feat/screwless-mount` (teammate) — not ours, do not touch.
+
+**Worktrees:** only the 3 kept ones remain (`-emergency`/`-handsfree` backups removed with their
+branches after the gate; 11 orphan dirs deleted from `~/Downloads`).
 
 ### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
 

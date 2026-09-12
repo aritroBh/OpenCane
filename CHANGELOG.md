@@ -2,6 +2,13 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+> **Step numbers 15, 16 and 17 each appear twice, and that is not a mistake to "fix".**
+> `feat/screwless-mount` (hardware, Windows) and `main` (iOS, Mac) numbered their steps
+> independently and in parallel, then met in a merge on 2026-09-12. The first of each
+> pair is the hardware line, the second the app line. Renumbering either would break
+> every commit message that already refers to them. Read the date and the subject, not
+> the number.
+
 ## Step 19 — The collar had no thread on it (Sat Sep 12, overnight)
 
 Three adversarial sub-agent reviews were run over `hardware/mount_screwless/` before
@@ -249,6 +256,124 @@ too stiff to click or too thin to survive.
 
 test on device: n/a (no app change). On the printer: coupons `what="bore"` first, set `bore_clear`,
 then thread and dovetail coupons, then collar + ring, then arm + cradle.
+## Step 17 — App icon (Sat Sep 12, on phone and launched)
+
+Both `AppIcon` sets were empty — the app shipped with no icon. v1 ("Folded Signal", from
+`/tmp/icon.py`) was abstract bars; v2 ("White Cane") is a real mobility cane on the navy
+field: black grip, gold joint ring, white shaft with two red wraps, red tip leaning
+lower-right, faint gold signal arcs. Generator committed as `ios/scripts/appicon.py`
+(`python3 ios/scripts/appicon.py` rewrites both 1024 PNGs).
+
+Review: `agy` cannot run in this sandbox (needs localhost bind + log writes), so the user
+ran it in their own terminal against a `/tmp` copy. It found 3 real defects, all fixed and
+re-verified: (1) red wrap bands clipped flush — strip had no vertical padding so
+`alpha_composite` cut the proud 8 px + rounded corners; (2) drop shadow hard-edged — the
+blur clamped at the unpadded layer bounds; (3) stale "top-left" comment on the top-right
+arcs. Fixes: `PAD` strip padding, `SPAD`-padded shadow layer. My own numeric review before
+that caught the v2 tip on the mask boundary (fixed by the 0.88 scale). Final probe: zero
+content pixels in the mask cut zone; masked 180 px + 60 px renders confirm tip intact and
+cane legible. agy also confirmed asset wiring (both sets, RGB, no alpha) and squircle safety.
+
+test on device: OpenCane icon on the Home Screen after install; red tip intact inside the
+squircle at small sizes (check a folder view too).
+
+Installed 2026-09-12 ~01:25 via `make run` (build + `actool` icon compile + devicectl install
+all green, incl. the 10 Siri phrases training under the OpenCane name). Auto-launch refused:
+phone was locked — unlock and tap the icon by hand.
+
+Re-installed ~01:45 with the v3 icon (`AppIcon60x60@2x.png` emplaced in the build log):
+**BUILD SUCCEEDED**, devicectl install green, and `device process launch` succeeded (phone
+unlocked). White Cane icon live on the Home Screen.
+
+## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
+
+Both worktrees are now in the main checkout, hand-merged so nothing the renames and fixes
+built since is lost:
+- Emergency (`cane-wt-emergency`): siren gate 0.50 → 0.60 with three agreeing windows,
+  `.emergency` urgency → `.nav` band (never `.safety`), `best(of:)` so traffic noise cannot
+  shadow a siren, `speechTTL` per kind. `SoundAlerts.swift` + `SoundAlertsTests.swift` copied
+  verbatim (main never touched them); `SoundWatcher` + `AppModel` merged keeping every OpenCane
+  rename. Verified: API fully additive (`labels`, `candidateLabels`, `kind(for:)` retained;
+  `SensorProbe` only uses `candidateLabels`), `best(of:)` fallback preserves the policy's
+  below-gate reset, no force-unwraps, `.nav` exists on `SpeechPriority`.
+- Hands-free (`cane-wt-handsfree`): Status / Ask / Silence-haptics shortcuts (list now 10/10),
+  `HandsFreeIntents.swift` + `QuestionPrompt` / `StatusSummary` + tests + `docs/handsfree.md`
+  copied; `AppIntents` shortcuts block, `VLMClient.cloudPrimary` contract, `SceneDescriber`
+  question path and the `describe_result` question field merged. Two corrections while merging:
+  spoken strings say OpenCane (the branch predates the rename), and main's newer 18/25 s cloud
+  timeouts kept over the branch's 8/12 s. Verified: all four `AppModel` methods the intents call
+  exist (as an extension in the intents file), every member they touch exists, sources are globs
+  so no `project.yml` change needed. A 4-agent verification wave over the integrated tree
+  confirmed all contracts with file:line evidence.
+- Deliberately NOT merged as branches (the work is uncommitted in the worktrees); this is the
+  merge, done by hand with the rename applied. Commit after the gate, then merge the branches
+  only to retire them.
+
+test on device: siren needs ~1.5 s of continuous siren before "Siren. Do not start crossing.";
+horns stay passive; "How is OpenCane doing" answers in the fixed six-clause order; "Ask OpenCane
+about the scene" answers the question asked, never a generic description.
+
+### Antigravity review of Step 16 (7 findings — 4 fixed, 1 instrumented, 2 rejected with evidence)
+
+1. **Siren expired unheard behind crossing lines — FIXED, real.** 5 s assumed a siren queues
+   behind "at most the route line already playing". Wrong: `.nav` queues FIFO behind any `.nav`
+   line (crossing 4–8 s, lock warning 10 s, location-denied 20 s) and the queue purges expired
+   lines on line end (`SpeechQueue` header). Siren `speechTTL` 5 → 15 (= repeat interval) with
+   the test rewritten to pin both bounds.
+2. **Siren blocked by long `.nav` lines — same fix; pre-empting obstacle NAMES — REJECTED.**
+   Haptic warnings never pass through speech: the cane keeps buzzing under any announcement, so
+   nothing safety-critical is delayed. Names resume (interrupted lines re-queue).
+3. **Siri invocation may kill the mic permanently — INSTRUMENTED, unproven.** `SoundWatcher` had
+   no interruption observer (confirmed by reading the file). No lifecycle change without device
+   proof; added a log-only `interruption_began/ended` observer so the trip log can correlate the
+   next death. Repro: sirens on → "Ask OpenCane about the scene" → check switch + log.
+4. **"SetOption announces on before async validation" — FIXED the overclaim, real.** The
+   read-back is synchronous; the 0.25 s format settle can refuse after. Comment now states that;
+   behavior kept (the failure line corrects within ~a second).
+5. **Silence confirmation delays spoken cues 3–4 s — ACCEPTED as residual, overstated.**
+   `SpeechQueue` queues (not suppresses); only a cue arriving in that window AND expiring (4 s
+   TTL) is lost, and only when the user just silenced haptics with no watch. `handsfree.md` now
+   says to stand still for a few seconds after.
+6. **Ask answers go stale while walking — ACCEPTED, bounded.** Question-path answer TTL 20 →
+   10 (plain Where-Am-I keeps 20: that walker stands still). Cloud-wait staleness remains;
+   bounded by the 18/25 s session budget and auditable via `ms` + `frame` in `describe_result`.
+7. **No-cloud downgrade "violates" the ask contract — REJECTED.** The downgrade is announced out
+   loud ("needs the cloud model... Describing instead.") and the original question is preserved
+   in `lastQuestion` + the trip log. No silent substitution; the contract bans silent ones.
+
+## Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
+
+The front inset of the both-cameras view still came out tilted with the back feed fine, after the
+first fix (0f32282) asked `RotationCoordinator` for `videoRotationAngleForHorizonLevelPreview`.
+That connection feeds a video *data output* — a capture connection — and the preview angle follows
+the interface orientation while the capture angle follows the horizon, which accounts for exactly a
+90° disagreement on a phone clamped to a cane. `connect()` now prefers
+`videoRotationAngleForHorizonLevelCapture`, falls back to the preview angle, then to a
+per-position portrait default (front 270, back 90) instead of a blind 90, and records the applied
+angle per camera. `diagnostics` gains `front_rotation` / `back_rotation` (logged in the
+`both_cameras` start record; `-1` = that camera never connected), so the next device run says
+whether the coordinator or the fallback is to blame with no further guess-runs. `CODE_REFERENCE.md`
+gains the missing `DualCameraSession` section in the same change. Follow-up the same morning:
+the upright front inset read backwards (mirrored) — the inset now sets `isVideoMirrored = false`
+so it agrees with the back feed on left/right, and logs `front_mirrored` beside the angles.
+
+Reviewed but deliberately **not** merged tonight: the emergency-siren rework
+(`cane-wt-emergency`: siren gate 0.50 → 0.60, three agreeing windows, `.emergency` urgency → `.nav`
+band, `best(of:)` so traffic noise cannot shadow a siren) and hands-free voice control
+(`cane-wt-handsfree`: Status / Ask / Silence-haptics shortcuts taking the list to the 10-shortcut
+limit, `QuestionPrompt` / `StatusSummary` in Logic with tests). Both were read end to end: the
+siren `best(of:)` fallback path preserves the policy's below-gate reset semantics and introduces no
+force-unwrap or crash path, and the Hazards-toggle crash itself is already fixed on main
+(`fix/launch-crash` + `fix/sound-watch-hardening`). They stay unmerged because the merge gate needs
+`make test` / `make sim` / `make uitest` / `make e2e` green and none of those can run from this
+sandboxed session — merging untested the night before the demo would break the gate that protects
+the walker.
+
+test on device: turn on Both cameras with the phone clamped in portrait; front inset upright and
+mirrored, back feed upright; trip log `both_cameras` start record reads `front_rotation: 270,
+back_rotation: 90` with both frame counts climbing. Then run the gate in your own terminal
+(`cd ios && make test`, `make sim`, `make uitest`, `make e2e`) before merging anything.
+
 ## Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)
 
 Everything below is verified by 303 CaneKitLogic tests, a clean Swift 6 strict build and a green

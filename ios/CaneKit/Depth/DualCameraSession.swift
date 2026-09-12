@@ -167,6 +167,14 @@ final class DualCameraSession {
     /// One per camera, retained for the life of the session: `AVCaptureDevice.RotationCoordinator`
     /// observes the device's orientation and stops updating the moment it is released.
     @ObservationIgnored private var rotationCoordinators: [AVCaptureDevice.RotationCoordinator] = []
+    /// The `videoRotationAngle` actually applied per camera ("front" / "back"), kept for the trip
+    /// log. When the front inset still looks tilted on the device, these two numbers say whether
+    /// the coordinator or the fallback is to blame — no second guess-run needed.
+    @ObservationIgnored private var appliedRotationAngles: [String: Double] = [:]
+    /// The `isVideoMirrored` actually in effect on the front connection, kept for the trip log
+    /// beside the rotation angles. Read back from the connection after setting, so the log
+    /// records what AVFoundation accepted, not what was asked.
+    @ObservationIgnored private var frontMirrored = false
     /// Strong references to the sample-buffer delegates (`AVCaptureVideoDataOutput` holds its
     /// delegate weakly) and the source of the per-camera frame counts.
     @ObservationIgnored private var relays: [String: DualCameraFrameRelay] = [:]
@@ -200,6 +208,8 @@ final class DualCameraSession {
         rendererFlushes = 0
         frontOpened = false
         backOpened = false
+        appliedRotationAngles.removeAll()
+        frontMirrored = false
 
         guard Self.isSupported else {
             // Say what actually happens, which is nothing. This line used to end "…so only the
@@ -286,6 +296,8 @@ final class DualCameraSession {
         session = nil
         inputs.removeAll()
         rotationCoordinators.removeAll()
+        appliedRotationAngles.removeAll()
+        frontMirrored = false
         relays.removeAll()
         backLayer.sampleBufferRenderer.flush()
         frontLayer.sampleBufferRenderer.flush()
@@ -336,6 +348,7 @@ final class DualCameraSession {
             }
             session.removeInput(input)
             relays[name] = nil
+            appliedRotationAngles[name] = nil
             return false
         }
         guard let port = input.ports(for: .video, sourceDeviceType: type,
@@ -364,25 +377,44 @@ final class DualCameraSession {
         // rotation itself; a data output will not, so it is set explicitly.
         //
         // NOT a hard-coded 90°. That is right for the back sensor and wrong for the front one,
-        // which is mounted the other way round — the front feed came out sideways on the device.
+        // which is mounted the other way round — the front feed came out sideways on the device,
+        // and still tilted after the first coordinator fix.
         // `AVCaptureDevice.RotationCoordinator` computes the correct angle for THIS device, which
         // is why Apple added it; a table of per-camera magic numbers is wrong on the next model.
         // The coordinator must be retained: it observes device orientation and a released one
         // stops updating.
+        // Capture angle first, not preview: this connection feeds a video data output (a capture
+        // connection), and the preview angle follows the interface orientation while the capture
+        // angle follows the horizon — on a clamped phone those can disagree by exactly the 90°
+        // tilt seen on the front inset. Last resort is per-position, not a blind 90: the front
+        // sensor needs 270 in portrait where the back needs 90.
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         rotationCoordinators.append(coordinator)
-        let angle = coordinator.videoRotationAngleForHorizonLevelPreview
-        if connection.isVideoRotationAngleSupported(angle) {
-            connection.videoRotationAngle = angle
-        } else if connection.isVideoRotationAngleSupported(90) {
-            connection.videoRotationAngle = 90          // last resort: portrait for a landscape sensor
+        let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+        let previewAngle = coordinator.videoRotationAngleForHorizonLevelPreview
+        let fallbackAngle: CGFloat = position == .front ? 270 : 90
+        let applied: CGFloat
+        if connection.isVideoRotationAngleSupported(captureAngle) {
+            applied = captureAngle
+        } else if connection.isVideoRotationAngleSupported(previewAngle) {
+            applied = previewAngle
+        } else if connection.isVideoRotationAngleSupported(fallbackAngle) {
+            applied = fallbackAngle
+        } else {
+            applied = connection.videoRotationAngle
         }
-        // A selfie feed that is not mirrored reads as someone else's face to the person holding
-        // the phone. Front camera only: mirroring the back camera would flip the world.
+        connection.videoRotationAngle = applied
+        appliedRotationAngles[name] = Double(applied)
+        // The front inset is NOT mirrored, on purpose. Selfie-mirror convention is for the
+        // person being filmed; this screen is watched by a sighted spotter next to the walker,
+        // and the inset must agree with the back feed on left and right — a mirrored inset
+        // contradicts the main picture (and flips every sign). Observed on device: mirrored read
+        // backwards; unmirrored matches the world. Back camera is never mirrored.
         if position == .front, connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = true
+            connection.isVideoMirrored = false
         }
+        if position == .front { frontMirrored = connection.isVideoMirrored }
         session.addConnection(connection)
         inputs.append(input)
         return true
@@ -509,6 +541,9 @@ final class DualCameraSession {
             // picture — the failure mode that made this view black (see `render(_:into:)`).
             "enqueued": enqueuedFrames,
             "renderer_flushes": rendererFlushes,
+            "front_rotation": appliedRotationAngles["front"] ?? -1,
+            "back_rotation": appliedRotationAngles["back"] ?? -1,
+            "front_mirrored": frontMirrored,
             "hardware_cost": Double((hardwareCost * 100).rounded() / 100),
             "system_pressure_cost": Double((systemPressureCost * 100).rounded() / 100),
             "frame_rate_reduced": frameRateReduced,

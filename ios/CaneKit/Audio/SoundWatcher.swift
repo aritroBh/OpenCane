@@ -37,9 +37,43 @@
 //  `outputRouteChanged(from:to:)` here and stops the watcher. Speech, obstacle warnings and the
 //  beacon are the safety path; a microphone feature never outranks them.
 //
-//  Owner: `AppModel.sounds` (one instance). Alerts are spoken at `.obstacle` priority — below
-//  route lines and below "Head height." (docs/design.md §5): a sound the walker can also hear
-//  themselves is worth less than a warning they cannot.
+//  Owner: `AppModel.sounds` (one instance).
+//
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  WHAT PRIORITY AN EMERGENCY SIREN GETS, AND WHY IT IS NOT `.safety`
+//  ─────────────────────────────────────────────────────────────────────────────────────────────
+//  An emergency siren has the strongest claim of anything in this app to being interrupt-worthy:
+//  it is the single hazard neither the cane tip, nor the 5 m LiDAR, nor the camera, nor the GPS
+//  route can ever detect. It arrives from behind, around corners, and from hundreds of metres.
+//  It is still **not** `.safety`, for three reasons, in order of weight:
+//
+//   1. `.safety` is a queue, not a volume knob. `SpeechQueue` pre-empts only on a *strictly*
+//      higher priority; equal priorities queue FIFO. A siren line sitting at `.safety` would
+//      therefore **delay "Head height."** — or a LiDAR drop-off — by its own length, every time
+//      the two coincided. The rule that `.safety` is never suppressed is not weakened here; it is
+//      protected, by keeping out of that band anything that is not imminent, physical, and
+//      invisible to the walker.
+//   2. The walker already has this signal. A siren is an auditory warning device, engineered to be
+//      heard by pedestrians; a blind traveller's hearing is their primary instrument and hears it
+//      far further than a phone microphone strapped to a swinging cane. "Head height." warns about
+//      something nobody can perceive. This tells the walker what a sound they can hear *means*.
+//   3. Apple, about this exact classifier, shipped as Sound Recognition: "Don't rely on your
+//      iPhone to recognize sounds in circumstances where you may be harmed or injured, in
+//      high-risk or emergency situations, or for navigation." A model with that disclaimer does
+//      not get the band reserved for the cues that are always right.
+//
+//  So the emergency siren sits at `.nav` — the band route lines and crossing instructions use —
+//  and horns and vehicle sounds stay at `.obstacle`, unchanged. `.nav` is not a compromise, it is
+//  the semantically correct band: what a siren tells a blind pedestrian is a *crossing* fact (see
+//  SoundAlerts.swift R1 — the siren masks the traffic sound the crossing decision is made from),
+//  and crossing facts are `.nav` in this app. Mechanically `.nav` also buys the two things
+//  `.obstacle` could not: the alert no longer waits behind a 20-word scene description, and it can
+//  no longer cut a crossing instruction, because equal priorities queue.
+//  Nothing new can delay a warning: `.safety` still pre-empts `.nav` instantly, the haptic cue
+//  channel is untouched, and the only line a siren can now interrupt is an obstacle *name* — which
+//  is what every route line in the app has always done, and which resumes afterwards.
+//  There is still no haptic and no wrist tap for a sound alert: the cane's taps mean "something is
+//  in your path", and borrowing them for something heard would make the safety channel ambiguous.
 //
 //  Threading / isolation: `@MainActor @Observable`. `SNResultsObserving` is called by
 //  SoundAnalysis on its own queue, and the microphone tap is called on an AVAudioEngine render
@@ -82,7 +116,7 @@ final class SoundWatcher {
 
     /// True while the microphone tap and the analyser are live.
     private(set) var isRunning = false
-    /// Last line spoken because of a sound ("Siren nearby."), for the Hazards card.
+    /// Last line spoken because of a sound ("Siren. Do not start crossing."), for the Hazards card.
     private(set) var lastAlert: String?
     /// Why the watcher is not running: a refused microphone, a degraded audio route, or an engine
     /// failure. Shown on the Hazards card in the warning colour; never cleared silently.
@@ -143,6 +177,13 @@ final class SoundWatcher {
     /// which would otherwise orphan this task *and* re-baseline `SpeechQueue`'s route guard to
     /// whatever the route had already become.
     @ObservationIgnored private var formatRetry: Task<Void, Never>?
+    /// Observes `AVAudioSession.interruptionNotification` while the microphone is on, **log only**.
+    /// A Siri invocation (or call) that seizes the input kills the analyser, which lands in
+    /// `analysisFailed` and switches the feature off with no record of WHY it died — rinse that
+    /// correlation out of the trip log (`sound_watch` action `interruption_began/ended`) before
+    /// touching the lifecycle. Never restarts or stops anything from here: an observer that acts
+    /// is a second owner of the engine.
+    @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     /// The classify request built by the current `start()`, held across the input-format retry so
     /// the retry does not rebuild the label table or re-log it. Nil whenever nothing is starting.
     @ObservationIgnored private var pendingRequest: SNClassifySoundRequest?
@@ -220,6 +261,19 @@ final class SoundWatcher {
             // already walking.
             speech.onMicrophoneRouteChanged = { [weak self] before, after in
                 self?.outputRouteChanged(from: before, to: after)
+            }
+            // Log-only interruption watch (see the property doc): Siri / calls vs real death.
+            interruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                // Same read as `SpeechQueue`'s own observer: unknown type → ignore, never log.
+                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+                guard let type else { return }
+                MainActor.assumeIsolated {
+                    self?.onDiagnostic?("sound_watch", ["action": type == .began
+                                                        ? "interruption_began" : "interruption_ended"])
+                }
             }
         case .revertedRouteChanged(let before, let after):
             onDiagnostic?("sound_watch", ["action": "session_reverted", "before": before, "after": after])
@@ -354,6 +408,10 @@ final class SoundWatcher {
         formatRetry = nil
         pendingRequest = nil
         speech.onMicrophoneRouteChanged = nil
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
         // `sessionHeld` is in the guard on purpose: a start that got the session and is still
         // waiting for the input format has no analyser to tear down but very much has a
         // microphone to give back.
@@ -451,6 +509,10 @@ final class SoundWatcher {
         // A start that got as far as the session but no further has already left a route hook on
         // `SpeechQueue`; nothing must be able to call back into a watcher that has given up.
         speech.onMicrophoneRouteChanged = nil
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
         // Structural, not conventional: every current caller releases the session before it fails,
         // but the file header promises that *every* way this feature dies ends on `.playback`, and
         // a promise kept by six call sites agreeing is one bad merge from being broken.
@@ -591,20 +653,23 @@ private nonisolated final class SoundResultsRelay: NSObject, SNResultsObserving,
         self.onFailure = onFailure
     }
 
-    /// One classification window. Only the best label with a `DangerSound` mapping is forwarded;
-    /// the mapping itself is checked again on the main actor against the *measured* label table.
+    /// One classification window. Exactly one label with a `DangerSound` mapping is forwarded; the
+    /// mapping itself is checked again on the main actor against the *measured* label table.
+    ///
+    /// Which one is `SoundAlerts.best(of:)`'s decision, not this class's, and it is deliberately
+    /// **not** "the highest confidence". Next to a road `traffic_noise` and `engine` are high in
+    /// every window, so an approaching siren would come second window after window, and
+    /// `SoundAlertPolicy` — which needs *consecutive agreeing* windows — would have the siren's run
+    /// broken by the ambient class every time and would never announce it at all. `best(of:)`
+    /// prefers the more urgent kind whenever it clears its own gate; see its doc comment and
+    /// `SoundAlertsTests.anEmergencySirenIsNotShadowedByTheAmbientTrafficClass`.
     func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let classification = result as? SNClassificationResult else { return }
-        var bestLabel = ""
-        var bestConfidence = 0.0
-        for c in classification.classifications {
-            guard SoundAlerts.kind(for: c.identifier) != nil else { continue }
-            if c.confidence > bestConfidence {
-                bestLabel = c.identifier
-                bestConfidence = c.confidence
-            }
+        let candidates = classification.classifications.map {
+            (label: $0.identifier, confidence: $0.confidence)
         }
-        onResult(bestLabel, bestConfidence)
+        let best = SoundAlerts.best(of: candidates)
+        onResult(best?.label ?? "", best?.confidence ?? 0)
     }
 
     /// Analysis failed; the message reaches `SoundWatcher.analysisFailed`, which stops the

@@ -471,9 +471,17 @@ Pure ranking behind the Guide card's "as you type" suggestions. Foundation only;
   - `announcement(count:)` — "No matching places" / "1 result" / "N results", posted by `DestinationField` as the app's one VoiceOver announcement.
 - Tests: `DestinationSuggestionsTests.swift` (14).
 
+### `SoundAlerts.swift` — danger sounds, emergency-siren policy (Step 16)
+
+`DangerSound` (siren/horn/vehicle) carries `spokenLine`, `minimumConfidence` (siren 0.60, horn 0.60, vehicle 0.75), `requiredWindows` (siren 3, else 2, at the ~0.5 s window hop), `repeatInterval` (15/12/30 s), `speechTTL` (15/4/6 s — siren equals its repeat interval so it survives the `.nav` queue instead of expiring unheard behind a crossing instruction) and `selectionRank` (siren 2 > horn 1 > vehicle 0). `SoundUrgency` (ambient/emergency) decides the speech band in `AppModel.wireSounds` (emergency → `.nav`, ambient → `.obstacle`, never `.safety`). `SoundAlerts.best(of:)` picks the most urgent kind clearing its own gate (never the raw highest confidence, so traffic noise cannot shadow a siren); `SoundAlertPolicy.update(kind:confidence:now:)` needs consecutive agreeing windows and resets on a below-gate window. `MicrophoneStart` owns the input-format settle (one retry, whole budget < 0.5 s). Tests: `SoundAlertsTests.swift` (incl. `spokenLinesAreThePrefetchedOnes`, `anEmergencySirenIsNotShadowedByTheAmbientTrafficClass`).
+
+### `QuestionPrompt.swift` / `StatusSummary.swift` — hands-free content (Step 16)
+
+Pure builders behind the Siri intents. `QuestionPrompt.clean` (nil for unanswerable questions) / `.text(for:)` (the model prompt); `StatusFacts` (gathered by `AppModel` at speak time) → `StatusSummary.lines` / `.sentence` (fixed six-clause order: obstacle detection, GPS, audio, haptics, route, battery) / `.hapticsLine` (shared with `announceChannels` so one fact has one sentence everywhere). Tests: `QuestionPromptTests.swift`, `StatusSummaryTests.swift`.
+
 ---
 
-### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 243 tests
+### Tests — `ios/Logic/Tests/CaneKitLogicTests/` (Swift Testing, `@testable import CaneKitLogic`) — 316 tests on main before Step 16 (run `make test` for the count with the Step 16 cases)
 **CueDeciderTests.swift** (14; helper `report(head:torso:trusted:)` builds a trusted, depth-available report)
 - `centerApproachFiresThenUpdatesDistance` — first centre frame → `.fire(.centerApproach)`, next → `.updateCenter`, `active == .center`.
 - `centerDistanceIsClampedToNearFloor` — 0.3 m reports as 0.5 m (`centerNear`).
@@ -564,6 +572,10 @@ Pure ranking behind the Guide card's "as you type" suggestions. Foundation only;
 - Otherwise (Command Line Tools only) → `swift test` with `-Xswiftc -Fsystem -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks`, `-Xfrontend -disable-cross-import-overlays`, and matching `-Xlinker -F/-rpath`, because SwiftPM cannot find Swift Testing's Foundation cross-import overlay under CLT.
 - Invariant: tests may use only core `Testing` + `Foundation` types (no overlay-dependent APIs). Extra args pass through (e.g. `--filter`).
 - CI: `.github/workflows/ci.yml` (manual `workflow_dispatch` only for now) job `logic-tests` runs plain `swift test` in `ios/Logic` on Linux (`swift:6.2` container); the `sim-build` job (macOS, newest Xcode) is informational (`continue-on-error`). Tests must therefore also pass on Linux Foundation (e.g. `CourseSmootherTests` uses its own LCG rather than a seeded Foundation RNG).
+
+### `ios/scripts/appicon.py` — renders the app icon (committed generator, Step 17)
+- `python3 ios/scripts/appicon.py` writes `Icon-1024.png` into both `AppIcon` sets (iPhone `CaneKit/Resources/Assets.xcassets`, Watch `CaneKitWatch/Assets.xcassets`); no `project.yml` change needed (asset files only).
+- Design ("White Cane" v2): navy gradient field, black straight grip + gold joint ring, white shaft with two red wraps, red tip leaning lower-right, faint gold signal arcs top-right. Pieces are square-ended and overlapped (round caps only on the two outer ends) so no hairline seams; the strip carries `PAD` vertical padding so the proud band ends keep their rounding, and the shadow layer carries `SPAD` padding so the blur feathers instead of clamping (both caught by the agy review round). The whole cane is scaled 0.88 about the centre so the tip survives the squircle mask (verified by bbox probe + masked render: zero content pixels in the cut zone, not by eye alone).
 
 ### Cross-module contracts (who uses what)
 - `DepthFrameProcessor` (app) → `LaneMath.computeLanes` (raw pointer form, owns `LaneConfig` and `scratch`) → publishes `LaneReport` at ~30 Hz.
@@ -740,7 +752,7 @@ Policy (`CueSpeechPolicy`, CaneKitLogic):
 #### Headphones / watch presence
 
 - **`wireAudioRoute()`** (private, called once in `start`) — installs `audioRoute.onChange { connected, name }` (debounced 2 s in the monitor): `beacon.headphonesConnected = connected`; log `audioroute` (`connected`, `name`); connected → `speech.say("\(name) connected.", .nav, ttl: 5)` and, if `nav.isNavigating`, `head.start()` + `recenterPending = true`; disconnected → `speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)` and **`head.stop()`** (no AirPods, no motion). Also installs `audioRoute.onImmediateChange { connected in beacon.headphonesConnected = connected }` — undebounced, so the click stops the moment the AirPods drop instead of playing from the cane speaker for 2 s. Then `audioRoute.start()` and seeds `beacon.headphonesConnected = audioRoute.headphonesConnected` (the initial read fires neither callback). The beacon only renders into headphones; a click out of the cane speaker carries no direction.
-- **`announceChannels()`** (private, last step of `beginRoute`) — each applicable line at `.nav`, ttl 20, queued after the route intro: `!audioRoute.headphonesConnected` → `"No headphones. Beacon paused until AirPods connect."`; `watch.isPaired && !watch.isReachable` → `"Watch not reachable. Open CaneKit on the watch."`; `!haptics.isHealthy && !watch.isReachable` → `"Haptics unavailable. Obstacle cues will be spoken."`.
+- **`announceChannels()`** (private, last step of `beginRoute`) — each applicable line at `.nav`, ttl 20, queued after the route intro: `!audioRoute.headphonesConnected` → `"No headphones. Beacon paused until AirPods connect."`; `watch.isPaired && !watch.isReachable` → `"Watch not reachable. Open OpenCane on the watch."`; `!haptics.isHealthy && !watch.isReachable` → `"Haptics unavailable. Obstacle cues will be spoken."`.
 
 #### Navigation wiring — `wireNavigation()` (private, called once in `start`)
 
@@ -794,21 +806,25 @@ Other triggers into the same paths: `describeScene()` (logs `describe {provider}
 
 ### `AppIntents.swift` — Action button / Siri entry points
 
-**Purpose.** Three `AppIntent`s that open the app (ARKit needs the foreground) and call into `AppModel.shared`, plus the `AppShortcutsProvider`.
+**Purpose.** Seven route `AppIntent`s (Where am I, Take me to \<place\>, Take me somewhere, Navigate to CIF from here, Start demo route, Repeat, Next, Stop) that open the app (ARKit needs the foreground) and call into `AppModel.shared`, plus the `AppShortcutsProvider`. Spoken name is OpenCane via `\(.applicationName)` (display name — no edit needed on rename); code names stay CaneKit.
 
 | Type | Kind | Role |
 |---|---|---|
 | `WhereAmIIntent` | `struct: AppIntent` | title "Where am I"; `perform()` → `model.describeScene()`. |
-| `StartDemoRouteIntent` | `struct: AppIntent` | title "Start CaneKit route"; `perform()` → `model.startDemoRoute()`. |
-| `RepeatInstructionIntent` | `struct: AppIntent` | title "Repeat instruction"; `perform()` → `model.repeatInstruction()`. |
-| `IntentSupport` | `enum` namespace | `struct NotReady: Error, CustomLocalizedStringResourceConvertible` ("CaneKit is still starting. Try again."); `@MainActor static func model() async throws -> AppModel` polls `AppModel.shared` up to 20 × 100 ms (2 s) on a cold lock-screen launch, then throws `NotReady`. |
-| `CaneKitShortcuts` | `struct: AppShortcutsProvider` | Registers the three shortcuts; every phrase must contain `\(.applicationName)`. |
+| `TakeMeToIntent` / `TakeMeSomewhereIntent` | `struct: AppIntent` | Gazetteer-first / free-text destination → `model.navigate(to:)`. |
+| `NavigateToCIFIntent` | `struct: AppIntent` | MKDirections to the route file's last waypoint as a bare coordinate. |
+| `StartDemoRouteIntent` | `struct: AppIntent` | title "Start route"; `perform()` → `model.startDemoRoute()`. |
+| `RepeatInstructionIntent` / `NextWaypointIntent` / `StopRouteIntent` | `struct: AppIntent` | Repeat / Next / Stop. |
+| `IntentSupport` | `enum` namespace | `struct NotReady: Error` ("OpenCane is still starting. Try again."); `@MainActor static func model() async throws -> AppModel` polls `AppModel.shared` up to 20 × 100 ms (2 s) on a cold lock-screen launch, then throws `NotReady`. |
+| `CaneKitShortcuts` | `struct: AppShortcutsProvider` | Registers **all ten** shortcuts (Step 16 added Status / Ask / Silence-haptics); every phrase must contain `\(.applicationName)`. ⚠ The list is full — anything new must be a plain `AppIntent` or replace one. |
 
-All three intents: `static let supportedModes: IntentModes = .foreground(.immediate)`; `perform()` is `@MainActor`, returns `.result()`.
-
-Phrases: `"Where am I in <app>"`, `"<app> describe the scene"` (`eye`); `"Start my route in <app>"` (`figure.walk`); `"Repeat in <app>"`, `"<app> say that again"` (`arrow.counterclockwise`).
+All intents: `static let supportedModes: IntentModes = .foreground(.immediate)`; `perform()` is `@MainActor`, returns `.result()`.
 
 ⚠ Do not change `supportedModes` away from foreground — `describeScene()` needs a live ARKit frame, which only exists while the app is frontmost.
+
+### `App/HandsFreeIntents.swift` — Siri status, questions, voice switches (Step 16)
+
+`StatusIntent` → `model.speakStatus()` (six clauses via `StatusSummary`); `AskSceneIntent` (String parameter, Siri asks "What do you want to know?") → `model.askAboutScene(_)` → `SceneDescriber.ask`; `SilenceHapticsIntent` (optional `SwitchState`, defaults off) → `model.setHapticsSilenced(_)`; `RecenterIntent` / `SetOptionIntent` (Shortcuts-app only, no Siri phrase — the 10-shortcut list is full). The `AppModel` methods live as an extension in this file: `speakStatus()` (`.scene`, ttl 20 per clause), `askAboutScene(_:)`, `setHapticsSilenced(_:)` (`.nav`, ttl 10), `setOption(_:enabled:)` + `isOptionEnabled(_:)` (reads state back after writing; a synchronous refusal is never announced as on, an async one — the 0.25 s mic-format settle — is corrected by the watcher's own failure line ~a second later; "Both cameras" and face-tracking AR restart deliberately unreachable by voice). ⚠ `SetOptionIntent` only touches warning subsets — core obstacle/head-height cues are not reachable.
 
 ---
 
@@ -932,6 +948,19 @@ Other consumer: `AppModel.location.onHeading` drops **compass** readings unless 
 **`nonisolated private final class SessionObserver: NSObject, ARSessionDelegate, @unchecked Sendable`** — splits the delegate: `session(_:didUpdate:)` forwards synchronously to `DepthFrameProcessor` on the depth queue; `didFailWithError` (extracts `NSError.code` + `localizedDescription` because `any Error` is not Sendable), `sessionWasInterrupted`, `sessionInterruptionEnded`, `cameraDidChangeTrackingState` hop to the engine via `Task { @MainActor }`. Holds `engine` weakly.
 
 ⚠ Do not change `frameSemantics`, `delegateQueue`, or the reset options in `start()`/`resume()` without a device test (depth must recover after backgrounding without losing the world map; `.smoothedSceneDepth` is what keeps lanes from flickering at 15 Hz).
+
+### `ios/CaneKit/Depth/DualCameraSession.swift` — both cameras at once (Step 14, off by default)
+
+Purpose: front + back camera on screen together for a sighted spotter, via `AVCaptureMultiCamSession` rendered from `AVCaptureVideoDataOutput` buffers into two `AVSampleBufferDisplayLayer`s. ARKit can never deliver two pictures (`ARFrame` has one `capturedImage`; Apple DTS forum 677731), so the caller (`AppModel.setBothCameras`) pauses ARKit first — obstacle detection is down while this is on. Never a preview layer (forums 742501: preview layers make LiDAR depth unreliable).
+
+**`@MainActor @Observable final class DualCameraSession`** — `backLayer` / `frontLayer` (created once, attached by `BothCamerasView`), `isRunning`, `backConnected` / `frontConnected`, `lastError`, `hardwareCost` / `systemPressureCost`, `frameRateReduced`, `frontOpened` / `backOpened` (survive teardown after a failed start), `enqueuedFrames` / `rendererFlushes` (frames that reached a renderer; cameras live but view black = `enqueued` stuck at 0).
+
+- `start()` — no-op if a session exists; refuses when `!isSupported` (no fallback picture); `connect(.back, .builtInWideAngleCamera)` + `connect(.front, .builtInTrueDepthCamera)` falling back to front wide-angle; tears down on every failure path (a zombie session would make later starts silent no-ops via the `guard session == nil`).
+- `connect(_:device:name:to:in:)` — `addInputWithNoConnections` / `addOutputWithNoConnections` + one explicit `AVCaptureConnection` per camera; `alwaysDiscardsLateVideoFrames = true`; `DualCameraFrameRelay` delegate (nonisolated, one frame in flight). Rotation: `RotationCoordinator` **capture** angle first (`videoRotationAngleForHorizonLevelCapture` — this is a capture connection, and the preview angle follows interface orientation, which disagreed by the 90° front-inset tilt), then preview angle, then per-position fallback (front 270, back 90); applied angles kept in `appliedRotationAngles` and logged as `front_rotation` / `back_rotation` (`-1` = camera never connected). Front connection explicitly unmirrored (`isVideoMirrored = false`): the screen is watched by a spotter, so the inset must agree with the back feed on left/right — mirrored read backwards on device. Read back into `frontMirrored`, logged as `front_mirrored`.
+- `render(_:into:)` — never guards on `isReadyForMoreMediaData` (pull-protocol flag; guarding it dropped every frame on a fresh layer); flushes on `requiresFlushToResumeDecoding` / `.failed`, then enqueues.
+- `diagnostics` — `supported/running/front/back/front_opened/back_opened/front_frames/back_frames/enqueued/renderer_flushes/front_rotation/back_rotation/hardware_cost/system_pressure_cost/frame_rate_reduced/error`; logged by `AppModel` as `both_cameras` on start.
+
+⚠ Do not reintroduce an `isReadyForMoreMediaData` guard, a preview layer, or a blind 90° fallback — each was a real black-view or sideways-view bug. Rotation changes need the phone clamped in portrait on the cane (`front_rotation` should read 270, `back_rotation` 90).
 
 ### `ios/CaneKit/Depth/MeshClassifier.swift`
 
@@ -1075,7 +1104,7 @@ Private state beyond the backends: `queue`, `sequence`, `generation`, `currentPr
   1. Not speaking → `speakNow` immediately.
   2. Speaking and `priority > currentPriority` → `requeueCurrent()` then `stopCurrent()` then `speakNow` (interrupt).
   3. Speaking and `priority <= currentPriority` → **coalesce**: dropped if `line == currentText` or an identical text is already queued; otherwise appended with `sequence += 1` and `sortQueue()`.
-  Callers/priorities in `AppModel`: `.nav` for route lines (`nav.onSpeak`, ttl 12 — `NavigationEngine` only ever passes `.nav`, including the arrival hint "You are close to …"), status lines "Recentered." / watch "No route running." (ttl 2), headphone connect/disconnect lines (ttl 5), the thermal notice (ttl 10), `announceChannels()` lines at route start and the camera-denied / location-denied lines (ttl 20), arrival summary (ttl 30), and default-ttl lines ("CaneKit ready.", "Route stopped.", route-building errors); `.obstacle` for namer lines (ttl 4), `"Left."` / `"Right."` / `"Ahead, <distance>."` from `CueSpeechPolicy` when the phone cannot buzz (ttl 6), and `HazardScanner` sign / caution lines (`"Sign: detour."`, `"Caution: cones ahead, 3 meters."`, ttl 6); `.safety` for `"Head height."` from `CueSpeechPolicy` (ttl 6; once per obstacle episode, ≥ 4 s apart) and ground-hazard lines (`"Drop-off ahead, two meters."`, ttl 3); `.scene` from `SceneDescriber` and `speechTest()`.
+  Callers/priorities in `AppModel`: `.nav` for route lines (`nav.onSpeak`, ttl 12 — `NavigationEngine` only ever passes `.nav`, including the arrival hint "You are close to …"), status lines "Recentered." / watch "No route running." (ttl 2), headphone connect/disconnect lines (ttl 5), the thermal notice (ttl 10), `announceChannels()` lines at route start and the camera-denied / location-denied lines (ttl 20), arrival summary (ttl 30), and default-ttl lines ("OpenCane ready.", "Route stopped.", route-building errors); `.obstacle` for namer lines (ttl 4), `"Left."` / `"Right."` / `"Ahead, <distance>."` from `CueSpeechPolicy` when the phone cannot buzz (ttl 6), and `HazardScanner` sign / caution lines (`"Sign: detour."`, `"Caution: cones ahead, 3 meters."`, ttl 6); `.safety` for `"Head height."` from `CueSpeechPolicy` (ttl 6; once per obstacle episode, ≥ 4 s apart) and ground-hazard lines (`"Drop-off ahead, two meters."`, ttl 3); `.scene` from `SceneDescriber` and `speechTest()`.
 - `sayAgain(_ text: String, _ priority: SpeechPriority, ttl: TimeInterval = 12)` — "say that again": bypasses coalescing so it speaks even when `text` is the line playing now. Trims; empty → no-op; removes any queued copy of `text`. If `interrupted` or speaking a line with `currentPriority > priority` → enqueued (`sequence += 1`, `sortQueue()`). Otherwise `stopCurrent()` + `speakNow` — it interrupts an equal-or-lower line **without** re-queueing it. Only caller: `nav.onRepeat` → `speech.sayAgain(text, .nav)` (`NavigationEngine.repeatInstruction()`: last line actually spoken + " Next, <place>, in N meters." while navigating).
 - `requeueCurrent()` (private) — **re-queue rule**: requires `currentPriority`, non-empty `currentText`, `currentReplays < maxReplays`, `currentExpires > now`, and the text not already queued. Inserted at the *front of its priority band* with `sequence = (min queued sequence ?? sequence) − 1`, `expires = max(currentExpires, now + 8)`, `replays = currentReplays + 1`. Equal priority ⇒ resumes right after the interrupter; lower priority ⇒ after all higher lines. A line already replayed once, or expired, is silently dropped (Repeat recovers it).
 - `sortQueue()` (private) — sort key `(priority desc, sequence asc)`: highest priority first, FIFO within a band.
@@ -1240,7 +1269,8 @@ Purpose: transport + key plumbing for the vision-language providers, and the clo
 | `.gemini` | `GEMINI_API_KEY` | `GEMINI_MODEL` (`gemini-2.5-flash`) | `GeminiClient`, `"Gemini"` |
 | `.openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` (`gpt-4o-mini`) | `OpenAICompatibleClient` at `https://api.openai.com/v1`, `"OpenAI"` |
 
-- `vlmSession` — `nonisolated private let URLSession`: **`waitsForConnectivity = false`**, **`timeoutIntervalForRequest = 8`**, **`timeoutIntervalForResource = 12`** — fail fast on a dead network so the on-device fallback answers instead of 20 s of silence.
+- `vlmSession` — `nonisolated private let URLSession`: **`waitsForConnectivity = false`**, **`timeoutIntervalForRequest = 18`**, **`timeoutIntervalForResource = 25`** (measured: Muse Spark reasoning needs ~10.7 s end to end; 8/12 s cancelled it every time) — a dead network still fails fast via `waitsForConnectivity = false`.
+- `cloudPrimary` (Step 16) — the cloud client inside this one (`self` for bare providers, `primary.cloudPrimary` for `FallbackVLMClient`, nil for on-device). Only "Ask OpenCane" uses it: the fallback chain would answer a question with a generic description, so the question path asks the cloud directly and reports failures. ⚠ New clients that ignore `prompt` must return nil here (fails open by default — see the protocol doc).
 - `post(_ url:headers:body:) async throws -> Data` (nonisolated private) — `POST`, `Content-Type: application/json` + provider headers; no `HTTPURLResponse` → `VLMError.malformed("no HTTP response")`; status checked by `VLMResponse.checkStatus` (throws `VLMError.http(code, provider message or first 200 bytes)`).
 - `OpenAICompatibleClient` (`nonisolated struct: VLMClient`; `name`, `baseURL`, `apiKey`, `model`) — `describe(jpeg:prompt:)` normalises the base URL (trim, strip trailing `/`, append `/chat/completions` unless already present; missing scheme → `.malformed("bad base URL")`), header `Authorization: Bearer <key>`, body `VLMRequest.openAICompatible(model:jpegBase64:prompt:)`, parse `VLMResponse.openAICompatible`.
 - `AnthropicClient` — `https://api.anthropic.com/v1/messages` (a constant literal, the one remaining `!`), headers `x-api-key`, `anthropic-version: 2023-06-01`; `VLMRequest.anthropic(model:jpegBase64:prompt:)` / `VLMResponse.anthropic`.
@@ -1263,6 +1293,7 @@ Purpose: "Where am I" — latest camera frame → 1024 px JPEG → the shared `V
 - `onResult: ((String?, String?, Int?) -> Void)?` (`@ObservationIgnored`) — every outcome (sentence, error, ms) on the main actor: no frame, success, failure. `AppModel.wireDescriber` logs it as `describe_result`, so a walk log shows what "Where am I" actually said.
 - Triggers, all via `AppModel.describeScene()`: `GuideCard` "Where am I" button, watch `.describe`, `AppIntents.swift` (Action button App Shortcut), `AppModel.cameraControlPressed()`, and the automation hook `AppModel.describeEveryWaypoint` (`CANEKIT_DESCRIBE_EVERY_WAYPOINT=1`: route start + every waypoint, used by the Street View e2e).
 - All speech is `.scene` (lowest priority) — a description never interrupts a route or safety line and is dropped after its ttl if the voice is busy. ⚠ Do not change the no-frame / failure paths without re-running `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully` (expects a text containing "camera" or starting "Scene:" within 8 s, and the button back) and `make uitest-streetview`.
+- "Ask OpenCane" (Step 16): `ask(_:)` cleans via `QuestionPrompt`, snapshots one frame, asks `client.cloudPrimary` directly (a fallback answer would be a different question's answer), gates with `CloudSceneGate`, speaks one sentence. `lastQuestion` records the walker's words ("" for plain Where-Am-I) and is logged by `AppModel` in `describe_result`, so every answer sits beside its question.
 
 ---
 

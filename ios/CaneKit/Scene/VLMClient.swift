@@ -49,9 +49,28 @@ nonisolated protocol VLMClient: Sendable {
     /// `FallbackVLMClient` has one). `SceneDescriber` speaks it when the gate refuses the cloud
     /// sentence, so a refusal still answers the walker.
     var onDeviceFallback: (any VLMClient)? { get }
+    /// The cloud client inside this one, or nil when there is none.
+    ///
+    /// Only "Ask OpenCane" uses it, and it exists because that path must NOT fall back silently.
+    /// `describe(jpeg:prompt:)` on a `FallbackVLMClient` answers a failed cloud call with the
+    /// on-device client, which ignores the prompt entirely and returns a scene description — for
+    /// "Where am I" that is exactly right, but as the answer to "is there a bench on my left?" it
+    /// is a different question's answer spoken as if it were this one's. Asking the cloud client
+    /// directly makes a failure a failure, which the walker is then told about.
+    ///
+    /// ⚠ **Contract for a new client: if it ignores `prompt`, it must return nil here.** The
+    /// default below returns `self` for anything that is not `isOnDevice`, which is correct for
+    /// every client that exists (`OpenAICompatibleClient`, `AnthropicClient`, `GeminiClient` all
+    /// pass `prompt` through, and `OnDeviceVLMClient` is excluded by `isOnDevice`) — but it fails
+    /// *open*, so a future wrapper that quietly drops the prompt would answer "is there a bench?"
+    /// with a generic description spoken as the answer. That is the one failure this property
+    /// exists to prevent (review round 1 raised it; the default is kept because inverting it would
+    /// silently break the question path the moment a provider forgot to opt in, which is the worse
+    /// direction to fail in).
+    var cloudPrimary: (any VLMClient)? { get }
     /// One image + a prompt → text. `prompt` is `ScenePrompt.text` for "Where am I" and
     /// `HazardPrompt.text` for the hazard watch. Throws `VLMError` (HTTP status, malformed body)
-    /// or `URLError` (transport, 8 s request / 12 s total timeout).
+    /// or `URLError` (transport, 18 s request / 25 s total timeout).
     func describe(jpeg: Data, prompt: String) async throws -> String
     /// "Where am I", with the provenance the gate needs. Caller: `SceneDescriber.describe()`.
     func describeScene(jpeg: Data) async throws -> VLMAnswer
@@ -62,6 +81,8 @@ nonisolated extension VLMClient {
     var isOnDevice: Bool { false }
     /// Only `FallbackVLMClient` has a fallback.
     var onDeviceFallback: (any VLMClient)? { nil }
+    /// A bare client is its own cloud client, unless it is the on-device one (which has none).
+    var cloudPrimary: (any VLMClient)? { isOnDevice ? nil : self }
 
     /// "Where am I": the scene prompt. Caller: `HazardScanner`-free paths and tests.
     func describe(jpeg: Data) async throws -> String {
@@ -82,8 +103,11 @@ nonisolated struct FallbackVLMClient: VLMClient {
     var name: String { "\(primary.name) + \(fallback.name)" }
     /// What `SceneDescriber` speaks when `CloudSceneGate` refuses the cloud sentence.
     var onDeviceFallback: (any VLMClient)? { fallback }
+    /// The cloud half, which "Ask OpenCane" asks directly so a cloud failure is reported rather
+    /// than answered by the on-device describer (see the protocol's doc comment).
+    var cloudPrimary: (any VLMClient)? { primary.cloudPrimary }
 
-    /// The hazard watch cannot wait for the cloud's full 8–12 s timeout: a reply that late is about
+    /// The hazard watch cannot wait for the cloud's full 18–25 s timeout: a reply that late is about
     /// a place the walker has left. For `HazardPrompt.text` the cloud gets this long, then the
     /// on-device client answers instead (review round 5).
     var hazardDeadline: Duration = .seconds(2.5)
