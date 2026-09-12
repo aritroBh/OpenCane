@@ -12,6 +12,10 @@ section (InsForge-like geometry, cane soul, no words). One 1024 PNG generated fr
 test on device: OpenCane icon on the Home Screen after install; no white bars clipped by the
 squircle at small sizes (check a folder view too).
 
+Installed 2026-09-12 ~01:25 via `make run` (build + `actool` icon compile + devicectl install
+all green, incl. the 10 Siri phrases training under the OpenCane name). Auto-launch refused:
+phone was locked — unlock and tap the icon by hand.
+
 ## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
 
 Both worktrees are now in the main checkout, hand-merged so nothing the renames and fixes
