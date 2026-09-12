@@ -130,9 +130,9 @@ final class DepthEngine {
     /// Sequence boundary captured from the processor queue at the transition. This is stronger
     /// than the consumed report timestamp because `reports` buffers one pre-transition value.
     @ObservationIgnored private var readinessBaselineFrameSequence: Int?
-    /// Last report sequence accepted by the readiness gate; a gap means the newest-only stream
-    /// dropped at least one published frame, so the consecutive run must restart conservatively.
-    @ObservationIgnored private var readinessLastFrameSequence: Int?
+    /// Published-report continuity across the readiness boundary. A gap means the newest-only
+    /// stream dropped at least one published frame, so the consecutive run restarts conservatively.
+    @ObservationIgnored private var readinessContinuity = DepthFrameContinuity()
     /// Pure state machine; all mutations happen on the main actor.
     @ObservationIgnored private var readiness = DepthReadiness()
 
@@ -162,7 +162,7 @@ final class DepthEngine {
     func beginReadiness(at now: TimeInterval) {
         readinessBaselineFrameTime = report.depthAvailable ? report.timestamp : nil
         readinessBaselineFrameSequence = processor.latestPublishedSequence()
-        readinessLastFrameSequence = nil
+        readinessContinuity.begin(after: readinessBaselineFrameSequence)
         publishReadiness(readiness.begin(at: now))
     }
 
@@ -175,7 +175,7 @@ final class DepthEngine {
     func cancelReadiness() {
         readinessBaselineFrameTime = nil
         readinessBaselineFrameSequence = nil
-        readinessLastFrameSequence = nil
+        readinessContinuity = DepthFrameContinuity()
         publishReadiness(readiness.cancel())
     }
 
@@ -185,7 +185,7 @@ final class DepthEngine {
         guard readiness.state != .idle else { return }
         readinessBaselineFrameTime = report.depthAvailable ? report.timestamp : nil
         readinessBaselineFrameSequence = processor.latestPublishedSequence()
-        readinessLastFrameSequence = nil
+        readinessContinuity.begin(after: readinessBaselineFrameSequence)
         publishReadiness(readiness.invalidate(at: now))
     }
 
@@ -234,6 +234,9 @@ final class DepthEngine {
     func pause() {
         guard isRunning else { return }
         session.pause()
+        // Complete any callback already in flight before capturing the paused-session boundary.
+        // A newest-only report yielded just before the pause must never satisfy a post-resume gate.
+        processor.synchronize()
         processor.stopMotion()
         processor.dropLatestImage()     // a paused frame is a stale frame: never describe it later
         isRunning = false
@@ -267,6 +270,9 @@ final class DepthEngine {
     func resume() {
         guard !isRunning else { return }
         guard configuration != nil else { start(); return }
+        // Drain the old session's delegate tail before taking a new readiness boundary. Without
+        // this, a report published during the pause can look like post-resume evidence.
+        processor.synchronize()
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
@@ -292,7 +298,15 @@ final class DepthEngine {
     func setHighFrameRate(_ on: Bool) {
         guard on != highFrameRate else { return }
         highFrameRate = on
+        // In high-rate mode every camera frame is published, so an untrusted 60 Hz frame cannot
+        // be hidden between two qualifying readiness reports. The normal 30 Hz cap remains the
+        // shipped low-power path.
+        let rate = CameraRate.framesPerSecond(highFrameRate: on)
+        processor.settings.withLock { $0.maxRate = Double(rate) }
         guard isRunning else { return }
+        session.pause()
+        processor.dropLatestImage()
+        processor.synchronize()
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
@@ -320,6 +334,9 @@ final class DepthEngine {
         faceTrackingEnabled = wanted
         if !wanted { faceAnchorSeen = false }
         guard isRunning else { return }
+        session.pause()
+        processor.dropLatestImage()
+        processor.synchronize()
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: meshEnabled)
         configuration = config
@@ -331,6 +348,9 @@ final class DepthEngine {
         meshEnabled = on
         processor.settings.withLock { $0.meshLookupEnabled = on }
         guard isRunning else { return }
+        session.pause()
+        processor.dropLatestImage()
+        processor.synchronize()
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         let config = makeConfiguration(mesh: on)
         configuration = config
@@ -434,23 +454,14 @@ final class DepthEngine {
            readinessBaselineFrameTime.map({ r.timestamp > $0 }) ?? true,
            readinessBaselineFrameSequence.map({ r.frameSequence > $0 }) ?? true {
             let now = ProcessInfo.processInfo.systemUptime
-            var skipCurrentFrame = false
-            if let previous = readinessLastFrameSequence,
-               r.frameSequence != (previous &+ 1) {
+            let contiguous = readinessContinuity.accepts(r.frameSequence)
+            if !contiguous {
                 // `reports` intentionally buffers only the newest value. If delivery skipped any
                 // published report, one of those unseen frames may have been limited or missing
                 // depth; never call the values on either side consecutive evidence.
                 publishReadiness(readiness.invalidate(at: now))
-                skipCurrentFrame = true
-            } else if let baseline = readinessBaselineFrameSequence,
-                      r.frameSequence != (baseline &+ 1) {
-                // The first post-boundary report can also arrive after an unseen buffered report;
-                // discard this one as evidence and require a wholly contiguous run from here.
-                publishReadiness(readiness.invalidate(at: now))
-                skipCurrentFrame = true
             }
-            readinessLastFrameSequence = r.frameSequence
-            if !skipCurrentFrame {
+            if contiguous {
                 publishReadiness(readiness.frame(at: now,
                                                  trackingNormal: r.trackingNormal,
                                                  sceneDepthAvailable: r.depthAvailable,

@@ -9,6 +9,36 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 25 — Camera interlock adversarial hardening and documentation sync (Sat Sep 12)
+
+The full review after merging the voice-assistant work found and fixed the remaining safety/UI
+edges:
+
+- AR reconfiguration now drains the serial frame queue before taking a readiness boundary, so
+  reports from the previous camera configuration cannot earn post-transition trust.
+- High-frame-rate mode publishes every camera frame (60 Hz) instead of leaving an untrusted frame
+  hidden behind the 30 Hz cap; the normal shipped path remains 30 Hz.
+- Published-frame continuity is a pure `DepthFrameContinuity` policy with Logic tests for dropped
+  reports and transition boundaries.
+- `routeStartWaiting` is observable, and Guide now exposes **Cancel route start** with an explicit
+  spoken/watch confirmation while depth is warming. No queued request can be stranded behind a
+  disabled Stop button.
+- Current docs, route labels, test counts and the OpenCane/CaneKit name split were synchronized;
+  historical verification claims are marked historical rather than presented as current.
+- No screenshot-tour state was added: the cancel control exists only during a LiDAR camera warm-up,
+  which the no-LiDAR simulator cannot reproduce; the Guide layout remains covered by the existing
+  idle tour state.
+
+**Verification:** 366 `@Test` annotations are present. Logic sources and changed app files pass
+local Swift parsing/type checking; the local Xcode 15.1 / Swift 5.9.2 toolchain cannot execute the
+Swift-tools-version 6.0 package, and XcodeGen/CoreSimulator/Muse/Antigravity are unavailable in
+this environment. The Xcode 27 device/simulator gates remain explicitly pending.
+
+test on device: while a two-camera view is active, request Start route to CIF, confirm the warm-up
+status and Cancel route start button, cancel once, then retry and wait for automatic start; background
+the app mid-route, resume, and confirm guidance stays paused until three fresh trusted depth frames
+arrive; toggle 60 fps and verify the trip log shows contiguous `frame_seq` values.
+
 ## Step 24 — Audio tap Swift 6 isolation fix, Action Button PTT toggle, and session coordination (Sat Sep 12)
 
 Fixed physical-device voice-input crash paths:
@@ -37,14 +67,14 @@ Hands-free voice assistant mode designed specifically for blind white-cane users
 - **Hardware triggers**: Wired into the physical iPhone Action Button via `TalkToOpenCaneIntent: AppIntent` (with `requestValueDialog: "How can OpenCane help?"`), plus accessible push-to-talk in `GuideCard.swift`.
 - **Speech priority hierarchy & double-speak elimination**: Spoken conversational replies are strictly `.scene` priority (lowest band, priority 3). Route instructions (`.nav`), obstacle alerts (`.obstacle`), and head-height warnings (`.head` / `.safety`) immediately interrupt any conversational reply. Actions that already announce themselves out loud (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) skip the coordinator's spoken repetition to prevent echoing.
 - **Muse adversarial audit (rounds 1 & 2)**: Addressed all findings: (1) `cloudPrimary` routing on `VLMClient` avoiding on-device prompt drops; (2) off-main thread JPEG encoding via detached task; (3) weak `appModel` across async gaps; (4) beacon state save and restoration across voice sessions; (5) eliminated fast-path and tool double-speaking; (6) fixed sticky `.error` state and guarded stale recognition callbacks against unlistening states; (7) reentrancy guards on `handleQuery`.
-- **Verification**: 359/359 unit tests green (`make test`), simulator build clean (`make sim`), 10/10 XCUITests + visual tour green (`make uitest`). Deployed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2308).
+- **Historical upstream verification**: 359/359 unit tests green (`make test`), simulator build clean (`make sim`), 10/10 XCUITests + visual tour green (`make uitest`). Deployed and installed on physical iPhone 17 Pro Max (`00008150-001A698C1108401C`, build sequence 2308); rerun after the current merge with Xcode 27.
 - **Follow-up fixes**: cloud-primary routing, detached JPEG encoding, stale recognition callbacks,
   double-speak suppression, and query reentrancy guard.
 
 test on device: trigger Action Button or tap the mic; say “set a post here named curb”, verify the
 confirmation, ask “how is my battery”, then say “take me to CIF”.
 
-## Step 22 — Gate route start on fresh trusted LiDAR depth (Sat Sep 12)
+## Step 22 — Gate route start on fresh trusted LiDAR depth (implementation precursor; superseded by Step 25 heading above) (Sat Sep 12)
 
 Added the camera-transition interlock for route guidance:
 
@@ -63,7 +93,7 @@ Added the camera-transition interlock for route guidance:
   start. The intentional no-LiDAR and camera-denied degraded guidance paths remain unchanged and
   explicit.
 
-**Verification:** 353 `@Test` cases are present; changed Logic sources pass `swiftc -typecheck` with
+**Verification at implementation time:** 353 `@Test` cases were present; changed Logic sources pass `swiftc -typecheck` with
 the local module cache. `make test` could not run in this environment because the selected Xcode is
 15.1 / Swift 5.9.2 while the package requires Swift tools 6.0; simulator/device gates remain pending
 on the Xcode 27 toolchain.

@@ -119,9 +119,10 @@ final class AppModel {
     /// This is deliberately separate from `routeError`: the request is still alive and will
     /// continue automatically when the interlock clears.
     private(set) var routeStartStatus: String?
-    /// True only while a route request is queued. A timed-out status remains visible but does not
-    /// disable a retry, so the walker can try Start again after checking the camera.
-    var routeStartWaiting: Bool { pendingRouteStart != nil }
+    /// True only while a route request is queued. This is stored (rather than computed from the
+    /// ignored pending payload) so SwiftUI invalidates the Guide and Hazards cards immediately.
+    /// A timed-out status remains visible but does not disable a retry.
+    private(set) var routeStartWaiting = false
 
     /// A route that has been requested but cannot start until the depth interlock is ready.
     private struct PendingRouteStart: Sendable {
@@ -643,7 +644,7 @@ final class AppModel {
     /// The walker cannot see that a switch moved, and an app that silently drops features is worse
     /// than one that admits it: `.nav` priority so it never steps on an obstacle warning, with a
     /// ttl so it is dropped rather than spoken late if the walker is already moving.
-    /// Caller: `start()`, after "CaneKit ready."
+    /// Caller: `start()`, after "OpenCane ready."
     private func announceLaunchRecovery() {
         guard let line = LaunchRecovery.spokenLine(for: Settings.launchMode) else { return }
         logger.event("launch_recovery", ["cleared": LaunchRecovery.optionalFeatureKeys,
@@ -1556,7 +1557,7 @@ final class AppModel {
     }
 
     /// Start the bundled demo route (ISR Townsend Hall → CIF).
-    /// Triggered by the "Start demo route" button, `StartDemoRouteIntent`, and at launch by the
+    /// Triggered by the "Start route to CIF" button, `StartDemoRouteIntent`, and at launch by the
     /// `--demo-route` / `CANEKIT_DEMO_ROUTE=1` automation hook. On failure sets `routeError` and
     /// says "Route file missing."
     /// ⚠ Abandons an in-flight MapKit build first: a "Take me to …" search that returned *after*
@@ -1740,7 +1741,7 @@ final class AppModel {
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
-        "Obstacle detection warming up. Route will start when it is ready.",
+        "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
@@ -1787,6 +1788,7 @@ final class AppModel {
         routeStartGeneration &+= 1
         let generation = routeStartGeneration
         pendingRouteStart = PendingRouteStart(route: route, announce: announce)
+        routeStartWaiting = true
         routeStartStatus = "Obstacle detection warming up. Route will start when it is ready."
         routeError = nil
         speech.say("Obstacle detection warming up. Route will start when it is ready.", .nav, ttl: 8)
@@ -1841,6 +1843,7 @@ final class AppModel {
         case .ready:
             guard let pending = pendingRouteStart else { return }
             pendingRouteStart = nil
+            routeStartWaiting = false
             routeReadinessTask?.cancel()
             routeReadinessTask = nil
             routeReadinessTimeoutTask?.cancel()
@@ -1862,6 +1865,7 @@ final class AppModel {
         guard pendingRouteStart != nil else { return }
         routeStartGeneration &+= 1
         pendingRouteStart = nil
+        routeStartWaiting = false
         routeReadinessTask?.cancel()
         routeReadinessTask = nil
         routeReadinessTimeoutTask?.cancel()
@@ -1881,6 +1885,7 @@ final class AppModel {
         guard pendingRouteStart != nil || routeReadinessTask != nil else { return }
         routeStartGeneration &+= 1
         pendingRouteStart = nil
+        routeStartWaiting = false
         routeReadinessTask?.cancel()
         routeReadinessTask = nil
         routeReadinessTimeoutTask?.cancel()
@@ -1890,9 +1895,24 @@ final class AppModel {
         logger.event("route_readiness", ["state": "cancelled"])
     }
 
+    /// Cancel a queued route-start request from the phone UI. A pending request has not started
+    /// guidance, so it needs a distinct confirmation line rather than `stopRoute`'s "Route
+    /// stopped." Caller: GuideCard's visible cancel button while depth is warming.
+    func cancelRouteStart() {
+        guard routeStartWaiting else { return }
+        // Remove the queued warm-up line before confirming cancellation; otherwise the walker
+        // could hear "Route will start" after the button has already canceled it.
+        speech.stopAll()
+        cancelPendingRouteStart()
+        routeStartStatus = "Route start canceled."
+        speech.say("Route start canceled.", .nav, ttl: 4)
+        watch.send(status: "Route start canceled", distanceM: -1)
+    }
+
     /// The existing route-start effects, reached only after the interlock has cleared (or through
     /// the intentional no-LiDAR / camera-denied degraded path).
     private func startRouteNow(_ route: Route, announce: String? = nil) {
+        routeStartWaiting = false
         routeStartStatus = nil
         routeError = nil
         if let announce {

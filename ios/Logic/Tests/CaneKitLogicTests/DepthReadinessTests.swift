@@ -96,3 +96,23 @@ import Testing
     #expect(gate.state == .warming)
     #expect(gate.consecutiveFrames == 1)
 }
+
+/// The newest-only adapter must not treat reports on either side of a dropped sequence as
+/// consecutive freshness evidence.
+@Test func publishedFrameContinuityRejectsGapsAndRecovers() {
+    var continuity = DepthFrameContinuity()
+    continuity.begin(after: 10)
+    #expect(continuity.accepts(11))
+    #expect(!continuity.accepts(13))
+    #expect(continuity.accepts(14))
+}
+
+/// A transition boundary rejects buffered pre-transition reports even when their sequence is
+/// otherwise valid, then accepts a contiguous post-boundary run.
+@Test func publishedFrameContinuityHonorsTransitionBoundary() {
+    var continuity = DepthFrameContinuity()
+    continuity.begin(after: 20)
+    #expect(!continuity.accepts(20))
+    #expect(continuity.accepts(21))
+    #expect(continuity.accepts(22))
+}

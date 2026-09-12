@@ -25,7 +25,7 @@ shortcuts, not ours. Several wordings work for each command; the first one liste
 | **"Take me to Grainger in OpenCane"** (CIF, ISR, Grainger, the Illini Union, Siebel, the Main Library, the ARC) | Walks you there from where you are. |
 | **"Take me somewhere in OpenCane"** | Siri asks where; say any place ("Starbucks on Green Street"). |
 | **"Navigate to CIF from here in OpenCane"** | Walking directions to the CIF east entrance, wherever you start. |
-| **"Start my route in OpenCane"** — or "Start the demo route in OpenCane" | The recorded ISR Townsend Hall → CIF route. |
+| **"Start my route in OpenCane"** — or the legacy phrase "Start the demo route in OpenCane" | The recorded ISR Townsend Hall → CIF route. |
 | **"Repeat in OpenCane"** — or "OpenCane say that again" | Says the current instruction again. |
 | **"Next waypoint in OpenCane"** | Skips to the next instruction. |
 | **"Stop the route in OpenCane"** — or "Stop navigating in OpenCane" | Ends guidance, and cancels a destination search still running. |

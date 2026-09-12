@@ -27,7 +27,7 @@ has the **data-flow diagram** ([§ Data flow](../docs/CODE_REFERENCE.md#data-flo
 AirPods, the watch or the untethered demo, read [`docs/devices_setup.md`](../docs/devices_setup.md).
 Every other doc is listed in [`docs/README.md`](../docs/README.md).
 
-**Status.** Steps 0–22 have landed. The Logic target contains 353 tests; the earlier simulator,
+**Status.** Steps 0–25 have landed. The Logic target contains 366 tests (`@Test` annotations); the earlier simulator,
 XCUITest, screenshot-tour and GPS-replay checks remain the baseline, while Step 22's full run needs
 the Xcode 27 toolchain. Device testing (LiDAR, haptics through the clamp, AirPods, watch) is the
 open work. [`docs/todo.md`](../docs/todo.md) and
@@ -118,7 +118,7 @@ Everything runs from `ios/` on the command line. You don't need the Xcode GUI af
 | Command | What it does |
 |---|---|
 | `make gen` | `scripts/gen.sh`: `xcodegen generate` + the watch-embed patch, and it copies `Secrets.example.plist` → `CaneKit/Resources/Secrets.plist` if missing. Run it only after `project.yml` or the file list changes. `WATCH=0 scripts/gen.sh` gives a phone-only project. |
-| `make test` | `scripts/test.sh`: the 353 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools. |
+| `make test` | `scripts/test.sh`: the 366 `CaneKitLogic` tests (Swift Testing). Works with the Swift 6 toolchain / Command Line Tools. |
 | `make build` | Device build, automatic signing, personal team (needs `TEAM` + `DEVICE`) |
 | `make install` | `xcrun devicectl device install app` onto the phone |
 | `make launch` | `xcrun devicectl device process launch com.aritro.canekit` |
@@ -179,7 +179,7 @@ The **commit gate** (from `AGENTS.md` rule 10): `make test` and `make sim` must 
 changes, also run `make uitest` and `make tour` on the iPhone 17 Pro Max / iOS 27 simulator. Run
 `make e2e` for navigation or speech changes. Then run the Muse review of the diff.
 
-- **Unit tests (`Logic/`, no device):** 353 Swift Testing tests. They cover lane extraction on
+- **Unit tests (`Logic/`, no device):** 366 Swift Testing tests. They cover lane extraction on
   synthetic depth buffers, the hysteresis / rate-limit cue state machine, geofence and bearing
   math (skip-ahead, passed-by, arrival gate), MapKit steps → waypoints, the watch message codec,
   VLM bodies and parsing, turn settling, straight-walk, the spoken-cue policy, the crown gesture,

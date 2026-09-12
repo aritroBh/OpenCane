@@ -33,7 +33,7 @@ break the walk. This page is the human checklist plus what OpenCane does on its 
   is still settling, never within 15 m of a crossing, never on a timer.
 - Phone call or Siri mid-route: speech and beacon resume when the interruption ends.
 
-**Sanity check (AirPods in, standing still)**: Start demo route → the click should sit to one side.
+**Sanity check (AirPods in, standing still)**: Start route to CIF → the click should sit to one side.
 Turn your body until the click goes silent → you are facing the first leg. Press **Recenter** →
 you hear "Recentered.". Now turn your head left with the body still → the click moves to the right.
 Face forward again → silent.

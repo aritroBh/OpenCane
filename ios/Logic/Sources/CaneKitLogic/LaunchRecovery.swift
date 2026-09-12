@@ -111,7 +111,7 @@ public enum LaunchRecovery {
     ///
     /// Spoken to someone who cannot see that a switch moved, so it names the loss *and* says the
     /// guidance is intact — AGENTS.md rule 6: a refused feature warns loudly but still guides.
-    /// Kept to one breath: it is said during launch, over the top of "CaneKit ready."
+    /// Kept to one breath: it is said during launch, over the top of "OpenCane ready."
     public static func spokenLine(for mode: LaunchMode) -> String? {
         switch mode {
         case .normal:

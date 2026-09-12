@@ -137,7 +137,7 @@ Note: in OSM, Springfield Ave through campus is named "Springfield Avenue" (no "
 
 ## To re-record on the Friday walk
 
-**How.** Walk the route with the app: Start demo route, "Write trip log" on (Mount card, default on),
+**How.** Walk the route with the app: Start route to CIF, "Write trip log" on (Mount card, default on),
 AirPods in, watch app open. At each real position (the door, the corner you actually stand on, the path
 junction) stand still for 10–15 s. The JSONL log in the app's Documents folder (Files app / AirDrop) has
 `gps` lines (`lat`, `lon`, `acc`, `speed`), `waypoint` lines (where each fence actually fired), `speech`

@@ -147,6 +147,13 @@ struct GuideCard: View {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
                                 hint: "Says the arrival line again") { model.repeatInstruction() }
                 }
+                if model.routeStartWaiting {
+                    CKBigButton(title: "Cancel route start", systemImage: "xmark.circle",
+                                role: .destructive,
+                                hint: "Stops waiting for obstacle detection and does not start guidance") {
+                        model.cancelRouteStart()
+                    }
+                }
                 // ⚠ test contract: "Start route to CIF" is the first thing every UI test waits for.
                 CKBigButton(title: "Start route to CIF", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }

@@ -90,6 +90,14 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         queue.sync { publishedCount }
     }
 
+    /// Drain callbacks already admitted by ARKit before a session configuration changes.
+    /// `ARSession.run` can overlap the tail of the old configuration; synchronizing this serial
+    /// queue gives `DepthEngine` a real hand-off boundary before it captures the next readiness
+    /// baseline. Caller: `DepthEngine` immediately before every reconfiguration.
+    func synchronize() {
+        queue.sync { }
+    }
+
     // MARK: State
 
     /// Tunables shared with the main actor. Written by `DepthEngine` (main), read once per frame

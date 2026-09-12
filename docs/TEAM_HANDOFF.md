@@ -1,9 +1,9 @@
 # Team handoff: read this first after you pull
 
-State of OpenCane / CaneKit on **Fri 2026-09-11 (night before the demo)**, for Aritro, Sagar and
-Aarav. It says what exists, what is proven, what is not, what each of us does next, and which
-decisions are already made so nobody re-litigates them at 2 a.m. Everything here links to the doc
-that has the detail.
+State of OpenCane / CaneKit after the Step 25 safety interlock and Steps 23–24 voice-assistant
+merge, for Aritro, Sagar and Aarav. It says what exists, what is proven, what is not, what each of
+us does next, and which decisions are already made so nobody re-litigates them at 2 a.m. Historical
+claims below are labelled; current counts and build limitations are in the status table.
 
 > **Latest status, branches in flight and tonight's setup checklist: [`TEAM_BRIEF.md`](TEAM_BRIEF.md)
 > → "Status right now". Live checklist: [`todo.md`](todo.md) → "TONIGHT".** AI agents working in this
@@ -13,7 +13,7 @@ that has the detail.
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (146 logic tests, needs only the Command Line Tools).
+1. `git pull`, then `cd ios && make test` (366 Logic tests with the Swift 6 toolchain).
 2. Find your row in §3 and do its first item.
 3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
    only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
@@ -36,13 +36,13 @@ warn about curbs and drop-offs, and every hazard lands on a shareable GeoJSON ma
 
 ## 2. What is proven, and what is not
 
-**Proven on the Mac / simulator (iPhone 17 Pro Max, iOS 27):**
+**Historical upstream verification (recorded before the current merge; rerun with Xcode 27):**
 
 | Check | Result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | 146 pass | `make test` |
-| App + watch + widget build, Swift 6 strict | green | `make sim` |
-| UI tests + screenshot tour | 7 pass (one needs the local Street View frames) | `make uitest`, `make tour` |
+| Logic tests (every rule with a number in it) | 366 annotations in the current checkout; the historical green run was 146 | `make test` |
+| App + watch + widget build, Swift 6 strict | historical green; current local Xcode 15.1 cannot build the Xcode 27 project | `make sim` |
+| UI tests + screenshot tour | historical green; current simulator unavailable in this environment | `make uitest`, `make tour` |
 | GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
 | Real `NavigationEngine` in a scratch harness, 72 simulated walks | 0 false "Veer"; an injected 35° veer caught 18/18 | see CHANGELOG Step 11 |
 | Street View camera stand-in (Google Street View frames of the route) | see §8 | `make e2e SCENARIO=streetview`, `make uitest-streetview` |
@@ -84,7 +84,7 @@ The app tests are D1–D18 and F1–F12 in that plan; the mount's own bench test
 ```sh
 git pull
 cd ios
-make test          # 146 logic tests; needs only the Command Line Tools
+make test          # 366 logic tests; requires the Swift 6 toolchain
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
