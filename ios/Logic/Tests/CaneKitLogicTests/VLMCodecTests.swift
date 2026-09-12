@@ -18,13 +18,29 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
 
 // MARK: Requests
 
+/// The prompt asks for what VLMs measure well (naming, side) and forbids what they do not.
+/// GuideDog (ACL 2026) measured distance judgement BELOW chance (22.2 % vs a 25 % baseline) and
+/// clock directions read off the image frame rather than the walker's body; counting is worse
+/// still (52.7 %). The distance a walker hears comes from LiDAR, never from the model.
+@Test func scenePromptAsksForSidesNotNumbers() {
+    let p = ScenePrompt.text.lowercased()
+    #expect(p.contains("left"), "the prompt must ask for a side")
+    #expect(p.contains("center") && p.contains("right"))
+    #expect(!p.contains("clock"), "clock-face directions are read from the image frame, not the walker")
+    #expect(!p.contains("meter"), "asking for metres asks the model to invent its worst task")
+    #expect(p.contains("never give a number"))
+    #expect(p.contains("hazards first"))
+    #expect(p.contains("never say the way is clear"))
+    #expect(ScenePrompt.text.count < 400)   // it rides on every request
+}
+
 /// Describe via Gemini sends the fixed prompt plus the JPEG, with thinking off for latency.
 @Test func geminiRequestCarriesImageAndPrompt() throws {
     let body = try VLMRequest.gemini(jpegBase64: "AAAA")
     let obj = try JSONSerialization.jsonObject(with: body) as! [String: Any]
     let contents = obj["contents"] as! [[String: Any]]
     let parts = contents[0]["parts"] as! [[String: Any]]
-    #expect(parts[0]["text"] as? String == ScenePrompt.text)
+    #expect(parts[0]["text"] as? String == ScenePrompt.text)   // content: scenePromptAsksForSidesNotNumbers
     let inline = parts[1]["inlineData"] as! [String: Any]
     #expect(inline["mimeType"] as? String == "image/jpeg")
     #expect(inline["data"] as? String == "AAAA")
@@ -53,7 +69,7 @@ private func json(_ s: String) -> Data { Data(s.utf8) }
     let blocks = ((obj["messages"] as! [[String: Any]])[0]["content"] as! [[String: Any]])
     #expect(blocks[0]["type"] as? String == "image")
     #expect(((blocks[0]["source"] as! [String: Any])["media_type"] as? String) == "image/jpeg")
-    #expect(blocks[1]["text"] as? String == ScenePrompt.text)
+    #expect(blocks[1]["text"] as? String == ScenePrompt.text)   // content: scenePromptAsksForSidesNotNumbers
 }
 
 // MARK: Responses

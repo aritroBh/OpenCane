@@ -13,8 +13,8 @@
 //
 //  Key invariants:
 //    · No networking, no keys, no headers here; headers are noted in comments only.
-//    · The prompt is fixed by spec (`ScenePrompt.text`): one sentence, < 20 words, clock-face
-//      directions, metres, hazards first.
+//    · The prompt is fixed (`ScenePrompt.text`): one sentence, < 20 words, hazards first, left /
+//      center / right, and no numbers — the LiDAR fact supplies the only distance a walker hears.
 //    · Parsers never return an empty string: empty → `.emptyResponse(reason)`; undecodable →
 //      `.malformed`; provider refusal → `.refused`; non-2xx → `.http` (via `checkStatus`).
 //    · Anthropic `max_tokens` 1024 covers thinking + answer (256 starved the answer).
@@ -58,11 +58,27 @@ public enum VLMError: Error, Equatable, LocalizedError {
     }
 }
 
-/// The fixed prompt (spec). Under 20 words, clock-face directions, metres, hazards first.
+/// The fixed prompt. One sentence, under 20 words, hazards first, sides not clock faces, and no
+/// numbers at all — the app supplies the distance from LiDAR.
 public enum ScenePrompt {
     /// The exact prompt sent with every image. Pinned by `geminiRequestCarriesImageAndPrompt`,
-    /// `anthropicRequestShape`.
-    public static let text = "You are describing a scene to a blind pedestrian. One sentence, under 20 words, use clock-face directions and distances in meters. Mention hazards first."
+    /// `anthropicRequestShape`, `scenePromptAsksForSidesNotNumbers`.
+    ///
+    /// It used to ask for "clock-face directions and distances in meters". Both were measured
+    /// mistakes:
+    ///   · clock face — VLMs read the clock off the image frame, not the walker's body (GuideDog,
+    ///     ACL 2026), so "10 o'clock" points somewhere the walker is not facing. Left / center /
+    ///     right survives a rotated cane mount;
+    ///   · metres — the same benchmark has small VLMs judging distance BELOW chance (22.2 % against
+    ///     a 25 % baseline) while naming objects at 80–87 %, and counting is the worst measured
+    ///     task of all (52.7 % for Gemini 3.5 Flash-Lite). Asking for a number asks the model to
+    ///     invent the one thing it is worst at, so the prompt forbids numbers entirely and
+    ///     `SceneDescriber` puts the measured LiDAR distance in front of the sentence, exactly as
+    ///     `OnDeviceVLMClient` does.
+    /// The last line exists because a solid white frame produced "The path ahead is clear and
+    /// unobstructed" 4 times out of 4. `CloudSceneGate` enforces all of this on the reply; the
+    /// prompt is what makes enforcement rare.
+    public static let text = "You are describing what a cane-mounted camera sees, for a blind pedestrian. One sentence, under 20 words. Name what is actually there, hazards first, and say whether each thing is on the left, in the center or on the right. Never give a number, a distance or a count. Never say the way is clear, empty or safe. No preamble."
 }
 
 // MARK: - Requests
