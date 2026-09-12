@@ -13,8 +13,9 @@ project, targets, scheme, the `CaneKitLogic` module, the `ios/CaneKit/…` paths
 `com.aritro.canekit` all keep that name on purpose, so every command below still matches the files.
 Only what a person sees or hears says OpenCane. See [`AGENTS.md`](AGENTS.md) → "The name split".
 
-Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026. Team: **Aritro** (software),
-**Sagar** (hardware, 3D printing, CAD), **Aarav**, **Tejas** (software)
+Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026.
+Team: **Aritro**, **Aarav**, **Tejas** (software / iOS app); **Sagar**, **Tommy**
+(hardware, 3D printing, CAD).
 
 > **Teammates: after `git pull`, read [`docs/TEAM_BRIEF.md`](docs/TEAM_BRIEF.md) (2 minutes), then
 > [`docs/TEAM_HANDOFF.md`](docs/TEAM_HANDOFF.md).** It says
@@ -120,5 +121,5 @@ app uses the system voice and describes scenes on the phone. Then follow
 - [`docs/design.md`](docs/design.md): UI and cue design system
 - [`docs/todo.md`](docs/todo.md): what's still open
 - [`docs/stress_test_plan.md`](docs/stress_test_plan.md): device tests, failure injection, go/no-go, demo run sheet
-- [`hardware/README.md`](hardware/README.md): the printed phone mount (Sagar)
+- [`hardware/README.md`](hardware/README.md): the printed phone mount (Sagar, Tommy)
 - [`docs/ideas.md`](docs/ideas.md): why phone-only (§9), pitch, prior art

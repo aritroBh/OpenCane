@@ -46,6 +46,21 @@ kills the travel, VoiceOver rotor still hits card headers on the current page.
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 26 — Team credits corrected in the README (Sat Sep 12)
+
+The README credited the team by a role split that no longer matched who is doing what. Hardware is
+**Sagar and Tommy**; the iOS app is **Aritro, Aarav and Tejas**. The docs-index line pointing at
+`hardware/README.md` named Sagar alone and now names both.
+
+Numbered 26 rather than 22 because Steps 23–25 (voice assistant, Action Button audio isolation,
+camera interlock hardening) landed upstream while this was being written.
+
+Nothing else changed — no code, no geometry, no parameter. `docs/TEAM_HANDOFF.md`,
+`docs/TEAM_BRIEF.md` and `docs/todo.md` still carry the old role split and are left for a
+separate sweep rather than folded in here, so this diff stays exactly what it claims to be.
+
+test on device: nothing. Documentation only.
+
 ## Step 25 — Camera interlock adversarial hardening and documentation sync (Sat Sep 12)
 
 The full review after merging the voice-assistant work found and fixed the remaining safety/UI
