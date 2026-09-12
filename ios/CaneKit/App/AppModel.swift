@@ -325,6 +325,18 @@ final class AppModel {
                                "video_formats": DepthEngine.supportedFormats,
                                "front_camera_with_lidar": DepthEngine.supportsFrontCameraWithLiDAR])
         let cameraDenied = announceCameraDenied()
+        // Every warning line the app can *generate* (`SpokenPhrases.warningLines`: 74 lines,
+        // 1,722 characters, one-time — each is cached on disk forever after its first synthesis).
+        // Warnings never wait for the network — a cache miss is spoken by the system voice at once
+        // — so the only way a warning is ever heard in the natural voice is for it to be on disk
+        // already. Without this the walker heard route lines in the ElevenLabs voice and warnings
+        // in Apple's, alternating line by line (user report, 2026-09-11).
+        // `backgroundLines` rather than one batch here because the first warning that misses the
+        // cache calls `prefetch` itself, which would otherwise cancel this batch half-done; as a
+        // standing tail it is resumed by every later batch instead. Fire-and-forget on a detached
+        // utility task inside `prefetch`: it never touches the main actor and never delays launch,
+        // and a failure only writes `speech.voiceError` (the system voice still speaks everything).
+        speech.backgroundLines = SpokenPhrases.warningLines
         speech.prefetch(Self.commonLines)
         if !cameraDenied {
             speech.say(lidarSupported ? "CaneKit ready." : "CaneKit. This phone has no LiDAR.", .nav)
@@ -947,9 +959,13 @@ final class AppModel {
     }
 
     /// Lines the natural voice should have ready before they are needed.
-    /// Prefetched in `start()` and again in `beginRoute`.
+    /// Prefetched in `start()` and again in `beginRoute`, ahead of `speech.backgroundLines`
+    /// (`SpokenPhrases.warningLines`, which every batch carries as its tail).
     /// ⚠ Must stay byte-identical to the strings spoken in NavigationEngine, CueSpeechPolicy and
-    /// this file, or the prefetch cache misses and the line waits for synthesis.
+    /// this file, or the prefetch cache misses and the line waits for synthesis. Fixed strings
+    /// only: the *generated* warning lines (obstacle names, approach cues, signs, ground hazards)
+    /// are enumerated by `SpokenPhrases` in CaneKitLogic, which owns their templates so they
+    /// cannot drift by a byte.
     static let commonLines = [
         "CaneKit ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
@@ -982,7 +998,9 @@ final class AppModel {
         groundPolicy.reset()
         lockWarningGiven = false
         lastGroundHazard = nil               // a new route must not show the last route's drop-off
-        // Every waypoint line and the route intro, synthesized now so they play instantly.
+        // Every waypoint line and the route intro, synthesized now so they play instantly. The
+        // route's own lines go first because waypoint 1 is needed in seconds; whatever is left of
+        // `speech.backgroundLines` (the warning set) follows on the same two-request budget.
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
