@@ -45,6 +45,8 @@
       thread   - threaded stub + ring. Settles thr_clear.
       dovetail - 3 tenon/socket pairs. Settles dt_clear.
       coupons  - all three rows on one plate.
+      next     - thread row + dovetail row: the plate to print once the bore
+                 rings have been read (they have, 2026-09-12: pole_d = 27.65).
       arm      - the arm. The one REAL part that needs no measurement first:
                  its tenons are drawn at dt_section(0) and the pawl is fixed
                  geometry, so neither pole_d nor dt_clear reaches it.
@@ -61,6 +63,19 @@
     2 a 10 mm ring flexes under thumb pressure, so a bore that is genuinely
     too tight still feels like it "goes on" and the gauge reads large.
 
+.PARAMETER Support
+    Force support on (build-plate-only). It is on by default for the cradle
+    and off for everything else; see the comment at the override block.
+
+.PARAMETER NoSupport
+    Force support off, cradle included. You will get a back plate printed
+    in mid-air.
+
+.PARAMETER PoleD
+    Slice the STL build_stl.ps1 -PoleD wrote for that cane diameter
+    (collar_pole28.75.stl -> ..._collar_pole28.75_....gcode). Only the
+    collar and the ring have these; nothing else is sized by the cane.
+
 .PARAMETER OutDir
     Where to write. Defaults to hardware/mount_screwless/gcode/.
 
@@ -71,7 +86,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('bore', 'thread', 'dovetail', 'coupons', 'arm',
+    [ValidateSet('bore', 'thread', 'dovetail', 'coupons', 'next', 'arm',
                  'collar', 'ring', 'cradle', 'socket', 'lock')]
     [string]$Plate = 'bore',
 
@@ -80,6 +95,11 @@ param(
 
     [ValidateRange(1, 10)]
     [int]$Walls = 0,          # 0 = leave the profile alone
+
+    [double]$PoleD = 0,
+
+    [switch]$Support,
+    [switch]$NoSupport,
 
     [string]$OutDir
 )
@@ -110,26 +130,64 @@ foreach ($p in @($machineProfile, $processProfile, $filamentProfile)) {
     if (-not (Test-Path $p)) { throw "Profile not found: $p" }
 }
 
-# ------------------------------------------------------- wall_loops override
+# --------------------------------------- process overrides (walls, support)
 # Written next to the vendor profile rather than into it: `inherits` is
 # resolved by name against the loaded vendor presets, so a copy in a scratch
 # directory still inherits fdm_process_creality_common correctly.
-if ($Walls -gt 0) {
-    $tmpProc = Join-Path ([IO.Path]::GetTempPath()) "opencane_proc_${Walls}wall.json"
+#
+# SUPPORT. The vendor profile has it OFF and the CLI does not turn it on by
+# itself - the 2026-09-12 plate had it on because it was ticked in the GUI,
+# and the first headless cradle slice (same day) shipped with
+# enable_support = 0 in its footer. The cradle stands on its dovetail block
+# with the back plate, the rails and the corner caps 7 mm off the bed, so
+# that file would have printed the plate in mid-air. Support is on by
+# default for the cradle and off for everything else (nothing else has a
+# downward face past 45 degrees); -Support / -NoSupport override either
+# way. "On build plate only" is enough: everything that needs holding up
+# has nothing but bed under it.
+$wantSupport = if ($NoSupport) { $false } elseif ($Support) { $true } else { $Plate -eq 'cradle' }
+if ($Walls -gt 0 -or $wantSupport) {
+    $ptag = $(if ($Walls -gt 0) { "${Walls}wall" } else { 'stdwall' }) + $(if ($wantSupport) { '_support' } else { '' })
+    $tmpProc = Join-Path ([IO.Path]::GetTempPath()) "opencane_proc_$ptag.json"
     $j = Get-Content $processProfile -Raw | ConvertFrom-Json
-    $j.wall_loops = "$Walls"
-    $j.name = "0.20mm Standard ${Walls}wall @SPARKX i7 0.4 nozzle"
+    # Add-Member -Force rather than assignment: the vendor profile inherits
+    # most of these keys and does not carry them itself, and assigning a
+    # property that is not there throws in 5.1.
+    if ($Walls -gt 0) { $j | Add-Member -NotePropertyName wall_loops -NotePropertyValue "$Walls" -Force }
+    if ($wantSupport) {
+        $j | Add-Member -NotePropertyName enable_support              -NotePropertyValue '1'            -Force
+        $j | Add-Member -NotePropertyName support_type                -NotePropertyValue 'normal(auto)' -Force
+        $j | Add-Member -NotePropertyName support_on_build_plate_only -NotePropertyValue '1'            -Force
+        # 30 degrees from horizontal: the plate underside (0), the rails
+        # and caps (0) get support; the flare and the dovetail flanks (45)
+        # do not, which matters - support inside the socket would have to be
+        # dug out of a 50 mm channel and would scar the fit faces.
+        $j | Add-Member -NotePropertyName support_threshold_angle     -NotePropertyValue '30'           -Force
+        # The cradle's dovetail socket has a flat roof 24.5 mm wide, 5 mm off
+        # the bed and open to it. Orca supports any bridge longer than
+        # max_bridge_length (default 10), so by default it fills the socket
+        # with support that would have to be dug out of a 50 mm channel with
+        # 45-degree undercuts. 30 lets that roof bridge; the plate underside
+        # is not a bridge (nothing at its far edges) and still gets support.
+        $j | Add-Member -NotePropertyName bridge_no_support           -NotePropertyValue '1'            -Force
+        $j | Add-Member -NotePropertyName max_bridge_length           -NotePropertyValue '30'           -Force
+    }
+    $j | Add-Member -NotePropertyName name -NotePropertyValue "0.20mm Standard $ptag @SPARKX i7 0.4 nozzle" -Force
     $j | ConvertTo-Json -Depth 30 | Set-Content $tmpProc -Encoding utf8
     $processProfile = $tmpProc
 }
 
 # ------------------------------------------------------------------ models
+$poleTag = if ($PoleD -gt 0 -and $Plate -in @('collar', 'ring')) {
+    '_pole' + $PoleD.ToString([Globalization.CultureInfo]::InvariantCulture)
+} else { '' }
 $models = switch ($Plate) {
     'bore'     { @('coupons_bore.stl') }
     'thread'   { @('coupons_thread.stl') }
     'dovetail' { @('coupons_dovetail.stl') }
     'coupons'  { @('coupons_bore.stl', 'coupons_thread.stl', 'coupons_dovetail.stl') }
-    default    { @("$Plate.stl") }
+    'next'     { @('coupons_next.stl') }
+    default    { @("$Plate$poleTag.stl") }
 }
 $paths = foreach ($m in $models) {
     $f = Join-Path $stlDir $m
@@ -142,7 +200,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $work = Join-Path ([IO.Path]::GetTempPath()) ("opencane_slice_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
-Write-Host "Slicing $Plate in $Material$(if ($Walls) { " at $Walls walls" }) ..." -ForegroundColor Cyan
+Write-Host "Slicing $Plate$poleTag in $Material$(if ($Walls) { " at $Walls walls" })$(if ($wantSupport) { ' with support' }) ..." -ForegroundColor Cyan
 # Build the argument list as a flat array. Do NOT use backtick line
 # continuations with a splatted @paths here: one trailing space after a
 # backtick silently truncates the command and you get an empty output
@@ -198,6 +256,13 @@ $start = Field 'START_PRINT'
 $time  = (Field '^; estimated printing time \(normal mode\)') -replace '^.*=\s*', ''
 $grams = (Field '^; filament used \[g\]') -replace '^.*=\s*', ''
 $wl    = (Field '^; wall_loops\s*=') -replace '^.*=\s*', ''
+$sup   = (Field '^; enable_support\s*=') -replace '^.*=\s*', ''
+$supbp = (Field '^; support_on_build_plate_only\s*=') -replace '^.*=\s*', ''
+# The cradle without support is a failed print, not a choice. Refuse to
+# name the file, the same way the material guard does.
+if ($Plate -eq 'cradle' -and $sup -ne '1' -and -not $NoSupport) {
+    throw "The cradle sliced with enable_support = '$sup'. Its back plate is 7 mm off the bed; refusing to write it. (Pass -NoSupport if you really mean it.)"
+}
 
 if (-not $start) { throw "No START_PRINT line in the sliced file - refusing to name it safe." }
 if ($start -notmatch 'EXTRUDER_TEMP=(\d+)\s+BED_TEMP=(\d+)') {
@@ -226,7 +291,7 @@ if ($nozzleT -ne $expect) {
 
 $slot = if ($Material -eq 'PETG') { 'slot2' } else { 'slot3or4' }
 $tag  = ($time -replace '\s', '')
-$name = "{0}_{1}__{2}_{3}.gcode" -f $Material, $slot, $Plate, $tag
+$name = "{0}_{1}__{2}{3}_{4}.gcode" -f $Material, $slot, $Plate, $poleTag, $tag
 $dest = Join-Path $OutDir $name
 Move-Item $gc $dest -Force
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -237,6 +302,7 @@ Write-Host "  material   $Material  (filament_type = $ftype)"
 Write-Host "  nozzle     $nozzleT C"
 Write-Host "  bed        $bedT C"
 Write-Host "  walls      $wl"
+Write-Host "  support    $(if ($sup -eq '1') { 'ON' + $(if ($supbp -eq '1') { ' (build plate only)' } else { '' }) } else { 'off' })"
 Write-Host "  time       $time"
 Write-Host "  weight     $grams g"
 Write-Host "  start line $start"

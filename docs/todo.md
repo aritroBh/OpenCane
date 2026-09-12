@@ -339,17 +339,21 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Print collar + ring; check the ring actually closes the collet on the real cane
 - [ ] Print arm + cradle; T0 fit with the phone in it. **CORRECTION 2026-09-12: the arm now DOES
       depend on `dt_clear`**, via `arm_tip_t = dt_narrow - 2*dt_clear`, added when the fin was
-      narrowed to pass the socket mouth. Measured: arm volume 42.865 / 42.656 / 42.448 cm3 at
+      narrowed to pass the socket mouth. **RE-CORRECTED, Step 25: `arm_tip_t` is gone** — the fin
+      no longer passes through the socket mouth at all (it lands on a pad under the cradle's block),
+      so the arm's tenons are nominal again and it can be printed before the dovetail coupon. Measured: arm volume 42.865 / 42.656 / 42.448 cm3 at
       dt_clear 0.15 / 0.25 / 0.35. `pole_d` genuinely does not reach it. So the dovetail coupon
       must be read BEFORE the arm is printed — the old "printable first" advice would have wasted
       it. The same wrong claim is in PRINTING.md, CHANGELOG Step 18 and slice_gcode.ps1.
-- [ ] **Pawl release window is ~79% blocked by the arm** — there may be no way to press the catch
-      to release the joint. Confirm on the printed arm, then either move the window or add a
-      cutaway.
-- [ ] Remaining unfixed, found by review on 2026-09-12 and not yet addressed: no lead-in ramp on
-      the pawl catch; `socket_part()`'s "flare" is a flat 90° ledge, not a flare; the button
-      windows overrun the top of both side walls; `dt_clear` gives 0.325 mm at the mouth and
-      0.139 mm buried instead of a uniform 0.25; ball-socket fingers at ~7–9% strain will crack.
+- [x] ~~Pawl release window is ~79% blocked by the arm~~ — moot (Step 25): the collar joint has no
+      pawl any more (the ring is its lock, socket open at the top), and the far pawl's window is
+      through the cradle's roof just under the phone's bottom edge, open to a fingernail.
+- [ ] Remaining unfixed, found by review on 2026-09-12 and not yet addressed: `socket_part()`'s
+      "flare" is a flat 90° ledge, not a flare; ball-socket fingers at ~7–9% strain will crack
+      (ball joint only — not the demo path). Fixed in Step 25: the far pawl's catch has a 45° lead;
+      the rails that now continue up beside the phone stop at z = 2.0, under the buttons (they
+      start at z = 3.0), so the overrunning windows cut nothing that matters; the dovetail flanks
+      are 45°, which makes `dt_clear` uniform along the flank.
 - [x] **Cane diameter SETTLED at 27.65 mm, 2026-09-12.** Was disputed three ways (27.65 dial
       caliper / 28.75 repo+brief / 28.65 = 1.128 in). The bore rings decided it against the real
       shaft and agreed with the caliper to 0.01 mm. `hardware/mount/cane_mount.scad` and
@@ -363,6 +367,36 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Decide on the day: `hardware/mount/` (screwed) or `hardware/mount_screwless/`. Record which in
       CHANGELOG.md.
 - [ ] T7 shake / T8 drop on whichever is fitted; check the camera still reads 3–8° down afterwards
+
+### Hardware, later that evening (Windows machine) — see CHANGELOG Step 25
+- [x] `scripts/verify_mount.ps1` + `hardware/mount_screwless/verify.scad` + `scripts/stl_tools.js`:
+      30 model checks (intersections that must be empty, ones that must not, the thread driven
+      through its travel, the ring as the arm's lock, shells, overhangs). All green. **Run it after
+      any change to the .scad; the preview cannot see overlaps.**
+- [x] Step 21's blocking items 1–3 closed: the arm no longer passes through the phone (socket moved
+      below the phone's bottom edge, `sock_y`); the top latch (loose island, on the plateau) replaced
+      by sprung top-corner caps, phone loads from the front, floor open for USB-C; both sockets have
+      stops — the collar joint is locked by the ring (no pawl), the far joint by a leaf pawl on the
+      fin's bed face.
+- [x] **Why the printed ring would not go fully down:** the cone started 0.75 mm outside the ring's
+      thread crests and the ring's own thread hit it 3.8 mm from home (0.165 cm³ at every height
+      from 6 mm up, found by lifting the ring in the model). `cone_relief` 0.10, taper 1.6, squeeze
+      0.6. Thread cut to nut 3 of the four-nut coupon, [0.45, 0.45]; flank 60°.
+- [x] Support was OFF in every headless slice; `slice_gcode.ps1` turns it on for the cradle,
+      bridges the socket roof (Orca's default filled the socket — checked in the gcode), refuses a
+      cradle file without it.
+- [x] Dovetail flanks 67° → 45° (24 / 14 / 5); dovetail coupon tenons lie on their side like the arm's.
+- [x] `build_stl.ps1` renders the coupon rows under the names the slicer asks for (`coupons_bore`
+      etc. — Step 21's `bore.stl` was never found by `slice_gcode.ps1`).
+- [ ] **Print `coupons_next`** (thread row: stub + four nuts; dovetail row) from this geometry. Smallest
+      nut that runs the full length → `thr_clear`/`thr_axial`; dovetail that slides and stays →
+      `dt_clear`. Rebuild, rerun `verify_mount.ps1`, then collar + ring: with no cane the ring
+      reaches the shoulder, with the cane it stops ~3 mm short.
+- [ ] Print the cradle; check the corner caps' spread force with the phone (calculated ~2 N each)
+      and that the caps clear the plateau; measure `plateau_h` with calipers while the phone is out.
+- [ ] Print the arm; check the far pawl clicks into the cradle's window and releases with a nail.
+- [!] Step 21's item 4 stands: the collar is a closed bore and goes on over the end of the shaft.
+      Fine on the broom handle; on a real cane it needs a split collar or a removable tip. Not designed.
 
 ### Scene understanding: the decision, and why (researched 2026-09-11, 65 agents)
 

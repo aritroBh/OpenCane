@@ -75,9 +75,12 @@
 //    and the reason that one now has a warning attached to it.
 //
 //    Screw each nut down the stub by hand, no tool. Take the SMALLEST
-//    nut that turns freely for the WHOLE length with no play you can
-//    feel by rocking it at the top. Put both its numbers in
-//    `thr_clear` / `thr_axial`.
+//    nut that turns freely for the WHOLE length. Put both its numbers in
+//    `thr_clear` / `thr_axial`. Expect some rocking play at the top - up to
+//    about 1 mm on nut 3 - and do not count it against the nut: with the
+//    60-degree flanks the radial clearance turns into axial slack too
+//    (0.45 radial adds 0.26 per flank), and it all disappears once the
+//    real ring bears on the collet's cone. Free running is the test.
 //
 //    WHY TWO AXES. The 2026-09-12 bench run had one nut, [0.35, 0.25],
 //    and it went down two turns of four and then jammed. That rules out
@@ -102,7 +105,12 @@
 // 3. DOVETAIL PAIR (row 3, NOTCHED 1/2/3 = 0.15/0.25/0.35 clearance)
 //    Slide each tenon into its socket. You want it to slide with thumb
 //    pressure and stay put when you shake it. Put that number in
-//    `dt_clear`.
+//    `dt_clear`. The tenons lie on their side with the width vertical,
+//    the way the arm's tenons print, so the lower flank (a 45-degree
+//    overhang) is in the measurement. Judge the fit with the tenon's
+//    notched base face DOWN, i.e. in the orientation it was printed.
+//    (Flanks were 67 degrees until 2026-09-12 evening: they printed in
+//    air on the arm and the slicer put support inside the cradle's socket.)
 //
 // Coupons are identified by NOTCHES, not printed numbers: count the
 // notches in the rim, fewest = smallest clearance. Notches are used
@@ -126,12 +134,12 @@ rib_h        = 0.50;
 rib_w        = 1.60;
 thr_pitch    = 3.00;
 thr_depth    = 1.20;
-thr_duty     = 0.25;
-thr_crest    = 0.10;
+thr_duty     = 0.30;    // 60-degree flank; keep equal to screwless_mount.scad
+thr_crest    = 0.067;
 thr_axial    = 0.25;
-dt_wide      = 20.0;
+dt_wide      = 24.0;    // 45-degree flanks: (wide - narrow) / 2 == depth. Keep in sync.
 dt_narrow    = 14.0;
-dt_depth     = 7.0;
+dt_depth     = 5.0;
 
 /* [Coupon settings] */
 ring_h       = 10.0;   // mm, height of each bore ring.
@@ -361,17 +369,25 @@ module dt_sect(grow) {
 module dt_pair(dc) {
     l = 18;
     n = search([dc], dt_tests)[0] + 1;
-    // tenon on a base
+    // Tenon LYING ON ITS SIDE, width in Z, exactly as the arm prints (the
+    // arm goes on the bed rotated 90 deg about X, so its tenons' width is
+    // the build axis). That makes the tenon's lower flank a 45-degree
+    // overhang, and whatever that does to the surface is part of what
+    // dt_clear has to absorb - a tenon printed standing up has perfect
+    // flanks and would measure a clearance the arm never gets. Length
+    // along X, depth +Y.
     difference() {
         union() {
-            translate([-16, -3, 0]) cube([32, 3, l]);
-            translate([0, 3 - eps, 0]) rotate([0, 0, 0])
-                linear_extrude(height = l, convexity = 6) dt_sect(0);
-            translate([-16, 0, 0]) cube([32, 3, l]);
+            translate([-l / 2, -6, 0]) cube([l, 6, dt_wide]);
+            translate([-l / 2, 0, 0]) rotate([90, 0, 90])
+                linear_extrude(height = l, convexity = 6)
+                    polygon([[-eps, (dt_wide - dt_narrow) / 2],
+                             [-eps, (dt_wide + dt_narrow) / 2],
+                             [dt_depth, dt_wide], [dt_depth, 0]]);
         }
-        // identity notches along the top edge of the base
+        // identity notches along the top edge of the base's outer face
         for (k = [0 : n - 1])
-            translate([-12 + k * 5, -3.1, l - notch_d])
+            translate([-l / 2 + 2 + k * 5, -6.1, dt_wide - notch_d])
                 cube([notch_w, 4, notch_d + eps]);
     }
     // socket block

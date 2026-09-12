@@ -45,9 +45,22 @@ the slot by hand rather than tapping AUTO so you can see which spool it picked.
 ## Slicing
 
 ```powershell
-.\scripts\build_stl.ps1                                    # .scad -> stl/
+.\scripts\verify_mount.ps1                                 # 30 model checks, ~2 min. Green before anything else.
+.\scripts\build_stl.ps1                                    # .scad -> stl/   (add -PoleD 28.75 for the other cane)
 .\scripts\slice_gcode.ps1 -Plate bore -Material PLA -Walls 4   # stl -> gcode/
 ```
+
+`build_stl.ps1` writes every part, including the three single-row coupon plates the slicer
+asks for by name (it did not, once, and the first command in this file failed on a fresh
+clone). `-PoleD 28.75` adds a collar and ring for that cane next to the 27.65 ones; nothing
+else is sized by the cane.
+
+**Support is the slicer script's job, not yours.** The vendor profile has it off and the
+command line does not turn it on; the first headless cradle file went out with
+`enable_support = 0` and would have printed its back plate in mid-air. `slice_gcode.ps1` now
+turns it on for the cradle (build-plate only, bridges left alone so the dovetail socket
+stays empty) and refuses to write a cradle file without it. It prints a `support` line
+in its verification block; read it.
 
 `slice_gcode.ps1` drives Creality Print 7.2 headlessly — it is an Orca fork and takes
 Orca's command line, so no GUI, no fighting for the mouse, and the same inputs give the
@@ -79,12 +92,17 @@ from `pole_d`, so none of them can be sliced honestly until the bore rings have 
 
 | # | Plate | Material | Time | What it settles |
 |---|---|---|---|---|
-| 1 | `-Plate bore -Walls 4` | PLA | 52m53s, 22.4 g | the cane diameter |
-| 2 | `-Plate bore -Walls 4` | PETG | — | the same, without a shrinkage correction |
-| 3 | `-Plate thread` | PETG | — | `thr_clear`, and whether the thread exists at all |
-| 4 | `-Plate dovetail` | PLA | — | `dt_clear` |
-| 5 | `-Plate arm` | PLA | 23m42s, 13.4 g | nothing — it is a real part, see below |
-| 6 | `-Plate coupons -Walls 4` | PETG | 3h01m, 62.8 g | all three rows at once |
+| ~~1~~ | ~~`-Plate bore -Walls 4`~~ | PLA | 52m48s, 22.4 g | **DONE 2026-09-12: `pole_d` = 27.65.** Do not reprint unless the shaft changes |
+| 2 | `-Plate next -Walls 4` | PETG | 3h33m, 54.3 g | `thr_clear`/`thr_axial` (stub + four nuts) **and** `dt_clear` (three dovetail pairs) in one job |
+| 2a | `-Plate thread -Walls 4` | PETG | 2h24m, 31.8 g | the thread row alone, if you only want that |
+| 2b | `-Plate dovetail` | PLA | 41m57s, 15.2 g | the dovetail row alone |
+| 3 | `-Plate arm` | PETG | 38m55s, 16.0 g | nothing — it is a real part and needs no coupon, see below |
+| 4 | `-Plate collar` + `-Plate ring` | PETG | 1h43m + 55m, 23.1 + 15.1 g | the clamp, cut to nut 3 [0.45, 0.45]; rebuild if a different nut wins |
+| 5 | `-Plate cradle` | PETG | 1h34m, 33.3 g (support on) | the phone holder |
+
+The gcode for every row is in `hardware/mount_screwless/gcode/` as of 2026-09-12 (late),
+named by material, slot, plate and time. The thread row's time doubled against the earlier
+two-ring plate because it is now the four-nut bracket from Step 21.
 
 **The arm is the exception and it is worth knowing why.** It is the only real part that
 can be printed before any measurement comes back. Its tenons are drawn at
@@ -141,10 +159,32 @@ removes it: you measure with rings made of the material the real part will be ma
 If you have both, **use the PETG answer.** If you only have PLA and you are borderline
 between two rings, take the larger one.
 
-## Reading the thread pair
+## Reading the thread set
 
-Screw the ring onto the stub. It should turn by hand for the full length — no tool, no
-slop you can feel at the top. Binds → raise `thr_clear` by 0.1. Wobbles → drop it by 0.1.
+One stub, **four** nuts, notched on the top rim. Each nut is a pair [radial, axial]:
+
+| Notches | `thr_clear` | `thr_axial` | what it tests |
+|---|---|---|---|
+| 1 | 0.45 | 0.25 | radial step only |
+| 2 | 0.35 | 0.45 | axial step only |
+| 3 | 0.45 | 0.45 | both, modest — **the collar and ring are cut to this one** |
+| 4 | 0.55 | 0.65 | both, generous — if only this one works, something else is wrong |
+
+Screw each down the stub by hand, no tool. Take the **smallest nut that runs freely for the
+whole length** and put both its numbers in `thr_clear` / `thr_axial`, then rebuild the
+collar and ring if it is not nut 3. **Rocking play at the top is not a fault**: with 60° flanks
+the radial clearance turns into axial slack as well (about 0.49 mm per flank on nut 3), so a
+loose nut rocks about a millimetre. It vanishes the moment the real ring bears on the cone.
+Where it binds tells you what is wrong: tight from the first turn → radial; free then jams
+part-way → axial; jams only at the flange → elephant's foot on the stub's first layers.
+
+**What "fully down" means on the real collar.** With no cane in it, the ring runs all the
+way to the shoulder; the last two and a half turns get stiff as its cone closes the collet
+fingers (0.6 mm radial, by design). **With the cane in, the ring stops about 3 mm short of
+the shoulder.** That is the clamp: the fingers have met the cane and the rest of the
+travel is preload. A ring that reaches the shoulder with the cane in means the bore is too
+big for that cane. A ring that stops more than ~5 mm short with the cane *out* is binding,
+and the thread set above is how you find out why.
 
 This is the coupon that matters most right now. Until 2026-09-12 the thread generator
 produced no thread at all: a twisted `linear_extrude` maps **angle** to height, and the
@@ -160,6 +200,29 @@ Prefer the PETG result — `thr_clear` is material-dependent and the collar is P
 
 Notched 1/2/3 = 0.15 / 0.25 / 0.35 mm. Slide each tenon into its socket: it should move
 with thumb pressure and stay put when you shake it. That number goes in `dt_clear`.
+
+The tenons lie on their side, notched base down, exactly as the arm's tenons print: the
+dovetail's width is the build axis, so one flank is a 45° overhang and its finish is part
+of the number. Test them the way they were printed, base face down. (A tenon printed
+standing up has perfect flanks and reads a clearance the arm never gets.)
+
+## Fitting it together
+
+1. **Ring off.** Drop the arm into the collar's socket from the top - its tenon clears
+   the threaded band on the way down - until it lands on the stop 5.5 mm above the
+   collar's base. Then screw the ring on. The ring's rim now sits over the tenon and the
+   arm cannot come out. There is no pawl on this joint; the ring is the lock.
+2. **Slide the cradle down onto the arm's far tenon** from above until it stops. The leaf
+   pawl on the tenon cams in on the way and clicks out into the window in the cradle's
+   roof, just below where the phone's bottom edge will sit. To release, press the catch
+   back through that window with a fingernail and lift.
+3. **Phone in from the front:** bottom edge into the two corner cups first, then press
+   the top back until the two corner caps snap over the top corners. They spread about
+   6 mm to let the corners past. To take it out, spread the two rails with a thumb and
+   finger and lift the top edge clear. The floor between the cups is open for the USB-C
+   plug, the speaker and the mics.
+4. **On the cane:** collar on with the ring loose, slide it to station, tighten the ring
+   until it stops. See "what fully down means" above.
 
 The socket and the real part are built by the same method, so the number transfers even
 though the clearance is not perfectly uniform around the flank — see the known-issue list
