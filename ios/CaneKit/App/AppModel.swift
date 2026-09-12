@@ -97,6 +97,9 @@ final class AppModel {
     let hazards: HazardScanner
     /// Hazard map: every announced hazard with GPS + photo → Documents/hazards/*.geojson.
     let hazardLog = HazardLog()
+    /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 34).
+    /// Off unless `familyAlertsEnabled`; unconfigured (no webhook key) is a no-op that says so.
+    let family = FamilyAlerts()
     /// Last LiDAR ground hazard spoken ("Two meters ahead, drop-off."), for the Hazards card.
     private(set) var lastGroundHazard: String?
     /// When a confirmed ground hazard is worth saying again (CaneKitLogic, HazardTests).
@@ -215,6 +218,15 @@ final class AppModel {
     /// Default OFF until validated on the phone.
     var hazardWatchEnabled: Bool = Settings.bool("hazardWatchEnabled", default: false) {
         didSet { Settings.set(hazardWatchEnabled, "hazardWatchEnabled"); hazards.watchEnabled = hazardWatchEnabled }
+    }
+    /// Send cane events (fall, SOS, close obstacle, breadcrumb, low battery) to the Grok Bot
+    /// routine so it can alert family.
+    ///
+    /// Default **OFF** (AGENTS.md → new untuned features ship off, and this one sends the walker's
+    /// position off the phone, so it is opt-in twice over: the switch here and a webhook key in
+    /// Secrets.plist). In `LaunchRecovery.optionalFeatureKeys`, so a crash loop clears it.
+    var familyAlertsEnabled: Bool = Settings.bool("familyAlertsEnabled", default: false) {
+        didSet { Settings.set(familyAlertsEnabled, "familyAlertsEnabled"); family.enabled = familyAlertsEnabled }
     }
     /// Name people (and dogs / cats) in "Where am I" (Hazards card).
     ///
@@ -447,6 +459,8 @@ final class AppModel {
         haptics.silenced = hapticsSilenced
         logger.enabled = loggingEnabled
         beacon.enabled = beaconEnabled
+        // didSet does not fire during init: push the stored opt-in through once.
+        family.enabled = familyAlertsEnabled
         AppModel.shared = self
         self.conversation = ConversationCoordinator(appModel: self, client: client)
         self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
@@ -994,6 +1008,17 @@ final class AppModel {
             if speech.say(line, .obstacle, ttl: 4, load: .ambientObstacleName) {
                 logger.event("speech", ["text": line, "priority": "obstacle"])
             }
+            // Deliberately outside the `speech.say` result: the family event reports the
+            // DETECTION, not the utterance. Step 29-33's load policy can drop the spoken line
+            // when the soundscape is busy, and a close obstacle still matters to family then.
+            // The policy drops it unless it is close (≤ obstacleMaxDistanceM) and not
+            // rate-limited. `centerHit` is the centre ray, hence direction "center".
+            family.obstacle(kind: report.centerHit?.classification.spokenName,
+                            distanceM: report.centerHit.map { Double($0.distance) },
+                            direction: "center",
+                            lat: location.fix?.coordinate.latitude,
+                            lng: location.fix?.coordinate.longitude,
+                            note: line, now: report.timestamp)
         }
         if groundHazardsEnabled, let g = report.groundHazard,
            groundPolicy.shouldAnnounce(g, now: report.timestamp) {
@@ -1546,6 +1571,10 @@ final class AppModel {
             }
             self.logger.event("gps", ["lat": fix.coordinate.latitude, "lon": fix.coordinate.longitude,
                                       "acc": fix.accuracy, "speed": fix.speed])
+            // Throttled to one every FamilyAlertLimits.locationInterval inside the policy.
+            self.family.location(lat: fix.coordinate.latitude, lng: fix.coordinate.longitude,
+                                 accuracyM: fix.accuracy, heading: self.location.heading,
+                                 speedMps: Double(fix.speed), now: fix.timestamp)
         }
         location.onHeading = { [weak self] h, fromCourse in
             guard let self else { return }
@@ -2065,6 +2094,9 @@ final class AppModel {
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
         nav.start(route)
+        // New walk: forget the breadcrumb / obstacle rate limits so the first fix goes out
+        // promptly. Battery arming deliberately survives (FamilyAlertPolicy.reset).
+        family.reset()
         beacon.start()
         head.start()
         if faceHeadTrackingEnabled { faceHead.start() }   // the no-AirPods head source
@@ -2186,10 +2218,27 @@ final class AppModel {
         wasHot = hot
     }
 
+    /// Debug "Send test event": posts one sample `fall` event to the Grok Bot routine and speaks
+    /// what came back, so the chain can be checked before a walk without looking at the screen.
+    ///
+    /// Works even while `familyAlertsEnabled` is off — checking the wiring is exactly what a
+    /// family member does *before* switching it on.
+    ///
+    /// ⚠ It reports that the bot **accepted** the event. It never says family was texted: the bot
+    /// decides that later, and claiming it here would be a lie the walker might rely on.
+    func sendFamilyTestEvent() async {
+        let line = await family.sendTestEvent(lat: location.fix?.coordinate.latitude,
+                                              lng: location.fix?.coordinate.longitude)
+        speech.say(line, .nav, ttl: 10)
+        logger.event("family_test", ["result": line])
+    }
+
     /// `batteryLevel` is 0…1, or negative when unknown (simulator) → `batteryPercent` 0–100 / -1.
     private func updateBattery() {
         let level = UIDevice.current.batteryLevel
         batteryPercent = level < 0 ? -1 : Int((level * 100).rounded())
+        // Once per discharge; the policy re-arms only after a real recharge.
+        family.lowBattery(pct: batteryPercent)
     }
 }
 

@@ -97,6 +97,9 @@ public enum LaunchRecovery {
         "hazardWatchEnabled",     // periodic vision-model hazard check while walking
         "signsEnabled",           // on-device sign reading (Vision, every 3 s)
         "highFrameRateCamera",    // 60 fps camera: double the capture cost and heat
+        // Family alerts: a background POST per detection, and the walker's position leaves the
+        // phone. Off by default; cleared on a crash loop like every other optional feature.
+        "familyAlertsEnabled",
     ]
 
     /// How to run this launch.

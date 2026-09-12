@@ -55,3 +55,8 @@ hardware/**/*.png
 # scripts/slice_gcode.ps1, then copy here.
 !hardware/3d_print_files/
 !hardware/3d_print_files/**
+ios/local-free.entitlements
+ios/scripts/gen-local.sh
+ios/.project.yml.orig
+ios/scripts/run-local.sh
+ios/scripts/restore-ids.sh

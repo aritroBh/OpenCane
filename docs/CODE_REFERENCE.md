@@ -22,6 +22,7 @@ wins wherever the two disagree.
 - [Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)](#module-speech-audio-scene-ioscanekitspeech-ioscanekitaudio-ioscanekitscene)
 - [Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity](#module-navigation-trip--gps-waypoint-engine-turn-settling-route-sources-trip-logtracker-live-activity)
 - [Module `watch-widget-shared`](#module-watch-widget-shared)
+- [Module `family-alerts` — cane events → the Grok Bot routine (Step 28)](#module-family-alerts--cane-events--the-grok-bot-routine-step-28)
 - [Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI](#module-ui-tests-build--phone-ui-xcuitests-xcodegen-build-ci)
 
 ## Data flow
@@ -184,7 +185,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - **`enum ObstacleClass: Int, Sendable, Codable, CaseIterable`** — `none=0, wall, floor, ceiling, table, seat, window, door` — mirrors ARKit mesh classification raw values (order must stay in sync with `ARMeshClassification`). `spokenName: String?` → "wall"/"table"/"seat"/"window"/"door"; `nil` for `none/floor/ceiling` (never announced).
 - **`struct MeshHit: Sendable, Equatable`** — `classification: ObstacleClass`, `distance: Float` (m).
 - **`struct LaneReport: Sendable, Equatable`** — `grid: LaneGrid` (default `.empty`), `isTrusted: Bool` (default `true`; false while cane is sweeping, |ω| ≥ app threshold → cues freeze), `rotationRate: Float` (|rad/s|; logged as `omega` in the `lanes` trip-log record, not shown on screen), `timestamp: TimeInterval`, `depthAvailable: Bool` (default `false`; false until first depth frame / non-LiDAR), `trackingNormal: Bool` (default `false`; whether the same ARKit frame had `.normal` camera tracking), `frameSequence: Int` (published-report sequence used to detect newest-only stream gaps), `centerHit: MeshHit?`, `groundHazard: GroundHazard?` (default `nil`; the latest *confirmed* LiDAR ground hazard from `GroundHazardDetector`, set by `DepthFrameProcessor` and re-attached to every report until the next trusted evaluation replaces it — see `Hazards.swift`). `cameraTiltDownDeg: Float?` (default `nil`; degrees the camera looks below the horizon, positive = down, a ~0.5 s EMA at the normal 30 Hz publish rate over trusted frames from `DepthFrameProcessor.trackTilt`; nil before the first trusted frame). `init(grid:isTrusted:rotationRate:timestamp:depthAvailable:trackingNormal:frameSequence:centerHit:groundHazard:cameraTiltDownDeg:)`, all defaulted. Computed `head`/`torso` forward to `grid`.
-- **`struct DepthFrameContinuity: Sendable, Equatable`** — pure transition-boundary / newest-only-stream policy. `begin(after:)` excludes buffered reports at or before the boundary; `accepts(_:)` requires exact sequence increments, rejects a gap as readiness evidence, then anchors the next run. Pinned by `DepthReadinessTests.publishedFrameContinuityRejectsGapsAndRecovers` and `publishedFrameContinuityHonorsTransitionBoundary`. ⚠ Both tests call `accepts` into a local before `#expect`, because it is `mutating` and `#expect` captures its argument immutably — inlining the call breaks the build (Step 27).
+- **`struct DepthFrameContinuity: Sendable, Equatable`** — pure transition-boundary / newest-only-stream policy. `begin(after:)` excludes buffered reports at or before the boundary; `accepts(_:)` requires exact sequence increments, rejects a gap as readiness evidence, then anchors the next run. Pinned by `DepthReadinessTests.publishedFrameContinuityRejectsGapsAndRecovers` and `publishedFrameContinuityHonorsTransitionBoundary`. ⚠ Both tests call `accepts` into a local before `#expect`, because it is `mutating` and `#expect` captures its argument immutably — inlining the call breaks the build (Step 28).
 - **`enum MountTilt`** — the mount's camera aim. The lane grid skips a fixed bottom fraction of the image as ground (`LaneConfig.groundSkipFraction`, no gravity correction), so the phone must look only a little below the horizon: at ~10° down the torso lanes already read bare pavement near 2 m (the centre-approach threshold) and the cane buzzes on an empty sidewalk; at 0° or above the ground detector loses its 0.8–1.5 m reference (`hardware/mount/DESIGN.md` and `pitch_model.py` derive the window). `static func downDegrees(cameraZColumnY:) -> Float` converts `camera.transform.columns.2.y` to degrees below the horizon (the camera looks along −Z, so down is positive; pinned by `tiltSignIsDownPositive`); `DepthFrameProcessor.trackTilt` uses it. `status` judges the rounded value it displays (2.6° → "3°, good").
   - `static let aim: ClosedRange<Float> = 3...8` (degrees down).
   - `static func status(downDeg d: Float) -> (text: String, ok: Bool)` — `n = Int(|d|.rounded())`; `n == 0` → ("Camera level: tilt the phone down", false); inside `aim` → ("Camera tilt N° down, good", true); above → "Camera tilt N° down: tilt the phone up"; below (incl. looking up, `d < 0` → "up") → "Camera tilt N° up|down: tilt the phone down", false. Shown by the Settings tab's Mount card (`MountAimRow`, used by `SettingsPage.mountSettings`). Pinned by `mountTiltWindow`.
@@ -2083,6 +2084,76 @@ Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps
 | Phone Watch card layout | `ios/CaneKitUITests/CaneKitVisualTour.swift` `testTour` (simulator, no watch; the tour opens the **Settings** tab, then shoots the cards there) | `make tour` (PNGs in `SHOTS`, default `build/shots`) or `make uitest` |
 
 ---
+
+## Module `family-alerts` — cane events → the Grok Bot routine (Step 28)
+
+Cane detections become one JSON event POSTed to the Grok Bot routine **"OpenCane cane events"**
+(folder `opencane-cane-events`), which decides whether to text family. Same split as the VLM path:
+the schema and every threshold are pure and unit-tested in `CaneKitLogic`, the app owns only
+transport and keys.
+
+⚠ **HTTP 200 = the bot accepted the call and started a run.** It is NOT proof an SMS was sent — the
+bot decides that afterwards from `severity` and `type`. `GrokBotResult.accepted` and every UI string
+are worded for that; do not "improve" them into "family notified".
+
+### `Logic/Sources/CaneKitLogic/GrokBotEvent.swift` — the wire contract
+
+- `OpenCaneSeverity` — `info` / `warn` / `critical`. The bot texts family for `warn` and
+  `critical`; omitting severity asks it to infer (fall / sos ⇒ critical).
+- `OpenCaneEventType` — open `RawRepresentable` (not an enum) so an unknown `type` decodes instead
+  of throwing. Constants: `.location`, `.fall`, `.obstacle`, `.lowBattery`, `.sos`, `.status`.
+- `OpenCaneEvent` — the event. ⚠ `CodingKeys` are the contract: `accuracy_m`, `speed_mps`,
+  `cane_id`, `battery_pct`, `obstacle.distance_m`, and `lng` (never `lon`). A nil field is omitted,
+  never sent as null.
+- `OpenCaneGeo`, `OpenCaneObstacle`, `OpenCaneJSON` (arbitrary JSON for `extra`).
+- `iso8601(_:)` / `stamped(at:)` — ISO-8601 UTC at second resolution; `stamped` never overwrites a
+  timestamp the caller already knew. `jsonBody()` encodes with `.sortedKeys`.
+
+### `Logic/Sources/CaneKitLogic/FamilyAlertPolicy.swift` — when a detection is worth sending
+
+- `FamilyAlertLimits` — `locationInterval` 120 s, `obstacleInterval` 60 s,
+  `obstacleMaxDistanceM` 1.2, `lowBatteryPct` 20, `lowBatteryRearmPct` 30.
+- `FamilyAlertPolicy` — mutating `location(…)`, `obstacle(…)`, `lowBattery(pct:)` return an event
+  or nil; static `fall(…)`, `sos(…)`, `status(…)` are never rate-limited. `reset()` clears the rate
+  limits but deliberately NOT the battery arming.
+- ⚠ Struct with mutating methods: a call inside `#expect`/`#require` does not compile under
+  Swift 6. The tests assign to a local first.
+
+### `ios/CaneKit/Alerts/GrokBotClient.swift` — transport only
+
+- `GrokBotResult` — `.accepted` / `.notConfigured` / `.rejected(status:body:)` / `.failed`, each
+  with a `summary` line for the UI and trip log.
+- `GrokBotClient.fromSecrets()` — reads `OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY` from the **process
+  environment first**, then `Secrets.plist`; requires `https`. nil = feature unconfigured.
+- `send(_:now:)` — POST with `Authorization: Bearer`, 10 s timeout, **one** retry on a transport
+  failure and **never** on a non-2xx (a 401 will be a 401 again; re-POSTing an accepted `fall`
+  would double-text). Logs status + body, never headers.
+
+### `ios/CaneKit/Alerts/FamilyAlerts.swift` — the main-actor relay
+
+- Owned by `AppModel.family`; holds the policy and the client. `enabled` follows the
+  `familyAlertsEnabled` setting (default **off**, in `LaunchRecovery.optionalFeatureKeys`).
+- `location(…)`, `obstacle(…)`, `lowBattery(pct:)` — called from `AppModel`'s GPS callback, cue
+  router and battery observer. Sends are fire-and-forget `Task`s so a POST never delays a cue.
+- `fall(…)` / `sos(…)` — ⚠ **nothing calls these yet**: OpenCane has no fall detector and no SOS
+  control. They exist so those detectors have one obvious place to report to.
+- `sendTestEvent(lat:lng:)` — the debug button; posts a sample `fall` and works even while the
+  feature is off, because checking the chain is what you do *before* switching it on.
+
+### Call sites
+
+| Where | Event |
+|---|---|
+| `AppModel.wireNavigation()` → `location.onFix` | `location`, throttled to 120 s |
+| `AppModel.handle(_:)` (cue router, beside the spoken obstacle line) | `obstacle` when `centerHit` ≤ 1.2 m |
+| `AppModel.updateBattery()` | `low_battery`, once per discharge |
+| `AppModel.startRouteNow(_:)` | `family.reset()` — new walk, forget the rate limits |
+| `AppModel.sendFamilyTestEvent()` ← Settings "Send test event" | sample `fall` |
+
+Settings UI: `ContentView.familyAlertsCard(_:)` — the toggle, the "no webhook key" explanation, the
+test button and the last status line.
+
+Config: `ios/README.md §4.1`. Tests: `GrokBotEventTests.swift`, `FamilyAlertPolicyTests.swift`.
 
 ## Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI
 

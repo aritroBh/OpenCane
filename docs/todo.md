@@ -601,6 +601,30 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
 - **test on device:** see CHANGELOG Step 27
 
+## Step 28 — Cane events → Grok Bot family alerts (Sat Sep 12)
+- [x] `GrokBotEvent.swift` (Logic): `OpenCaneEvent` + `OpenCaneEventType` (open, so an unknown type
+      decodes) + `OpenCaneJSON` for `extra`; `CodingKeys` asserted as bytes — they are the bot's contract
+- [x] `FamilyAlertPolicy.swift` (Logic): breadcrumb 120 s, obstacle 60 s and ≤ 1.2 m, low battery once
+      per discharge re-arming above 30 %; fall/sos never limited; `reset()` keeps battery arming
+- [x] `Alerts/GrokBotClient.swift`: bearer POST, 10 s timeout, one retry on transport failure, none on
+      non-2xx (a 401 stays a 401; a re-POSTed `fall` would double-text). Logs status + body, never headers
+- [x] `Alerts/FamilyAlerts.swift`: main-actor relay, fire-and-forget sends so a POST never delays a cue
+- [x] `AppModel` call sites: `location.onFix` breadcrumb, obstacle beside the spoken line,
+      `updateBattery()`, `family.reset()` at route start, `sendFamilyTestEvent()`
+- [x] Settings → Family alerts: opt-in (default off, in `LaunchRecovery.optionalFeatureKeys`),
+      "no webhook key" explanation, "Send test event" that works while the switch is off
+- [x] Keys in git-ignored `Secrets.plist` only (`OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY`), env read
+      first; `ios/README.md §4.1` documents both plus a curl example
+- [x] Verified: `make test` **383/383**, `make sim` green, webhook answered HTTP 200
+      `{"success":true,"runUuid":…}` to the curl sample
+- [ ] **No fall detector.** `FamilyAlerts.fall(…)` is written and tested but nothing calls it. Needs
+      CoreMotion + a numeric threshold from real data, in `ios/Logic` with its own tests (hard rule 3)
+- [ ] **No SOS control.** `FamilyAlerts.sos(…)` likewise — wants a watch button / Action Button /
+      Siri phrase, all three of which already have plumbing
+- [ ] Confirm on the phone that a `warn` actually reaches a family member's SMS (bot side, not ours)
+- [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
+- **test on device:** see CHANGELOG Step 28
+
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen

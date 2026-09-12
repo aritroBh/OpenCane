@@ -105,7 +105,7 @@ make devices                       # find the phone's identifier
 make run                           # gen + build + install + launch
 ```
 
-Put API keys (ElevenLabs voice, "Where am I" model) in `ios/CaneKit/Resources/Secrets.plist`
+Put API keys (ElevenLabs voice, "Where am I" model, the Grok Bot family-alert webhook) in `ios/CaneKit/Resources/Secrets.plist`
 **before** `make run`, because the file is bundled into the app. Never commit it. Without keys the
 app uses the system voice and describes scenes on the phone. Then follow
 [`docs/devices_setup.md`](docs/devices_setup.md) for the AirPods, the watch and the untethered demo
