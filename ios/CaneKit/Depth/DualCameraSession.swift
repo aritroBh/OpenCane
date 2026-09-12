@@ -164,6 +164,9 @@ final class DualCameraSession {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// The two inputs, kept so the frame rate can be cut if the hardware cost comes in over budget.
     @ObservationIgnored private var inputs: [AVCaptureDeviceInput] = []
+    /// One per camera, retained for the life of the session: `AVCaptureDevice.RotationCoordinator`
+    /// observes the device's orientation and stops updating the moment it is released.
+    @ObservationIgnored private var rotationCoordinators: [AVCaptureDevice.RotationCoordinator] = []
     /// Strong references to the sample-buffer delegates (`AVCaptureVideoDataOutput` holds its
     /// delegate weakly) and the source of the per-camera frame counts.
     @ObservationIgnored private var relays: [String: DualCameraFrameRelay] = [:]
@@ -282,6 +285,7 @@ final class DualCameraSession {
         }
         session = nil
         inputs.removeAll()
+        rotationCoordinators.removeAll()
         relays.removeAll()
         backLayer.sampleBufferRenderer.flush()
         frontLayer.sampleBufferRenderer.flush()
@@ -356,10 +360,23 @@ final class DualCameraSession {
         guard session.canAddConnection(connection) else {
             return giveUp("\(label) camera could not be connected.", output: output)
         }
-        // The phone is clamped to a cane in portrait, and a preview layer would have handled this
-        // itself; a data output will not, so the rotation is set explicitly. 90° is portrait for a
-        // camera whose sensor is landscape.
-        if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+        // The phone is clamped to a cane in portrait, and a preview layer would have handled the
+        // rotation itself; a data output will not, so it is set explicitly.
+        //
+        // NOT a hard-coded 90°. That is right for the back sensor and wrong for the front one,
+        // which is mounted the other way round — the front feed came out sideways on the device.
+        // `AVCaptureDevice.RotationCoordinator` computes the correct angle for THIS device, which
+        // is why Apple added it; a table of per-camera magic numbers is wrong on the next model.
+        // The coordinator must be retained: it observes device orientation and a released one
+        // stops updating.
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
+        rotationCoordinators.append(coordinator)
+        let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        } else if connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90          // last resort: portrait for a landscape sensor
+        }
         // A selfie feed that is not mirrored reads as someone else's face to the person holding
         // the phone. Front camera only: mirroring the back camera would flip the world.
         if position == .front, connection.isVideoMirroringSupported {
