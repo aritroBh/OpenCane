@@ -37,12 +37,12 @@ final class CaneKitUITests: XCTestCase {
     /// Start → instruction shows waypoint 1 → Next → waypoint 2 → Repeat does not advance →
     /// Recenter → Stop → idle again with no Repeat.
     ///
-    /// ⚠ test contract: buttons "Start demo route", "Stop route", "Next", "Repeat", "Recenter"
+    /// ⚠ test contract: buttons "Start route to CIF", "Stop route", "Next", "Repeat", "Recenter"
     /// (GuideCard); instruction texts containing "Townsend" / "Illinois Street" come from the
     /// `say` lines of CaneKit/Resources/route_isr_cif.json waypoints 1 and 2. Note waypoint 1's
     /// line already mentions "Illinois Street", so that wait alone does not prove Next advanced.
     func testGuideStartsAndStopsDemoRoute() {
-        let start = app.buttons["Start demo route"]
+        let start = app.buttons["Start route to CIF"]
         XCTAssertTrue(start.waitForExistence(timeout: 10), "Start button should be on the guide card")
         start.tap()
 
@@ -168,10 +168,10 @@ final class CaneKitUITests: XCTestCase {
 
     /// Spot-checks the VoiceOver tree on the idle screen.
     ///
-    /// ⚠ test contract: button "Start demo route", element "Head row" (LaneGridView row label),
+    /// ⚠ test contract: button "Start route to CIF", element "Head row" (LaneGridView row label),
     /// button "Where am I", switch "Write trip log" (ContentView Mount card).
     func testAccessibilityLabelsExist() {
-        XCTAssertTrue(app.buttons["Start demo route"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 10))
         // Rows expose a combined spoken value ("left clear, center clear, right clear" or "no depth data").
         let headRow = app.otherElements["Head row"]
         XCTAssertTrue(headRow.exists)
@@ -183,12 +183,12 @@ final class CaneKitUITests: XCTestCase {
     /// controls while a route runs. Not tapped: it would start GPS and an Apple Maps request.
     ///
     /// ⚠ test contract: button "Navigate to CIF from here" (GuideCard; its label is its text),
-    /// "Start demo route", "Stop route".
+    /// "Start route to CIF", "Stop route".
     func testNavigateToCIFButtonIsOnTheIdleGuide() {
         let cif = app.buttons["Navigate to CIF from here"]
         XCTAssertTrue(cif.waitForExistence(timeout: 10), "CIF-from-here button should be on the idle guide")
         XCTAssertTrue(cif.isEnabled)
-        app.buttons["Start demo route"].tap()
+        app.buttons["Start route to CIF"].tap()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 10))
         XCTAssertFalse(cif.exists, "route controls replace the picker while navigating")
         app.buttons["Stop route"].tap()
