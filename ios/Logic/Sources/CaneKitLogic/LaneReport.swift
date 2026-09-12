@@ -72,10 +72,10 @@ public struct LaneReport: Sendable, Equatable {
     /// Nearest classified mesh face at the image centre, if any.
     public var centerHit: MeshHit?
     /// Confirmed LiDAR ground hazard ahead (drop-off, hole, curb, low obstacle), if any.
-    /// Set by `DepthFrameProcessor` from `GroundHazardDetector` (evaluated up to ~7 Hz, confirmed over frames).
+    /// Set by `DepthFrameProcessor` from `GroundHazardDetector` (evaluated up to 10 Hz, confirmed over frames).
     public var groundHazard: GroundHazard?
     /// How far the camera looks below the horizon, degrees (positive = down), smoothed over
-    /// ~1 s of trusted frames; nil before the first frame. See `MountTilt`.
+    /// ~0.5 s at the normal 30 Hz publish rate; nil before the first frame. See `MountTilt`.
     public var cameraTiltDownDeg: Float?
 
     /// Every parameter defaults to the "no depth yet" state (empty grid, trusted, no data).

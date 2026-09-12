@@ -55,7 +55,7 @@ struct ProcessorSettings: Sendable {
     /// Mesh lookups happen every Nth published frame (30 Hz / 8 ≈ 4 Hz: the costly part stays put).
     var meshEveryNthFrame = 8
     /// LiDAR ground-hazard detection (drop-offs, holes, curbs; GroundSampler + CaneKitLogic
-    /// GroundHazardDetector). Evaluated on published frames at most every 0.1 s (~7 Hz).
+    /// GroundHazardDetector). Evaluated on published frames at most every 0.1 s (up to 10 Hz).
     var groundHazardsEnabled = true
     /// |gyro| (rad/s) under which a frame is good enough for the *ground* path. Looser than
     /// `sweepThreshold`: GroundSampler registers every point through `camera.transform` in the
@@ -155,13 +155,13 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     private var groundDetector = GroundHazardDetector() // queue-only, confirms over frames
     private var lastGroundHazard: GroundHazard?         // queue-only, reused between evaluations
     private var lastGroundEval: TimeInterval = 0        // queue-only, ARKit clock
-    /// Smoothed horizontal walking direction (~1 s EMA of the camera forward), queue-only.
+    /// Smoothed horizontal walking direction (~0.5 s EMA at the normal 30 Hz publish rate), queue-only.
     private var walkDirection: SIMD3<Float>?
     /// Metres walked along `walkDirection` since launch, and the last camera position.
     private var travelled: Float = 0
     private var lastCamPos: SIMD3<Float>?
-    /// Camera look direction below the horizon (deg, + = down), ~1 s EMA of trusted frames, for
-    /// the Mount card's "Camera tilt" line (MountTilt). Queue-only.
+    /// Camera look direction below the horizon (deg, + = down), ~0.5 s EMA of trusted frames at
+    /// the normal 30 Hz rate, for the Mount card's "Camera tilt" line (MountTilt). Queue-only.
     private var tiltDownDeg: Float?
 
     /// Builds the newest-only report stream. Called on main by `DepthEngine`'s property
