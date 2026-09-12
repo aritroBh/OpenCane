@@ -227,9 +227,25 @@ final class CaneKitUITests: XCTestCase {
         field.tap()
         field.typeText("Grainger")
 
-        // No fix in the simulator, so the label carries no distance.
-        let suggestion = app.buttons["Grainger Engineering Library, campus place"]
-        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "campus places must be offered first")
+        // Match on the name and the kind, not on the whole sentence: the row legitimately gains a
+        // detail line (and, with a GPS fix, a distance) a moment after it first appears, and
+        // asserting the exact final string made this test a race. What the feature promises is
+        // that the campus library is offered and is marked as a campus place — MKLocalSearch's own
+        // answer for "Grainger" is an industrial supply store in another town.
+        let campus = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@",
+                        "Grainger Engineering Library", "campus place")).firstMatch
+        XCTAssertTrue(campus.waitForExistence(timeout: 5), "campus places must be offered first")
+
+        // …and offered FIRST: no other suggestion row may sit above it. Map rows carry a street
+        // address, which is how they are told apart from the field and the buttons above.
+        let mapRows = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Urbana, IL")).allElementsBoundByIndex
+        for row in mapRows {
+            XCTAssertGreaterThan(row.frame.origin.y, campus.frame.origin.y,
+                                 "a map row must never rank above the campus place")
+        }
         XCTAssertFalse(error.exists, "typing clears the previous attempt's error line")
     }
+
 }

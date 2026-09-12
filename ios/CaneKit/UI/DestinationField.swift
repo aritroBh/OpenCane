@@ -192,10 +192,19 @@ struct DestinationField: View {
     private var suggestionList: some View {
         VStack(spacing: CKSpacing.xs) {
             ForEach(search.suggestions) { suggestion in
-                Button { choose(suggestion) } label: { row(suggestion) }
+                // The accessibility modifiers go on the row *inside* the button's label, not on
+                // the button. On the button they raced: a `Button` already builds an element from
+                // its label, so `children: .ignore` outside it left the composed children exposed
+                // and VoiceOver read the row as "Grainger Engineering Library, On campus, Campus"
+                // — the visible title, the detail line and the badge word, in that order — instead
+                // of the sentence we wrote. Both labels were observed on the same row in one
+                // XCUITest run, which is also what made the test flaky.
+                Button { choose(suggestion) } label: {
+                    row(suggestion)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(suggestion.voiceOverLabel)
+                }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(suggestion.voiceOverLabel)
                     .accessibilityHint(suggestion.voiceOverHint)
                     .accessibilityAddTraits(.isButton)
             }
