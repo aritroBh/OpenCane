@@ -6,7 +6,7 @@
 //  along the camera's forward axis, then finds the nearest classified face across the
 //  ARMeshAnchors within reach. Runs on the depth queue, throttled to ~4 Hz by the processor.
 //
-//  Step 2 ships the geometry; step 4 wires the result into speech ("door ahead, two meters").
+//  Step 2 ships the geometry; step 4 wires the result into speech ("Two meters ahead, door").
 //
 //  Threading / isolation: a `nonisolated` caseless enum of static, stateless functions. The only
 //  caller is `DepthFrameProcessor.session(_:didUpdate:)` on the depth queue, so the `ARFrame` and

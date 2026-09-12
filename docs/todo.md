@@ -315,6 +315,28 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Experiments, off by default: front camera head direction; microphone sound alerts (sirens, horns)
 - [ ] Muse + Antigravity + Claude workflow review of all of the above; fix or reject with evidence
 - [ ] Install on the phone, verify each item from the trip log, push
+- [ ] **Action Button opens OpenCane and listens (Step 29).** Needs `cd ios && make run` from a
+      normal terminal first (the reinstall re-indexes shortcuts), then Settings → Action Button →
+      Shortcut → Talk to OpenCane. If it is missing: open the Shortcuts app once, retry, restart
+      last. Press → tick → "how is my battery" → press again → answer. Trip log must show
+      `voice_toggle {source: actionButton}`.
+- [ ] **Distance-first warnings on the phone (Step 29).** Walk past a doorway: "N meters ahead,
+      door" — never "door ahead, N meters". Same order for people, drop-offs, approach cues.
+- [ ] **Speech governor calm on a real walk.** `speech_suppressed` events in the trip log for
+      mesh names only; route, head-height, ground-hazard and directional fallback lines never
+      suppressed. Tune the 7 s gap only after measuring with a blind/O&M-trained tester.
+- [ ] **Voice hold on the phone (Step 30).** Start a route, press Talk mid-guidance, keep
+      talking: no route/obstacle line over the dictation; `.safety` still breaks through;
+      after stopping, the answer speaks first, then at most one still-valid held line.
+- [ ] **Blindfold walk to Grainger/Siebel (Step 31).** Reinstall FIRST (`make run` — Steps
+      29–33 are not on the phone yet). Phrases: "Talk to OpenCane → set location to Sift"
+      or "take me to Granger Library". Expect: fast system-voice answer, exit-first clause
+      if GPS is weak indoors, distance-first warnings en route. Sighted guide present,
+      cane on. Trip log must show `voice_toggle`, `conv_turn` latencies, no `field_kind`.
+- [ ] **Flashlight + both cameras (Step 32).** Dark room: Flashlight on/off + spoken
+      confirmation; on during a route (allowed); on inside Both cameras mode; trip log
+      `torch {active:true}` in all three. Both-cameras refusal line while guiding is
+      correct behavior, not a bug.
 - [ ] Outdoor walk ISR → CIF (stress plan W1/W2) — needs Aarav, Sagar and daylight
 
 ### Hardware tonight (Sagar, Windows machine)

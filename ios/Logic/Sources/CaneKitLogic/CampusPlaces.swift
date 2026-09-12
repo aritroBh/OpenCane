@@ -77,8 +77,10 @@ public enum CampusPlaces {
         CampusPlace(id: "grainger", name: "Grainger Engineering Library",
                     // OSM entrance node 5296014632, Springfield Avenue side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1125612, longitude: -88.2272830),
+                    // "Granger" is the common speech-recognition mishearing of "Grainger".
                     aliases: ["Grainger", "Grainger Library", "Grainger Engineering Library",
-                              "Grainger Engineering Library Information Center"]),
+                              "Grainger Engineering Library Information Center",
+                              "Granger", "Granger Library"]),
         CampusPlace(id: "illiniUnion", name: "the Illini Union",
                     // OSM entrance node 5399191831 (entrance=main), Green Street side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1098522, longitude: -88.2272312),
@@ -86,8 +88,10 @@ public enum CampusPlaces {
         CampusPlace(id: "siebel", name: "the Siebel Center",
                     // OSM entrance node 5427072676 (entrance=main), Goodwin Avenue side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1141046, longitude: -88.2243039),
+                    // "Sift" is the common speech-recognition mishearing of "Siebel".
                     aliases: ["Siebel", "Siebel Center", "Siebel Center for Computer Science",
-                              "Thomas Siebel Center", "Thomas M Siebel Center for Computer Science"]),
+                              "Thomas Siebel Center", "Thomas M Siebel Center for Computer Science",
+                              "Sift", "Sift Center"]),
         CampusPlace(id: "mainLibrary", name: "the Main Library",
                     // OSM entrance node 12981484012, Gregory Drive side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1043031, longitude: -88.2287797),
@@ -185,11 +189,23 @@ public enum DestinationPicker {
 /// The confirmation spoken before a MapKit route starts, so a wrong pick can be stopped.
 /// Pinned by `walkingIntroSaysThePlaceAndARoundedDistance`.
 public enum WalkingIntro {
+    /// GPS horizontal accuracy (m) worse than this means the fix was probably taken indoors,
+    /// so the route's first steps are meaningless until the walker is outside. Pinned by
+    /// `weakGpsAddsAnExitFirstClause`.
+    public static let weakAccuracyM = 25.0
+
     /// "Walking to <place>, <distance>." — or "Walking to <place>." when the distance is unknown.
-    /// Called by `AppModel.buildRoute` with `PlannedRoute.placeName` / `walkingMeters`.
-    public static func line(place: String, meters: Double) -> String {
+    /// With a weak fix, appends an exit-first clause: MapKit's first steps from a bad fix point
+    /// nowhere real, and a blind walker starting inside needs the building exit before any turn.
+    /// Worded conditionally — weak GPS also happens in urban canyons, not only indoors.
+    /// Called by `AppModel.buildRoute` with `PlannedRoute.placeName` / `walkingMeters` /
+    /// the fix accuracy.
+    public static func line(place: String, meters: Double, accuracyM: Double? = nil) -> String {
         guard let d = distancePhrase(meters) else { return "Walking to \(place)." }
-        return "Walking to \(place), \(d)."
+        guard let accuracy = accuracyM, accuracy.isFinite, accuracy > weakAccuracyM else {
+            return "Walking to \(place), \(d)."
+        }
+        return "Walking to \(place), \(d). GPS is weak. If you are inside, head for the exit first."
     }
 
     /// Nearest 10 m below a kilometre (at least "10 meters", never "0"), tenths of a kilometre

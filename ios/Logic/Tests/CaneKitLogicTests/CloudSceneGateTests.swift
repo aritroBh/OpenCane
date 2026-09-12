@@ -26,7 +26,7 @@ import Testing
 @testable import CaneKitLogic
 
 /// LiDAR line as `AppModel.contextLine` writes it, for the tests that need a real distance fact.
-private let lidar14 = "Obstacle ahead at 1.4 meters."
+private let lidar14 = "1.4 meters ahead, obstacle."
 
 // MARK: Rule a — counts
 
@@ -61,7 +61,7 @@ private let lidar14 = "Obstacle ahead at 1.4 meters."
     // Grounded: the number the depth sensor gave may be repeated.
     #expect(CloudSceneGate.sanitized("A bench 1.4 meters ahead.", lidar: lidar14, ocr: [], detectedNouns: ["a bench"])
             == "A bench 1.4 meters ahead.")
-    #expect(CloudSceneGate.sanitized("A door two meters ahead.", lidar: "Obstacle ahead at two meters.",
+    #expect(CloudSceneGate.sanitized("A door two meters ahead.", lidar: "Two meters ahead, obstacle.",
                                      ocr: [], detectedNouns: ["a door"]) == "A door two meters ahead.")
     // Feet are a distance too, and never what the LiDAR fact says.
     #expect(CloudSceneGate.sanitized("Curb about 6 feet ahead.", lidar: lidar14, ocr: [], detectedNouns: []) == nil)
@@ -213,7 +213,9 @@ private let lidar14 = "Obstacle ahead at 1.4 meters."
 /// `SceneVocabulary.numbersAreGrounded` is the one predicate both paths use, so a number can never
 /// be legal on the cloud path and illegal on the on-device path.
 @Test func groundedNumbersPredicateIsShared() {
-    #expect(SceneVocabulary.numbersAreGrounded("two meters ahead", in: "Obstacle ahead at two meters."))
+    #expect(SceneVocabulary.numbersAreGrounded("two meters ahead", in: "Two meters ahead, obstacle."))
+    // Order-free both ways: an old-order LiDAR fact still grounds the same number.
+    #expect(SceneVocabulary.numbersAreGrounded("Two meters ahead, door.", in: "Obstacle ahead at two meters."))
     #expect(SceneVocabulary.numbersAreGrounded("a bench ahead", in: ""))
-    #expect(!SceneVocabulary.numbersAreGrounded("three meters ahead", in: "Obstacle ahead at 1.4 meters."))
+    #expect(!SceneVocabulary.numbersAreGrounded("three meters ahead", in: "1.4 meters ahead, obstacle."))
 }

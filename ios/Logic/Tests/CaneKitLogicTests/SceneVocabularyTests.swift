@@ -59,6 +59,18 @@ import Testing
     #expect(SceneVocabulary.sentence(lounge) == "Ahead: a sofa and plants.")
 }
 
+/// A scene answer should give the walker the two highest-ranked useful nouns, not a truthful census
+/// of every classifier label. This catches a fallback/model-fact expansion that reintroduces the
+/// overload this feature is meant to remove.
+@Test func narrationKeepsOnlyTheTopTwoRankedNouns() {
+    let corner: [(name: String, confidence: Float)] = [
+        ("grass", 0.95), ("path", 0.94), ("crosswalk", 0.93), ("road", 0.92)
+    ]
+
+    #expect(SceneVocabulary.narrationNouns(corner) == ["a crosswalk", "a path"])
+    #expect(SceneVocabulary.sentence(corner, max: 2) == "Ahead: a crosswalk and a path.")
+}
+
 /// The on-device model's Street View answer "No hazards detected. Distance: 0 meters." names
 /// nothing and invents a number → rejected; a sentence naming a detected thing is accepted.
 @Test func modelSentencesMustBeFaithfulToTheFacts() {
@@ -67,7 +79,7 @@ import Testing
     #expect(!SceneVocabulary.isFaithful("No hazards detected. Distance: 0 meters.", facts: facts, nouns: nouns))
     #expect(SceneVocabulary.isFaithful("Street ahead with cars nearby.", facts: facts, nouns: nouns))
     #expect(!SceneVocabulary.isFaithful("Cars on the street, 3 meters ahead.", facts: facts, nouns: nouns))
-    let withDepth = "Depth sensor: Obstacle ahead at 2 meters.\nCamera sees: a door"
+    let withDepth = "Depth sensor: 2 meters ahead, obstacle.\nCamera sees: a door"
     #expect(SceneVocabulary.isFaithful("A door ahead, 2 meters away.", facts: withDepth, nouns: ["a door"]))
 }
 
@@ -89,23 +101,23 @@ import Testing
 
 /// Muse final review: spelled facts allow digits, synonyms count, prefixes do not.
 @Test func faithfulnessUnderstandsSynonymsAndSpelledNumbers() {
-    let facts = "Depth sensor: Obstacle ahead at two meters.\nCamera sees: the street, cars"
+    let facts = "Depth sensor: Two meters ahead, obstacle.\nCamera sees: the street, cars"
     let nouns = ["the street", "cars"]
     #expect(SceneVocabulary.isFaithful("Road ahead with a car, 2 meters away.", facts: facts, nouns: nouns))
     #expect(!SceneVocabulary.isFaithful("Cars on the street, three meters ahead.", facts: facts, nouns: nouns))
     #expect(!SceneVocabulary.isFaithful("Businesses line the block.", facts: "Camera sees: a bus", nouns: ["a bus"]))
     #expect(SceneVocabulary.isFaithful("A crossing is just ahead.", facts: "Camera sees: a crosswalk", nouns: ["a crosswalk"]))
     #expect(SceneVocabulary.isFaithful("Door ahead, one and a half meters.",
-                                       facts: "Obstacle ahead at one and a half meters. Camera sees: a door", nouns: ["a door"]))
+                                       facts: "One and a half meters ahead, obstacle. Camera sees: a door", nouns: ["a door"]))
 }
 
 /// Antigravity final review: "1.4" in the facts must not license an invented "4".
 @Test func decimalsInTheFactsStayWhole() {
-    let facts = "Depth sensor: Obstacle ahead at 1.4 meters.\nCamera sees: a door"
+    let facts = "Depth sensor: 1.4 meters ahead, obstacle.\nCamera sees: a door"
     #expect(!SceneVocabulary.isFaithful("A door ahead, 4 meters away.", facts: facts, nouns: ["a door"]))
     #expect(SceneVocabulary.isFaithful("A door ahead, 1.4 meters away.", facts: facts, nouns: ["a door"]))
     #expect(SceneVocabulary.isFaithful("A door, 1.5 meters ahead.",
-                                       facts: "Obstacle ahead at one and a half meters. Camera sees: a door", nouns: ["a door"]))
+                                       facts: "One and a half meters ahead, obstacle. Camera sees: a door", nouns: ["a door"]))
 }
 
 /// Muse review of 3efc0b1: nothing detected → the model is never trusted; teens are numbers too;
@@ -113,7 +125,7 @@ import Testing
 @Test func blankWallsTeensAndMisreadsAreHandled() {
     #expect(!SceneVocabulary.isFaithful("A door ahead.", facts: "Nothing detected.", nouns: []))
     #expect(!SceneVocabulary.isFaithful("The street runs thirteen meters ahead.",
-                                        facts: "Obstacle ahead at two meters. Camera sees: the street", nouns: ["the street"]))
+                                        facts: "Two meters ahead, obstacle. Camera sees: the street", nouns: ["the street"]))
     #expect(SceneVocabulary.readableTexts(["EX1T"]) == ["EX1T"])
     #expect(SceneVocabulary.readableTexts(["111", "{4J J"]).isEmpty)
 }
@@ -127,7 +139,7 @@ import Testing
     #expect(!SceneVocabulary.isFaithful("A crosswalk is ahead, then stairs, then a door, and finally trees.", facts: facts, nouns: nouns))
     #expect(!SceneVocabulary.isFaithful("Crosswalk, stairs, door, trees, grass.", facts: facts, nouns: nouns))
     #expect(!SceneVocabulary.isFaithful("A crosswalk, stairs, and a door are ahead; trees are further away.",
-                                        facts: "Depth sensor: Obstacle ahead at 1.4 meters.\nCamera sees: a path, trees, grass",
+                                        facts: "Depth sensor: 1.4 meters ahead, obstacle.\nCamera sees: a path, trees, grass",
                                         nouns: ["a path", "trees", "grass"]))
     #expect(SceneVocabulary.isFaithful("Trees and grass ahead.", facts: facts, nouns: nouns))
 }
@@ -148,9 +160,9 @@ import Testing
 @Test func factWordsAreAllowedAndDistanceIsANumber() {
     let facts = "Camera sees: the street\nVisible text: \"SIDEWALK CLOSED\""
     #expect(SceneVocabulary.isFaithful("The street ahead; a sign says sidewalk closed.", facts: facts, nouns: ["the street"]))
-    #expect(!SceneVocabulary.mentionsDistance("Parking meters line the street.", from: "Obstacle ahead at 1.4 meters."))
-    #expect(SceneVocabulary.mentionsDistance("A pole ahead, 1.4 meters away.", from: "Obstacle ahead at 1.4 meters."))
-    #expect(SceneVocabulary.mentionsDistance("A pole two meters ahead.", from: "Obstacle ahead at two meters."))
+    #expect(!SceneVocabulary.mentionsDistance("Parking meters line the street.", from: "1.4 meters ahead, obstacle."))
+    #expect(SceneVocabulary.mentionsDistance("A pole ahead, 1.4 meters away.", from: "1.4 meters ahead, obstacle."))
+    #expect(SceneVocabulary.mentionsDistance("A pole two meters ahead.", from: "Two meters ahead, obstacle."))
 }
 
 /// Hazard words outside the object vocabulary ("cone", "barrier", "trench") also count as invented

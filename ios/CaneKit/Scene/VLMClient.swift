@@ -24,7 +24,7 @@ import Foundation
 
 /// Which kind of model wrote a scene sentence. `SceneDescriber` must know, because a cloud
 /// sentence has to pass `CloudSceneGate` while an on-device sentence was already vetted by
-/// `SceneVocabulary.isFaithful` and is two sentences by design ("Obstacle ahead at 1.4 meters.
+/// `SceneVocabulary.isFaithful` and is two sentences by design ("1.4 meters ahead, obstacle.
 /// Ahead: a crosswalk …"), which the gate's one-sentence cap would chop in half.
 nonisolated enum VLMAnswerSource: Sendable {
     /// A cloud provider (Gemini / Anthropic / OpenAI / custom) wrote it: gate it.

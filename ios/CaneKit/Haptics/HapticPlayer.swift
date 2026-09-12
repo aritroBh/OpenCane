@@ -128,11 +128,15 @@ final class HapticPlayer {
                 let e = try CHHapticEngine(audioSession: nil)
                 e.playsHapticsOnly = true
                 e.isAutoShutdownEnabled = false
-                e.resetHandler = { [weak self] in
+                // ⚠ Both handlers must stay `@Sendable`: `CHHapticEngineResetHandler` /
+                // `StoppedHandler` are not `NS_SWIFT_SENDABLE` and CHHapticEngine.h says
+                // "callbacks arrive on a non-main thread"; without it they would be inferred
+                // `@MainActor` (the isolation trap behind the 2026-09-11 pedometer crash).
+                e.resetHandler = { @Sendable [weak self] in
                     // Media server reset: the engine must be restarted and players rebuilt.
                     Task { @MainActor [weak self] in self?.rebuildAfterReset() }
                 }
-                e.stoppedHandler = { [weak self] reason in
+                e.stoppedHandler = { @Sendable [weak self] reason in
                     let code = reason.rawValue
                     Task { @MainActor [weak self] in self?.engineStopped(reasonCode: code) }
                 }

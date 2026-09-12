@@ -7,9 +7,10 @@
 //  OpenCane", "Next waypoint in OpenCane", "Stop the route in OpenCane".
 //
 //  Purpose: seven App Intents — Where am I / Start route to CIF / Navigate to CIF from here /
-//  Take me to <place> / Repeat / Next waypoint / Stop route — plus their
-//  `AppShortcutsProvider`. Each intent only forwards to a public `AppModel` method, so Siri,
-//  the Action button, the watch and the on-screen buttons share one code path.
+//  Take me to <place> / Repeat / Next waypoint / Stop route — plus the `AppShortcutsProvider`
+//  they share with the hands-free intents (`HandsFreeIntents.swift`). Each intent only forwards
+//  to a public `AppModel` method, so Siri, the Action button, the watch and the on-screen
+//  buttons share one code path.
 //
 //  Owner: module `app-core` (docs/CODE_REFERENCE.md). The system instantiates the intents; they
 //  reach the live model through `AppModel.shared` (intents run inside the app process).
@@ -22,7 +23,8 @@
 //      warnings, "Where am I") only runs while the app is frontmost, and guidance without the
 //      obstacle channel must never start silently in the background.
 //    · Every shortcut phrase must contain `\(.applicationName)` (App Shortcuts requirement), and
-//      an app may register at most 10 App Shortcuts (this file registers 7).
+//      an app may register at most 10 App Shortcuts (this file registers 6; the other 4 are the
+//      hands-free ones in `HandsFreeIntents.swift`).
 //    · ⚠ `\(.applicationName)` is resolved by the system from the bundle's **display name**
 //      (`CFBundleDisplayName`, set in `ios/project.yml` → OpenCane), never from the target or
 //      module name. That is why the phrases below need no edit when the product is renamed:
@@ -80,6 +82,13 @@ struct StartDemoRouteIntent: AppIntent {
 
 /// Siri "Navigate to CIF from here": Apple Maps walking directions from the live GPS fix to the
 /// CIF east entrance (`AppModel.navigateToCIFFromHere()`), for when the walker is not at ISR.
+///
+/// ⚠ Plain `AppIntent`, not an App Shortcut: the ten shortcut slots are full and the Action
+/// button needed "Talk to OpenCane" more (see `CaneKitShortcuts`). Still in the Shortcuts app
+/// as an action (a one-step shortcut around it goes on the Action button), and the Guide card
+/// button is unchanged. The Siri phrase for the same destination is now "Take me to CIF in
+/// OpenCane" (`TakeMeToIntent` + the gazetteer, whose CIF entry is this same route-file
+/// waypoint) — say that instead.
 struct NavigateToCIFIntent: AppIntent {
     /// Shown in Shortcuts.
     static let title: LocalizedStringResource = "Navigate to CIF from here"
@@ -251,15 +260,17 @@ enum IntentSupport {
 }
 
 /// Registered at install; phrases must include the app name. **All ten** App Shortcuts an app may
-/// have: the seven route shortcuts defined above, plus three hands-free ones whose intents live in
-/// `HandsFreeIntents.swift`. `shortTitle` / `systemImageName` are what the Action button and
-/// Spotlight show. Phrases are short and start with the verb a walker would say; no two shortcuts
-/// share one.
+/// have: the six route shortcuts defined above, plus four hands-free ones whose intents live in
+/// `HandsFreeIntents.swift` — the fourth, "Talk to OpenCane", is the Action button target.
+/// `shortTitle` / `systemImageName` are what the Action button and Spotlight show. Phrases are
+/// short and start with the verb a walker would say; no two shortcuts share one.
 ///
 /// ⚠ This list is **full**. Anything new must either be a plain `AppIntent` — still listed as an
 /// action in the Shortcuts app, and assignable to the Action button by building a one-step shortcut
-/// around it — or replace one of these ten. `RecenterIntent` and `SetOptionIntent` in
-/// `HandsFreeIntents.swift` are the worked examples of the first choice.
+/// around it — or replace one of these ten. `RecenterIntent`, `SetOptionIntent` and (since the
+/// Talk-to-OpenCane swap) `NavigateToCIFIntent` are the worked examples of the first choice: the
+/// Guide card button for the last one is unchanged, and "Take me to CIF in OpenCane" reaches the
+/// same route-file waypoint by Siri.
 struct CaneKitShortcuts: AppShortcutsProvider {
     /// The ten shortcuts, in display order.
     static var appShortcuts: [AppShortcut] {
@@ -275,12 +286,12 @@ struct CaneKitShortcuts: AppShortcutsProvider {
                               "Take me somewhere with \(.applicationName)"],
                     shortTitle: "Take me to…",
                     systemImageName: "mappin.and.ellipse")
-        AppShortcut(intent: NavigateToCIFIntent(),
-                    phrases: ["Navigate to CIF from here in \(.applicationName)",
-                              "Navigate to CIF from here with \(.applicationName)",
-                              "\(.applicationName) navigate to CIF from here"],
-                    shortTitle: "CIF from here",
-                    systemImageName: "location.north.circle")
+        AppShortcut(intent: TalkToOpenCaneIntent(),
+                    phrases: ["Talk to \(.applicationName)",
+                              "Speak to \(.applicationName)",
+                              "\(.applicationName) start listening"],
+                    shortTitle: "Talk to OpenCane",
+                    systemImageName: "mic")
         AppShortcut(intent: StartDemoRouteIntent(),
                     phrases: ["Start my route in \(.applicationName)",
                               "Start the demo route in \(.applicationName)",
@@ -302,9 +313,9 @@ struct CaneKitShortcuts: AppShortcutsProvider {
                               "Stop navigating in \(.applicationName)"],
                     shortTitle: "Stop route",
                     systemImageName: "stop.fill")
-        // The three hands-free shortcuts (HandsFreeIntents.swift), which take this list to the
-        // limit of ten. Why these three and not Recenter or the hazard switches: see that file's
-        // header.
+        // The other three hands-free shortcuts (HandsFreeIntents.swift), which take this list
+        // to the limit of ten. Why these four and not Recenter, the hazard switches or (now) the
+        // CIF-from-here route shortcut: see that file's header.
         AppShortcut(intent: StatusIntent(),
                     phrases: ["How is \(.applicationName) doing",
                               "\(.applicationName) status",

@@ -268,7 +268,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         if s.groundHazardsEnabled {
             trackWalk(frame)
             // Only with a mount-like camera aim (MountTilt.groundUsable, 0-15 deg down): hand-held
-            // at a desk it called desk edges "Hole ahead" (first real-phone test).
+            // at a desk it called desk edges a hole (first real-phone test).
             if ω < s.groundSweepThreshold, now - lastGroundEval >= 0.1,
                MountTilt.groundUsable(downDeg: tiltDownDeg ?? 90) {
                 lastGroundEval = now

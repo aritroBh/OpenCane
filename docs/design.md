@@ -83,7 +83,7 @@ Rules:
 - Dynamic Type: every text uses a text style. The only clamp is the hero (80 pt). `CKBigButton` restacks icon over label at accessibility sizes (`ViewThatFits`) and grows; it never truncates. Tile metres use `minimumScaleFactor(0.5)`, pills 0.8.
 - Line height: default. Never tighten. Never letter-space lowercase text.
 - Units on screen: a plain space between number and unit. Tiles `"%.1f m"` below 4.5 m, otherwise the word "clear" (∞ is never drawn); hero integer metres; trip distance `"N m"` below 950 m, `"N.N km"` from 950 m; Live Activity `"N m"` / `"N.N km"` from 1000 m; watch title `"N m"`.
-- Units spoken: US spelling, words not symbols: "meters", "kilometers", "Ahead, one and a half meters." (`SpokenDistance.phrase` rounds to half metres: "very close", "half a meter", "one meter", …).
+- Units spoken: US spelling, words not symbols: "meters", "kilometers", "One and a half meters ahead." (`SpokenDistance.phrase` rounds to half metres: "very close", "half a meter", "one meter", …). Warning lines are distance-first: the time-to-contact ("Two meters ahead") comes before the identity ("door").
 
 ---
 
@@ -186,13 +186,15 @@ Motion never carries information. The app owns two animations, and both honour R
 |---|---|---|
 | Depth grid update (30 Hz) | **None.** Fill, word and number change instantly. | Same |
 | Big button press (`CKBigButtonStyle`, also Go and the test buttons) | Scale 0.97 on a 0.12 s spring; `.sensoryFeedback(.impact(weight: .light))` on release | Opacity 0.85 only; haptic kept |
-| Root tab switch (`CKTabBar` + `ContentView` page) | Page **cross-fades** over 0.2 s (`.transition(.opacity)`); the accent capsule slides between icons (`matchedGeometryEffect`, 0.32 s spring); `.sensoryFeedback(.selection)` | Instant page swap; capsule jumps; selection haptic kept |
+| Root tab switch (`CKTabBar` + `ContentView` page) | Incoming page **fades in** over 0.16 s (`.transition(.asymmetric(insertion: .opacity, removal: .identity))`); the accent capsule slides between icons (`matchedGeometryEffect`, 0.16 s spring) so pill and page land together; `.sensoryFeedback(.selection)` | Instant page swap; capsule jumps; selection haptic kept |
 | Everything else (pills, distance, instruction, cards appearing) | Instant | Instant |
 
 Never animate layout of the grid. Never animate colour of a lane tile (a fade through orange
 lies about the distance for 150 ms). Tab motion is chrome only: it does not encode a distance
 or a hazard. **Pages never slide sideways** — a horizontal slide implies travel through an
-ordered set, and it read as "going forward" even when moving back left. Cross-fade only.
+ordered set, and it read as "going forward" even when moving back left. Fade-in only — never
+a symmetric cross-fade: keeping both pages alive inside the animation dropped frames on device
+(two ScrollViews plus Sense's SceneKit preview teardown/setup composing at once).
 
 **Not built** (original spec, deliberately dropped): urgent-tile 2 Hz pulse and 4 pt border, 150 ms pill
 cross-fade, `.numericText()` distance transition, sliding obstacle banner, arrival sheet.
@@ -211,9 +213,9 @@ and `HazardScanner` (signs, hazard watch). All speech goes through `SpeechQueue`
 
 | Priority | What speaks at it (literal lines from the code) | TTL while queued |
 |---|---|---|
-| `.safety` (3, top) | "Head height."; LiDAR ground hazards "Drop-off ahead, two meters." / "Hole ahead, …" / "Step up ahead, …" / "Low obstacle ahead, …"; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane." | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure |
+| `.safety` (3, top) | "Head height."; LiDAR ground hazards "Two meters ahead, drop-off." / "… hole." / "… step up." / "… low obstacle."; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane." | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure |
 | `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "Route start canceled."; "No route running."; "OpenCane ready."; "Obstacle detection warming up. Route will start when it is ready."; "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 10 s "Phone is hot…", 8 s warm-up/default |
-| `.obstacle` (1) | Mesh names "door ahead, two meters" (door / wall / seat / window / table); "Left." / "Right." / "Ahead, one meter." when the phone cannot buzz; signs "Sign: sidewalk closed."; hazard watch "Caution: cones ahead, 3 meters." | 4 s names, 6 s cue, sign and caution lines |
+| `.obstacle` (1) | Mesh names "Two meters ahead, door" (door / wall / seat / window / table); "Left." / "Right." / "One meter ahead." when the phone cannot buzz; signs "Sign: sidewalk closed."; hazard watch "Caution: 3 meters ahead, cones." | 4 s names, 6 s cue, sign and caution lines |
 | `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed." | 3 s "Describing.", 20 s description, 8 s default |
 
 Rules (all in `SpeechQueue`):
@@ -237,13 +239,13 @@ once per second while it stays active.
 | Cue | Trigger | Felt (`HapticPlayer`) | Heard (`CueSpeechPolicy`, `.obstacle` unless noted) | Shown (phone) | Wrist (mirror) |
 |---|---|---|---|---|---|
 | `clear` | nothing in range | Nothing; any loop stops | Nothing | Tiles CLEAR; Haptics card cue pill CLEAR (neutral) | — |
-| `centerApproach(d)` | torso-centre lane < 2.0 m | Geiger loop: one transient (sharpness 0.6) repeated at 4 / d Hz, clamped 2 Hz @ 2 m → 8 Hz @ 0.5 m; intensity 0.6 @ 2 m → 1.0 @ 0.5 m | Only when the phone cannot buzz: "Ahead, <distance>." at most every 4 s | Torso-centre tile; cue pill CENTER (warning) | `.click` |
+| `centerApproach(d)` | torso-centre lane < 2.0 m | Geiger loop: one transient (sharpness 0.6) repeated at 4 / d Hz, clamped 2 Hz @ 2 m → 8 Hz @ 0.5 m; intensity 0.6 @ 2 m → 1.0 @ 0.5 m | Only when the phone cannot buzz: "<distance> ahead." at most every 4 s | Torso-centre tile; cue pill CENTER (warning) | `.click` |
 | `left` | torso-left lane < 1.2 m | 2 transients 120 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Left." at most every 4 s | Torso-left tile; cue pill LEFT | `.start` |
 | `right` | torso-right lane < 1.2 m | 3 transients 100 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Right." at most every 4 s | Torso-right tile; cue pill RIGHT | `.stop` |
 | `head` | any head-row lane < 1.5 m | 2 transients 80 ms apart, intensity 1.0, sharpness 1.0; re-fires every second while the obstacle stays — **never suppressed** | Spoken even when the phone can buzz: "Head height." at `.safety`, once per obstacle episode (a new episode starts after the cue clears or another cue is spoken), no more than one per 4 s | Head-row tile; cue pill HEAD | `.failure` (reserved for head height) |
-| Mesh name | door / seat / window / table < 3 m, wall < 1.5 m at the image centre (indoors; off when thermal ≥ serious) | — | "door ahead, two meters": on a class change or ≥ 1 m of movement, at most every 2.5 s; "Speak obstacle names" toggle (on by default) | — | — |
-| Ground hazard (not `CueDecider`: `GroundHazardDetector`, "Detect drop-offs" toggle, off by default) | drop-off / hole / step up / low obstacle in a 0.9 m wide corridor 1.5–3.5 m ahead: an edge against the near-field ground, confirmed on 3 of the last 5 trusted frames | 4 heavy taps 70 ms apart (intensity 1.0, sharpness 0.3), `playGroundHazard` | Always spoken, `.safety`: "Drop-off ahead, two meters." (`GroundHazardPolicy`: the same hazard in the same place, e.g. a curb you stand at, is said once, then at most every 30 s, and again once it is 1 m closer) | Hazards card LIDAR row; hazard map entry | `.click` when the phone cannot buzz or the mirror toggle is on |
-| Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (each sign at most once a minute); "Caution: cones ahead, 3 meters." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
+| Mesh name | door / seat / window / table < 3 m, wall < 1.5 m at the image centre (indoors; off when thermal ≥ serious) | — | "Two meters ahead, door": on a class change or ≥ 1 m of movement, at most every 2.5 s, then at most one every 7 s while the queue is free (`SpeechLoadPolicy`); "Speak obstacle names" toggle (on by default) | — | — |
+| Ground hazard (not `CueDecider`: `GroundHazardDetector`, "Detect drop-offs" toggle, off by default) | drop-off / hole / step up / low obstacle in a 0.9 m wide corridor 1.5–3.5 m ahead: an edge against the near-field ground, confirmed on 3 of the last 5 trusted frames | 4 heavy taps 70 ms apart (intensity 1.0, sharpness 0.3), `playGroundHazard` | Always spoken, `.safety`: "Two meters ahead, drop-off." (`GroundHazardPolicy`: the same hazard in the same place, e.g. a curb you stand at, is said once, then at most every 30 s, and again once it is 1 m closer) | Hazards card LIDAR row; hazard map entry | `.click` when the phone cannot buzz or the mirror toggle is on |
+| Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (each sign at most once a minute); "Caution: 3 meters ahead, cones." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
 | Sweeping | \|ω\| ≥ 0.6 rad/s | No new cue and no stop: the decider freezes, so a running centre loop keeps its last rate until the next trusted frame | Nothing | Obstacles pill SWEEPING (warning, spoken "Sweeping, warnings paused"); tiles keep drawing the latest values | — |
 | No depth | before the first depth frame / no LiDAR | Nothing | Nothing (at launch: "OpenCane. This phone has no LiDAR." on a non-LiDAR phone) | Tiles "—" / NO DATA; status card "Waiting for depth…" / "No LiDAR / sceneDepth on this device" | — |
 
@@ -481,10 +483,13 @@ An empty field shows "Type a destination first"; with Location off for OpenCane 
 fix yet. Try again outside."; nothing within 3 km: "Could not find "…" within walking distance".
 
 Every control here is also a Siri phrase, because the walker this card is for cannot see it
-(`AppIntents.swift`): "Start route to CIF / Navigate to CIF from here / Take me to Grainger / Take me
+(`AppIntents.swift`): "Start route to CIF / Take me to Grainger / Take me
 somewhere / Repeat the last instruction / Next waypoint / Stop the route **in OpenCane**", plus "Where am I
-in OpenCane". Seven of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
+in OpenCane" and "Talk to OpenCane". Six of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
 obstacle warnings only run with the app frontmost, so guidance must never start in the background.
+("Navigate to CIF from here" stays a Guide card button and a Shortcuts-app action, but its Siri
+phrase moved to "Take me to CIF in OpenCane" — same route-file waypoint via the gazetteer — when
+its shortcut slot went to "Talk to OpenCane" for the Action button.)
 App Shortcut phrases can only interpolate an `AppEnum`/`AppEntity`, so the phrase form carries the seven
 gazetteer places (`CampusDestination`); any other place goes through "Take me somewhere in OpenCane" and
 Siri asks "Where do you want to go?" for the free text.

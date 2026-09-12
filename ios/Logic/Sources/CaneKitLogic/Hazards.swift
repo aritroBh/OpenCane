@@ -55,6 +55,18 @@ public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable
         case .lowObstacle: return "Low obstacle ahead"
         }
     }
+
+    /// The bare noun for the distance-first line ("Two meters ahead, drop-off."). `spoken`
+    /// above stays the legacy object-first shape for the direction-only fallback; this is the
+    /// word that follows the distance in `GroundHazard.spokenLine`.
+    public var shortNoun: String {
+        switch self {
+        case .dropOff: return "drop-off"
+        case .pothole: return "hole"
+        case .stepUp: return "step up"
+        case .lowObstacle: return "low obstacle"
+        }
+    }
 }
 
 public struct GroundHazard: Sendable, Equatable {
@@ -74,8 +86,15 @@ public struct GroundHazard: Sendable, Equatable {
         self.anchor = anchor ?? distance
     }
 
-    /// "Drop-off ahead, two meters."
-    public var spokenLine: String { "\(kind.spoken), \(SpokenDistance.phrase(distance))." }
+    /// "Two meters ahead, drop-off." Distance first, hazard second: same reason as
+    /// `SpokenPhrases.obstacleLine` — the walker brakes on the number, then learns what for.
+    /// A non-finite distance (unreachable from the detector, which only reports bin starts)
+    /// falls back to the direction-only kind line rather than speaking an empty number.
+    public var spokenLine: String {
+        let phrase = SpokenDistance.phrase(distance)
+        guard !phrase.isEmpty else { return "\(kind.spoken)." }
+        return "\(SpokenDistance.leadingCapitalized(phrase)) ahead, \(kind.shortNoun)."
+    }
 }
 
 /// Finds ground hazards in one frame's samples, then confirms them over several frames.
@@ -414,13 +433,18 @@ public struct SignPolicy: Sendable, Equatable {
 
 /// The periodic vision-model check: when to ask, what to ask, and what to say.
 public enum HazardPrompt {
-    /// Asks for path hazards only, in a fixed short format, with an explicit "NONE".
+    /// Asks for path hazards only, in a fixed short format, with an explicit "NONE". The reply
+    /// is requested distance-first ("3 meters ahead, cones"): the app's own warning lines lead
+    /// with the number, and a free-text VLM reply should match so the walker hears one order.
+    /// `HazardWatchPolicy.line` does not reorder — it wraps the first sentence as written — so
+    /// the ordering contract lives here, in the prompt.
     public static let text = """
     You are the eyes of a blind pedestrian walking forward. Look only at the walking path in the \
     next 5 meters. If there is a hazard a cane might miss or that is not on a map (construction, \
     cones, barrier, open trench, pothole, scooter or bike on the sidewalk, low branch, pole, \
-    parked car on the path, stairs), reply with ONE short phrase under 8 words naming it and \
-    where (left, ahead, right) and roughly how far in meters. Otherwise reply exactly NONE.
+    parked car on the path, stairs), reply with ONE short phrase under 8 words naming the \
+    distance FIRST in meters, then the hazard and where (for example: "3 meters ahead, cones"). \
+    Otherwise reply exactly NONE.
     """
 }
 
@@ -434,6 +458,14 @@ public struct HazardWatchPolicy: Sendable, Equatable {
     public var repeatWindow: TimeInterval = 30
     private var lastAsk: TimeInterval = -.infinity
     private var recent: [(words: Set<String>, distance: Double?, time: TimeInterval)] = []
+
+    /// Path-hazard words the cloud watch is allowed to turn into an advisory caution. A VLM can
+    /// still be wrong about a listed word, but an arbitrary object is not a hazard signal at all.
+    private static let allowedHazardWords: Set<String> = Set([
+        "cone", "barrier", "barricade", "trench", "pothole", "hole", "curb", "construction",
+        "branch", "bike", "bicycle", "scooter", "pole", "stairs", "step", "fence", "snow",
+        "ice", "debris", "obstacle", "bench", "trash", "car", "vehicle", "motorcycle", "low",
+    ].map { SceneVocabulary.stem($0) })
 
     public init() {}
 
@@ -458,8 +490,15 @@ public struct HazardWatchPolicy: Sendable, Equatable {
         var text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'*`"))
         if text.isEmpty || text.uppercased().hasPrefix("NONE") { return nil }
+        // A hazard-watch reply is advisory and cannot clear a path. Reuse the same refusal table
+        // as the scene gate so "The path is clear" never becomes the misleading line
+        // "Caution: The path is clear." (pinned by `hazardWatchReassuranceIsRejected`).
+        if CloudSceneGate.reassurance(in: text) != nil { return nil }
         // First sentence: stop at . ! ? or a newline — but not at a decimal point ("2.5 meters").
         if let r = text.range(of: #"[.!?](\s|$)|\n"#, options: .regularExpression) { text = String(text[..<r.lowerBound]) }
+        guard SceneVocabulary.tokens(text).contains(where: {
+            Self.allowedHazardWords.contains(SceneVocabulary.stem($0))
+        }) else { return nil }
         let words = text.split(separator: " ").prefix(12)
         guard !words.isEmpty else { return nil }
         text = words.joined(separator: " ")

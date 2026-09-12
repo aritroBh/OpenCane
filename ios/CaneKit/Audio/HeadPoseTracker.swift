@@ -14,10 +14,17 @@
 //  AppModel feeds the beacon a head yaw of 0 (the stale reference would double-count a turn).
 //  The first sample after `start()` also seeds the reference.
 //
+//  Nod to talk (Step 3 of the nod plan): the same motion stream's *pitch* feeds a CaneKitLogic
+//  `HeadNodDetector`; a double nod calls `onDoubleNod`, which AppModel turns into
+//  `startVoiceInput()` behind the off-by-default "Nod to talk" option. Pitch is absolute in Core
+//  Motion's frame (no reference needed: the detector looks at excursions, not at a level), and the
+//  detector is reset in `start()` / `stop()` so a nod half-made before a route cannot pair with one
+//  made after. The numbers live in `HeadNodDetector` (⚠ untuned placeholders; HeadNodDetectorTests).
+//
 //  Threading / isolation: `@MainActor`. Motion samples are delivered with
 //  `startDeviceMotionUpdates(to: .main)`, so the handler provably runs on the main queue and
-//  `MainActor.assumeIsolated` is legal (hard rule 1); only Sendable values (`Double` yaw,
-//  `String` error) are extracted before entering it. Connect/disconnect arrive through the
+//  `MainActor.assumeIsolated` is legal (hard rule 1); only Sendable values (`Double` yaw, pitch
+//  and timestamp, `String` error) are extracted before entering it. Connect/disconnect arrive through the
 //  `CMHeadphoneMotionManagerDelegate` on an unspecified thread, so they go through the
 //  `nonisolated` `ConnectionRelay`, which hops with `Task { @MainActor in … }`.
 //
@@ -25,6 +32,7 @@
 //  audio session. Requires `NSMotionUsageDescription` (the prompt appears at route start).
 //
 
+import CaneKitLogic
 import CoreMotion
 import Foundation
 import Observation
@@ -38,6 +46,17 @@ final class HeadPoseTracker {
     /// Degrees, positive = head turned to the right of the recentred direction. nil = no AirPods data.
     /// Range (−180, 180]. Read by AppModel's 10 Hz ticker into `BeaconEngine.setHeadYaw`.
     private(set) var headYawDeg: Double?
+    /// Latest head pitch, degrees, straight from `CMAttitude.pitch` (Core Motion's frame, sign
+    /// unmeasured on AirPods — see the ponytail note in `HeadNodDetector`). nil = no AirPods data.
+    /// Written for the trip log (`head_nod` events) so the nod thresholds can be re-measured from
+    /// real walks; not used for the beacon.
+    private(set) var pitchDeg: Double?
+    /// Fired once per double nod (`HeadNodDetector.update` returned true), on the main actor.
+    /// `AppModel` installs it and, when "Nod to talk" is on, starts voice input. Only fires while
+    /// motion is `active`, i.e. while a route is running.
+    /// ⚠ Gesture pinned by HeadNodDetectorTests (`doubleNodFiresOnceOnTheSecondNod`,
+    /// `walkingSwayIsSilent`, `refractoryHoldsAfterAFire`, …).
+    var onDoubleNod: (() -> Void)?
     /// AirPods motion is flowing (a sample arrived, or the delegate reported connect). Gates
     /// auto-recenter and the "Head tracked" pill; false after disconnect or `stop()`.
     private(set) var isConnected = false
@@ -57,6 +76,10 @@ final class HeadPoseTracker {
     @ObservationIgnored private var referenceYaw: Double?
     /// Samples already queued on main when `stop()` runs must not re-seed the reference.
     @ObservationIgnored private var active = false
+    /// The double-nod state machine (CaneKitLogic). Fed every motion sample's pitch with the
+    /// sample's own `timestamp` (seconds since boot, monotonic — the detector only needs one
+    /// consistent clock). Reset in `start()` and `stop()`.
+    @ObservationIgnored private var nod = HeadNodDetector()
 
     init() {}
 
@@ -68,6 +91,7 @@ final class HeadPoseTracker {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
         active = true
         referenceYaw = nil
+        nod.reset()                 // a half-made nod from before the route must not pair up
         relay.onConnect = { [weak self] connected in
             Task { @MainActor [weak self] in
                 self?.isConnected = connected
@@ -77,7 +101,10 @@ final class HeadPoseTracker {
         manager.delegate = relay
         // Deliver on main: the closure is @Sendable but provably on the main queue.
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
+            // Sendable scalars only, extracted before the isolated block (hard rule 1).
             let yaw = motion?.attitude.yaw
+            let pitch = motion?.attitude.pitch
+            let timestamp = motion?.timestamp
             let message = error?.localizedDescription
             MainActor.assumeIsolated {
                 guard let self, self.active else { return }
@@ -87,19 +114,26 @@ final class HeadPoseTracker {
                 self.rawYaw = yaw
                 if self.referenceYaw == nil { self.referenceYaw = yaw }   // first sample = forward
                 self.headYawDeg = Self.wrap180((self.referenceYaw! - yaw) * 180 / .pi)
+                if let pitch, let timestamp {
+                    let deg = pitch * 180 / .pi
+                    self.pitchDeg = deg
+                    if self.nod.update(pitchDeg: deg, now: timestamp) { self.onDoubleNod?() }
+                }
             }
         }
     }
 
-    /// Stop updates and forget everything (yaw, reference, connection) so the UI never shows
-    /// stale head tracking. Callers: `AppModel.stopRoute` and arrival.
+    /// Stop updates and forget everything (yaw, pitch, reference, connection, pending nod) so the
+    /// UI never shows stale head tracking. Callers: `AppModel.stopRoute` and arrival.
     func stop() {
         active = false
         isConnected = false             // the pill must not say "Head tracked" with no data
         manager.stopDeviceMotionUpdates()
         headYawDeg = nil
+        pitchDeg = nil
         rawYaw = nil
         referenceYaw = nil          // a fresh start re-zeroes on the first sample
+        nod.reset()
     }
 
     /// Current head direction becomes "straight ahead".

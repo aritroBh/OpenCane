@@ -75,13 +75,13 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 // MARK: - The line
 
 @Test func onePersonAhead() {
-    #expect(PeopleAhead.line([person(at: 0.5, meters: 2)]) == "A person ahead, about two meters.")
+    #expect(PeopleAhead.line([person(at: 0.5, meters: 2)]) == "About two meters ahead, a person.")
 }
 
 @Test func twoPeopleWithDistance() {
     // The frame that made this feature necessary: the classifier said nothing, two bodies at 3 m.
     let s = [person(at: 0.47, meters: 3.1), person(at: 0.55, meters: 3.4)]
-    #expect(PeopleAhead.line(s) == "Two people ahead, about 3 meters.")
+    #expect(PeopleAhead.line(s) == "About 3 meters ahead, two people.")
 }
 
 @Test func noDepthMeansNoNumber() {
@@ -92,26 +92,26 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 @Test func severalPeople() {
     let crowd = (0..<5).map { person(at: 0.45 + Float($0) * 0.01, meters: 2.2) }
-    #expect(PeopleAhead.line(crowd) == "Several people ahead, about two meters.")
+    #expect(PeopleAhead.line(crowd) == "About two meters ahead, several people.")
 }
 
 @Test func twoGroupsNearestFirst() {
     // Nearest group leads and carries the distance; the second is direction only, so the whole
     // line stays inside the describer's one-sentence budget.
     let s = [person(at: 0.9, meters: 4.0), person(at: 0.5, meters: 1.5)]
-    #expect(PeopleAhead.line(s) == "A person ahead, about one and a half meters, and a person on your right.")
+    #expect(PeopleAhead.line(s) == "About one and a half meters ahead, a person, and a person on your right.")
 }
 
 @Test func thirdGroupIsDropped() {
     let s = [person(at: 0.5, meters: 1.5), person(at: 0.9, meters: 2.5), person(at: 0.1, meters: 3.5)]
     let line = PeopleAhead.line(s) ?? ""
-    #expect(line == "A person ahead, about one and a half meters, and a person on your right.")
+    #expect(line == "About one and a half meters ahead, a person, and a person on your right.")
     #expect(!line.contains("left"))
 }
 
 @Test func groupWithoutDepthSortsLast() {
     let s = [person(at: 0.1), person(at: 0.5, meters: 4)]
-    #expect(PeopleAhead.line(s) == "A person ahead, about 4 meters, and a person on your left.")
+    #expect(PeopleAhead.line(s) == "About 4 meters ahead, a person, and a person on your left.")
 }
 
 @Test func aRealDistanceIsNeverDropped() {
@@ -120,7 +120,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0.8, minY: 0, width: 0.1, height: 0.1),
                        confidence: 0.9, distance: 1.2)
     #expect(PeopleAhead.line([dog, person(at: 0.5)])
-            == "A person ahead and a dog on your right, about one meter.")
+            == "A person ahead and about one meter on your right, a dog.")
 }
 
 @Test func nonFiniteBoxIsDroppedNotCalledAhead() {
@@ -130,7 +130,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                        box: NormalizedBox(minX: .nan, minY: 0.1, width: 0.2, height: 0.6),
                        confidence: 0.95, distance: 2)
     #expect(PeopleAhead.line([bad]) == nil)
-    #expect(PeopleAhead.line([bad, person(at: 0.9, meters: 3)]) == "A person on your right, about 3 meters.")
+    #expect(PeopleAhead.line([bad, person(at: 0.9, meters: 3)]) == "About 3 meters on your right, a person.")
 }
 
 @Test func animalsComeAfterPeople() {
@@ -138,13 +138,13 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
                        confidence: 0.9, distance: 1.0)
     // The dog is nearer, but a person outranks it: one line, people first.
     #expect(PeopleAhead.line([dog, person(at: 0.5, meters: 3)])
-            == "A person ahead, about 3 meters, and a dog on your right.")
+            == "About 3 meters ahead, a person, and a dog on your right.")
 }
 
 @Test func animalAloneIsSpoken() {
     let dog = Sighting(kind: .dog, box: NormalizedBox(minX: 0.0, minY: 0.0, width: 0.2, height: 0.2),
                        confidence: 0.8, distance: 2.0)
-    #expect(PeopleAhead.line([dog]) == "A dog on your left, about two meters.")
+    #expect(PeopleAhead.line([dog]) == "About two meters on your left, a dog.")
 }
 
 @Test func lowConfidenceDropped() {
@@ -162,7 +162,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 
 @Test func mirroredLineSwapsSides() {
     #expect(PeopleAhead.line([person(at: 0.1, meters: 2)], mirrored: true)
-            == "A person on your right, about two meters.")
+            == "About two meters on your right, a person.")
 }
 
 // MARK: - Facts handed on
@@ -190,8 +190,11 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 @Test func detectedPeopleAreFaithfulWithoutSceneLabels() {
     // The exact failure this feature exists for: the classifier returned nothing, so `nouns` is
     // empty. Before, every sentence was rejected and the walker heard only the LiDAR template.
-    let facts = "People detector: Two people ahead, about 3 meters."
+    let facts = "People detector: About 3 meters ahead, two people."
+    // The model may answer in either order; the numbers and nouns are what ground it.
     #expect(SceneVocabulary.isFaithful("Two people ahead, about 3 meters.",
+                                       facts: facts, nouns: [], detected: ["people"]))
+    #expect(SceneVocabulary.isFaithful("About 3 meters ahead, two people.",
                                        facts: facts, nouns: [], detected: ["people"]))
     // A synonym of the merged group still counts.
     #expect(SceneVocabulary.isFaithful("A pedestrian is ahead.",
@@ -199,7 +202,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 }
 
 @Test func detectingPeopleDoesNotLoosenAnythingElse() {
-    let facts = "People detector: A person ahead, about two meters."
+    let facts = "People detector: About two meters ahead, a person."
     // A dog that was never detected is still rejected...
     #expect(!SceneVocabulary.isFaithful("A person and a dog ahead.",
                                         facts: facts, nouns: [], detected: ["people"]))
@@ -216,7 +219,7 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 // MARK: - Does the model's sentence still need the people line?
 
 @Test func modelMustCarryEveryDetectedNoun() {
-    let line = "A person ahead, about 3 meters, and a dog on your right."
+    let line = "About 3 meters ahead, a person, and a dog on your right."
     // Naming only the dog must NOT suppress the person: an "any noun named" test dropped the
     // person entirely (Muse review of this change).
     #expect(PeopleAhead.needsSpeaking(line, given: "A dog on your right, 3 meters away.",
@@ -228,13 +231,13 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
 }
 
 @Test func modelMustCarryTheNumbers() {
-    let line = "Two people ahead, about 3 meters."
+    let line = "About 3 meters ahead, two people."
     // Right nouns, wrong (or missing) numbers: say the authoritative line as well.
     #expect(PeopleAhead.needsSpeaking(line, given: "People are ahead of you.", detected: ["people"]))
     #expect(PeopleAhead.needsSpeaking(line, given: "Two people five meters ahead.", detected: ["people"]))
     #expect(!PeopleAhead.needsSpeaking(line, given: "Two people ahead, about 3 meters.", detected: ["people"]))
     // Number words count as numbers ("two" == 2, "three" == 3).
-    #expect(!PeopleAhead.needsSpeaking("Two people ahead, about three meters.",
+    #expect(!PeopleAhead.needsSpeaking("About three meters ahead, two people.",
                                        given: "2 people ahead at 3 meters.", detected: ["people"]))
 }
 
@@ -251,14 +254,14 @@ private func person(at x: Float, meters: Float? = nil, confidence: Float = 0.9) 
     #expect(!PeopleAhead.needsSpeaking("A person on your right.", given: "A person to the right.",
                                        detected: ["people"]))
     // A dropped "very close" carries no number either.
-    #expect(PeopleAhead.needsSpeaking("A person ahead, very close.", given: "A person ahead.",
+    #expect(PeopleAhead.needsSpeaking("Very close ahead, a person.", given: "A person ahead.",
                                       detected: ["people"]))
 }
 
 @Test func theTemplateNeverDoublesTheLine() {
     // The deterministic template already contains the line verbatim, so nothing is prepended.
-    let line = "Two people ahead, about 3 meters."
-    let template = "Obstacle ahead at 1.4 meters. \(line) Ahead: the sidewalk and trees."
+    let line = "About 3 meters ahead, two people."
+    let template = "1.4 meters ahead, obstacle. \(line) Ahead: the sidewalk and trees."
     #expect(!PeopleAhead.needsSpeaking(line, given: template, detected: ["people"]))
 }
 

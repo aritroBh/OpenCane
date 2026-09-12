@@ -9,8 +9,8 @@
 //  Why these, and why only these. An app may register at most **ten App Shortcuts** (the
 //  phrase-driven, zero-setup kind that Siri, Spotlight and the Action button's "Choose a Shortcut"
 //  list show without the walker building anything — Apple DTS, developer forums 787555).
-//  `AppIntents.swift` already uses seven. The three spent here are the three a *blind walker*
-//  cannot do without:
+//  `AppIntents.swift` uses six. The four spent here are the four a *blind walker* cannot do
+//  without:
 //    1. **Status** — the spoken version of the whole screen. Every card reports its health
 //       visually and nothing reported it aloud, so the only evidence that obstacle detection had
 //       stopped was that nothing happened, which is also what working sounds like. Silence must
@@ -23,11 +23,16 @@
 //       and the only one whose right value changes mid-walk (a crowded corridor, a false-positive
 //       stretch, a hand that needs the cane quiet). Everything else on the cards is set up before
 //       leaving.
+//    4. **Talk to OpenCane** — the Action button target: one press opens the app and starts
+//       listening, so a walker with both hands on the cane can ask anything (status, scene,
+//       places, posts) with no wake word and no screen.
 //  What did NOT get a slot, and why: Recenter (the watch has it, and the app re-zeroes itself
-//  after three straight-walking fixes) and the hazard switches (configuration, set before the
-//  walk, not during it). Both are still reachable hands-free — as plain `AppIntent`s below, which
-//  the Shortcuts app lists as actions and which can be put on the Action button by building a
-//  one-step shortcut around them. Only the automatic, phrase-driven kind is capped at ten.
+//  after three straight-walking fixes), the hazard switches (configuration, set before the
+//  walk, not during it), and "Navigate to CIF from here" (the Guide card button is unchanged
+//  and "Take me to CIF in OpenCane" reaches the same route-file waypoint by Siri). All are
+//  still reachable hands-free — as plain `AppIntent`s, which the Shortcuts app lists as actions
+//  and which can be put on the Action button by building a one-step shortcut around them. Only
+//  the automatic, phrase-driven kind is capped at ten.
 //
 //  Deliberately NOT built: a spoken back-and-forth conversation. See `QuestionPrompt`
 //  (CaneKitLogic) for the evidence — users want to ask, but the measured complaint about AI
@@ -45,7 +50,7 @@
 //    · ⚠ Every answer these intents speak is `.scene`, the lowest speech priority, so an obstacle
 //      name, a route line or "Head height." interrupts it. A status report or a scene answer must
 //      never delay a warning.
-//    · ⚠ Three App Shortcuts are added to `CaneKitShortcuts` in `AppIntents.swift`, taking it to
+//    · ⚠ Four App Shortcuts are added to `CaneKitShortcuts` in `AppIntents.swift`, taking it to
 //      the limit of ten. Anything new after this is a plain `AppIntent`, not an `AppShortcut`.
 //
 
@@ -102,10 +107,11 @@ extension AppModel {
     /// - Parameter question: what the walker said; Siri's transcription arrives unedited and is
     ///   cleaned by `QuestionPrompt.clean`.
     /// Callers: `AskSceneIntent`.
-    func askAboutScene(_ question: String) {
+    @discardableResult
+    func askAboutScene(_ question: String) -> Bool {
         logger.event("ask", ["question": question,
                              "provider": describer.providerName ?? "none"])
-        describer.ask(question)
+        return describer.ask(question)
     }
 
     /// Silences or un-silences the cane buzz and says what the walker will get instead.
@@ -148,6 +154,7 @@ extension AppModel {
         case .obstacleNames: obstacleNamesEnabled = enabled
         case .beacon: beaconEnabled = enabled
         case .sirens: dangerSoundsEnabled = enabled
+        case .nodToTalk: nodToTalkEnabled = enabled
         }
         // Say the state, not "done": the walker cannot see the switch move. `dangerSoundsEnabled`
         // can refuse itself (a denied microphone, a degraded audio route), so the line is read back
@@ -185,6 +192,7 @@ extension AppModel {
         case .obstacleNames: obstacleNamesEnabled
         case .beacon: beaconEnabled
         case .sirens: dangerSoundsEnabled
+        case .nodToTalk: nodToTalkEnabled
         }
     }
 }
@@ -216,8 +224,13 @@ enum SwitchState: String, AppEnum {
 /// AirPods" restarts the AR session; neither may be flipped by a phrase mid-walk. The purely
 /// visual switches (live camera view, portrait, mirror, 60 fps) are for a sighted helper on the
 /// bench and have nothing to say to a walker.
+///
+/// `nodToTalk` (Step 3 of the nod plan) is the one non-hazard option here: it is safe mid-walk (it
+/// only ever *starts* listening, never stops guidance) and it is the option a walker with both
+/// hands busy most wants to switch on by voice. ⚠ Its gesture detector is untuned
+/// (`HeadNodDetector`, HeadNodDetectorTests) and the feature ships off, unpersisted.
 enum HandsFreeOption: String, AppEnum {
-    case dropOffs, signs, hazardWatch, namePeople, obstacleNames, beacon, sirens
+    case dropOffs, signs, hazardWatch, namePeople, obstacleNames, beacon, sirens, nodToTalk
 
     /// Parameter type name in Shortcuts.
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "OpenCane feature"
@@ -231,6 +244,7 @@ enum HandsFreeOption: String, AppEnum {
         .obstacleNames: DisplayRepresentation(title: "Speak obstacle names", synonyms: ["obstacle names", "object names"]),
         .beacon: DisplayRepresentation(title: "Audio beacon", synonyms: ["beacon", "the clicking"]),
         .sirens: DisplayRepresentation(title: "Listen for sirens and horns", synonyms: ["sirens", "horns", "sirens and horns"]),
+        .nodToTalk: DisplayRepresentation(title: "Nod to talk", synonyms: ["nod", "nod to talk", "head nod"]),
     ]
 
     /// How the confirmation line names the feature ("Read signs on."). Same words as the switch.
@@ -243,6 +257,7 @@ enum HandsFreeOption: String, AppEnum {
         case .obstacleNames: "Obstacle names"
         case .beacon: "The audio beacon"
         case .sirens: "Siren and horn listening"
+        case .nodToTalk: "Nod to talk"
         }
     }
 
@@ -262,11 +277,12 @@ enum HandsFreeOption: String, AppEnum {
         case .obstacleNames: "Obstacles are still felt on the cane, but not named."
         case .beacon: "The direction click is off. Route instructions still come."
         case .sirens: "Sirens and horns will not be called out."
+        case .nodToTalk: "Nodding will not start listening; use the button or the Action button."
         }
     }
 }
 
-// MARK: - App Shortcuts (three of the ten; registered in AppIntents.swift)
+// MARK: - App Shortcuts (four of the ten; registered in AppIntents.swift)
 
 /// Siri / Action button "How is OpenCane doing": speaks obstacle detection, GPS, audio, haptics,
 /// route and battery. The spoken version of every card on the screen, for a walker who cannot see
@@ -392,7 +408,7 @@ struct SetOptionIntent: AppIntent {
     /// Shown in Shortcuts and the Action button picker.
     static let title: LocalizedStringResource = "Turn a feature on or off"
     /// Subtitle in Shortcuts.
-    static let description = IntentDescription("Switches drop-off detection, sign reading, the hazard watch, naming people, obstacle names, the beacon or siren listening.")
+    static let description = IntentDescription("Switches drop-off detection, sign reading, the hazard watch, naming people, obstacle names, the beacon, siren listening or nod to talk.")
     /// ⚠ Foreground only, like every intent in this app.
     static let supportedModes: IntentModes = .foreground(.immediate)
 
@@ -418,8 +434,10 @@ struct SetOptionIntent: AppIntent {
 
 /// Action button / Shortcuts "Talk to OpenCane": spoken conversational assistant query.
 ///
-/// Can be assigned directly to the iPhone Action Button in iOS Settings > Action Button > Shortcut,
-/// or triggered via Siri / Shortcuts. Speaks the answer back at `.scene` priority.
+/// Registered as an App Shortcut (`CaneKitShortcuts` in `AppIntents.swift`), so it appears
+/// directly in iOS Settings > Action Button > Shortcut with no user-built shortcut, and answers
+/// to "Talk to OpenCane" via Siri. An empty query (an Action button press) toggles push-to-talk
+/// listening in the app; a filled one is answered conversationally at `.scene` priority.
 struct TalkToOpenCaneIntent: AppIntent {
     /// Shown in Shortcuts and the Action button picker.
     static let title: LocalizedStringResource = "Talk to OpenCane"
@@ -441,11 +459,10 @@ struct TalkToOpenCaneIntent: AppIntent {
         if text.isEmpty {
             // When triggered from Action button or Shortcuts without a pre-set query,
             // immediately toggle push-to-talk listening in the app.
-            model.toggleVoiceInput()
+            model.toggleVoiceInput(source: "actionButton")
             return .result()
         }
         await model.handleSpokenQuery(text)
         return .result()
     }
 }
-

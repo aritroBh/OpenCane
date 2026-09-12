@@ -3,7 +3,7 @@
 //  CaneKitLogic
 //
 //  Turns Apple Vision's body and animal detections into the one line a blind walker actually
-//  wants: "Two people ahead, about 3 meters."
+//  wants: "About 3 meters ahead, two people."
 //
 //  Why it exists: the 1,303-class scene classifier is a whole-frame guess and it fails silently.
 //  The real iPhone trip log of 2026-09-11 has `describe_result` with
@@ -209,12 +209,14 @@ public enum PeopleAhead {
     ///
     /// Sightings are grouped by kind and direction; the nearest group is said first and carries
     /// the distance, a second group is added without one (so the line stays under 20 words), and
-    /// anything further is dropped. People always outrank animals.
+    /// anything further is dropped. People always outrank animals. Every clause is distance-first
+    /// ("About 3 meters ahead, two people"): same contract as the obstacle and ground-hazard
+    /// lines — time-to-contact before identity.
     /// - Parameters:
     ///   - sightings: this frame's detections, distances already attached (nil where unknown).
     ///   - mirrored: see `bearing(midX:mirrored:)`.
-    /// - Returns: e.g. "Two people ahead, about 3 meters.", "A person on your left.",
-    ///   "A person ahead, about two meters, and a dog on your right."
+    /// - Returns: e.g. "About 3 meters ahead, two people.", "A person on your left.",
+    ///   "About two meters ahead, a person, and a dog on your right."
     /// ⚠ Pinned by `onePersonAhead`, `twoPeopleWithDistance`, `noDepthMeansNoNumber`,
     ///   `severalPeople`, `twoGroupsNearestFirst`, `animalsComeAfterPeople`, `lowConfidenceDropped`.
     public static func line(_ sightings: [Sighting], mirrored: Bool = false) -> String? {
@@ -222,18 +224,37 @@ public enum PeopleAhead {
         guard !groups.isEmpty else { return nil }
 
         let spoken = Array(groups.prefix(maxGroups))
-        var text = countPhrase(spoken[0].kind, count: spoken[0].count) + " " + spoken[0].bearing.spoken
         let lead = distancePhrase(spoken[0].distance)
-        if let lead { text += ", " + lead }
+        var text = clause(spoken[0], distance: lead, capitalized: true)
         if spoken.count > 1 {
-            var second = countPhrase(spoken[1].kind, count: spoken[1].count) + " " + spoken[1].bearing.spoken
             // A real LiDAR distance is never dropped: people lead the line, so when the leading
             // group had no depth the second group's distance moves onto its own clause rather
             // than going unsaid (adversarial review of this change).
-            if lead == nil, let tail = distancePhrase(spoken[1].distance) { second += ", " + tail }
-            text += (lead == nil ? " and " : ", and ") + second
+            let tail = lead == nil ? distancePhrase(spoken[1].distance) : nil
+            text += (lead == nil ? " and " : ", and ") + clause(spoken[1], distance: tail, capitalized: false)
         }
-        return text.prefix(1).uppercased() + String(text.dropFirst()) + "."
+        return text + "."
+    }
+
+    /// One group's clause, distance first ("About 3 meters ahead, two people").
+    ///
+    /// Without depth it is direction only ("A person on your left") — a missing number is never
+    /// invented. The bearing word sits inside the distance phrase ("About 3 meters ahead"), so an
+    /// ahead-group never stutters ("ahead … ahead").
+    /// - Parameters:
+    ///   - group: the kind/direction/count group to phrase.
+    ///   - distance: `distancePhrase(group.distance)`, or nil to say direction only.
+    ///   - capitalized: upper-case the first letter (the line's first clause only).
+    /// - Returns: the clause without any trailing full stop.
+    static func clause(_ group: Group, distance: String?, capitalized: Bool) -> String {
+        let text: String
+        if let distance {
+            text = "\(distance) \(group.bearing.spoken), \(countPhrase(group.kind, count: group.count))"
+        } else {
+            text = "\(countPhrase(group.kind, count: group.count)) \(group.bearing.spoken)"
+        }
+        guard capitalized else { return text }
+        return text.prefix(1).uppercased() + String(text.dropFirst())
     }
 
     /// The `SceneVocabulary` nouns these sightings ground, so a language-model sentence that

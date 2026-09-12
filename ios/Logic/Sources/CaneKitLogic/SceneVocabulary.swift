@@ -18,6 +18,11 @@ import Foundation
 
 public enum SceneVocabulary {
 
+    /// Maximum number of scene-classifier nouns used in one calm spoken scene answer. People and
+    /// measured LiDAR facts are separate authoritative channels; this limit only removes the
+    /// lower-ranked background census from the narration path.
+    public static let narrationMaxItems = 2
+
     /// One spoken noun, its rank (lower is said first) and every Vision identifier that means it.
     struct Group: Sendable {
         let rank: Int
@@ -118,6 +123,17 @@ public enum SceneVocabulary {
             if out.count == max { break }
         }
         return out
+    }
+
+    /// The ranked classifier nouns allowed into a normal spoken scene answer.
+    ///
+    /// The general `nouns` API remains available to faithfulness and diagnostics callers that need
+    /// the full candidate set. Scene narration uses this narrower, two-item default so a truthful
+    /// frame does not become an exhausting inventory. Pinned by `narrationKeepsOnlyTheTopTwoRankedNouns`.
+    public static func narrationNouns(_ labels: [(name: String, confidence: Float)],
+                                      max: Int = narrationMaxItems) -> [String] {
+        guard max > 0 else { return [] }
+        return nouns(labels, max: max)
     }
 
     /// "a crosswalk, the street and cars" (Oxford-free, spoken).
@@ -288,8 +304,8 @@ public enum SceneVocabulary {
     }
 
     /// The template sentence's scene part: "Ahead: a crosswalk, the street and cars." or nil.
-    public static func sentence(_ labels: [(name: String, confidence: Float)]) -> String? {
-        let n = nouns(labels)
+    public static func sentence(_ labels: [(name: String, confidence: Float)], max: Int = 3) -> String? {
+        let n = narrationNouns(labels, max: max)
         return n.isEmpty ? nil : "Ahead: \(list(n))."
     }
 }

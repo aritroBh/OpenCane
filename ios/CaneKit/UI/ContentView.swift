@@ -8,7 +8,7 @@
 //    Settings — Haptics, Watch, Mount (tilt + fps + toggles), This phone
 //  Styled only with Theme.swift tokens. No debug footer (removed in Step 11).
 //
-//  Pages cross-fade; they never slide sideways (a horizontal slide read as "going forward" even
+//  Pages fade in; they never slide sideways (a horizontal slide read as "going forward" even
 //  when moving left, and direction carries no meaning here). See docs/design.md §4.
 //
 //  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
@@ -27,6 +27,9 @@ import UIKit
 /// `RootTab`. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume
 /// press is treated as "Where am I" and logged (`describe {source: cameraControl}`).
 struct ContentView: View {
+    /// Incoming-page fade length. Matches the tab pill's travel (TabBar `pillTravel`) so pill
+    /// and page land together; longer than this the switch feels laggy, shorter it flashes.
+    static let pageFade: TimeInterval = 0.16
     /// The app-wide owner of every engine; `@Bindable` inside settings for the toggle bindings.
     @Environment(AppModel.self) private var model
     /// Which of the three pages is showing. Starts on Guide so the idle walk controls are first.
@@ -40,14 +43,17 @@ struct ContentView: View {
                 page
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .id(tab)
-                    // Cross-fade only: pages never slide. A horizontal slide read as "going
-                    // forward" even when moving left, and direction is not information here.
-                    .transition(.opacity)
+                    // Fade the incoming page in; the outgoing page is removed instantly, never
+                    // cross-faded. A symmetric cross-fade kept two full ScrollViews (and Sense's
+                    // SceneKit preview teardown/setup) alive inside the animation and dropped
+                    // frames on device. Pages still never slide: a horizontal slide read as
+                    // "going forward" even when moving left, and direction is not information.
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
                 CKTabBar(selection: $tab)
             }
             .background(CKColor.background)
             .navigationTitle("OpenCane")
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: tab)
+            .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
         }
         // Camera Control / volume-button spike: counts presses in the footer.
         .background(CameraControlInteraction { model.cameraControlPressed() })

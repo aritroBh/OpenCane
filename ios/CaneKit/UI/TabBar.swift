@@ -61,6 +61,12 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
 /// Implements docs/design.md §4 (tab switch) and §6 (three pages). The capsule uses `matchedGeometryEffect`
 /// so it travels between icons on a short spring; Reduce Motion skips the travel and the icon scale.
 struct CKTabBar: View {
+    /// Pill travel animation. Same landing time as the page fade (`ContentView.pageFade`)
+    /// so capsule and page arrive together; the old 0.32 s spring was still travelling after
+    /// the page had landed, which read as lag.
+    private static func pillTravel() -> Animation {
+        .spring(duration: 0.16, bounce: 0.08)
+    }
     /// Width of the selected capsule (chrome only; the 60 pt hit area is wider).
     private static let pillWidth: CGFloat = 62
     /// Height of the selected capsule. Deliberately under `CKMetrics.touchTarget`: this is the
@@ -110,7 +116,7 @@ struct CKTabBar: View {
             if reduceMotion {
                 selection = tab
             } else {
-                withAnimation(.spring(duration: 0.32, bounce: 0.14)) { selection = tab }
+                withAnimation(Self.pillTravel()) { selection = tab }
             }
         } label: {
             Image(systemName: tab.systemImage)

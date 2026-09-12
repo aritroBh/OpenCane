@@ -2,8 +2,8 @@
 //  ObstacleNamer.swift
 //  CaneKit
 //
-//  Turns the mesh classification at the image centre into a spoken name: "door ahead, two
-//  meters". Speaks only on a change of class or half-metre bucket, at most once per 2.5 s, and
+//  Turns the mesh classification at the image centre into a spoken name: "Two meters ahead,
+//  door". Speaks only on a change of class or half-metre bucket, at most once per 2.5 s, and
 //  only indoors-ish ranges (mesh classification is unreliable past ~3 m and in sunlight).
 //
 //  Threading / isolation: `@MainActor`, synchronous, no timers or callbacks. `AppModel.handle`
@@ -62,7 +62,7 @@ final class ObstacleNamer {
     /// A line is returned only when the report is trusted (cane not mid-sweep), the centre hit
     /// has a speakable class (`ObstacleClass.spokenName`: wall/table/seat/window/door) within
     /// range, the class or distance changed (≥ 1 m, i.e. two half-metre buckets), and
-    /// `minInterval` has passed. Format: "door ahead, one meter" (`SpokenDistance.phrase`).
+    /// `minInterval` has passed. Format: "One meter ahead, door" (`SpokenPhrases.obstacleLine`).
     /// - Parameters:
     ///   - r: the latest depth report (its `centerHit` is refreshed at ~4 Hz by the processor).
     ///   - now: report time in seconds (`r.timestamp`).

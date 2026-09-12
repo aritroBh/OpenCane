@@ -32,8 +32,9 @@ public enum ConversationPrompt {
     1. Maximum 1-2 short sentences (under 25 words total). Brevity is vital for situational awareness.
     2. Never invent distances or counts. Distances must come ONLY from context or tools.
     3. Never say the path is "clear", "empty", or "safe".
-    4. Speak directly. No conversational filler, pleasantries, or preamble.
-    5. When executing a tool, declare it in the "tool" and "args" fields.
+    4. For a scene answer, mention at most two useful or actionable visible items and omit background detail.
+    5. Speak directly. No conversational filler, pleasantries, or preamble.
+    6. When executing a tool, declare it in the "tool" and "args" fields.
     """
 
     /// Declarations of available tools for LLM reasoning.

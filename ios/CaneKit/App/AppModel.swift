@@ -91,13 +91,13 @@ final class AppModel {
     let trip = TripTracker()
     /// Dynamic Island / lock screen (step 9).
     let liveActivity = LiveActivityController()
-    /// LiDAR facts handed to the on-device describer ("Obstacle ahead at 1.4 meters.").
+    /// LiDAR facts handed to the on-device describer ("1.4 meters ahead, obstacle.").
     let sceneContext: SceneContext
     /// Camera hazards: signs (on-device) + hazard watch (cloud → on-device, or on-device).
     let hazards: HazardScanner
     /// Hazard map: every announced hazard with GPS + photo → Documents/hazards/*.geojson.
     let hazardLog = HazardLog()
-    /// Last LiDAR ground hazard spoken ("Drop-off ahead, two meters."), for the Hazards card.
+    /// Last LiDAR ground hazard spoken ("Two meters ahead, drop-off."), for the Hazards card.
     private(set) var lastGroundHazard: String?
     /// When a confirmed ground hazard is worth saying again (CaneKitLogic, HazardTests).
     @ObservationIgnored private var groundPolicy = GroundHazardPolicy()
@@ -140,7 +140,7 @@ final class AppModel {
     /// Decides which cue fires from each lane report (pure logic, CaneKitLogic).
     /// ⚠ Its timing contract is the AR clock; see `handle(_:)`.
     @ObservationIgnored private let decider = CueDecider()
-    /// "door ahead, two meters" from the mesh classification (step 4).
+    /// "Two meters ahead, door" from the mesh classification (step 4).
     @ObservationIgnored private let namer = ObstacleNamer()
     /// Kind currently decided as active (for the UI); `.clear` when nothing is in range.
     private(set) var activeCue: CueKind = .clear
@@ -188,7 +188,7 @@ final class AppModel {
     var loggingEnabled: Bool = Settings.bool("loggingEnabled", default: true) {
         didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
-    /// Speak obstacle names ("door ahead, two meters"). Off = haptics only.
+    /// Speak obstacle names ("Two meters ahead, door"). Off = haptics only.
     /// Read on every report in `handle(_:)`; not pushed anywhere.
     var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: true) {
         didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
@@ -258,6 +258,59 @@ final class AppModel {
     /// True while `setBothCameras` is running, so its own writes to `bothCamerasEnabled` cannot
     /// re-enter it. See the `didSet` above.
     @ObservationIgnored private var applyingBothCameras = false
+
+    /// Back-camera flashlight, as reported by the device itself (`isTorchActive` read back
+    /// after every set — never the request). Device-level torch: it touches no capture
+    /// session, so it works while ARKit runs, while both-cameras runs, and mid-route, and is
+    /// never refused the way both-cameras is. Not persisted and false at launch: a pocketed
+    /// phone with the torch on is a dead battery and a burn risk. Written only by
+    /// `setTorch(_:)`; the card binds through it, so there is no `didSet` re-entrancy dance.
+    private(set) var torchEnabled = false
+
+    /// Turn the back-camera torch on or off, then report what the device actually did.
+    ///
+    /// The torch is a property of the camera device, not of any session: ARKit keeps its
+    /// frames and the multi-cam session keeps its feeds either way, which is why this works
+    /// everywhere both-cameras cannot (mid-route, with obstacle detection alive). The switch
+    /// snaps back by itself when the torch does not take (no torch hardware, lock failure),
+    /// and the trip log records the measured state, so a device run is the measurement of
+    /// whether torch + ARKit coexist on this phone.
+    /// - Parameter on: the requested state.
+    /// Main actor. Speaks the outcome (`.scene`); logs `torch {action, active}`.
+    func setTorch(_ on: Bool) {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video,
+                                                   position: .back),
+              device.hasTorch else {
+            torchEnabled = false
+            speech.say("This phone has no flashlight.", .scene, ttl: 6)
+            logger.event("torch", ["action": "unsupported"])
+            return
+        }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if on {
+                try device.setTorchModeOn(level: 1.0)
+            } else {
+                device.torchMode = .off
+            }
+        } catch {
+            torchEnabled = false
+            speech.say("The flashlight did not switch.", .scene, ttl: 6)
+            logger.event("torch", ["action": on ? "on" : "off", "active": false,
+                                   "error": error.localizedDescription])
+            return
+        }
+        torchEnabled = device.isTorchActive
+        // An ON request the device silently refuses (thermal cutout without a throw) must not
+        // be confirmed with "Flashlight off." — true, but answering the wrong question.
+        if on, !device.isTorchActive {
+            speech.say("The flashlight did not switch on.", .scene, ttl: 6)
+        } else {
+            speech.say(device.isTorchActive ? "Flashlight on." : "Flashlight off.", .scene, ttl: 4)
+        }
+        logger.event("torch", ["action": on ? "on" : "off", "active": device.isTorchActive])
+    }
 
     /// Head tracking from the **front** camera instead of the AirPods (`DepthEngine`'s
     /// `userFaceTrackingEnabled`). Default OFF: new and untuned on the real cane (AGENTS.md rule
@@ -335,6 +388,26 @@ final class AppModel {
     /// that write cannot re-enter the `didSet` above. See `wireSounds()`.
     @ObservationIgnored private var applyingDangerSounds = false
 
+    /// "Nod to talk" (Hazards card switch; `HandsFreeOption.nodToTalk` by voice): a double head
+    /// nod on the AirPods starts voice input, so a walker with both hands busy can ask OpenCane a
+    /// question without the phone, the watch or Siri. Default OFF.
+    ///
+    /// ⚠ **Not persisted**, for the same reason as `dangerSoundsEnabled`: the gesture detector's
+    /// numbers are untuned placeholders (`HeadNodDetector`, CaneKitLogic — nothing has been walked
+    /// on the cane), and a false double nod opens the microphone. A feature that can open the
+    /// microphone because of something you did yesterday is a surprise, not a setting. Persist it
+    /// in the same change that tunes the thresholds from real `head_nod` trip-log events, or not
+    /// at all (AGENTS.md "How we engineer" §6: new untuned features ship off).
+    ///
+    /// Scope: head tracking (`head`, the AirPods `HeadPoseTracker`) only runs while a route is
+    /// active — `beginRoute` starts it, `stopRoute` / arrival stop it — so the gesture only works
+    /// on a route, and only with AirPods connected. It only ever *starts* listening
+    /// (`startVoiceInput`), never toggles: a nod while already listening is ignored, so a nod
+    /// cannot cut off the walker mid-sentence. Wired in `wireHeadNod()`.
+    /// ⚠ Gesture pinned by HeadNodDetectorTests (`doubleNodFiresOnceOnTheSecondNod`,
+    /// `walkingSwayIsSilent`, `aLargeSlowTiltIsSilent`, `refractoryHoldsAfterAFire`).
+    var nodToTalkEnabled: Bool = false
+
     // MARK: Lifecycle
 
     /// Token for the `thermalStateDidChangeNotification` observer (kept alive for the process).
@@ -382,13 +455,20 @@ final class AppModel {
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
     /// Logs a `describe` event with the provider name, then hands off to `SceneDescriber`
     /// (which waits for a camera frame and speaks at `.scene` priority).
-    func describeScene() {
+    @discardableResult
+    func describeScene() -> Bool {
         logger.event("describe", ["provider": describer.providerName ?? "none"])
-        describer.describe()
+        return describer.describe()
     }
 
-    /// Toggles on-device push-to-talk voice recording.
-    func toggleVoiceInput() {
+    /// Toggles push-to-talk voice recording: first press listens, second press submits what was
+    /// heard so far (listening also ends on its own after 1.5 s of silence — `UtteranceEndDetector`).
+    /// - Parameter source: who pressed — the on-screen button or the Action Button intent. Written
+    ///   to the trip log, so a walk recording shows a press the walker made but never heard an
+    ///   answer to (AGENTS.md "make the invisible visible").
+    /// Callers: "Talk to OpenCane" (`GuideCard`), the Action Button intent.
+    func toggleVoiceInput(source: String = "button") {
+        logger.event("voice_toggle", ["source": source, "listening": !voiceInput.isListening])
         if voiceInput.isListening {
             voiceInput.stopListeningAndSubmit()
         } else {
@@ -495,8 +575,14 @@ final class AppModel {
         observeThermalAndBattery()
         observeLaunchHealth()
         logger.start()
+        speech.onSuppressed = { [weak self] text, load, reason in
+            self?.logger.event("speech_suppressed", [
+                "text": text, "load": load.rawValue, "reason": reason.rawValue
+            ])
+        }
         speech.configureAudioSession()       // before ARKit and before the haptic engine
         wireAudioRoute()
+        wireHeadNod()
         haptics.start()
         watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
         watch.activate()
@@ -551,14 +637,27 @@ final class AppModel {
         }
         wireHazards()
         wireDescriber()
+        // A transcript always ends in something audible and in the engine leaving `.processing`:
+        // `ConversationCoordinator.handleQuery` returns silently while a previous query is still
+        // in flight (its `isProcessing` guard), so that case is spoken here, and `finishProcessing`
+        // runs on every path so the next press starts from `.idle`.
         voiceInput.onTranscriptionFinalized = { [weak self] transcript in
             Task { @MainActor [weak self] in
-                await self?.conversation.handleQuery(transcript)
+                guard let self else { return }
+                if self.conversation.isProcessing {
+                    self.speech.say("Still working on your last question.", .scene, ttl: 6)
+                } else {
+                    await self.conversation.handleQuery(transcript)
+                }
+                self.voiceInput.finishProcessing()
             }
         }
         voiceInput.shouldRestorePlaybackSession = { [weak self] in
             !(self?.sounds.ownsMicrophoneSession ?? false)
         }
+        // `voice_start` / `voice_end`: what the recogniser saw and why listening stopped, so a
+        // press that produced nothing can be read back from the walk log.
+        voiceInput.onEvent = { [weak self] kind, fields in self?.logger.event(kind, fields) }
         logger.event("start", ["lidar": lidarSupported, "mesh": meshClassificationSupported,
                                "haptics": haptics.isHealthy,
                                // ⚠ `haptics: false` used to be the whole story, and it is not a
@@ -583,7 +682,7 @@ final class AppModel {
         if dangerSoundsEnabled { sounds.start() }
         let cameraDenied = announceCameraDenied()
         // Every warning line the app can *generate* (`SpokenPhrases.warningLines`: 74 lines,
-        // 1,722 characters, one-time — each is cached on disk forever after its first synthesis).
+        // 1,718 characters, one-time — each is cached on disk forever after its first synthesis).
         // Warnings never wait for the network — a cache miss is spoken by the system voice at once
         // — so the only way a warning is ever heard in the natural voice is for it to be on disk
         // already. Without this the walker heard route lines in the ElevenLabs voice and warnings
@@ -892,8 +991,9 @@ final class AppModel {
             }
         }
         if obstacleNamesEnabled, let line = namer.update(report, now: report.timestamp) {
-            speech.say(line, .obstacle, ttl: 4)      // > namer interval + one utterance
-            logger.event("speech", ["text": line, "priority": "obstacle"])
+            if speech.say(line, .obstacle, ttl: 4, load: .ambientObstacleName) {
+                logger.event("speech", ["text": line, "priority": "obstacle"])
+            }
         }
         if groundHazardsEnabled, let g = report.groundHazard,
            groundPolicy.shouldAnnounce(g, now: report.timestamp) {
@@ -1271,8 +1371,9 @@ final class AppModel {
         logger.event("hazard", ["type": kind, "text": text, "source": source.rawValue])
     }
 
-    /// The LiDAR facts the on-device describer may use ("Obstacle ahead at 1.4 meters. Hole
-    /// ahead, two meters."). Empty when nothing is within 3 m.
+    /// The LiDAR facts the on-device describer may use ("1.4 meters ahead, obstacle. Two
+    /// meters ahead, hole."). Distance first, matching the spoken warning lines. Empty when
+    /// nothing is within 3 m.
     /// "Ahead" is the centre lane only (torso + head, filtered): side lanes and the unfiltered
     /// centre window made it true almost always on a sidewalk, which left the LiDAR gate for
     /// on-device hazard labels permanently open (review round 5).
@@ -1281,7 +1382,9 @@ final class AppModel {
         var parts: [String] = []
         let centre = [r.torso, r.head].compactMap { $0.count == 3 ? $0[1] : nil }
         let ahead = centre.min() ?? .infinity
-        if ahead.isFinite, ahead < 3 { parts.append("Obstacle ahead at \(SpokenDistance.phrase(ahead)).") }
+        if ahead.isFinite, ahead < 3 {
+            parts.append("\(SpokenDistance.leadingCapitalized(SpokenDistance.phrase(ahead))) ahead, obstacle.")
+        }
         if r.head.count == 3, r.head[1].isFinite, r.head[1] < 1.5 { parts.append("Something at head height.") }
         if let g = r.groundHazard { parts.append(g.spokenLine) }
         if let hit = r.centerHit, let name = hit.classification.spokenName {
@@ -1369,6 +1472,25 @@ final class AppModel {
         }
         audioRoute.start()
         beacon.headphonesConnected = audioRoute.headphonesConnected
+    }
+
+    /// Turns the AirPods double nod (`HeadPoseTracker.onDoubleNod`) into `startVoiceInput()` when
+    /// `nodToTalkEnabled` is on. Called once from `start()`; the tracker itself only delivers nods
+    /// while a route is running (see `nodToTalkEnabled`).
+    ///
+    /// Every detected double nod is logged as `head_nod` — **including ones ignored because the
+    /// option is off** — with the pitch at the moment of the fire and whether voice input was
+    /// already listening, so a walk with the switch off still measures the false-positive rate the
+    /// untuned detector needs before it can ship on (AGENTS.md "make the invisible visible").
+    private func wireHeadNod() {
+        head.onDoubleNod = { [weak self] in
+            guard let self else { return }
+            self.logger.event("head_nod", ["pitch_deg": self.head.pitchDeg ?? 0,
+                                           "listening": self.voiceInput.isListening,
+                                           "enabled": self.nodToTalkEnabled])
+            guard self.nodToTalkEnabled else { return }
+            self.startVoiceInput()           // start only, never toggle: a nod cannot cut a sentence
+        }
     }
 
     /// Spoken once at route start so the walker knows which channels are live before moving.
@@ -1677,7 +1799,8 @@ final class AppModel {
                 self.logger.event("destination", ["name": planned.placeName, "meters": planned.walkingMeters,
                                                   "waypoints": planned.route.waypoints.count])
                 self.beginRoute(planned.route,
-                                announce: WalkingIntro.line(place: planned.placeName, meters: planned.walkingMeters))
+                                announce: WalkingIntro.line(place: planned.placeName, meters: planned.walkingMeters,
+                                                            accuracyM: fix.accuracy))
             } catch {
                 guard isCurrent() else { return }
                 self.routeError = error.localizedDescription
@@ -1742,6 +1865,9 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
+        // Flashlight confirmations (`setTorch`): toggle feedback must never wait on a fetch.
+        // ⚠ Keep byte-identical to the strings in `setTorch`.
+        "Flashlight on.", "Flashlight off.",
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
@@ -1998,7 +2124,7 @@ final class AppModel {
     /// Queues a `.scene` line then an `.obstacle` line; the obstacle line should interrupt it.
     func speechTest() {
         speech.say("Scene test: sidewalk ahead, bike rack at ten o'clock, two meters.", .scene)
-        speech.say("Door ahead, one meter.", .obstacle)
+        speech.say("One meter ahead, door.", .obstacle)
     }
 
 

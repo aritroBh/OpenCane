@@ -24,6 +24,9 @@
 //      *detecting* (face found, head yaw) and states in as many words that there is no front
 //      camera picture: ARKit delivers one camera image per frame and it is the rear camera's.
 //      Never re-word that row into something a reader could take for a selfie preview.
+//    · "Nod to talk" (nod plan, step 3) — a double head nod on the AirPods starts voice input
+//      (`HeadPoseTracker` → `HeadNodDetector` → `AppModel.startVoiceInput`). Off by default and
+//      not persisted: the detector's thresholds are untuned placeholders.
 //
 //  Two debug buttons ("Both cameras self test", "Front camera self test") appear at the bottom of
 //  the card **only** under `AppModel.selfTestControlsVisible` (a launch flag). They used to run by
@@ -32,8 +35,8 @@
 //
 //  Implements docs/design.md (cards, pills, toggles, big buttons). Accessibility: every toggle is
 //  a labelled switch ("Detect drop-offs", "Read signs", "Hazard watch", "Name people ahead",
-//  "Listen for sirens and horns", "Head tracking without AirPods", "Live camera view", "Both
-//  cameras (pauses obstacle detection)"); the live view and the two-camera picture are hidden from
+//  "Listen for sirens and horns", "Nod to talk", "Head tracking without AirPods", "Live camera
+//  view", "Both cameras (pauses obstacle detection)", "Flashlight"); the live view and the two-camera picture are hidden from
 //  VoiceOver (they carry nothing a blind user needs) but the front-camera readout is not — it is
 //  the only proof a blind walker has that their head direction is being followed.
 //
@@ -92,6 +95,13 @@ struct HazardsCard: View {
                 .accessibilityHint("Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default.")
             soundStatus
 
+            // Off by default and not persisted (`AppModel.nodToTalkEnabled`): the gesture is untuned.
+            // Disabled without headphone motion support — the nod comes from the AirPods.
+            Toggle("Nod to talk", isOn: $model.nodToTalkEnabled)
+                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .disabled(!model.head.isAvailable)
+                .accessibilityHint("Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default.")
+
             Toggle("Head tracking without AirPods", isOn: $model.faceHeadTrackingEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!DepthEngine.supportsFrontCameraWithLiDAR)
@@ -108,6 +118,10 @@ struct HazardsCard: View {
                 .disabled(!DualCameraSession.isSupported || model.routeStartWaiting)
                 .accessibilityHint("Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you.")
             bothCameras
+            Toggle("Flashlight", isOn: Binding(get: { model.torchEnabled },
+                                               set: { model.setTorch($0) }))
+                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .accessibilityHint("Turns the back-camera flashlight on or off. Works while a route guides and while both cameras are on. Off at every launch.")
             if AppModel.selfTestControlsVisible { selfTests }
         }
     }
