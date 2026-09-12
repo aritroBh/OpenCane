@@ -29,14 +29,14 @@
 
 .PARAMETER Part
     Render one part instead of all of them.
-    collar | ring | arm | cradle | coupons
+    collar | ring | arm | cradle | coupons | socket | lock
 
 .PARAMETER Png
     Also write a preview PNG next to each STL.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'collar', 'ring', 'arm', 'cradle', 'coupons')]
+    [ValidateSet('all', 'collar', 'ring', 'arm', 'cradle', 'coupons', 'socket', 'lock')]
     [string]$Part = 'all',
     [switch]$Png
 )
@@ -84,7 +84,11 @@ $targets = @(
     @{ Name = 'ring';    Scad = $mainScad;   Def = 'part=\"ring\"'   },
     @{ Name = 'arm';     Scad = $mainScad;   Def = 'part=\"arm\"'    },
     @{ Name = 'cradle';  Scad = $mainScad;   Def = 'part=\"cradle\"' },
-    @{ Name = 'coupons'; Scad = $couponScad; Def = 'what=\"all\"'    }
+    @{ Name = 'coupons'; Scad = $couponScad; Def = 'what=\"all\"'    },
+    # Ball-joint parts. Only needed when joint = "ball" in the .scad;
+    # harmless to render either way, and cheap.
+    @{ Name = 'socket';  Scad = $mainScad;   Def = 'part=\"socket\"' },
+    @{ Name = 'lock';    Scad = $mainScad;   Def = 'part=\"lock\"'   }
 )
 if ($Part -ne 'all') { $targets = $targets | Where-Object { $_.Name -eq $Part } }
 

@@ -2,6 +2,41 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 15 — Cane diameter disputed, clamped ball joint, SPARKX i7 (Fri Sep 11)
+
+**The cane is 27.65 mm, not 28.75.** Dial caliper, Sagar. That contradicts
+`hardware/mount/cane_mount.scad`, the hardware brief, and the 1.128 in (28.65 mm) quoted
+earlier the same evening. The spread is 1.1 mm — three times any sane bore clearance, so
+a collar bored for 28.75 would spin freely on a 27.65 shaft. `mount_screwless/` now uses
+27.65 and the bore coupons were changed from *clearances* to *absolute bore diameters*
+(27.85 / 28.25 / 28.45 / 28.95 / 29.15, 1–5 notches) so one 20-minute print settles it
+against the real cane instead of against anyone's memory. **`hardware/mount/` is still
+modelled at 28.75 — one of the two folders is wrong.** Whoever prints first, record the
+answer here.
+
+**Clamped ball joint, `joint = "ball"`.** Sagar asked for a gyroscopic / ball-socket aim.
+Both the hardware brief and `mount/DESIGN.md` rejected ball joints on purpose — "ball
+joints slip under sweep vibration and break the Point-to-Identify calibration" — so this
+is not a free ball. It is the cane collar's collet trick at small scale: a slotted socket
+cup squeezed onto the ball by a threaded lock ring, so holding force comes from a wedge
+you tighten rather than from how snugly it printed. That answers the recorded objection
+without deleting it: an undertightened clamp still slips, and now in two axes. The
+fixed-angle dovetail arm stays the default and the safe demo part. T7 (shake) decides.
+Two new parts, `socket` and `lock`, still zero bought hardware. The collar's ring and the
+ball's lock ring are now one `collet_nut()` module, so a thread-fit fix lands in both.
+
+**Printer is the Creality SPARKX i7** (260 × 260 × 255, 0.4 hardened nozzle, Klipper, on
+the network at 172.23.209.71:4408, profile `0.20mm Standard @SPARKX i7 0.4 nozzle`).
+Largest part is the coupon plate at 174 × 195 mm, so everything lies flat with room.
+Print single-colour — it is a multi-material machine and the purge would waste more PETG
+than the parts use.
+
+**Not done:** still never printed, never fitted, never walked. The ball socket's grip is
+reasoning about a wedge, not a measurement. No rain hood.
+
+test on device: n/a (no app change). On the printer: bore coupons first — they decide
+whether 27.65 or 28.75 is right, and everything else waits on that.
+
 ## Step 14 — Screwless phone mount, Windows CAD toolchain (Fri Sep 11)
 
 Hardware side, on Sagar's Windows machine. Nothing here touches the app.

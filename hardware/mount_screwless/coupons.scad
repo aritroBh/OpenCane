@@ -12,11 +12,22 @@
 //
 // WHAT TO DO WITH IT
 //
-// 1. BORE RINGS (row 1, NOTCHED 1/2/3/4 = 0.20/0.30/0.40/0.50 clearance)
-//    Slide each onto the actual cane at the spot the collar will sit.
-//    You want the one that slides on with firm thumb pressure and does
-//    not rattle. Too tight is wrong too - the collet needs room to close.
-//    Put that number in screwless_mount.scad as `bore_clear`.
+// 1. BORE RINGS (row 1, NOTCHED 1..5 = absolute BORE DIAMETER, mm)
+//      1 notch  27.85     4 notches 28.95
+//      2 notches 28.25    5 notches 29.15
+//      3 notches 28.45
+//    These are bore diameters, not clearances, because the cane diameter
+//    itself is disputed: the dial caliper says 27.65 mm, the repo and the
+//    hardware brief say 28.75 mm, and 1.128 in (28.65) was quoted once.
+//    That is a 1.1 mm spread - three times any sane clearance - so the
+//    rings bracket ALL of it and the cane decides.
+//
+//    Slide each onto the real cane where the collar will sit. Keep the
+//    one that goes on with firm thumb pressure and does not rattle. Then:
+//      pole_d     = (that ring's bore) - 0.35
+//      bore_clear = 0.35
+//    and tell the rest of the team, because hardware/mount/ is still
+//    modelled at 28.75 and one of the two folders is wrong.
 //
 // 2. THREAD PAIR (row 2)
 //    Screw the small ring onto the threaded stub. It should turn by hand
@@ -45,7 +56,7 @@ use <screwless_mount.scad>
 what = "all"; // [all, bore, thread, dovetail]
 
 /* [Copied from screwless_mount.scad - keep in sync] */
-pole_d       = 28.70;
+pole_d       = 27.65;   // dial caliper, Sep 11. Disputed - see above.
 collar_wall  = 4.20;
 grip_ribs    = 8;
 rib_h        = 0.50;
@@ -58,7 +69,7 @@ dt_depth     = 7.0;
 
 /* [Coupon settings] */
 ring_h       = 10.0;   // mm, height of each bore ring.
-bore_tests   = [0.20, 0.30, 0.40, 0.50];   // bore_clear values to try
+bore_tests   = [27.85, 28.25, 28.45, 28.95, 29.15];  // absolute BORE diameters
 dt_tests     = [0.15, 0.25, 0.35];         // dt_clear values to try
 thr_test     = 0.35;   // thr_clear to try on the thread pair
 notch_d      = 1.20;   // mm, identity notch depth.
@@ -70,8 +81,8 @@ $fs = 0.5;
 eps = 0.01;
 
 // ---------------------------------------------------------------- bore
-module bore_ring(bc) {
-    br = (pole_d + bc) / 2;
+module bore_ring(bd) {
+    br = bd / 2;
     orr = br + collar_wall;
     difference() {
         cylinder(h = ring_h, r = orr);
@@ -82,7 +93,7 @@ module bore_ring(bc) {
                     cylinder(h = ring_h + 2 * eps, r = rib_w / 2, $fn = 12);
         // identity notches in the top rim: 1 notch = the first value in
         // bore_tests, 2 = the second, and so on.
-        n = search([bc], bore_tests)[0] + 1;
+        n = search([bd], bore_tests)[0] + 1;
         for (k = [0 : n - 1])
             rotate([0, 0, 90 + k * 13])
                 translate([orr - 1.2, 0, ring_h - notch_d])
@@ -91,7 +102,7 @@ module bore_ring(bc) {
 }
 
 module bore_row() {
-    step = pole_d + 2 * collar_wall + gap;
+    step = bore_tests[len(bore_tests) - 1] + 2 * collar_wall + gap;
     for (i = [0 : len(bore_tests) - 1])
         translate([i * step, 0, 0]) bore_ring(bore_tests[i]);
 }

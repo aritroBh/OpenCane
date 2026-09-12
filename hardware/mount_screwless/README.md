@@ -6,8 +6,8 @@ replacement — pick whichever one is fitted on the day and say so in `CHANGELOG
 The difference is the bill of materials. `../mount/` needs four M4 screws, four M4
 brass heat-set inserts, an M5 bolt, an M5 nyloc, two M3 countersunk screws, two M3
 inserts, two M3 nylon screws and two nylon nuts, plus a soldering iron with a
-heat-set tip to fit them. This folder needs **none of that**. Four printed parts, a
-cane, and a phone.
+heat-set tip to fit them. This folder needs **none of that**. Four printed parts (six
+if you choose the ball joint), a cane, and a phone.
 
 That is the pitch, not a shortcut: the iPhone already is the sensor suite, the
 compute, the battery and the speaker. If the retrofit that turns an ordinary white
@@ -25,7 +25,7 @@ and cane-specific, and every part depends on them.
 
 | # | Render | Solid volume | What it settles |
 |---|---|---|---|
-| 1 | `coupons.scad`, `what="bore"` | 17 cm³ · 22 g | `bore_clear` — how the collar sits on **your** cane |
+| 1 | `coupons.scad`, `what="bore"` | ~20 cm³ | **the cane diameter itself** — see the conflict below |
 | 2 | `coupons.scad`, `what="thread"` then `"dovetail"` | 12 + 31 cm³ | `thr_clear`, `dt_clear` |
 | 3 | `collar` + `ring` | 16 + 14 cm³ | the clamp |
 | 4 | `arm` + `cradle` | 19 + 34 cm³ | the rest |
@@ -34,8 +34,7 @@ Volumes are measured off the rendered STLs at 100% infill. At 25% gyroid the rea
 mass is well under half. Print times are **unknown — slice them and read the number**;
 they depend on your machine and profile, and no two of your three printers will agree.
 
-Coupons carry **notches, not numbers**: count the notches, fewest = smallest
-clearance. OpenSCAD's `text()` needs fontconfig, which the portable Windows snapshot
+Coupons carry **notches, not numbers**: count the notches, fewest = smallest. OpenSCAD's `text()` needs fontconfig, which the portable Windows snapshot
 does not ship, so text silently renders as nothing and you get four identical
 unlabelled rings. Notches also read by thumb, which is on-brand here.
 
@@ -56,6 +55,21 @@ zip from <https://files.openscad.org/snapshots/> and unzip into `%USERPROFILE%\T
 the build script finds it there on its own. One is already unzipped at
 `C:\Users\sriva\Tools\OpenSCAD-2025.09.15\`.
 
+## Printer
+
+Sliced for the **Creality SPARKX i7** (the profile is already in Creality Print 7.2):
+
+- build volume **260 × 260 × 255 mm** — the largest part, the coupon plate, is
+  174 × 195 mm, so everything fits flat with room
+- 0.4 mm hardened steel nozzle, Klipper; default profile
+  `0.20mm Standard @SPARKX i7 0.4 nozzle`
+- the machine is on the network at `172.23.209.71:4408`, so Creality Print can send
+  straight to it
+- it is a multi-material machine. Print these single-colour — a filament change mid
+  part buys nothing here and the purge wastes more PETG than the parts use.
+
+Nothing in the design needs a specific printer; this is just what it was sized against.
+
 ## How it works
 
 **Clamp — a collet.** The collar's nose is a cone with four slots cut down it. The
@@ -69,6 +83,19 @@ printed thread is reliable in. This is why the collar is not simply a C-clamp wi
 printed bolt across it: that puts the thread axis horizontal, where it prints as a
 stack of overhangs.
 
+**Aiming — pick one.** `joint = "dovetail"` (default) gives a fixed angle set when you
+print the arm: stiffest, nothing to slip, but you reprint the arm to change it.
+`joint = "ball"` gives a clamped ball joint — aim by hand, then screw the lock ring
+down. It adds two parts (`socket`, `lock`) and reuses the same collet trick as the cane
+clamp, so its holding force comes from a wedge you tighten rather than from friction.
+
+Read this before choosing the ball: **both the hardware brief and
+`../mount/DESIGN.md` rejected ball joints deliberately** — "ball joints slip under
+sweep vibration and break the Point-to-Identify calibration." Clamping answers that
+objection but does not delete it. An undertightened clamp still slips, and it now slips
+in two axes instead of none. The dovetail arm stays the safe demo part. Run T7 (shake)
+on whichever you fit and confirm the Mount card still reads 3–8° down afterwards.
+
 **Modularity — one joint type, three interfaces.**
 
 | Part | Is the interface to | Reprint it when |
@@ -76,6 +103,7 @@ stack of overhangs.
 | `collar` | the cane | the cane diameter changes |
 | `arm` | the walking pose | you want a different camera angle |
 | `cradle` | the phone | you change phone |
+| `socket` + `lock` | the aim, if `joint = "ball"` | — |
 
 All three meet at the same sliding dovetail running **along the cane axis**, so the
 phone's weight loads every joint in shear across its widest face and never tries to
@@ -102,10 +130,22 @@ to match how the walker actually holds it and the camera angle follows.
 
 Every one of these is currently a number someone read off a drawing or a caliper once.
 
-- **`pole_d` — the cane.** Recorded 28.75 mm on Sep 10; Sagar later quoted 1.128 in
-  (28.65) and asked for 1.13 in (28.70), which is what the file uses. All three are
-  inside one print tolerance and `bore_clear` dominates, but measure at the exact spot
-  the collar sits, because canes taper.
+- **`pole_d` — the cane. UNRESOLVED, and it is the one number everything depends on.**
+  Three figures are in circulation:
+
+  | Source | Value |
+  |---|---|
+  | Dial caliper, Sagar, Sep 11 — **what this folder uses** | **27.65 mm** |
+  | `1.128 in`, quoted Sep 11 | 28.65 mm |
+  | `hardware/mount/cane_mount.scad` + the hardware brief | 28.75 mm |
+
+  This is a 1.1 mm spread. That is not a rounding difference — it is three times any
+  sane bore clearance, and a collar bored for 28.75 will simply spin on a 27.65 shaft.
+  The bore coupons bracket all three (27.85 / 28.25 / 28.45 / 28.95 / 29.15 mm bores,
+  1–5 notches), so the cane settles it in one 20-minute print. Whatever wins,
+  **`hardware/mount/` is still modelled at 28.75 — one of the two folders is wrong**,
+  so say which in `CHANGELOG.md` once you know. Measure at the exact spot the collar
+  sits; canes taper.
 - **`phone_r`, `plateau_h`** — scaled off Apple's drawing, flagged MEASURE in
   `../mount/cane_mount.scad`. Same caveat here; the cradle inherits them.
 - **Real clamping force.** Unknown. The collet either holds a 233 g phone through a

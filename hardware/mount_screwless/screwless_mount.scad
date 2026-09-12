@@ -31,16 +31,42 @@
 // =====================================================================
 
 /* [Part to export] */
-part = "assembly"; // [assembly, collar, ring, arm, cradle]
+part = "assembly"; // [assembly, collar, ring, arm, cradle, socket, lock]
+
+// How the cradle attaches to the arm.
+//   "dovetail" - fixed angle, set when you print the arm. Stiffest.
+//   "ball"     - clamped ball joint: aim it by hand, then lock it.
+//
+// READ THIS BEFORE CHOOSING "ball". Both the hardware brief and
+// hardware/mount/DESIGN.md rejected a ball joint on purpose: "Ball joints
+// slip under sweep vibration and break the Point-to-Identify calibration."
+// That objection is about a FREE ball (friction only). This one is a
+// clamped ball - the same collet trick as the cane collar, a slotted
+// socket squeezed by a threaded ring - so holding force comes from a wedge
+// you tighten, not from how snugly it printed. That answers the objection
+// but does not erase it: a clamp that is not tightened enough still slips,
+// and now it slips in two axes instead of none. The fixed-angle dovetail
+// arm remains the safe demo part. Test T7 (shake) on whichever you fit,
+// and check the Mount card still reads 3-8 degrees down afterwards.
+joint = "dovetail"; // [dovetail, ball]
 
 world_view = true;  // ghost cane + phone in the assembly preview
 
 /* [Cane] */
-// MEASURED Sep 10 2026: 28.75 mm. Sagar re-quoted 1.128 in (28.65) and
-// asked for 1.13 in (28.70) for room. All three sit inside one print
-// tolerance; bore_clear is what actually sets the fit, and the collet
-// takes up the rest. MEASURE AGAIN with calipers where the collar sits.
-pole_d       = 28.70;  // mm, cane shaft diameter at the collar.
+// 27.65 mm, dial caliper, Sagar, Sep 11 2026. THIS IS THE NUMBER IN USE.
+//
+// It disagrees with everything before it and the disagreement is not a
+// rounding error: hardware/mount/cane_mount.scad and the hardware brief
+// both say 28.75 mm, and Sagar separately quoted 1.128 in (28.65 mm).
+// 27.65 is ~1.1 mm smaller than either, which is three times the bore
+// clearance - far too big to absorb. A collar bored for 28.75 would just
+// spin on a 27.65 shaft.
+//
+// The bore coupons bracket ALL THREE candidates, so one 20-minute print
+// settles it against the real cane instead of against anyone's memory.
+// Print them before the collar. If the winning ring is not near 27.65,
+// change this number and tell the rest of the team.
+pole_d       = 27.65;  // mm, cane shaft diameter at the collar.
 bore_clear   = 0.40;   // mm, ADDED TO DIAMETER. Set this from the coupons.
 collar_wall  = 4.20;   // mm, radial wall around the bore.
 grip_ribs    = 8;      // axial ribs inside the bore that bite the shaft.
@@ -79,6 +105,23 @@ pawl_w       = 10.0;   // mm, pawl width.
 pawl_t       = 1.6;    // mm, pawl spring thickness.
 pawl_len     = 16.0;   // mm, pawl cantilever length.
 pawl_catch   = 1.5;    // mm, how far the catch stands proud.
+
+/* [Ball joint - only used when joint = "ball"] */
+ball_d       = 22.0;   // mm, ball diameter. Bigger = more grip area, more bulk.
+ball_clear   = 0.30;   // mm, added to the socket's spherical radius x2.
+neck_d       = 11.0;   // mm, ball stem. Sets how far you can tilt before it fouls.
+neck_len     = 7.0;    // mm, stem length between the arm and the ball.
+sock_wall    = 4.50;   // mm, wall around the ball.
+sock_mouth   = 0.78;   // fraction of ball_d left open at the lip. Under 1.0 is
+                       // what captures the ball: it snaps past the equator and
+                       // cannot fall back out even with the ring off.
+sock_base    = 7.0;    // mm, solid base below the ball cavity.
+sock_thr_len = 10.0;   // mm, threaded band on the socket.
+sock_cone_len = 12.0;  // mm, slotted cone above it.
+sock_taper   = 1.80;   // mm, radius lost up the socket cone.
+sock_engage  = 10.0;   // mm, how much of that cone the lock ring grips.
+sock_slots   = 4;      // socket fingers.
+sock_slot_w  = 2.40;   // mm, socket slot width.
 
 /* [Geometry] */
 // The repo derives the arm angle as 90 - cane_angle + cam_down, which
@@ -133,6 +176,13 @@ plate_top = phone_h - plateau_h - plateau_clear;   // back plate stops here
 inner_x   = phone_w / 2 + clear;           // inside face of a side wall
 outer_x   = inner_x + wall_t;              // outside face of a side wall
 pad_x     = core_r + pad_t;                // outer face of the collar pad
+// ball joint
+ball_r    = ball_d / 2;
+sock_or   = ball_r + sock_wall;            // socket outer radius = its thread major
+sock_h    = sock_base + sock_thr_len + sock_cone_len;
+sock_ctr  = sock_base + ball_r;            // height of the ball centre in the socket
+lock_h    = sock_thr_len + sock_engage;
+lock_or   = sock_or + thr_clear + ring_wall;
 
 // =====================================================================
 // Thread generator
@@ -247,19 +297,80 @@ module collar() {
 }
 
 // =====================================================================
-// RING - screws down the cone and closes the collet
+// COLLET NUT - screws down a slotted cone and closes it
 // =====================================================================
-module ring() {
+// One module, two uses: the big ring that clamps the cane, and the small
+// lock ring that clamps the ball. Same mechanism, same feel in the hand,
+// one place to fix if the thread fit is wrong.
+module collet_nut(h, outer_r, thr_len, tminor, cone_r_lo, cone_r_hi, flutes) {
     difference() {
-        cylinder(h = ring_h, r = ring_or);
-        translate([0, 0, -eps]) thread(thread_len + 2, thr_minor + thr_clear, thr_depth);
-        translate([0, 0, thread_len])
-            cylinder(h = ring_h - thread_len + eps,
-                     r1 = cone_r0 + thr_clear, r2 = cone_r1 + thr_clear);
-        for (i = [0 : ring_flutes - 1])
-            rotate([0, 0, i * 360 / ring_flutes])
-                translate([ring_or, 0, -eps])
-                    cylinder(h = ring_h + 2 * eps, r = flute_d / 2, $fn = 20);
+        cylinder(h = h, r = outer_r);
+        translate([0, 0, -eps]) thread(thr_len + 2, tminor + thr_clear, thr_depth);
+        translate([0, 0, thr_len])
+            cylinder(h = h - thr_len + eps,
+                     r1 = cone_r_lo + thr_clear, r2 = cone_r_hi + thr_clear);
+        for (i = [0 : flutes - 1])
+            rotate([0, 0, i * 360 / flutes])
+                translate([outer_r, 0, -eps])
+                    cylinder(h = h + 2 * eps, r = flute_d / 2, $fn = 20);
+    }
+}
+
+module ring() {
+    collet_nut(ring_h, ring_or, thread_len, thr_minor, cone_r0, cone_r1, ring_flutes);
+}
+
+module lock() {
+    collet_nut(lock_h, lock_or, sock_thr_len, sock_or - thr_depth,
+               sock_or, sock_or - sock_taper, 8);
+}
+
+// =====================================================================
+// SOCKET - the clamped ball cup. Dovetails onto the cradle.
+// =====================================================================
+// Prints mouth-up with no support: the spherical cavity is a dome over
+// air only above its own equator, and above the equator the wall is
+// closing IN toward the mouth, which is self-supporting.
+module socket() {
+    mouth_r = ball_d * sock_mouth / 2;
+    difference() {
+        union() {
+            cylinder(h = sock_base + sock_thr_len, r = sock_or);
+            translate([0, 0, sock_base + sock_thr_len])
+                cylinder(h = sock_cone_len, r1 = sock_or, r2 = sock_or - sock_taper);
+            // thread band
+            translate([0, 0, sock_base])
+                thread(sock_thr_len, sock_or - thr_depth, thr_depth);
+        }
+        // the ball cavity
+        translate([0, 0, sock_ctr]) sphere(r = ball_r + ball_clear);
+        // mouth, straight up from the top of the ball
+        translate([0, 0, sock_ctr - eps])
+            cylinder(h = sock_h - sock_ctr + 1, r = mouth_r);
+        // slots so the fingers can open for the ball and close on it
+        for (i = [0 : sock_slots - 1])
+            rotate([0, 0, i * 360 / sock_slots + 45])
+                translate([0, -sock_slot_w / 2, sock_ctr - ball_r * 0.35])
+                    cube([sock_or + 2, sock_slot_w, sock_h]);
+    }
+}
+
+// The socket plus the tenon that plugs it into the cradle's dovetail.
+module socket_part() {
+    union() {
+        socket();
+        translate([0, 0, dt_depth]) rotate([0, 180, 0]) rotate([0, 0, 90]) dt_tenon();
+    }
+}
+
+// Ball on a neck, for the far end of the arm.
+module ball_stud() {
+    cylinder(h = neck_len, r = neck_d / 2);
+    translate([0, 0, neck_len + ball_r * 0.72]) sphere(r = ball_r);
+    // blend the neck into the ball so the joint is not a stress riser
+    hull() {
+        translate([0, 0, neck_len - eps]) cylinder(h = eps, r = neck_d / 2);
+        translate([0, 0, neck_len + ball_r * 0.72]) sphere(r = ball_r * 0.92);
     }
 }
 
@@ -280,10 +391,12 @@ module arm() {
             }
             // tenon that enters the collar (points -X)
             translate([0, 0, 0]) rotate([0, 90, 0]) dt_tenon();
-            // pad + tenon for the cradle, set over by arm_angle
+            // far end: either the cradle dovetail at a fixed angle, or a
+            // ball you aim by hand and lock.
             translate([arm_reach, 0, 0]) rotate([0, arm_angle, 0]) {
                 translate([-3, -arm_w / 2, -arm_t / 2]) cube([3 + eps, arm_w, arm_t]);
-                rotate([0, -90, 0]) dt_tenon();
+                if (joint == "ball") rotate([0, -90, 0]) mirror([0, 0, 1]) ball_stud();
+                else                 rotate([0, -90, 0]) dt_tenon();
             }
         }
         // pocket that frees the collar pawl to flex
@@ -387,6 +500,8 @@ else if (part == "collar")  collar();
 else if (part == "ring")    ring();
 else if (part == "arm")     arm();
 else if (part == "cradle")  cradle();
+else if (part == "socket")  socket_part();
+else if (part == "lock")    lock();
 
 echo(str("bore D", bore_d, "  collar OD D", core_r * 2, "  ring OD D", ring_or * 2,
          "  arm ", arm_angle, "deg  cradle covers ", plate_top, "mm of ", phone_h));

@@ -113,7 +113,12 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [ ] Thread + dovetail coupons; set `thr_clear` and `dt_clear`
 - [ ] Print collar + ring; check the ring actually closes the collet on the real cane
 - [ ] Print arm + cradle; T0 fit with the phone in it
-- [ ] Measure `pole_d` again with calipers at the exact spot the collar sits (28.75 / 28.70 unresolved)
+- [!] **Cane diameter disputed: 27.65 (dial caliper) vs 28.75 (hardware/mount + brief) vs
+      28.65 (1.128 in).** 1.1 mm apart. `mount_screwless/` uses 27.65; `mount/` still uses
+      28.75. Bore coupons bracket all three — print them and settle it, then fix the loser.
+- [ ] Ball joint (`joint = "ball"`): print socket + lock, check the clamp actually holds the
+      phone through a sweep. Brief and mount/DESIGN.md rejected free ball joints; this one is
+      clamped, which answers that but is untested.
 - [ ] Decide on the day: `hardware/mount/` (screwed) or `hardware/mount_screwless/`. Record which in
       CHANGELOG.md.
 - [ ] T7 shake / T8 drop on whichever is fitted; check the camera still reads 3–8° down afterwards
