@@ -7,9 +7,10 @@
 //  Pure function over raw buffers so the app can pass CVPixelBuffer memory without copying
 //  and the tests can pass plain arrays.
 //
-//  Purpose: the first step of the obstacle pipeline. `DepthFrameProcessor` (app) calls the raw
-//  entry point on every ARKit depth frame (~30 Hz normal / up to 60 Hz high-rate); the resulting `LaneGrid` goes into a
-//  `LaneReport`, which `CueDecider` turns into haptic cues.
+//  Purpose: the first step of the obstacle pipeline. `DepthFrameProcessor.computeGrid` (app, on
+//  its serial depth queue) calls the raw entry point on every frame that passes its `PublishGate`
+//  (~30 Hz normal / up to 60 Hz high-rate); the resulting `LaneGrid` goes into a `LaneReport`,
+//  which `CueDecider` turns into haptic cues. The same buffers also feed `DepthSnapshot.make`.
 //
 //  Key invariants:
 //    · Depth is Float32 metres; confidence is UInt8 (0 low / 1 medium / 2 high); medium must
@@ -19,7 +20,10 @@
 //    · Output index 0 = left, 1 = centre, 2 = right; band 0 (top) = head, band 1 = torso;
 //      `.infinity` = clear / too few samples. The centre window ignores the ground skip.
 //    · No allocation per frame: the caller owns `scratch`; one caller at a time.
-//  Tests: LaneMathTests.swift (11 tests; orientation is only verifiable on hardware).
+//    · ⚠ No gravity correction: the ground skip is a fixed image fraction, so the mount must aim
+//      the camera 3–8° below the horizon (`MountTilt`, LaneReport.swift).
+//  Tests: LaneMathTests.swift (15 tests: 10 for the lane grid, plus `TileLevel`, `MountTilt` and
+//  `PublishGate` pins; orientation is only verifiable on hardware).
 //
 
 import Foundation
@@ -36,7 +40,8 @@ public struct LaneConfig: Sendable, Equatable {
     public var minConfidence: UInt8 = 1
     /// Bottom fraction of the upright image skipped as ground. Pinned by `groundBandIsSkipped`.
     public var groundSkipFraction: Float = 0.25
-    /// Sample every Nth pixel on both axes (clamped to ≥ 1).
+    /// Sample every Nth pixel on both axes (clamped to ≥ 1): 4 reads 1 pixel in 16 of ARKit's
+    /// 256 × 192 depth map (the centre window always samples every 2nd pixel).
     public var subsampleStep = 4
     /// Fewer valid samples than this → the cell reports `.infinity` (clear).
     public var minSamplesPerCell = 8
@@ -45,6 +50,10 @@ public struct LaneConfig: Sendable, Equatable {
     public var percentile: Float = 0.10
     /// Side of the square window (scene pixels) used for `centerDepth`.
     public var centerWindow = 16
+    /// Depth threshold below which low-confidence readings are accepted as an obstacle (m).
+    /// At < 35 cm iPhone LiDAR SPAD saturation marks returns confidence 0; treating them as clear
+    /// creates an inverted safety gradient where point-blank walls appear clear.
+    public var closeOverrideThreshold: Float = 0.35
 
     /// Creates the default portrait, unmirrored, medium-confidence configuration.
     public init() {}
@@ -75,7 +84,7 @@ public struct LaneGrid: Sendable, Equatable {
     }
 
     /// Closest thing in a lane across both bands.
-    /// - Parameter lane: 0 left, 1 centre, 2 right.
+    /// - Parameter lane: 0 left, 1 centre, 2 right (not range-checked: other values trap).
     /// - Returns: metres (`.infinity` when clear).
     public func nearest(lane: Int) -> Float { min(head[lane], torso[lane]) }
 }
@@ -118,16 +127,21 @@ public enum LaneMath {
         let laneW = sceneW / 3
 
         // Reads one scene-space pixel through the portrait remap; nil when low-confidence,
-        // non-finite or ≤ 5 cm.
+        // non-finite or ≤ 5 cm. Proximity overrides confidence: returns < closeOverrideThreshold (35 cm)
+        // represent near-field physical presence (where LiDAR saturation drops confidence to 0) rather than noise.
         @inline(__always) func sample(sx: Int, sy: Int) -> Float? {
             let bx = rotate ? sy : sx
             let by = rotate ? (bufH - 1 - sx) : sy
+            let d = depth.load(fromByteOffset: by * depthBytesPerRow + bx * MemoryLayout<Float>.stride, as: Float.self)
+            guard d.isFinite, d > 0.05 else { return nil }
+            if d < config.closeOverrideThreshold {
+                return d
+            }
             if let confidence {
                 let c = confidence.load(fromByteOffset: by * confidenceBytesPerRow + bx, as: UInt8.self)
                 if c < config.minConfidence { return nil }
             }
-            let d = depth.load(fromByteOffset: by * depthBytesPerRow + bx * MemoryLayout<Float>.stride, as: Float.self)
-            return (d.isFinite && d > 0.05) ? d : nil
+            return d
         }
 
         var head = [Float](repeating: .infinity, count: 3)

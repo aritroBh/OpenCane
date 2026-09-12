@@ -13,7 +13,21 @@
 //
 //  Why: a long cane finds drop-offs only at arm's length and never reads a "SIDEWALK CLOSED"
 //  sign; the LiDAR sees the ground profile out to ~5 m and the camera sees signs and cones.
-//  Tests: HazardTests.swift.
+//
+//  Owners (one each; every stateful type is a `Sendable` struct with `mutating` updates):
+//    · `GroundHazardDetector` — `DepthFrameProcessor.groundDetector`, on its serial depth queue,
+//      fed `GroundSampler.samples(frame:walkDirection:)` at ≤ 10 Hz under a looser 1.5 rad/s gyro
+//      gate and only when `MountTilt.groundUsable` (0–15° down); the confirmed hazard rides on
+//      every `LaneReport.groundHazard` until the next evaluation.
+//    · `GroundHazardPolicy` — `AppModel.groundPolicy` (AR clock), reset in `startRouteNow`; an
+//      announced hazard is spoken at `.safety` with heavy cane taps and logged via `recordHazard`.
+//    · `SignPolicy` / `HazardWatchPolicy` / `HazardPrompt` — `HazardScanner` (reference-date clock);
+//      `OnDeviceVLMClient` builds throwaway `SignPolicy` values (`now: 0`) for its facts / template.
+//    · `HazardRecord` / `HazardGeoJSON` — `HazardLog.record` (Documents/hazards/*.geojson).
+//  ⚠ Drop-off detection and the hazard watch ship OFF by default (`AppModel.groundHazardsEnabled`,
+//  `hazardWatchEnabled`) until tuned on the real cane; sign reading is on.
+//  Tests: HazardTests.swift (46), plus `SignPhraseFilterTests` (CueProfileTests.swift) for
+//  `SignPolicy.allowedPhrases` and `groundHazardsNeedAMountLikeTilt` (LaneMathTests.swift).
 //
 
 import Foundation
@@ -24,9 +38,13 @@ import Foundation
 /// metres ahead along the horizontal walking direction, metres to the right, and height relative
 /// to the camera (negative = below the phone).
 public struct GroundSample: Sendable, Equatable {
+    /// Metres ahead along the horizontal walking direction.
     public var forward: Float
+    /// Metres to the walker's right of that direction (negative = left).
     public var lateral: Float
+    /// Metres relative to the camera, + = up (a mounted phone sees ground at about −0.5…−1.3).
     public var height: Float
+    /// Memberwise, no validation (non-finite heights are filtered by `classify`).
     public init(forward: Float, lateral: Float, height: Float) {
         self.forward = forward
         self.lateral = lateral
@@ -34,6 +52,8 @@ public struct GroundSample: Sendable, Equatable {
     }
 }
 
+/// What kind of ground change a confirmed hazard is. Raw values are also `HazardRecord.kind` and the
+/// `type` of the `hazard` trip-log event — keep them stable.
 public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable {
     /// Ground falls away by more than a step (curb down, a short step down, a trench). The lower
     /// surface must be visible within the scan: a long flight of stairs down or a ledge deeper than
@@ -47,6 +67,8 @@ public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable
     /// parking block). Waist-high things are the lane grid's job, not this detector's.
     case lowObstacle
 
+    /// Object-first line without a distance ("Drop-off ahead"); used only as `GroundHazard.spokenLine`'s
+    /// fallback when the distance cannot be phrased.
     public var spoken: String {
         switch self {
         case .dropOff: return "Drop-off ahead"
@@ -69,7 +91,9 @@ public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable
     }
 }
 
+/// One ground hazard: what, how far to its nearer edge, how big, and where along the walk.
 public struct GroundHazard: Sendable, Equatable {
+    /// Drop-off / hole / step up / low obstacle.
     public var kind: GroundHazardKind
     /// Metres ahead to the start of the hazard (the conservative, nearer edge).
     public var distance: Float
@@ -79,6 +103,8 @@ public struct GroundHazard: Sendable, Equatable {
     /// Stays put while the walker approaches, so GroundHazardPolicy can tell "the same curb,
     /// closer" from "a new curb". Equals `distance` when nobody tracks the walk (tests).
     public var anchor: Float
+    /// Memberwise; `anchor: nil` means "nobody tracks the walk" and defaults to `distance`
+    /// (`GroundHazardDetector.update` overwrites it with the world-anchored position).
     public init(kind: GroundHazardKind, distance: Float, delta: Float, anchor: Float? = nil) {
         self.kind = kind
         self.distance = distance
@@ -90,6 +116,7 @@ public struct GroundHazard: Sendable, Equatable {
     /// `SpokenPhrases.obstacleLine` — the walker brakes on the number, then learns what for.
     /// A non-finite distance (unreachable from the detector, which only reports bin starts)
     /// falls back to the direction-only kind line rather than speaking an empty number.
+    /// Pinned by `groundHazardLine` ("Two meters ahead, drop-off.", "One and a half meters ahead, hole.").
     public var spokenLine: String {
         let phrase = SpokenDistance.phrase(distance)
         guard !phrase.isEmpty else { return "\(kind.spoken)." }
@@ -110,16 +137,27 @@ public struct GroundHazard: Sendable, Equatable {
 /// last `windowFrames` trusted frames. Untrusted frames (cane mid-sweep) are ignored entirely.
 public struct GroundHazardDetector: Sendable {
 
+    /// Tunables (metres unless noted). ⚠ Changing any default needs every ground test in
+    /// HazardTests and a device walk toward a real curb (the feature ships off by default).
     public struct Config: Sendable, Equatable {
+        /// Half-width of the walking corridor: samples with |lateral| above this are ignored.
         public var corridorHalfWidth: Float = 0.45
+        /// Start of the near field whose median height is the ground reference.
         public var nearMin: Float = 0.8
+        /// End of the near field, and where the first bin starts.
         public var nearMax: Float = 1.5
+        /// Bins run while their start is below this (1.5, 1.8, … 3.3 m). Drops need their lower
+        /// ground visible within it: a deep ledge or long stair down is not detected (occlusion).
         public var scanMax: Float = 3.5
+        /// Bin length; a bin's height is the median of its samples.
         public var binSize: Float = 0.3
+        /// Sparser bins are skipped entirely (a missing bin adds ramp slack, see `classify`).
         public var minSamplesPerBin = 6
+        /// Fewer near-field samples → no verdict (`noNearFieldMeansNoVerdict`).
         public var minNearSamples = 12
         /// Where the ground must be relative to the camera for a cane-mounted phone (m). A desk
         /// 30 cm below a hand-held phone is not the ground (real-phone false "Hole ahead").
+        /// A reference outside this range gives no verdict (`aDeskIsNotTheGround`).
         public var groundHeightRange: ClosedRange<Float> = -1.3 ... -0.5
         /// Drop / hole: bin this far below the ground reference (m).
         public var dropThreshold: Float = 0.12
@@ -127,24 +165,35 @@ public struct GroundHazardDetector: Sendable {
         public var riseThreshold: Float = 0.10
         /// Anything taller than this above ground is the lane grid's business, not ours (m).
         public var maxRise: Float = 0.5
-        /// Minimum jump between consecutive bins for a real edge (m).
+        /// Minimum jump between consecutive bins for a real edge (m), compared against the previous
+        /// TWO bins (a mid-bin curb face splits its jump; a ≤ 10 % ramp changes ≤ 6 cm over two bins).
+        /// ⚠ Do not swap the `max`/`min` sense back to adjacent-bin only (`aMidBinCurbFaceIsStillFound`).
         public var edgeJump: Float = 0.07
+        /// History length, in trusted evaluations.
         public var windowFrames = 5
+        /// Agreeing evaluations (same family, anchors within `distanceTolerance`) needed to confirm.
         public var confirmFrames = 3
+        /// Agreement window on the world-anchored position (distance ahead + metres walked).
         public var distanceTolerance: Float = 0.6
         /// Evaluations older than this (s) never pair with a fresh one.
         public var maxAge: TimeInterval = 2
+        /// The defaults above.
         public init() {}
     }
 
+    /// The tuning in use; may be replaced between frames.
     public var config: Config
     /// One entry per trusted evaluation: the hazard (or nil), its world-anchored position
     /// (distance ahead + metres already walked), and when.
     private var history: [(hazard: GroundHazard?, at: Float, time: TimeInterval)] = []
 
+    /// An empty history with `config` (default tuning).
     public init(config: Config = Config()) { self.config = config }
 
-    /// Per-frame classification without memory (exposed for tests and the live view).
+    /// Per-frame classification without memory (exposed for tests; the app only calls `update`).
+    /// - Parameter samples: one frame's `GroundSample`s, any order.
+    /// - Returns: the nearest-edge hazard of the first bin that trips a rule, or nil. A drop in the
+    ///   last bin is reported at once (earliest warning); a rise there waits for a closer frame.
     public func classify(_ samples: [GroundSample]) -> GroundHazard? {
         let c = config
         let corridor = samples.filter { abs($0.lateral) <= c.corridorHalfWidth && $0.height.isFinite }
@@ -244,6 +293,7 @@ public struct GroundHazardDetector: Sendable {
     }
 
     /// 0 = the ground falls away (drop-off, hole), 1 = something rises (step up, low obstacle).
+    /// Frames agree within a family (`dropAndHoleFramesAgreeAsOneHazard`).
     static func family(_ k: GroundHazardKind) -> Int {
         switch k {
         case .dropOff, .pothole: return 0
@@ -258,8 +308,11 @@ public struct GroundHazardDetector: Sendable {
         return hs[min(hs.count - 1, hs.count * 3 / 4)]
     }
 
+    /// Clears the confirmation history. Called by `DepthFrameProcessor` on every frame while ground
+    /// hazards are switched off, so turning them on starts clean.
     public mutating func reset() { history.removeAll() }
 
+    /// Median of a non-empty array; an even count averages the two middle values. Internal.
     static func median(_ xs: [Float]) -> Float {
         let s = xs.sorted()
         return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
@@ -273,17 +326,28 @@ public struct GroundHazardDetector: Sendable {
 public struct GroundHazardPolicy: Sendable, Equatable {
     /// Same hazard, not getting closer (walker standing at it): repeat this rarely (s).
     public var repeatInterval: TimeInterval = 30
+    /// The same hazard (kind + place) is announced again once it is at least this much closer (m).
     public var closerBy: Float = 1.0
     /// Two sightings of one kind whose anchors are this close (m) are the same hazard.
     public var samePlace: Float = 1.0
+    /// The last ANNOUNCED hazard (not the last seen), with the caller's `now` of the announcement.
     private var last: (kind: GroundHazardKind, distance: Float, anchor: Float, time: TimeInterval)?
 
+    /// Default tuning (30 s / 1 m / 1 m), nothing announced yet.
     public init() {}
 
+    /// Compares the tunables only; the tuple `last` is not `Equatable` (and is transient state).
     public static func == (a: GroundHazardPolicy, b: GroundHazardPolicy) -> Bool {
         a.repeatInterval == b.repeatInterval && a.closerBy == b.closerBy && a.samePlace == b.samePlace
     }
 
+    /// True when `h` should be spoken now; records it as the last announcement when so.
+    /// Silent only when ALL hold: same kind as the last announcement, anchors within `samePlace`,
+    /// not `closerBy` nearer, and less than `repeatInterval` since it was said.
+    /// - Parameters:
+    ///   - h: a confirmed hazard (`LaneReport.groundHazard`).
+    ///   - now: seconds; the app passes `report.timestamp` (ARKit clock).
+    /// Pinned by `groundHazardsAreAnnouncedSparingly`, `aSecondCurbOfTheSameKindIsAnnounced`.
     public mutating func shouldAnnounce(_ h: GroundHazard, now: TimeInterval) -> Bool {
         if let l = last, l.kind == h.kind, abs(l.anchor - h.anchor) <= samePlace,
            l.distance - h.distance < closerBy, now - l.time < repeatInterval {
@@ -293,6 +357,8 @@ public struct GroundHazardPolicy: Sendable, Equatable {
         return true
     }
 
+    /// Forget the last announcement (`AppModel.startRouteNow`: a new route warns about the first
+    /// curb again).
     public mutating func reset() { last = nil }
 }
 
@@ -312,7 +378,9 @@ public struct SignPolicy: Sendable, Equatable {
         "PUSH BUTTON", "CLOSED", "EXIT", "ENTRANCE", "PULL", "PUSH",
     ].sorted { $0.count > $1.count }
 
+    /// Seconds before the same phrase (or any phrase inside it) may be read again.
     public var repeatInterval: TimeInterval = 60
+    /// Vision confidence (0…1) below which a text line is ignored (`irrelevantOrUnsureTextIsIgnored`).
     public var minConfidence: Float = 0.5
     /// One-word phrases (EXIT, PUSH, PULL, CLOSED, DETOUR …) need the text line at least this tall
     /// (fraction of the image height), i.e. close. Multi-word safety phrases ("SIDEWALK CLOSED")
@@ -324,8 +392,10 @@ public struct SignPolicy: Sendable, Equatable {
     /// `CueRules.allowedSignPhrases` (Quiet / Indoors: safety signs only). Pinned by
     /// `SignPhraseFilterTests`.
     public var allowedPhrases: Set<String>?
+    /// Phrase → caller's `now` when it (or a phrase containing it) was last spoken.
     private var lastSaid: [String: TimeInterval] = [:]
 
+    /// Default tuning, every phrase allowed, nothing said yet.
     public init() {}
 
     /// One recognized text line: its string, confidence (0…1) and line-box height as a fraction
@@ -334,20 +404,28 @@ public struct SignPolicy: Sendable, Equatable {
     public struct SeenText: Sendable, Equatable {
         /// Where the line sits in the image (normalized, Vision's bottom-left origin).
         public struct Box: Sendable, Equatable {
+            /// Left edge (0…1).
             public var minX: Float
+            /// Right edge (0…1).
             public var maxX: Float
+            /// Bottom edge (0…1, bottom-left origin); the top is `minY + SeenText.height`.
             public var minY: Float
+            /// Memberwise.
             public init(minX: Float, maxX: Float, minY: Float) {
                 self.minX = minX
                 self.maxX = maxX
                 self.minY = minY
             }
         }
+        /// The recognised string, as Vision returned it (normalized when matched).
         public var text: String
+        /// Vision's confidence, 0…1.
         public var confidence: Float
+        /// Line-box height as a fraction of the image height; 0 = unknown = far.
         public var height: Float
         /// nil = position unknown: such lines are never joined with other far lines.
         public var box: Box?
+        /// Built by `VisionDetections.seenTexts` (app) or tests; `height` 0 and `box` nil by default.
         public init(text: String, confidence: Float, height: Float = 0, box: Box? = nil) {
             self.text = text
             self.confidence = confidence
@@ -359,7 +437,8 @@ public struct SignPolicy: Sendable, Equatable {
     /// True when `upper` sits directly above `lower` on the same sign: their x ranges overlap,
     /// their heights are within 1.5x of each other, and the gap between them is under one line
     /// height. A stacked "SIDEWALK" / "CLOSED" qualifies; a distant "ROAD" and a shop's "CLOSED"
-    /// do not.
+    /// do not. False when either line lacks a box or a height. Pinned by `farStackedSignLinesAreJoined`,
+    /// `stackedJoinWorksAcrossTheHeightBoundaryAndCloseWordsNeedGeometry`.
     static func stacked(_ upper: SeenText, over lower: SeenText) -> Bool {
         guard let a = upper.box, let b = lower.box, upper.height > 0, lower.height > 0 else { return false }
         let overlap = min(a.maxX, b.maxX) - max(a.minX, b.minX)
@@ -371,6 +450,7 @@ public struct SignPolicy: Sendable, Equatable {
     /// True when a text line may be mentioned at all (to the walker or to the language model): it
     /// is close (`shortPhraseMinHeight` or taller) or it is several words. A far lone word ("EXIT"
     /// on a storefront across the street) is never passed on (Antigravity, review of 3efc0b1).
+    /// Caller: `OnDeviceVLMClient.facts`. Pinned by `onlyCloseOrMultiWordTextMayBeMentioned`.
     public func mayMention(_ s: SeenText) -> Bool {
         s.height >= shortPhraseMinHeight || Self.normalize(s.text).contains(" ")
     }
@@ -383,7 +463,16 @@ public struct SignPolicy: Sendable, Equatable {
         line(for: texts.map { SeenText(text: $0.text, confidence: $0.confidence, height: 1) }, now: now)
     }
 
-    /// - Parameter seen: recognized lines with size; see `shortPhraseMinHeight`.
+    /// The sized entry point (`HazardScanner.scanSigns`, `OnDeviceVLMClient`).
+    /// Matching: phrases longest first, as whole words (" PHRASE " inside " LINE "). One-word
+    /// phrases match only close lines (or close joins); multi-word phrases match any size. Lines
+    /// are joined only when `stacked` (boxed) or, for unboxed fixtures, when all close. A phrase
+    /// inside an already-matched one is skipped; a disallowed one is skipped unstamped; a recently
+    /// said one is skipped but still counts as matched. The first due phrase is stamped (with every
+    /// phrase inside it) and returned.
+    /// - Parameters:
+    ///   - seen: recognized lines with size; see `shortPhraseMinHeight`.
+    ///   - now: seconds, any clock, the same one on every call.
     /// - Returns: "Sign: sidewalk closed." or nil.
     public mutating func line(for seen: [SeenText], now: TimeInterval) -> String? {
         let usable = seen.filter { $0.confidence >= minConfidence }
@@ -403,6 +492,7 @@ public struct SignPolicy: Sendable, Equatable {
             for lower in boxed[(i + 1)...] where Self.stacked(chain[chain.count - 1], over: lower) { chain.append(lower) }
             if chain.count > 1 { chains.append(chain) }
         }
+        // One stacked chain as a space-padded haystack (" SIDEWALK CLOSED ").
         func joined(_ c: [SeenText]) -> String { " " + c.map { Self.normalize($0.text) }.joined(separator: " ") + " " }
         let close = usable.filter(isClose).map { " \(Self.normalize($0.text)) " }
             + [" " + unboxedClose.joined(separator: " ") + " "]
@@ -431,6 +521,7 @@ public struct SignPolicy: Sendable, Equatable {
     }
 
     /// Upper-case, letters and spaces only, single-spaced ("Sidewalk-closed!" → "SIDEWALK CLOSED").
+    /// Digits become spaces too, so "EX1T" never matches "EXIT".
     static func normalize(_ s: String) -> String {
         let mapped = s.uppercased().map { $0.isLetter ? $0 : " " }
         return String(mapped).split(separator: " ").joined(separator: " ")
@@ -446,6 +537,9 @@ public enum HazardPrompt {
     /// with the number, and a free-text VLM reply should match so the walker hears one order.
     /// `HazardWatchPolicy.line` does not reorder — it wraps the first sentence as written — so
     /// the ordering contract lives here, in the prompt.
+    /// ⚠ Identity matters: `VLMClient` / `OnDeviceVLMClient` detect hazard mode with
+    /// `prompt == HazardPrompt.text` (shorter cloud budget, labels-only on-device path) — never
+    /// build a variant string.
     public static let text = """
     You are the eyes of a blind pedestrian walking forward. Look only at the walking path in the \
     next 5 meters. If there is a hazard a cane might miss or that is not on a map (construction, \
@@ -456,6 +550,11 @@ public enum HazardPrompt {
     """
 }
 
+/// When the periodic vision-model hazard check asks, and what (if anything) its reply becomes.
+/// Owner: `HazardScanner.watchPolicy` (reference-date clock). Pinned by
+/// `hazardWatchAsksOnlyWhileWalkingAndRarely`, `hazardWatchRepliesBecomeShortCautions`,
+/// `hazardWatchReassuranceIsRejected`, `hazardWatchUnknownObjectsAreRejected`,
+/// `aCloserUpdateIsNotADuplicate`, `hazardReplyKeepsDecimals`, `aLateReplyLosesItsDistance`.
 public struct HazardWatchPolicy: Sendable, Equatable {
     /// Seconds between checks while walking.
     public var interval: TimeInterval = 8
@@ -463,20 +562,27 @@ public struct HazardWatchPolicy: Sendable, Equatable {
     public var minSpeed: Double = 0.5
     /// A reply that shares this fraction of its words with a recent one is a repeat.
     public var similarity: Double = 0.6
+    /// Seconds a spoken reply is remembered for the repeat check.
     public var repeatWindow: TimeInterval = 30
+    /// `now` of the last granted ask (−∞: the first walking tick asks).
     private var lastAsk: TimeInterval = -.infinity
+    /// Spoken replies within `repeatWindow`: their non-numeric word set, first number, and time.
     private var recent: [(words: Set<String>, distance: Double?, time: TimeInterval)] = []
 
     /// Path-hazard words the cloud watch is allowed to turn into an advisory caution. A VLM can
     /// still be wrong about a listed word, but an arbitrary object is not a hazard signal at all.
+    /// Stored stemmed (`SceneVocabulary.stem`); a reply needs at least one of them
+    /// (`hazardWatchUnknownObjectsAreRejected`).
     private static let allowedHazardWords: Set<String> = Set([
         "cone", "barrier", "barricade", "trench", "pothole", "hole", "curb", "construction",
         "branch", "bike", "bicycle", "scooter", "pole", "stairs", "step", "fence", "snow",
         "ice", "debris", "obstacle", "bench", "trash", "car", "vehicle", "motorcycle", "low",
     ].map { SceneVocabulary.stem($0) })
 
+    /// Default tuning (8 s, 0.5 m/s, 0.6, 30 s), nothing asked or said yet.
     public init() {}
 
+    /// Compares `interval` and `minSpeed` only (the tuples are transient state).
     public static func == (a: HazardWatchPolicy, b: HazardWatchPolicy) -> Bool {
         a.interval == b.interval && a.minSpeed == b.minSpeed
     }
@@ -485,7 +591,11 @@ public struct HazardWatchPolicy: Sendable, Equatable {
     /// the next tick may try again instead of waiting a full interval (Muse final review).
     public mutating func refund(now: TimeInterval) { lastAsk = now - interval + 2 }   // retry in 2 s, not every tick (Muse)
 
-    /// True when a new check should be sent now.
+    /// True when a new check should be sent now: `speed > minSpeed` (strict) and ≥ `interval` since
+    /// the last granted ask, which this call then records.
+    /// - Parameters:
+    ///   - now: seconds (reference-date in the app).
+    ///   - speed: walking speed, m/s (`HazardScanner.currentSpeed()`, 0 when the fix is stale).
     public mutating func shouldAsk(now: TimeInterval, speed: Double) -> Bool {
         guard speed > minSpeed, now - lastAsk >= interval else { return false }
         lastAsk = now
@@ -494,6 +604,10 @@ public struct HazardWatchPolicy: Sendable, Equatable {
 
     /// Parses the model's reply into a spoken line ("Caution: cones ahead, 3 meters."), or nil for
     /// NONE / empty / a near-duplicate of something said in the last `repeatWindow` seconds.
+    /// In order: trim whitespace and quotes / asterisks / backticks; "NONE…" or empty → nil; any
+    /// `CloudSceneGate.reassurance` → nil; cut to the first sentence (decimal-safe); no allowed
+    /// hazard word → nil; first 12 words; a Jaccard ≥ `similarity` repeat → nil unless its first
+    /// number is ≥ 1 lower (closer). The reply is wrapped as written, never reordered.
     public mutating func line(forReply reply: String, now: TimeInterval) -> String? {
         var text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'*`"))
@@ -534,6 +648,7 @@ public struct HazardWatchPolicy: Sendable, Equatable {
             .trimmingCharacters(in: .whitespaces)
     }
 
+    /// |a ∩ b| / |a ∪ b|; 0 for two empty sets. Internal.
     static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
         let u = a.union(b).count
         return u == 0 ? 0 : Double(a.intersection(b).count) / Double(u)
@@ -546,17 +661,20 @@ public struct HazardWatchPolicy: Sendable, Equatable {
 public struct HazardRecord: Sendable, Equatable, Codable {
     /// "dropOff" / "pothole" / "stepUp" / "lowObstacle" / "sign" / "vision".
     public var kind: String
-    /// What was spoken ("Drop-off ahead, two meters.").
+    /// What was spoken ("Two meters ahead, drop-off.", "Sign: sidewalk closed.", "Caution: cones ahead.").
     public var text: String
+    /// Degrees (0 when there was no fix).
     public var latitude: Double
+    /// Degrees (0 when there was no fix).
     public var longitude: Double
-    /// Horizontal accuracy of the fix (m).
+    /// Horizontal accuracy of the fix (m); −1 = no fix, which `HazardGeoJSON` writes as null geometry.
     public var accuracy: Double
     /// Seconds since 1970.
     public var time: TimeInterval
     /// Snapshot file name next to the GeoJSON, if one was saved.
     public var photo: String?
 
+    /// Memberwise; `photo` defaults to nil. Built by `HazardLog.record`.
     public init(kind: String, text: String, latitude: Double, longitude: Double, accuracy: Double,
                 time: TimeInterval, photo: String? = nil) {
         self.kind = kind
@@ -569,10 +687,14 @@ public struct HazardRecord: Sendable, Equatable, Codable {
     }
 }
 
+/// The hazard map encoder (RFC 7946). Caller: `HazardLog.record`, which rewrites the session's
+/// whole file on every record. Pinned by `hazardMapIsValidGeoJSON`, `aHazardWithoutAFixHasNullGeometry`.
 public enum HazardGeoJSON {
     /// A FeatureCollection of Points (lon, lat order, per RFC 7946) that opens in geojson.io,
     /// QGIS, Google My Maps or Apple's Files preview. A record with no fix (accuracy < 0) gets a
-    /// null geometry (valid RFC 7946 §3.2) instead of a bogus point at 0, 0.
+    /// null geometry (valid RFC 7946 §3.2) instead of a bogus point at 0, 0. Properties: `kind`,
+    /// `text`, `accuracy_m`, `time` (ISO 8601), `photo` when set; pretty-printed, sorted keys.
+    /// - Throws: `JSONSerialization` errors (not expected for these value types).
     public static func encode(_ records: [HazardRecord]) throws -> Data {
         let iso = ISO8601DateFormatter()
         let features: [[String: Any]] = records.map { r in

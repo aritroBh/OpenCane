@@ -22,7 +22,7 @@ wins wherever the two disagree.
 - [Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)](#module-speech-audio-scene-ioscanekitspeech-ioscanekitaudio-ioscanekitscene)
 - [Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity](#module-navigation-trip--gps-waypoint-engine-turn-settling-route-sources-trip-logtracker-live-activity)
 - [Module `watch-widget-shared`](#module-watch-widget-shared)
-- [Module `family-alerts` — cane events → the Grok Bot routine (Step 34)](#module-family-alerts--cane-events--the-grok-bot-routine-step-34)
+- [Module `family-alerts` — cane events → the Grok Bot routine (Step 39)](#module-family-alerts--cane-events--the-grok-bot-routine-step-39)
 - [Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI](#module-ui-tests-build--phone-ui-xcuitests-xcodegen-build-ci)
 
 ## Data flow
@@ -165,6 +165,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 | `minSamplesPerCell` | `8` | Fewer valid samples → cell = `.infinity` (clear) |
 | `percentile` | `0.10` | Index `Int(count × percentile)` of sorted samples ("nearest 10 % of the cell") |
 | `centerWindow` | `16` | Side (scene px) of the square window for `centerDepth` |
+| `closeOverrideThreshold` | `0.35` m | Proximity floor below which low-confidence returns (< 35 cm, SPAD saturation against point-blank walls) are accepted as obstacles |
 
 **`struct LaneGrid: Sendable, Equatable`** — `head: [Float]`, `torso: [Float]` (index 0 = left, 1 = centre, 2 = right; metres; `.infinity` = clear/no data), `centerDepth: Float` (median of centre window, `.infinity` if unknown). `static let empty` = all infinity. `nearest(lane:) -> Float` = `min(head[lane], torso[lane])`.
 
@@ -172,12 +173,12 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 - `static func computeLanes(depth: UnsafeRawPointer, depthBytesPerRow: Int, confidence: UnsafeRawPointer?, confidenceBytesPerRow: Int, width: Int, height: Int, config: LaneConfig, scratch: inout [Float]) -> LaneGrid`
   - Raw entry point used by the app (`DepthFrameProcessor.computeGrid`) over CVPixelBuffer memory. Depth is Float32 metres; confidence is UInt8. **Both row strides must be honoured** (CVPixelBuffer rows are padded). `scratch` is a reusable sample buffer (no per-frame allocation); not thread-safe — one caller at a time.
   - Geometry: `sceneW = rotate ? bufH : bufW`, `sceneH = rotate ? bufW : bufH`; `usableH = max(2, Int(sceneH × (1 − groundSkipFraction)))`; `bandH = usableH / 2` (band 0 = head/top, band 1 = torso); `laneW = sceneW / 3`.
-  - A sample is valid iff confidence ≥ `minConfidence` (when a confidence map is given) **and** depth `isFinite && > 0.05 m`. Zero, NaN, and ≤ 5 cm are invalid.
+  - A sample is valid iff depth `isFinite && > 0.05 m` and either (a) depth `< closeOverrideThreshold` (35 cm, near-field saturation override), or (b) confidence ≥ `minConfidence` (when confidence map is given). Zero, NaN, and ≤ 5 cm are invalid.
   - Per cell: sorted samples, value = `scratch[min(count−1, Int(count × percentile))]`, or `.infinity` if `count < minSamplesPerCell`. Consequence: an obstacle must cover **more than ~10 %** of a cell's valid samples to register (pinned by `tenthPercentileNeedsMoreThanTenPercentOfCell`).
   - Centre window: full-image centre (**independent of ground skip**), sampled at step 2, median if ≥ 4 samples else `.infinity`.
   - Pure; no side effects other than mutating `scratch`.
 - `static func computeLanes(depth: [Float], confidence: [UInt8]?, width: Int, height: Int, config: LaneConfig = LaneConfig()) -> LaneGrid` — array convenience for tests/replay; `precondition(depth.count == width*height)` (and same for confidence); assumes tight rows (`bytesPerRow = width*4` / `width`).
-- ⚠ Do not change the rotation mapping, ground skip, percentile logic, or stride handling without re-running `LaneMathTests` (esp. `rawEntrypointHonoursPaddedRowStrides`, `headRowIsTopBand`, `groundBandIsSkipped`) **and** a device test with the phone clamped upright on the cane (the L/R/head/torso orientation is only verifiable on hardware).
+- ⚠ Do not change the rotation mapping, ground skip, percentile logic, or stride handling without re-running `LaneMathTests` (esp. `rawEntrypointHonoursPaddedRowStrides`, `headRowIsTopBand`, `groundBandIsSkipped`, `pointBlankLowConfidenceObstacleIsDetected`) **and** a device test with the phone clamped upright on the cane (the L/R/head/torso orientation is only verifiable on hardware).
 
 ---
 
@@ -221,6 +222,7 @@ Pure-Swift, Foundation-only package. No ARKit/UIKit/WatchKit/MapKit/CoreLocation
 | `hysteresis` | 0.15 m | zone clears only when `d > enter + hysteresis` |
 | `minChangeInterval` | 0.4 s | minimum time between cue *changes* |
 | `repeatInterval` | 1.0 s | minimum time before the same discrete cue (left/right/head) fires again |
+| `nearDropoutHoldSeconds` | 1.5 s | hold active state across non-finite dropouts when obstacle was in urgent proximity (< 0.7 m) |
 
 - **`enum GeigerRate`** — `static func hertz(distance: Float, thresholds: CueThresholds = .init()) -> Double`: `clamp(4/d, 2, 8)`; non-finite or ≤ 0 → 2. So 2 Hz at 2.0 m, 4 Hz at 1.0 m, 8 Hz at 0.5 m. Called by `HapticPlayer`'s Geiger loop (`startApproachLoopIfNeeded`). Pinned by `geigerRateScalesWithInverseDistance`.
 - **`final class CueDecider`** — **not Sendable**; owned by `AppModel` (`@ObservationIgnored private let decider`). State: `thresholds` (var), `active: CueKind` (private(set), starts `.clear`), `lastChange: TimeInterval` (starts `-∞`), private `lastFired: [CueKind: TimeInterval]`, private `zoneActive` per kind.
@@ -2114,7 +2116,7 @@ Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps
 
 ---
 
-## Module `family-alerts` — cane events → the Grok Bot routine (Step 34)
+## Module `family-alerts` — cane events → the Grok Bot routine (Step 39)
 
 Cane detections become one JSON event POSTed to the Grok Bot routine **"OpenCane cane events"**
 (folder `opencane-cane-events`), which decides whether to text family. Same split as the VLM path:

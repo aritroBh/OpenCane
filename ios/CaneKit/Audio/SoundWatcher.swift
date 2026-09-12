@@ -629,8 +629,12 @@ final class SoundWatcher {
     /// already reported success. The spoken line deliberately does not read the port names out
     /// loud ("BluetoothHFP" means nothing to a walker); they go to the trip log instead.
     /// ⚠ One exception: for the startup settle (same output, input unavailable → usable)
-    /// `SpeechQueue` keeps `.playAndRecord` and only moves its baseline; `lifecycle.routeChanged`
-    /// then does not stop, so this returns without touching the session.
+    /// `SpeechQueue` keeps `.playAndRecord` and only moves its baseline. `lifecycle.routeChanged`
+    /// usually continues then (same usable input as its own baseline, or still starting), and this
+    /// returns without touching the session. Unverified edge (read from the code, not reproduced):
+    /// if the guard is already `.running` and the settled input differs from the one it holds, it
+    /// stops while `SpeechQueue` still holds the session — and the `sessionHeld = false` below then
+    /// skips the restore, leaving the `.soundRecognition` lease on `.playAndRecord`.
     /// - Parameters:
     ///   - before: the route snapshot when the microphone was granted.
     ///   - after: the route snapshot now.

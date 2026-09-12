@@ -24,8 +24,9 @@ Team: **Aritro**, **Aarav**, **Tejas** (software / iOS app); **Sagar**, **Tommy*
 ## The demo
 
 A cane user walks from **ISR Townsend Hall to CIF** on the UIUC campus. The route is 9 waypoints,
-989 m, with three street crossings: out the ISR front doors, west on Illinois St, north on Goodwin,
-west on Springfield, then to the CIF east entrance. On the way:
+989 m: out the ISR front doors, west on Illinois St, north on Goodwin, west on Springfield, then to
+the CIF east entrance, with three street crossings (Green St, Goodwin at Springfield, Mathews). On
+the way:
 
 - Wrist taps come before every turn and crossing.
 - The beacon keeps the heading between waypoints.
@@ -71,7 +72,7 @@ and are stretch goals only.
 | [`hardware/`](hardware/) | Physical kit: `mount_screwless/` (the live mount), `3d_print_files/` (G-code + STLs), `mount/` (screwed draft + tilt model), `cane_tip/` (printed rolling ball tip, OpenSCAD) |
 | [`scripts/`](scripts/) | Windows mount toolchain (PowerShell + Node): render STLs, slice G-code, verify the screwless mount |
 | `firmware/`, `cad/`, `ios/stretch/` | ESP32 grip firmware and OpenSCAD drafts. Stretch / legacy only. |
-| [`graphify-out/`](graphify-out/) | Knowledge graph of the repo (code + docs; the committed build has 3,374 nodes). `GRAPH_REPORT.md` lists the communities, `graph.html` opens in a browser. Query it with `graphify query "<question>"`; refresh with `graphify update .` after code changes. |
+| [`graphify-out/`](graphify-out/) | Knowledge graph of the repo (code + docs; the committed build has 3,527 nodes, built from `076fcaa`). `GRAPH_REPORT.md` lists the communities, `graph.html` opens in a browser. Query it with `graphify query "<question>"`; refresh with `graphify update .` after code changes. |
 | `opencane-hardware-brief.html` | One-page hardware brief for a browser |
 
 ## Quick start

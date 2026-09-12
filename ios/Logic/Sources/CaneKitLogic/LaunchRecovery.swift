@@ -32,15 +32,21 @@
 //  out loud. The next launch after that is normal again.
 //
 //  This file holds only the decision and the numbers (AGENTS.md hard rule 3); the marker itself is
-//  `UserDefaults`, which lives in `Settings` in the app. Owners: `Settings.launchMode`
-//  (evaluates the decision before any setting is read) and `AppModel.start()` (clears the marker).
-//  Tests: LaunchRecoveryTests.swift.
+//  an empty FILE in Application Support (not `UserDefaults` — see `markerName`), handled by
+//  `Settings` in AppModel.swift. Owners: `Settings.launchMode` (a `static let`, evaluated before
+//  the first setting is read: checks the marker and, when recovering, removes every
+//  `optionalFeatureKeys` key); `AppModel.start()` (arms the marker with
+//  `Settings.armLaunchMarker()` before any engine starts, and clears it with
+//  `Settings.markLaunchHealthy()` after `healthySeconds` or when the walker backgrounds the app);
+//  `AppModel.announceLaunchRecovery()` (speaks `spokenLine` and logs `launch_recovery`). The `start`
+//  trip-log record carries `launch` (the mode's raw value).
+//  Tests: LaunchRecoveryTests.swift (6).
 //
 
 import Foundation
 
 /// How this launch is running: with the walker's settings, or with the optional features cleared
-/// because the previous launch never reported itself healthy.
+/// because the previous launch never reported itself healthy. Raw values are logged as `launch`.
 public enum LaunchMode: String, Sendable, Equatable {
     /// The previous launch completed. Every persisted setting is honoured.
     case normal
@@ -86,7 +92,8 @@ public enum LaunchRecovery {
     /// the beacon.
     ///
     /// ⚠ A new persisted optional feature in `AppModel` belongs in this list, or a launch it kills
-    /// repeats forever. `recoveryClearsEveryPersistedOptionalFeature` and
+    /// repeats forever. Keys are removed (not set false), so a recovered launch gets each
+    /// feature's built-in default back — sign reading is ON by default, so it comes back on. `recoveryClearsEveryPersistedOptionalFeature` and
     /// `recoveryNeverClearsCoreGuidanceSettings` pin both halves of that.
     public static let optionalFeatureKeys: [String] = [
         // Front camera face tracking. No longer persisted by `AppModel` (see its `didSet`), but a
@@ -103,9 +110,10 @@ public enum LaunchRecovery {
     ]
 
     /// How to run this launch.
-    /// - Parameter previousLaunchCompleted: false when the marker written by the previous launch
-    ///   is still in `UserDefaults` — i.e. that launch never reached `healthySeconds` and was
-    ///   never deliberately backgrounded.
+    /// - Parameter previousLaunchCompleted: false when the marker file written by the previous
+    ///   launch still exists — i.e. that launch reached `AppModel.start()` but never reached
+    ///   `healthySeconds` and was never deliberately backgrounded.
+    /// Pinned by `aCompletedPreviousLaunchStartsNormally`, `anIncompletePreviousLaunchRecovers`.
     public static func mode(previousLaunchCompleted: Bool) -> LaunchMode {
         previousLaunchCompleted ? .normal : .recovered
     }
@@ -113,8 +121,11 @@ public enum LaunchRecovery {
     /// What the app says out loud about this launch, or nil when there is nothing to say.
     ///
     /// Spoken to someone who cannot see that a switch moved, so it names the loss *and* says the
-    /// guidance is intact — AGENTS.md rule 6: a refused feature warns loudly but still guides.
-    /// Kept to one breath: it is said during launch, over the top of "OpenCane ready."
+    /// guidance is intact — AGENTS.md "How we engineer" 6: a refused feature warns loudly but still
+    /// guides. Kept to one breath: it is said during launch, over the top of "OpenCane ready."
+    /// ⚠ "Turn them back on in Hazards." names the Hazards card, which now sits on the Sense tab
+    /// (Guide / Sense / Settings); "60 fps camera" lives on Settings → Mount. The words are pinned
+    /// only loosely (`theRecoveryLineSaysWhatIsOffAndThatGuidanceRemains`), and are not prefetched.
     public static func spokenLine(for mode: LaunchMode) -> String? {
         switch mode {
         case .normal:

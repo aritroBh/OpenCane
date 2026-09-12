@@ -7,6 +7,14 @@
 //
 //  Call `process(_:)` from one thread (the app calls it on main).
 //
+//  STATUS: draft, NOT in any target and never compiled by the current project. The iOS 18
+//  starter's cue logic for the ESP32 grip (the `H:` command line is the protocol in
+//  firmware/README.md), kept as history only; do not edit it (ios/drafts/README.md).
+//  Live successors: the decision (hysteresis, rate limiting, priorities) is `CueDecider` in
+//  CaneKitLogic with tests; the phone's own Taptic Engine plays it (`ios/CaneKit/Haptics/
+//  HapticPlayer.swift`); speech is `ios/CaneKit/Speech/SpeechQueue.swift` with the cue
+//  priorities of AGENTS.md hard rule 8. Tests: none.
+//
 
 import AVFoundation
 import Foundation

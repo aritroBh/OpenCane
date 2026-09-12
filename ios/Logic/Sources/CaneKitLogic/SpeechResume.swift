@@ -17,8 +17,11 @@
 //  proportionally (played time / duration × text length) and its resume starts `clipLead` early —
 //  hearing the end of the previous word beats losing the first word of the clause.
 //
-//  Pure: Foundation-only. Owner: `SpeechQueue.requeueCurrent` / `speakNow` / `lineEnded`.
-//  Tests: `SpeechResumeTests.swift`.
+//  Pure: Foundation-only. Owner: `SpeechQueue.requeueCurrent` (resume point, `nextResume`),
+//  `speakNow` (`remainder`, mp3 `clipTime`), `say` / `lineEnded` / `startNext` (`gapSeconds`).
+//  Trip log: `speech_dispatch.resume_from` (> 0 = a cut line continuing) — the evidence to tune
+//  every [H] constant below. Isolation: stateless and nonisolated; called on the main actor.
+//  Tests: `SpeechResumeTests.swift` (15).
 //
 
 import Foundation

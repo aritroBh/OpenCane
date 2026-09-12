@@ -17,13 +17,17 @@
 //  never names walls — a spoken-line reduction, the cane trails walls.
 //
 //  Later steps extend these rules (torso taps by level in Step 41); this file only holds decisions.
-//  Pure: Foundation-only. Owner: `AppModel.cueLevel` / `cuePlace`. Tests: `CueProfileTests.swift`.
+//  Pure: Foundation-only. Owner: `AppModel.cueLevel` / `cuePlace` (persisted with
+//  `Settings.string`, changed from Settings → Cues); `AppModel.cueRules` rebuilds the value, and
+//  `applyCueRules` pushes `headEnterM` into `CueDecider.thresholds.head` and `allowedSignPhrases`
+//  into `HazardScanner.signAllowedPhrases`; `allowsName` is read per report in `AppModel.handle`.
+//  Tests: `CueProfileTests.swift` (11, suite "Cue profile") + `SignPhraseFilterTests` (4, same file).
 //
 
 import Foundation
 
 /// How much the app volunteers. Raw values are persisted (`UserDefaults` key `cueLevel`) — never
-/// rename them (`rawValuesAreStable`).
+/// rename them (`rawValuesAreStable`). An unknown stored value falls back to `.detailed` in the app.
 public enum CueLevel: String, CaseIterable, Sendable, Codable {
     /// No obstacle names; safety signs only. (Step 41 adds: no torso taps. Head-height and
     /// ground-hazard warnings are identical at every level — the safety floor.)
@@ -33,7 +37,8 @@ public enum CueLevel: String, CaseIterable, Sendable, Codable {
     /// Today's behaviour: every speakable name except wall, every sign, today's haptics.
     case detailed
 
-    /// Spoken once when the walker changes the level (`.nav`, prefetched).
+    /// Spoken once when the walker changes the level (`.nav`, prefetched via
+    /// `CueRules.allSpokenLines`). Pinned by `profileChangeLines`.
     public var spokenLine: String {
         switch self {
         case .quiet: return "Quiet cues."
@@ -42,7 +47,8 @@ public enum CueLevel: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// The picker's visible title (and VoiceOver value).
+    /// The picker's visible title (and VoiceOver value). ⚠ UI test contract (AGENTS.md rule 9):
+    /// `testCuePickersChangeAndRestore` taps these segment titles.
     public var title: String {
         switch self {
         case .quiet: return "Quiet"
@@ -52,13 +58,16 @@ public enum CueLevel: String, CaseIterable, Sendable, Codable {
     }
 }
 
-/// Where the walker is. Raw values are persisted (`UserDefaults` key `cuePlace`).
+/// Where the walker is. Raw values are persisted (`UserDefaults` key `cuePlace`) — never rename
+/// them (`rawValuesAreStable`). An unknown stored value falls back to `.outdoors` in the app.
 public enum CuePlace: String, CaseIterable, Sendable, Codable {
+    /// Today's behaviour: 1.5 m head distance, names and signs follow the level.
     case outdoors
+    /// Rooms: no obstacle names, safety signs only, 1.2 m head distance [H].
     case indoors
 
     /// Spoken once when the walker changes the place (`.nav`, prefetched). Research: a mode switch
-    /// with no indication was a named complaint about the Sunu Band (P10).
+    /// with no indication was a named complaint about the Sunu Band (P10). Pinned by `profileChangeLines`.
     public var spokenLine: String {
         switch self {
         case .outdoors: return "Outdoor mode."
@@ -66,7 +75,7 @@ public enum CuePlace: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// The picker's visible title (and VoiceOver value).
+    /// The picker's visible title (and VoiceOver value). ⚠ UI test contract, as `CueLevel.title`.
     public var title: String {
         switch self {
         case .outdoors: return "Outdoors"
@@ -82,12 +91,13 @@ public struct CueRules: Sendable, Equatable {
     /// The place these rules came from.
     public let place: CuePlace
 
-    /// Detailed + Outdoors: today's behaviour.
+    /// Detailed + Outdoors: today's behaviour (the app's defaults). Pinned by `defaultIsTodaysBehaviour`.
     public static let `default` = CueRules(level: .detailed, place: .outdoors)
 
     /// Sign phrases a Quiet or Indoors walker still hears: closures, danger and the crossing push
     /// button (a decision point) — never EXIT / ENTRANCE / PUSH / PULL chatter. Every entry must be
-    /// in `SignPolicy.phrases` (`quietAndIndoorsReadOnlySafetySigns`).
+    /// in `SignPolicy.phrases` (`quietAndIndoorsReadOnlySafetySigns`). ⚠ A phrase added to
+    /// `SignPolicy.phrases` is silent under Quiet / Indoors until it is also added here.
     public static let safetySignPhrases: Set<String> = [
         "SIDEWALK CLOSED", "ROAD CLOSED", "USE OTHER SIDEWALK", "NO PEDESTRIANS", "DO NOT ENTER",
         "WET FLOOR", "KEEP OUT", "WORK ZONE", "CONSTRUCTION", "DETOUR", "DANGER", "CAUTION",
@@ -95,6 +105,8 @@ public struct CueRules: Sendable, Equatable {
     ]
 
     /// Every line a level or place change can speak, for `AppModel.commonLines` (`profileChangeLines`).
+    /// ⚠ Prefetch matches by bytes: edit a `spokenLine` and this list follows automatically, but
+    /// never hand-copy these strings elsewhere.
     public static let allSpokenLines: [String] =
         CueLevel.allCases.map(\.spokenLine) + CuePlace.allCases.map(\.spokenLine)
 
@@ -121,6 +133,8 @@ public struct CueRules: Sendable, Equatable {
     /// - Parameters:
     ///   - cls: the mesh class straight ahead.
     ///   - navigating: `NavigationEngine.isNavigating`.
+    /// Pinned by `quietProfileHasNoObstacleNames`, `standardAllowsOnlyDoorsOnARoute`,
+    /// `detailedNeverSaysWall`, `indoorsHasNoObstacleNames`.
     public func allowsName(_ cls: ObstacleClass, navigating: Bool) -> Bool {
         guard cls.spokenName != nil, place == .outdoors else { return false }
         switch level {
@@ -143,7 +157,8 @@ public struct CueRules: Sendable, Equatable {
     }
 
     /// Sign phrases that may be spoken: `safetySignPhrases` for Quiet or Indoors, nil (= every
-    /// phrase) otherwise. Fed to `SignPolicy.allowedPhrases`.
+    /// phrase) otherwise. Fed to `SignPolicy.allowedPhrases` (via `HazardScanner.signAllowedPhrases`).
+    /// Pinned by `quietAndIndoorsReadOnlySafetySigns`, `fullerLevelsReadEverySign`.
     public var allowedSignPhrases: Set<String>? {
         (level == .quiet || place == .indoors) ? Self.safetySignPhrases : nil
     }

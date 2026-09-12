@@ -1,5 +1,11 @@
 # CaneKit grip module firmware
 
+> **Stretch / history only — not used by the app.** The ESP32 grip was cut on 2026-09-10 when
+> OpenCane went phone-only (`AGENTS.md`: no ESP32, no external sensors). Nothing in the iOS targets
+> talks to it; the only client ever written is `ios/stretch/CaneBLE.swift` (in no target), which
+> speaks the protocol below. The housings are the legacy drafts in [`cad/`](../cad/README.md).
+> Never built in CI, no automated tests; the local fail-safe thresholds were never tuned on a cane.
+
 BLE haptic grip for a smart-cane retrofit: two coin ERM motors driven from a phone over
 Nordic UART Service, optional VL53L1X ground-distance sensor, and a local fail-safe
 drop-off / step-up alert when no phone is connected.
@@ -73,18 +79,23 @@ Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`, RX write `6E400002-...`, TX noti
 
 | Command            | Meaning |
 |--------------------|---------|
-| `H:{L,R,B}:{1-4}:{ms}` | Buzz left/right/both at intensity 1-4 (40/60/80/100 %) for `ms` (max 10000). Up to 4 commands queue; extra ones are rejected. |
+| `H:{L,R,B}:{1-4}:{ms}` | Buzz left/right/both at intensity 1-4 (40/60/80/100 %) for `ms` (1-10000). Up to 4 commands wait behind the one playing; extra ones are rejected (logged on Serial, nothing sent back over BLE). |
 | `P:1`              | Double pulse, both motors |
 | `P:2` / `P:3`      | Left / right triple pulse |
 | `P:4`              | STOP: flush the queue, then one long buzz on both |
-| `S:1` / `S:0`      | Silence on / off (haptics dropped while on) |
+| `S:1` / `S:0`      | Silence on / off. `S:1` flushes the queue and stops the motors; while on, commands are accepted and dropped. ⚠ It persists across a disconnect and also mutes the local fail-safe alerts until `S:0` or a reboot. |
 
-Telemetry, every 100 ms: `D:<mm>,B:<pct>\n` (`-1` = unknown).
+Command letters are case-insensitive; one command per line (LF or CR; 47 characters max, longer
+lines are truncated). Anything else is rejected on Serial.
+
+Telemetry, every 100 ms while connected: `D:<mm>,B:<pct>\n` (`-1` = unknown; `B` refreshes once a second).
 
 LED: solid = connected, short blip each second = advertising, fast blink = local
 fail-safe mode (no phone for 5 s and ToF present). In local mode both motors buzz when
-the ground distance rises > 250 mm above baseline (drop-off) or falls below 60 % of it
-(step-up). Baseline = median of the last 20 readings whenever their spread is <= 40 mm.
+the ground distance rises > 250 mm above baseline (drop-off: double pulse) or falls below 60 % of it
+(step-up: one 400 ms buzz), at most once per 1.5 s. Baseline = median of the last 20 readings
+(one per 50 ms, so ~1 s) whenever their spread is <= 40 mm; it keeps its old value while readings
+are unsettled, so any surface held steady for ~1 s becomes the new baseline.
 
 ## Testing with nRF Connect (Android / iOS)
 
