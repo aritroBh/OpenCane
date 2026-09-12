@@ -2,6 +2,39 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
+
+The front inset of the both-cameras view still came out tilted with the back feed fine, after the
+first fix (0f32282) asked `RotationCoordinator` for `videoRotationAngleForHorizonLevelPreview`.
+That connection feeds a video *data output* — a capture connection — and the preview angle follows
+the interface orientation while the capture angle follows the horizon, which accounts for exactly a
+90° disagreement on a phone clamped to a cane. `connect()` now prefers
+`videoRotationAngleForHorizonLevelCapture`, falls back to the preview angle, then to a
+per-position portrait default (front 270, back 90) instead of a blind 90, and records the applied
+angle per camera. `diagnostics` gains `front_rotation` / `back_rotation` (logged in the
+`both_cameras` start record; `-1` = that camera never connected), so the next device run says
+whether the coordinator or the fallback is to blame with no further guess-runs. `CODE_REFERENCE.md`
+gains the missing `DualCameraSession` section in the same change. Follow-up the same morning:
+the upright front inset read backwards (mirrored) — the inset now sets `isVideoMirrored = false`
+so it agrees with the back feed on left/right, and logs `front_mirrored` beside the angles.
+
+Reviewed but deliberately **not** merged tonight: the emergency-siren rework
+(`cane-wt-emergency`: siren gate 0.50 → 0.60, three agreeing windows, `.emergency` urgency → `.nav`
+band, `best(of:)` so traffic noise cannot shadow a siren) and hands-free voice control
+(`cane-wt-handsfree`: Status / Ask / Silence-haptics shortcuts taking the list to the 10-shortcut
+limit, `QuestionPrompt` / `StatusSummary` in Logic with tests). Both were read end to end: the
+siren `best(of:)` fallback path preserves the policy's below-gate reset semantics and introduces no
+force-unwrap or crash path, and the Hazards-toggle crash itself is already fixed on main
+(`fix/launch-crash` + `fix/sound-watch-hardening`). They stay unmerged because the merge gate needs
+`make test` / `make sim` / `make uitest` / `make e2e` green and none of those can run from this
+sandboxed session — merging untested the night before the demo would break the gate that protects
+the walker.
+
+test on device: turn on Both cameras with the phone clamped in portrait; front inset upright and
+mirrored, back feed upright; trip log `both_cameras` start record reads `front_rotation: 270,
+back_rotation: 90` with both frame counts climbing. Then run the gate in your own terminal
+(`cd ios && make test`, `make sim`, `make uitest`, `make e2e`) before merging anything.
+
 ## Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)
 
 Everything below is verified by 303 CaneKitLogic tests, a clean Swift 6 strict build and a green

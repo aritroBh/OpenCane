@@ -933,6 +933,19 @@ Other consumer: `AppModel.location.onHeading` drops **compass** readings unless 
 
 ⚠ Do not change `frameSemantics`, `delegateQueue`, or the reset options in `start()`/`resume()` without a device test (depth must recover after backgrounding without losing the world map; `.smoothedSceneDepth` is what keeps lanes from flickering at 15 Hz).
 
+### `ios/CaneKit/Depth/DualCameraSession.swift` — both cameras at once (Step 14, off by default)
+
+Purpose: front + back camera on screen together for a sighted spotter, via `AVCaptureMultiCamSession` rendered from `AVCaptureVideoDataOutput` buffers into two `AVSampleBufferDisplayLayer`s. ARKit can never deliver two pictures (`ARFrame` has one `capturedImage`; Apple DTS forum 677731), so the caller (`AppModel.setBothCameras`) pauses ARKit first — obstacle detection is down while this is on. Never a preview layer (forums 742501: preview layers make LiDAR depth unreliable).
+
+**`@MainActor @Observable final class DualCameraSession`** — `backLayer` / `frontLayer` (created once, attached by `BothCamerasView`), `isRunning`, `backConnected` / `frontConnected`, `lastError`, `hardwareCost` / `systemPressureCost`, `frameRateReduced`, `frontOpened` / `backOpened` (survive teardown after a failed start), `enqueuedFrames` / `rendererFlushes` (frames that reached a renderer; cameras live but view black = `enqueued` stuck at 0).
+
+- `start()` — no-op if a session exists; refuses when `!isSupported` (no fallback picture); `connect(.back, .builtInWideAngleCamera)` + `connect(.front, .builtInTrueDepthCamera)` falling back to front wide-angle; tears down on every failure path (a zombie session would make later starts silent no-ops via the `guard session == nil`).
+- `connect(_:device:name:to:in:)` — `addInputWithNoConnections` / `addOutputWithNoConnections` + one explicit `AVCaptureConnection` per camera; `alwaysDiscardsLateVideoFrames = true`; `DualCameraFrameRelay` delegate (nonisolated, one frame in flight). Rotation: `RotationCoordinator` **capture** angle first (`videoRotationAngleForHorizonLevelCapture` — this is a capture connection, and the preview angle follows interface orientation, which disagreed by the 90° front-inset tilt), then preview angle, then per-position fallback (front 270, back 90); applied angles kept in `appliedRotationAngles` and logged as `front_rotation` / `back_rotation` (`-1` = camera never connected). Front connection explicitly unmirrored (`isVideoMirrored = false`): the screen is watched by a spotter, so the inset must agree with the back feed on left/right — mirrored read backwards on device. Read back into `frontMirrored`, logged as `front_mirrored`.
+- `render(_:into:)` — never guards on `isReadyForMoreMediaData` (pull-protocol flag; guarding it dropped every frame on a fresh layer); flushes on `requiresFlushToResumeDecoding` / `.failed`, then enqueues.
+- `diagnostics` — `supported/running/front/back/front_opened/back_opened/front_frames/back_frames/enqueued/renderer_flushes/front_rotation/back_rotation/hardware_cost/system_pressure_cost/frame_rate_reduced/error`; logged by `AppModel` as `both_cameras` on start.
+
+⚠ Do not reintroduce an `isReadyForMoreMediaData` guard, a preview layer, or a blind 90° fallback — each was a real black-view or sideways-view bug. Rotation changes need the phone clamped in portrait on the cane (`front_rotation` should read 270, `back_rotation` 90).
+
 ### `ios/CaneKit/Depth/MeshClassifier.swift`
 
 Purpose: names what is straight ahead — projects the centre-window depth into world space along the camera forward axis and finds the nearest classified mesh face. Runs on the depth queue at ≈ 4 Hz.

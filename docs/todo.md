@@ -100,31 +100,43 @@ sensors did not see is ever spoken.*
   agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
   do the same for any new one, or install only from the main checkout.
 
-### Branch state (updated 2026-09-11 ~20:15)
+### Branch state (updated 2026-09-12 morning)
 
-**Merged into main and verified (243 Logic tests, simulator build clean, `make uitest` green):**
+**Merged into main and verified (316 Logic tests, simulator build clean, `make uitest` green):**
 - the destination-search rework + its accessibility fix
 - `fix/cloud-scene-gate` — the cloud sentence is gated, and Muse Spark can actually answer
   (`max_tokens` 120 → 1024 and `reasoning_effort: "low"`; it was spending the whole budget
   reasoning and returning nothing after 11 s)
 - `feat/detect-people` — people and animals named with direction and a LiDAR-measured distance
 - the widget-embed fix: **the Live Activity had never been in any installed build**
+- `fix/voice-consistency` — 74 warning lines prefetched so warnings stop alternating voices
+- `fix/veer-gap-regression` — a veer episode is continuous evidence, not continuous samples
+- `fix/launch-crash` — no optional feature may keep the app from starting (the Hazards-toggle crash)
+- `fix/sound-watch-hardening` — six confirmed microphone defects fixed, incl. the crash
+- `feat/all-sensors` + safety fixes — both cameras, front-camera head yaw, danger sounds, all off by default
+- `feat/rename-opencane` — the product is OpenCane, the code is still CaneKit
+- front-camera rotation, first attempt (0f32282) — coordinator angle, still tilted on device
+
+**Uncommitted in the main checkout (device build green, Logic tests not yet run):**
+- `ios/CaneKit/Depth/DualCameraSession.swift` — capture-angle-first rotation, unmirrored front
+  inset, `front_rotation` / `back_rotation` / `front_mirrored` in diagnostics (Step 15,
+  CHANGELOG). `make run` build succeeded on device; still needs `make test` before committing.
 
 **Committed on a branch, not yet merged:**
-- `fix/voice-consistency` — 74 warning lines (1,722 characters, 17.2 % of the monthly free tier)
-  prefetched so warnings stop alternating between Bella and Apple's voice. It also fixes a bug the
-  first attempt introduced: the launch batch was cancelled by the first warning the walker heard,
-  so most of the set was never synthesized.
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
   **Deliberately held**: it conflicts with the people-detection work in the same files and buys
   nothing for the demo.
 
-**Uncommitted work in worktrees — these are the only copies:**
-- `/Users/aritro/Downloads/cane-wt-veer` — the veer safety fix
-- `/Users/aritro/Downloads/cane-wt-all-sensors` — both-cameras mode, front-camera head tracking,
-  microphone sound recognition (~800 lines). ⚠ **Do not merge all-sensors without care**: it adds
-  to `AppModel`'s safety path, touches `Info.plist` and `project.yml`, and its sound watcher wants
-  `.playAndRecord`, which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
+**Uncommitted work in worktrees — these are the only copies (reviewed, deliberately unmerged):**
+- `/Users/aritro/Downloads/cane-wt-emergency` — emergency-siren rework (siren gate 0.50 → 0.60,
+  three agreeing windows, `.emergency` urgency → `.nav` band, `best(of:)` anti-shadowing). Read end
+  to end, no crash path found; unmerged because the gate cannot run from a sandboxed session.
+- `/Users/aritro/Downloads/cane-wt-handsfree` — hands-free voice control (Status / Ask /
+  Silence-haptics shortcuts to the 10-shortcut limit, `QuestionPrompt` / `StatusSummary` in Logic
+  with tests, `docs/handsfree.md`). Same gate reason.
+- `/Users/aritro/Downloads/cane-wt-all-sensors` — old pre-merge snapshot, superseded by the
+  `feat/all-sensors` merge; ⚠ do not merge from here. Its sound watcher wants `.playAndRecord`,
+  which collides with the one-`.playback`-session rule (AGENTS.md hard rule 7).
 
 ### Open findings from the Muse review of the sensor layer (2026-09-11, xhigh)
 
