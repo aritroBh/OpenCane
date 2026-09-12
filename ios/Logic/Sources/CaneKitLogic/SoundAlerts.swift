@@ -175,3 +175,50 @@ public struct SoundAlertPolicy: Sendable, Equatable {
         lastSpoken.removeAll()
     }
 }
+
+/// When the microphone's input format may be trusted, and how long to wait for it if it is not.
+///
+/// Why this exists: `SoundWatcher` asks `AVAudioEngine.inputNode` for its format immediately after
+/// the audio session is moved to `.playAndRecord`. iOS settles a route change **asynchronously**,
+/// so on the first-ever enable — especially with AirPods, where the input has to be negotiated —
+/// that read can come back as 0 Hz / 0 channels for a few hundred milliseconds. The old code
+/// failed on that first read and told the walker "No microphone input available", which was not
+/// true a quarter of a second later. Installing a tap with such a format is not an option either:
+/// `AVAudioEngine` traps on an invalid format, so the check itself must stay.
+///
+/// The numbers live here (AGENTS.md hard rule 3) and are pinned by `SoundAlertsTests`.
+/// They are deliberately tiny: this is a settling delay, not a retry loop around a broken
+/// microphone. A genuinely refused or missing input still fails, just ~0.25 s later.
+public enum MicrophoneStart {
+
+    /// How many times the input format is read in total before giving up (the first read plus
+    /// `formatAttempts - 1` retries). Two: one read that catches the common case at no cost, and
+    /// one retry after the route has settled. A third would push a real failure past half a
+    /// second of the walker waiting for a switch to do something.
+    public static let formatAttempts = 2
+
+    /// Seconds to wait before re-reading the input format. 0.25 s covers the ~0.1–0.2 s iOS takes
+    /// to publish a new route (measured for the route-change notification on this phone) with
+    /// margin, and is short enough that a flipped switch still feels immediate.
+    public static let formatRetryDelay: Double = 0.25
+
+    /// Whether an `AVAudioFormat` read off the input node can be used to install a tap.
+    ///
+    /// Both halves matter: a stale format reports `sampleRate == 0`, and a session that has an
+    /// input route but no channels yet reports `channelCount == 0`. Either one crashes
+    /// `installTap(onBus:bufferSize:format:)`.
+    /// - Parameters:
+    ///   - sampleRate: `AVAudioFormat.sampleRate`.
+    ///   - channels: `AVAudioFormat.channelCount`.
+    public static func isUsableInputFormat(sampleRate: Double, channels: UInt32) -> Bool {
+        sampleRate > 0 && channels > 0
+    }
+
+    /// How long to wait before the next read, or nil when the attempts are used up and the start
+    /// should fail.
+    /// - Parameter attempt: the zero-based attempt that just failed (0 = the first read).
+    public static func retryDelay(afterAttempt attempt: Int) -> Double? {
+        guard attempt >= 0, attempt + 1 < formatAttempts else { return nil }
+        return formatRetryDelay
+    }
+}

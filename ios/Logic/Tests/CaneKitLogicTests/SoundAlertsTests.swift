@@ -162,3 +162,36 @@ import Testing
     #expect(policy.update(kind: .vehicle, confidence: 0.8, now: 1.0) == nil)
     #expect(policy.update(kind: .vehicle, confidence: 0.8, now: 1.5) == .vehicle)
 }
+
+// MARK: - Microphone start (input-format settling)
+
+/// The format check is what stands between the app and an `AVAudioEngine` trap, so it must reject
+/// exactly the two shapes a not-yet-settled input node reports and nothing else.
+/// ⚠ Pins `MicrophoneStart.isUsableInputFormat`, called by `SoundWatcher.startEngine`.
+@Test func onlyAFullySettledInputFormatIsUsable() {
+    #expect(MicrophoneStart.isUsableInputFormat(sampleRate: 48_000, channels: 1))
+    #expect(MicrophoneStart.isUsableInputFormat(sampleRate: 16_000, channels: 2))
+    // A stale read right after the session went `.playAndRecord`: no rate yet.
+    #expect(!MicrophoneStart.isUsableInputFormat(sampleRate: 0, channels: 1))
+    // A route with an input port but no channels negotiated yet (seen on the first AirPods enable).
+    #expect(!MicrophoneStart.isUsableInputFormat(sampleRate: 48_000, channels: 0))
+    #expect(!MicrophoneStart.isUsableInputFormat(sampleRate: 0, channels: 0))
+}
+
+/// One retry, then the walker is told the truth. Retrying forever would leave the switch on and
+/// the session in `.playAndRecord` with nothing listening.
+/// ⚠ Pins the retry budget used by `SoundWatcher.startEngine(attempt:)`.
+@Test func theInputFormatIsRetriedExactlyOnce() {
+    #expect(MicrophoneStart.formatAttempts == 2)
+    #expect(MicrophoneStart.retryDelay(afterAttempt: 0) == MicrophoneStart.formatRetryDelay)
+    #expect(MicrophoneStart.retryDelay(afterAttempt: 1) == nil)
+    #expect(MicrophoneStart.retryDelay(afterAttempt: 5) == nil)
+}
+
+/// The whole retry budget has to stay inside the time a switch may take to answer. A blind user
+/// gets no visual "working…" state, so anything past about half a second reads as a dead control.
+@Test func theWholeRetryBudgetStaysUnderHalfASecond() {
+    let total = Double(MicrophoneStart.formatAttempts - 1) * MicrophoneStart.formatRetryDelay
+    #expect(total > 0)
+    #expect(total <= 0.5)
+}
