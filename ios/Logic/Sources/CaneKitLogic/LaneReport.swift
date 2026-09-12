@@ -60,6 +60,15 @@ public struct LaneReport: Sendable, Equatable {
     public var timestamp: TimeInterval
     /// False until the first depth frame (or on non-LiDAR devices).
     public var depthAvailable: Bool
+    /// True when the ARKit frame that produced this report had `.normal` camera tracking.
+    /// This is kept as a value in the report because the AR session's tracking delegate callback
+    /// is delivered separately from the frame callback; route-start readiness must judge the exact
+    /// frame carrying the depth map, not a possibly stale main-actor status string.
+    public var trackingNormal: Bool
+    /// Monotonic sequence of published reports in the depth session. The app uses this to detect
+    /// a `bufferingNewest(1)` delivery gap and conservatively restart the consecutive run rather
+    /// than treating reports on either side of a dropped frame as adjacent.
+    public var frameSequence: Int
     /// Nearest classified mesh face at the image centre, if any.
     public var centerHit: MeshHit?
     /// Confirmed LiDAR ground hazard ahead (drop-off, hole, curb, low obstacle), if any.
@@ -75,6 +84,8 @@ public struct LaneReport: Sendable, Equatable {
                 rotationRate: Float = 0,
                 timestamp: TimeInterval = 0,
                 depthAvailable: Bool = false,
+                trackingNormal: Bool = false,
+                frameSequence: Int = 0,
                 centerHit: MeshHit? = nil,
                 groundHazard: GroundHazard? = nil,
                 cameraTiltDownDeg: Float? = nil) {
@@ -83,6 +94,8 @@ public struct LaneReport: Sendable, Equatable {
         self.rotationRate = rotationRate
         self.timestamp = timestamp
         self.depthAvailable = depthAvailable
+        self.trackingNormal = trackingNormal
+        self.frameSequence = frameSequence
         self.centerHit = centerHit
         self.groundHazard = groundHazard
         self.cameraTiltDownDeg = cameraTiltDownDeg

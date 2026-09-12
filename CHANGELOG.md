@@ -9,6 +9,36 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 > every commit message that already refers to them. Read the date and the subject, not
 > the number.
 
+## Step 22 — Gate route start on fresh trusted LiDAR depth (Sat Sep 12)
+
+Added the camera-transition interlock for route guidance:
+
+- `CaneKitLogic.DepthReadiness` is a pure, testable state machine. It requires 3 consecutive
+  same-frame reports with `.normal` AR tracking, active scene depth and the existing sweep trust
+  bit; a gap over 0.5 s restarts the run and a 5 s bounded wait times out.
+- `LaneReport.trackingNormal` is captured from the exact `ARFrame` in `DepthFrameProcessor`; the
+  interlock does not trust the lagging `cameraDidChangeTrackingState` display string.
+- `DepthEngine` owns the thin ARKit adapter, resets readiness on interruption, pause/resume and
+  configuration re-runs, excludes buffered pre-transition reports with a processor sequence
+  boundary, and restarts the run if the newest-only report stream skipped a frame.
+- `AppModel.beginRoute` waits for serialized two-camera teardown, queues the route with a spoken
+  and on-screen warm-up state, auto-starts on readiness, and fails loudly on a five-second request
+  deadline (including a camera transition that never drains). Two-camera controls and self-tests
+  are blocked while a route is waiting. Stop and newer destination requests cancel the pending
+  start. The intentional no-LiDAR and camera-denied degraded guidance paths remain unchanged and
+  explicit.
+
+**Verification:** 353 `@Test` cases are present; changed Logic sources pass `swiftc -typecheck` with
+the local module cache. `make test` could not run in this environment because the selected Xcode is
+15.1 / Swift 5.9.2 while the package requires Swift tools 6.0; simulator/device gates remain pending
+on the Xcode 27 toolchain.
+
+test on device: with the two-camera view enabled, request Start and confirm the route intro waits
+for fresh depth; background/resume during that queued warm-up and confirm auto-start still requires
+a new trusted-depth sequence; then background/resume an already-guiding route and confirm ARKit
+recovers without stale depth; leave the camera unavailable for 5 s and confirm the spoken
+"Obstacle detection is not ready" failure and no route begins.
+
 ## Step 21 — The bore rings were printed, and five things they touched were wrong (Sat Sep 12)
 
 First physical measurement on this project. Everything below either came off the bed or was

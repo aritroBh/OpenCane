@@ -83,6 +83,13 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// Installed as `ARSession.delegateQueue` by `DepthEngine.start()`.
     let queue = DispatchQueue(label: "canekit.depth", qos: .userInteractive)
 
+    /// Snapshot the last published sequence on the processor's serial queue. `DepthEngine` uses
+    /// this at a route-start transition to exclude a report already buffered in the newest-only
+    /// stream but not yet consumed on the main actor.
+    func latestPublishedSequence() -> Int {
+        queue.sync { publishedCount }
+    }
+
     // MARK: State
 
     /// Tunables shared with the main actor. Written by `DepthEngine` (main), read once per frame
@@ -211,11 +218,20 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
 
         let ω = rotationRate
         let trusted = ω < s.sweepThreshold
+        // Read tracking from this exact frame. `ARSessionDelegate.cameraDidChangeTrackingState`
+        // is a separate asynchronous callback, so the main-actor string in `DepthEngine` can lag
+        // the depth map by a frame or two; route-start readiness must not accept that stale value.
+        let trackingNormal: Bool = {
+            if case .normal = frame.camera.trackingState { return true }
+            return false
+        }()
         trackTilt(frame)   // every frame: the pose is gravity-aligned even mid-sweep (Muse); the EMA smooths the sweep
 
         guard let (grid, snapshot) = computeGrid(frame: frame, config: s.lane) else {
             continuation.yield(LaneReport(grid: .empty, isTrusted: trusted, rotationRate: ω,
-                                          timestamp: now, depthAvailable: false, centerHit: nil,
+                                          timestamp: now, depthAvailable: false,
+                                          trackingNormal: trackingNormal,
+                                          frameSequence: publishedCount, centerHit: nil,
                                           cameraTiltDownDeg: tiltDownDeg))
             return
         }
@@ -257,7 +273,9 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         }
 
         continuation.yield(LaneReport(grid: grid, isTrusted: trusted, rotationRate: ω,
-                                      timestamp: now, depthAvailable: true, centerHit: lastMeshHit,
+                                      timestamp: now, depthAvailable: true,
+                                      trackingNormal: trackingNormal,
+                                      frameSequence: publishedCount, centerHit: lastMeshHit,
                                       groundHazard: lastGroundHazard, cameraTiltDownDeg: tiltDownDeg))
     }
 

@@ -104,7 +104,9 @@ final class TripLogger {
         event("lanes", [
             "ar_t": Self.num(r.timestamp),          // ARKit's monotonic clock, for cue correlation
             "head": r.head.map(Self.num), "torso": r.torso.map(Self.num),
-            "trusted": r.isTrusted, "omega": Self.num(r.rotationRate),
+            "trusted": r.isTrusted, "depth": r.depthAvailable,
+            "tracking_normal": r.trackingNormal, "omega": Self.num(r.rotationRate),
+            "frame_seq": r.frameSequence,
             "cue": cue.rawValue, "thermal": thermal, "battery": battery,
             "mesh": r.centerHit.map { "\($0.classification)" } ?? "",
             // Mount aim (deg below horizon, MountTilt) and published depth rate, for tuning
