@@ -709,8 +709,14 @@ final class AppModel {
             ])
         }
         // Every line handed to a voice backend, from any caller (`SpeechQueue.onDispatch`).
-        speech.onDispatch = { [weak self] text, priority, replays in
-            self?.logger.event("speech_dispatch", ["text": text, "priority": "\(priority)", "replays": replays])
+        // `resume_from` > 0: a cut line continuing from that UTF-16 offset (Step 37, `SpeechResume`).
+        speech.onDispatch = { [weak self] text, priority, replays, resumeFrom in
+            self?.logger.event("speech_dispatch", ["text": text, "priority": "\(priority)", "replays": replays,
+                                                   "resume_from": resumeFrom])
+        }
+        // A line's natural end, so the audit measures end → next start (`SpeechQueue.onLineEnd`).
+        speech.onLineEnd = { [weak self] priority in
+            self?.logger.event("speech_end", ["priority": "\(priority)"])
         }
         speech.configureAudioSession()       // before ARKit and before the haptic engine
         wireAudioRoute()

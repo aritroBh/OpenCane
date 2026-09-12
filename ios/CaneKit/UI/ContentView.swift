@@ -185,7 +185,7 @@ private struct SettingsPage: View {
     }
 
     /// What the selected level × place changes **today** (Step 36 changes speech only; haptics are
-    /// the same at every level until Step 40 — the Step 36 review caught a caption promising more),
+    /// the same at every level until Step 41 — the Step 36 review caught a caption promising more),
     /// plus a reminder when names are switched off, which Standard and Detailed depend on.
     private var cueLevelCaption: String {
         var parts: [String]

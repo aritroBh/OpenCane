@@ -16,7 +16,7 @@
 //  (`ios/scripts/cue_audit.py` says whether a log was mounted). The one Detailed change is that it
 //  never names walls — a spoken-line reduction, the cane trails walls.
 //
-//  Later steps extend these rules (torso taps by level in Step 40); this file only holds decisions.
+//  Later steps extend these rules (torso taps by level in Step 41); this file only holds decisions.
 //  Pure: Foundation-only. Owner: `AppModel.cueLevel` / `cuePlace`. Tests: `CueProfileTests.swift`.
 //
 
@@ -25,10 +25,10 @@ import Foundation
 /// How much the app volunteers. Raw values are persisted (`UserDefaults` key `cueLevel`) — never
 /// rename them (`rawValuesAreStable`).
 public enum CueLevel: String, CaseIterable, Sendable, Codable {
-    /// No obstacle names; safety signs only. (Step 40 adds: no torso taps. Head-height and
+    /// No obstacle names; safety signs only. (Step 41 adds: no torso taps. Head-height and
     /// ground-hazard warnings are identical at every level — the safety floor.)
     case quiet
-    /// Door names while a route guides; every sign. (Step 40: onset torso taps.)
+    /// Door names while a route guides; every sign. (Step 41: onset torso taps.)
     case standard
     /// Today's behaviour: every speakable name except wall, every sign, today's haptics.
     case detailed

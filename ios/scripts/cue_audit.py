@@ -12,7 +12,9 @@ It answers, from the log alone:
      or clearly farther / empty (the overhang signature)?
   3. How much was said and felt? cues per minute by kind, spoken lines per minute by priority,
      unsolicited (not asked-for) lines per minute, suppressed lines by reason.
-  4. How choppy? `speech_dispatch` replays (a cut line resumed) and lines dispatched < 1 s apart.
+  4. How choppy? `speech_dispatch` replays (a cut line resumed — mid-line from its clause, or from the
+     line start), lines dispatched < 1 s apart, and different-band lines starting < 0.3 s after the
+     previous line's `speech_end`.
   5. App bugs: any `field_kind` / `field_t` column (TripLogRecord collision; e2e.py fails on it too).
 
 Run from ios/:
@@ -54,6 +56,22 @@ def load(path: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def cross_band_short_pauses(records: list[dict]) -> int | str:
+    """Lines that started < 0.3 s after a DIFFERENT-priority line ended naturally (`speech_end`), not
+    counting `.safety` starts; "no speech_end records" on logs before Step 37."""
+    timed = sorted((r for r in records if r.get("kind") in ("speech_end", "speech_dispatch")
+                    and isinstance(r.get("t"), (int, float))), key=lambda r: r["t"])
+    if not any(r["kind"] == "speech_end" for r in timed):
+        return "no speech_end records (build before Step 37)"
+    count = 0
+    for a, b in zip(timed, timed[1:]):
+        if (a["kind"] == "speech_end" and b["kind"] == "speech_dispatch"
+                and a.get("priority") != b.get("priority") and b.get("priority") != "safety"
+                and 0 <= b["t"] - a["t"] < 0.3):
+            count += 1
+    return count
 
 
 def audit(records: list[dict]) -> dict:
@@ -140,6 +158,18 @@ def audit(records: list[dict]) -> dict:
         rep["dispatch"] = {
             "lines": len(dispatch),
             "replays": sum(1 for r in dispatch if (r.get("replays") or 0) > 0),
+            # Step 37: a replay with resume_from > 0 continued mid-line from its cut clause. One with
+            # resume_from 0 started from the first word: before Step 37 that was every replay (the
+            # choppy restart); on a Step 37 build it is a cut in the first clause or after a call /
+            # dictation, which is correct. Read the two together with the build (`start` record).
+            "replays_resumed_mid_line": sum(1 for r in dispatch
+                                            if (r.get("replays") or 0) > 0 and (r.get("resume_from") or 0) > 0),
+            "replays_from_line_start": sum(1 for r in dispatch
+                                           if (r.get("replays") or 0) > 0 and not (r.get("resume_from") or 0) > 0),
+            # Pause between a line's natural END (`speech_end`, Step 37) and the next line's start
+            # when their priorities differ: the 0.35 s pause should keep this at 0 (a `.safety` start
+            # never waits and is excluded). Start-to-start times cannot see a missing pause (review).
+            "cross_band_pause_under_0_3s": cross_band_short_pauses(records),
             "back_to_back_under_1s": sum(1 for g in gaps if 0 < g < CHOPPY_GAP_S),
         }
     else:
@@ -241,6 +271,22 @@ def selftest() -> None:
     assert rep["tilt"]["mounted"] is True and rep["tilt"]["share_in_mount_window"] == 0.75, rep
     assert rep["dispatch"]["lines"] == 3, rep                  # the record without t is skipped
     assert rep["dispatch"]["replays"] == 1 and rep["dispatch"]["back_to_back_under_1s"] == 1, rep
+    assert rep["dispatch"]["replays_from_line_start"] == 1, rep   # no resume_from
+    assert rep["dispatch"]["replays_resumed_mid_line"] == 0, rep
+    assert rep["dispatch"]["cross_band_pause_under_0_3s"].startswith("no speech_end"), rep
+    # End → next start: a safety line ends, a nav line starts 0.1 s later (missing pause → 1), a
+    # nav line starts 0.36 s after an obstacle end (pause kept → 0), a safety start never counts.
+    pauses = [
+        {"t": 1.0, "kind": "speech_end", "priority": "safety"},
+        {"t": 1.1, "kind": "speech_dispatch", "priority": "nav", "text": "a"},
+        {"t": 2.0, "kind": "speech_end", "priority": "obstacle"},
+        {"t": 2.36, "kind": "speech_dispatch", "priority": "nav", "text": "b"},
+        {"t": 3.0, "kind": "speech_end", "priority": "nav"},
+        {"t": 3.05, "kind": "speech_dispatch", "priority": "safety", "text": "c"},
+        {"t": 4.0, "kind": "speech_end", "priority": "nav"},
+        {"t": 4.05, "kind": "speech_dispatch", "priority": "nav", "text": "d"},
+    ]
+    assert cross_band_short_pauses(pauses) == 1, cross_band_short_pauses(pauses)
     assert rep["unsolicited_non_route_per_min"] == 1.0, rep    # Head height.; Flashlight asked for; route excluded
     assert rep["field_collisions"] == 1, rep
     assert rep["suppressed"] == {"by_reason": {"busy": 1}, "by_load": {"ambientObstacleName": 1}}, rep
