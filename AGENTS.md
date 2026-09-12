@@ -7,13 +7,44 @@ module section in `docs/CODE_REFERENCE.md` in the same commit — agents rely on
 
 ## What this is
 
-CaneKit is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
+OpenCane is a native iOS 26 app (Swift 6, SwiftUI, no third-party packages) that guides a blind cane
 user along GPS waypoints and warns about waist-to-head obstacles. The **phone is the only computer**:
 an iPhone 17 Pro Max (iOS 27) clamped to a non-metal 28.75 mm cane, plus AirPods Pro (beacon +
 speech + head yaw) and an Apple Watch (wrist taps, Repeat / Next / Describe / Recenter). No ESP32, no
 external sensors. The demo route is ISR Townsend Hall → CIF on the UIUC campus
 (`ios/CaneKit/Resources/route_isr_cif.json`), but any destination works via MapKit walking directions.
 For the demo everything runs **untethered on the phone**; the Mac only signs and installs.
+
+## The name split — OpenCane to a human, CaneKit in the code (deliberate, do not "fix")
+
+Added 2026-09-11. The two names are **not** a half-finished rename; keeping them apart is the point.
+
+| | Name | Where it is set |
+|---|---|---|
+| What a person **sees and hears** | **OpenCane** | `CFBundleDisplayName` on all three targets (`ios/project.yml` → `make gen`); the nav title in `ContentView`; the watch nav title; every spoken line (`AppModel`, `SoundWatcher`, `AppIntents`); the `NS*UsageDescription` purpose strings; the Siri App Shortcut phrases, which interpolate `\(.applicationName)` and therefore follow the display name with no edit |
+| What the **code** is called | **CaneKit** | Xcode project and `CaneKit.xcodeproj`, target names, scheme, `PRODUCT_NAME` (so the build product is `CaneKit.app`), the `CaneKitLogic` SwiftPM module, every `ios/CaneKit…/` path and file name, `Makefile` targets, the `CANEKIT_*` environment variables, the `canekit-*.jsonl` trip-log filenames |
+| Frozen either way | `com.aritro.canekit`, `.watchkitapp`, `.widget` | hard rule 6 |
+
+Why the code keeps the old name:
+
+- **The bundle id must not move.** iOS keys the installed app, its permission grants, its
+  `UserDefaults`, its Documents folder (trip logs, hazard GeoJSON) and the ElevenLabs mp3 voice
+  cache off the bundle id. A new id installs a *second* app beside the old one, orphans all of it,
+  and burns another of the 10 App IDs a free personal team gets per week.
+- **`PRODUCT_NAME` names the build product.** `CaneKit.app` is referenced by `ios/Makefile`,
+  `ios/scripts/gen.sh` and `ios/scripts/e2e.py`.
+- **Renaming targets, the module and the paths buys nothing a user can see** and would touch
+  hundreds of files, `docs/CODE_REFERENCE.md` and every XCUITest, for a rename with no user-visible
+  effect.
+
+So: when you add a **spoken or visible** string, say OpenCane. When you touch a type, file, module,
+target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
+
+1. ⚠ `AppModel.commonLines` prefetches the ElevenLabs audio for fixed spoken lines and matches them
+   **by bytes**. "OpenCane ready." appears both there and at the `speech.say` in `AppModel.start()`;
+   change one without the other and that line silently falls back to Apple's system voice.
+2. ⚠ Changing `CFBundleDisplayName` changes **what the walker must say to Siri**: the phrase is
+   "… in OpenCane" now, not "… in CaneKit". `docs/design.md` §6 lists the current phrases.
 
 ## Layout
 
@@ -214,8 +245,8 @@ app container's Documents folder.
   MKLocalSearch result within 3 km (a name containing every typed word preferred), never MapKit's
   first answer; "Walking to <place>, N meters." is said before guidance so a wrong pick can be
   stopped, and Stop also abandons a search still in flight. Siri phrases can only carry the
-  gazetteer places ("Take me to Grainger in CaneKit"; App Shortcut phrases cannot hold a String);
-  any other place goes through "Take me somewhere in CaneKit" and Siri asks where. Gazetteer
+  gazetteer places ("Take me to Grainger in OpenCane"; App Shortcut phrases cannot hold a String);
+  any other place goes through "Take me somewhere in OpenCane" and Siri asks where. Gazetteer
   entrances other than CIF / ISR are OSM entrance nodes, not yet walked.
 - "Navigate to CIF from here" routes with Apple Maps to the route file's last waypoint as a bare
   coordinate (no search), so it can never pick a different "CIF". Starting the demo route also

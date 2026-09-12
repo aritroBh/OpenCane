@@ -188,7 +188,7 @@ final class SoundWatcher {
         // succeed and then deliver silence, which looks exactly like "no sirens today".
         switch AVAudioApplication.shared.recordPermission {
         case .denied:
-            fail("Microphone is off for CaneKit. Sound alerts need it.")
+            fail("Microphone is off for OpenCane. Sound alerts need it.")
             return
         case .undetermined:
             // The prompt can stay up for as long as the walker likes, and they can turn the
@@ -199,7 +199,7 @@ final class SoundWatcher {
                 Task { @MainActor [weak self] in
                     guard let self, self.generation == generation else { return }
                     if granted { self.start() } else {
-                        self.fail("Microphone is off for CaneKit. Sound alerts need it.")
+                        self.fail("Microphone is off for OpenCane. Sound alerts need it.")
                     }
                 }
             }

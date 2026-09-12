@@ -31,7 +31,7 @@ struct WatchContentView: View {
         // screen without a ScrollView (a ScrollView would take the crown and "Next" never fires).
         NavigationStack {
             content
-                .navigationTitle(model.distanceM.map { "\($0) m" } ?? "CaneKit")
+                .navigationTitle(model.distanceM.map { "\($0) m" } ?? "OpenCane")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {

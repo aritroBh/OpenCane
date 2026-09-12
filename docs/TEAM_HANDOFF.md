@@ -109,7 +109,7 @@ To put it on the phone (full list: [`ios/README.md` §1](../ios/README.md#1-day-
    the app. Never commit it. With no keys everything still works: the system voice speaks and
    "Where am I" runs on the phone.
 5. `make run`. On the phone: Settings → General → VPN & Device Management → trust the developer
-   app, then open CaneKit again.
+   app, then open OpenCane again.
 6. If watch signing or pairing fights you, unblock the phone first: `WATCH=0 scripts/gen.sh`, then
    `make build install launch` (phone-only), and add the watch later ([`ios/README.md`](../ios/README.md)).
 7. Follow [`devices_setup.md`](devices_setup.md) for AirPods, the watch, Guided Access and warming
@@ -146,7 +146,7 @@ trip-log `lanes` line as `tilt`.
 | Phone held upright (portrait) (Mount card) | on | The clamp holds the phone upright; turn off only if it is clamped sideways. |
 | Mirror left / right (Mount card) | off | Turn on if a left obstacle buzzes as right (bench test D1). |
 | Audio beacon while navigating (Mount card) | on | Plays only into headphones. |
-| Write trip log (Mount card) | on | Every test needs a log; Files → On My iPhone → CaneKit. |
+| Write trip log (Mount card) | on | Every test needs a log; Files → On My iPhone → OpenCane. |
 | **Detect drop-offs** (Hazards card) | **off** | New, untuned on a real cane. Turn on for bench test D1-style curb checks, then decide. |
 | Read signs (Hazards card) | on | On-device, offline, speaks only safety / wayfinding phrases, once a minute each. |
 | **Hazard watch** (Hazards card) | **off** | Every 8 s while walking; on-device labels are weak (see §8), the cloud needs a key and network. |
@@ -228,7 +228,7 @@ after code changes with `graphify update .` (seconds, no API cost).
   fall mid-bin). ADA ramps (≤ 8.3 %) stay quiet in tests.
 - The screen is exposed on the cane: use Guided Access so a brush cannot hit Stop. To arm it
   (Settings → Accessibility → Guided Access on, passcode set), triple-click the side button in
-  CaneKit → Options: **Touch Off, Side Button Off, Volume Buttons Off, Keyboards Off, Motion On** →
+  OpenCane → Options: **Touch Off, Side Button Off, Volume Buttons Off, Keyboards Off, Motion On** →
   Start. While armed the watch (Repeat / Next / Describe / Recenter) is the only input. "Where am I"
   from the Action button may be blocked too (it is a hardware button; stress plan D16 records
   whether it works), so use the watch's Describe.
