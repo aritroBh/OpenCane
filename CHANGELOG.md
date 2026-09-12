@@ -126,6 +126,18 @@ test on device: nothing new on the phone. Print `coupons.scad what="next"` (11 s
 the full length freely and the dovetail that slides with thumb pressure and stays put when shaken,
 then put those three numbers in the parameter block. Do not print the collar, ring, arm or cradle —
 all four are blocked by the defects above.
+## Step 20 — Passed-by slow approach fix, Live Activity overlap prevention, and Watch keep-alive guard (Sat Sep 12)
+
+Full codebase stress test and multi-agent audit across LiDAR depth, cameras, navigation logic, watch connectivity, audio, speech, and hardware:
+- **Passed-by receding fixes reset on slow approach**: In `GeofenceTracker.update`, walking toward an intermediate waypoint at < 1 m/s (step < 1 m) meant `d > last - 1` evaluated true, accumulating false receding fixes before reaching closest approach. Now explicitly resets `recedingFixes = 0` whenever `d <= minDistance`. Added `@Test func passedByResetsRecedingStreakDuringSlowApproach()` in `GeoMathTests.swift`.
+- **Live Activity dismissal policy**: `LiveActivityController.end(final:immediate:)` now supports an `immediate: Bool = false` dismissal policy (`.immediate` vs `.after(.now + 60)`). `start()` and `AppModel.endRouteQuietly()` invoke `end(immediate: true)`, preventing stacked/overlapping stale Live Activities on the lock screen during rapid route restarts.
+- **Watch keep-alive guard**: Guarded `!text.hasPrefix("No route")` in `WatchModel.updateKeepAlive` to ensure "No route running." status lines do not spuriously trigger workout keep-alives while idle.
+- **LiDAR multi-cam architecture audit**: Researched and audited user query regarding front selfie camera + back camera + LiDAR depth. Verified hardware probe on iPhone 17 Pro Max confirms 12 multi-cam sets pair the front camera with rear LiDAR depth at 320×240 (AVFoundation). Documented why ARKit's single-camera architecture (`ARFrame.capturedImage`) pauses in dual-cam mode and what an AVFoundation-based pipeline would require (replacing ARKit, manual gravity via CoreMotion, lens undistortion, loss of classified mesh).
+- **Demo route guidance for Townsend Hall (dorm) to CIF**: Clarified that "Start demo route" (`route_isr_cif.json`) is specifically the pre-surveyed, pre-cached Townsend Hall to CIF route with tested curb gates and turn settling. Kept "Start demo route" and pinned accessibility label.
+- **AirPods Pro & Apple Watch necessity**: Clarified why AirPods Pro (spatial audio HRTF beacon, head yaw tracking, Transparency mode) and Apple Watch (wrist haptic taps, remote controls without cane phone access) remain essential for the blindfolded demo walk.
+- **Verification**: 348/348 Logic tests pass, `make sim` clean, 10/10 XCUITest / visual tour passed, `make e2e` clean scenario passed (989 m, 9/9 waypoints in order, 0 veer errors).
+
+test on device: start demo route, lock phone to check single Live Activity on Lock Screen; verify 3 detents on Watch crown advances waypoint; verify Townsend Hall -> CIF route navigation.
 
 ## Step 19 — The collar had no thread on it (Sat Sep 12, overnight)
 

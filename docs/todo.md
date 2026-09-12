@@ -474,6 +474,16 @@ for 60 s so a weak network can never stall a cue.
       announce skipped waypoints in the passed-by path too
 - **test on device:** see CHANGELOG Step 12
 
+## Step 20 — Passed-by slow approach fix, Live Activity overlap prevention, and Watch keep-alive guard (Sat Sep 12)
+- [x] Full codebase stress test across Depth, Navigation, Audio, Speech, Watch, and Trip Logging
+- [x] `GeofenceTracker.update`: reset `recedingFixes` when approaching waypoint (`d <= minDistance`), tested in `passedByResetsRecedingStreakDuringSlowApproach`
+- [x] `LiveActivityController`: added `immediate: Bool = false` dismissal policy; `start()` and `AppModel.endRouteQuietly()` use `immediate: true` to prevent stacked lock screen activities
+- [x] `WatchModel.updateKeepAlive`: guarded with `!text.hasPrefix("No route")` to prevent false workout starts on idle status messages
+- [x] Dual camera + LiDAR depth architecture audit: verified hardware capabilities on iPhone 17 Pro Max (12 multi-cam sets with front + rear LiDAR depth at 320x240) and ARKit single-camera constraint
+- [x] Verified 348/348 unit tests, `make sim` build, 10/10 UITests + visual tour, and clean GPS e2e replay (100% pass, 9/9 waypoints)
+- [x] Device install and verification on connected iPhone 17 Pro Max
+- **test on device:** see CHANGELOG Step 20
+
 ## Cross-cutting
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot

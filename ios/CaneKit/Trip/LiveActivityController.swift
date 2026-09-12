@@ -43,7 +43,7 @@ final class LiveActivityController {
     /// Idle until `start`.
     init() {}
 
-    /// Requests a new activity (ending any previous one) with glyph kind "straight".
+    /// Requests a new activity (ending any previous one immediately) with glyph kind "straight".
     /// Called by `AppModel.beginRoute()`. `distanceM` is metres to the first waypoint (0 if unknown).
     /// No-op with `lastError` set when the user has turned Live Activities off.
     func start(routeName: String, instruction: String, distanceM: Int) {
@@ -51,7 +51,7 @@ final class LiveActivityController {
             lastError = "Live Activities are off in Settings"
             return
         }
-        end()
+        end(immediate: true)
         let state = NavActivityAttributes.ContentState(instruction: instruction, distanceM: distanceM, kind: "straight")
         do {
             activity = try Activity.request(attributes: NavActivityAttributes(routeName: routeName),
@@ -81,14 +81,14 @@ final class LiveActivityController {
     }
 
     /// Ends the activity with an "arrived" glyph and `instruction` (default "Route ended"),
-    /// dismissed 60 s later. Called on arrival (`final: nav.instruction`), on `stopRoute()`, and
-    /// by `start` to replace a previous activity. No-op when none is running.
-    func end(final instruction: String? = nil) {
+    /// dismissed 60 s later (or immediately if `immediate` is true). Called on arrival (`final: nav.instruction`),
+    /// on `stopRoute()`, and by `start` to replace a previous activity. No-op when none is running.
+    func end(final instruction: String? = nil, immediate: Bool = false) {
         guard let activity else { return }
         let state = NavActivityAttributes.ContentState(instruction: instruction ?? "Route ended", distanceM: 0, kind: "arrived")
         nonisolated(unsafe) let act = activity
-        // Keep the arrival glyph on the lock screen for a minute, then clear it.
-        Task.detached { await act.end(.init(state: state, staleDate: nil), dismissalPolicy: .after(.now + 60)) }
+        let policy: ActivityUIDismissalPolicy = immediate ? .immediate : .after(.now + 60)
+        Task.detached { await act.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }
         self.activity = nil
         isActive = false
     }

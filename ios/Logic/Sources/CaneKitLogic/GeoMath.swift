@@ -436,8 +436,15 @@ public final class GeofenceTracker {
         guard !isLast, gatePasses(fix, forLast: false), let wp = current else { return nil }
         let d = GeoMath.distanceMeters(fix.coordinate, wp.coordinate)
         minDistance = min(minDistance, d)
-        // "Receding" tolerates 1 m of GPS jitter so one wobbly fix does not restart the count.
-        if let last = lastDistance, d > last - 1 { recedingFixes += 1 } else { recedingFixes = 0 }
+        // "Receding" tolerates 1 m of GPS jitter so one wobbly fix does not restart the count,
+        // but approaching the waypoint (d <= minDistance) must always reset the count.
+        if d <= minDistance {
+            recedingFixes = 0
+        } else if let last = lastDistance, d > last - 1 {
+            recedingFixes += 1
+        } else {
+            recedingFixes = 0
+        }
         lastDistance = d
         if minDistance <= wp.radiusM * passedByFactor,
            d >= minDistance + wp.radiusM,

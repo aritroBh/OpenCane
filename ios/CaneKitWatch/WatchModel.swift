@@ -300,7 +300,7 @@ final class WatchModel {
                 guard !Task.isCancelled else { return }
                 self?.stopKeepAlive()
             }
-        } else if text != "No route", keepAlive == "none", workout == nil, runtime == nil {
+        } else if !text.hasPrefix("No route"), keepAlive == "none", workout == nil, runtime == nil {
             startKeepAlive()
         }
     }
