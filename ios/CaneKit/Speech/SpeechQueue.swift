@@ -141,6 +141,11 @@ final class SpeechQueue {
     /// and still only `VoicePrefetch.maxConcurrent` requests are in flight.
     @ObservationIgnored var backgroundLines: [String] = []
 
+    /// The spoken lines of the route currently being walked, re-appended to every prefetch batch so
+    /// a warning cache miss can never discard them. Set by `AppModel` when a route starts, cleared
+    /// when it ends; empty when no route is running.
+    @ObservationIgnored var routeLines: [String] = []
+
     // MARK: Private
 
     /// A line waiting in `queue`.
@@ -550,7 +555,14 @@ final class SpeechQueue {
         // A new attempt: drop the previous complaint so the card cannot keep accusing the voice
         // after the network came back. A failure below writes a fresh one.
         voiceError = nil
-        let batch = lines + backgroundLines
+        // Route lines are a standing set too, for the same reason `backgroundLines` is one — and
+        // this is the case that matters most. At route start the whole route is prefetched, but the
+        // first obstacle warning that misses the cache calls `prefetch([text])`, which cancels this
+        // batch and replaces it. Without re-appending them every remaining waypoint line is dropped,
+        // and the walker's next turn or crossing instruction — at a street corner — waits on the
+        // network and arrives late in the system voice. They go before `backgroundLines` because a
+        // turn is time-critical and a warning phrase is only a nicety once it is cached.
+        let batch = lines + routeLines + backgroundLines
         prefetchTask = Task.detached(priority: .utility) { [weak self] in
             let failure = await naturalVoice.prefetch(batch)
             // Only report; never let a prefetch failure disable the voice. The live path has its

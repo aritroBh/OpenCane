@@ -752,17 +752,24 @@ final class AppModel {
             speech.say("Both cameras on. Obstacle detection, distance warnings and sign reading are paused.",
                        .nav, ttl: 15)
             let fpsBefore = depth.fps
-            hazards.stop()                      // no sign / hazard scanning without ARKit frames
-            depth.pause()                       // the AR session must let the cameras go
-            haptics.stopAll()
-            decider.reset()
-            cueSpeech.cleared()
-            namer.reset()
-            activeCue = .clear
-            sceneContext.set("")
-            faceHead.stop()                     // no ARKit frames means no face anchors
+            // Every one of these goes INSIDE the serialised chain, with the resume on the off path.
+            // They used to run synchronously here while the resume ran inside the chain, so ON →
+            // OFF → ON pressed quickly ordered as: pause (sync), [stop + resume] (queued), pause
+            // (sync), [start] (queued) — and the capture session started while ARKit was running
+            // again. The device probe measured what that costs: ARKit collapses from 30 fps to 8
+            // with session interruptions, i.e. obstacle detection degrades exactly when someone is
+            // fiddling with the switch.
             serializeBothCameras { [weak self] in
                 guard let self else { return }
+                self.hazards.stop()             // no sign / hazard scanning without ARKit frames
+                self.depth.pause()              // the AR session must let the cameras go
+                self.haptics.stopAll()
+                self.decider.reset()
+                self.cueSpeech.cleared()
+                self.namer.reset()
+                self.activeCue = .clear
+                self.sceneContext.set("")
+                self.faceHead.stop()            // no ARKit frames means no face anchors
                 await self.bothCameras.start()
                 var fields = self.bothCameras.diagnostics
                 fields["action"] = "start"
@@ -1011,6 +1018,7 @@ final class AppModel {
 
     /// Stop the running route without speaking (used before starting another one).
     private func endRouteQuietly() {
+        speech.routeLines = []               // no route: nothing standing to re-request
         nav.stop()
         beacon.stop()
         head.stop()
@@ -1391,6 +1399,7 @@ final class AppModel {
         Task { [weak self] in await self?.trip.stop() }
         liveActivity.end()
         speech.stopAll()                     // queued waypoint lines must not play after Stop
+        speech.routeLines = []               // and nothing of that route stays on the prefetch list
         speech.say("Route stopped.", .nav)
         logger.event("route", ["action": "stop"])
         pushStatusToWatch()
@@ -1450,6 +1459,11 @@ final class AppModel {
         // Every waypoint line and the route intro, synthesized now so they play instantly. The
         // route's own lines go first because waypoint 1 is needed in seconds; whatever is left of
         // `speech.backgroundLines` (the warning set) follows on the same two-request budget.
+        // Standing for the whole walk, not just this batch: `prefetch` cancels the batch before it,
+        // and every obstacle warning that misses the cache starts a new one. Without this the first
+        // warning the walker hears would throw away every waypoint line still unsynthesized, and the
+        // next turn instruction would arrive late, in the wrong voice, at a street corner.
+        speech.routeLines = route.waypoints.map(\.say)
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
