@@ -14,6 +14,13 @@
 //    2. Cost. Every line is one ElevenLabs synthesis on a 10,000-characters-per-month free tier,
 //       so the total is asserted against `warningCharacterBudget`.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/SpokenPhrases.swift` (`obstacleNameLines`,
+//  `approachLines`, `signLines`, `groundHazardLines`, `warningLines`, `obstacleLine`,
+//  `bucketSamples`, `characterCount`). Callers: `AppModel` (launch warm-up of `warningLines`),
+//  `ObstacleNamer` (`obstacleLine`, the same template the set is built from) and `SpeechQueue`
+//  (`backgroundLines` re-appended to every prefetch batch). ⚠ `spokenPhrasesStayInsideTheCharacterBudget`
+//  pins the exact total (1,718 characters, 74 lines): a reworded warning changes it on purpose.
+//
 
 import Foundation
 import Testing

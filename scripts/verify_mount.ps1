@@ -38,13 +38,14 @@
     Run by hand on the Windows CAD machine after build_stl.ps1 (section 5
     reads its STLs: on a fresh clone they are missing and fail, after a
     parameter change they are stale) and before slice_gcode.ps1. This
-    script IS the mount's test
-    suite; nothing runs it automatically. Needs OpenSCAD with the Manifold
-    backend (always passed here, unlike build_stl.ps1) and node.
+    script IS the mount's test suite; nothing runs it automatically. Needs
+    OpenSCAD with the Manifold backend (always passed here, unlike
+    build_stl.ps1) and node.
 
     The preview cannot do any of this: it draws overlaps in colour and
     they look like nothing at all. Each of these checks caught a real
-    defect on 2026-09-12; see CHANGELOG.md, Step 21.
+    defect on 2026-09-12; see CHANGELOG.md, Step 25 (the pass that built
+    this harness), and Step 21 for the thread and bore findings.
 
 .PARAMETER Quick
     Skip the kinematic sweeps (3 and 4).
@@ -62,7 +63,8 @@ $work   = Join-Path ([IO.Path]::GetTempPath()) 'opencane_verify'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Get-ChildItem "$work\*.stl" -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item $_.FullName -Force }
 
-# same search as build_stl.ps1
+# same search as build_stl.ps1 (returns only the path; the Fast flag is not
+# needed because --backend=manifold is always passed below)
 function Find-OpenScad {
     if ($env:OPENSCAD -and (Test-Path $env:OPENSCAD)) { return $env:OPENSCAD }
     $snap = Get-ChildItem -Path (Join-Path $env:USERPROFILE 'Tools\OpenSCAD-*\openscad.com') -ErrorAction SilentlyContinue |
@@ -85,6 +87,8 @@ function Say($ok, $text) {
 # Volume of the overlap a check renders, in mm3. 0 for an empty result.
 # The -D value is escaped with \" because that is the only quoting that
 # reaches the exe intact from Windows PowerShell 5.1 (see build_stl.ps1).
+# $check names a branch in verify.scad (`check == "..."`); $extra adds -D
+# overrides such as delta / rot_sign / shift / lift / test_cane.
 function Overlap([string]$check, [string[]]$extra = @()) {
     $out = Join-Path $work ("{0}_{1}.stl" -f $check, ([guid]::NewGuid().ToString('N').Substring(0, 6)))
     $argv = @('--backend=manifold', '--export-format', 'binstl', '-o', $out, '-D', ('check=\"' + $check + '\"')) + $extra + @($harn)

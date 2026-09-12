@@ -9,9 +9,19 @@
 //
 // Binary STL only (build_stl.ps1 writes binstl). No dependencies: the
 // machines this runs on have node and nothing else.
+//
+// Callers: scripts/verify_mount.ps1 (`vol` for every overlap check, `shells` for step 5, `overhang`
+// for the report); `gsupport` is a by-hand tool used when checking where Orca put support in the
+// cradle's G-code (Step 25). Units: millimetres in, cm3 / mm2 out as labelled. Output is parsed by
+// verify_mount.ps1 with regexes (`\s(-?[\d.]+) cm3`, `shells \d+ \(1 with volume\)`) — ⚠ change
+// the print formats and those regexes together. Tests: none; exit 2 on an unknown command.
+// ⚠ An ASCII STL is not detected: its text is read as a binary header + triangle count, which usually
+// throws a RangeError past the end of the buffer (or prints nonsense), never a clear refusal.
 'use strict';
 const fs = require('fs');
 
+// Triangles of a binary STL as [[x,y,z] x3] (vertex order as stored; the facet normal and the
+// 2-byte attribute are skipped). Throws if the file is missing or shorter than its triangle count.
 function readTris(path) {
   const b = fs.readFileSync(path); const n = b.readUInt32LE(80); const tris = [];
   for (let i = 0, o = 84; i < n; i++, o += 50) {
@@ -21,9 +31,15 @@ function readTris(path) {
   }
   return tris;
 }
+// Signed volume (mm3) of the tetrahedron from the origin to the triangle; summed over a closed,
+// outward-wound mesh it is the enclosed volume. An open or inside-out mesh gives a meaningless or
+// negative number.
 const triVol = ([a, b, c]) => (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+// File name without directories (Windows or POSIX separators), for aligned output.
 const base = p => p.split(/[\\/]/).pop();
 
+// `vol`: one line per file — volume in cm3 (4 dp), z range, triangle count; `EMPTY` for a missing file
+// (OpenSCAD writes no STL for empty geometry, which is exactly what the overlap checks want).
 function vol(paths) {
   for (const p of paths) {
     if (!fs.existsSync(p)) { console.log(`${base(p).padEnd(36)} EMPTY`); continue; }
@@ -33,6 +49,10 @@ function vol(paths) {
   }
 }
 
+// `shells`: connected components by shared vertex position (union-find over vertices rounded to
+// 1e-4 mm). Prints the total component count and how many enclose > 0.5 mm3, then the 8 largest with
+// volume, triangle count and bounding box. ⚠ Two bodies that touch at a single vertex or edge count as
+// ONE shell, so a part joined to debris by a knife edge still passes "1 with volume".
 function shells(paths) {
   for (const p of paths) {
     const tris = readTris(p);
@@ -59,6 +79,10 @@ function shells(paths) {
   }
 }
 
+// `overhang`: area (mm2) of triangles whose normal points within 45 deg of straight down. Those within
+// 0.05 mm of the lowest z are the first layer (bed contact, AGENTS.md: healthy parts 450-820 mm2);
+// the rest are unsupported overhangs, listed per 1 mm z band when a band exceeds 2 mm2. Assumes the
+// STL is already in print orientation (build_stl.ps1 exports it that way).
 function overhang(paths) {
   const lim = Math.cos(45 * Math.PI / 180);
   for (const p of paths) {
@@ -81,6 +105,11 @@ function overhang(paths) {
   }
 }
 
+// `gsupport`: counts extruding G0/G1 moves under an Orca `;TYPE:` containing "support" whose position,
+// shifted into model coordinates, lies inside the box [bx0,bx1] x [by0,by1] with z <= bz1. The model
+// offset is registered from the first layer's wall extents minus the STL's min x / y (sx, sy), so it
+// assumes the slicer did not rotate the part. Relies on Orca's `;Z:` and `;TYPE:` comments; returns
+// (and prints) the count.
 function gsupport([file, sx, sy, bx0, bx1, by0, by1, bz1]) {
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
   let z = 0, type = '', x = 0, y = 0, first = null;
@@ -103,6 +132,7 @@ function gsupport([file, sx, sy, bx0, bx1, by0, by1, bz1]) {
   return inBox.length;
 }
 
+// CLI dispatch: first argument is the command, the rest are its arguments.
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === 'vol') vol(args);
 else if (cmd === 'shells') shells(args);

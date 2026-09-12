@@ -7,6 +7,12 @@
 //  it replace the record's own kind, so `{"kind":"hazard"}` came out as `{"kind":"sign"}` and
 //  e2e.py never saw a hazard record.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/TripLogRecord.swift` (`make(t:kind:fields:)`,
+//  `reservedKeys`). Caller: `TripLogger.event` (app), for every JSONL trip-log line. Readers that
+//  depend on `t` / `kind` being the record's own: `ios/scripts/e2e.py`, `ios/scripts/cue_audit.py`,
+//  and whoever reads a walk's log. A caller field named `t` or `kind` survives as `field_t` /
+//  `field_kind`, never silently overwriting.
+//
 
 import Testing
 @testable import CaneKitLogic

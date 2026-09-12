@@ -116,8 +116,10 @@ final class DepthEngine {
     /// it on `.timedOut`.
     @ObservationIgnored var onReadinessChanged: ((DepthReadinessState) -> Void)?
 
-    /// True while an `ARFaceAnchor` has been seen at all this session (any age). Only for the
-    /// Hazards card's "the front camera is live" line; freshness is `FaceHeadPose.isTracking`.
+    /// True once an `ARFaceAnchor` has been seen while face tracking is on (any age); cleared when
+    /// `setFaceTracking(false)` turns it off. Read only by `AppModel.startFaceTrackingSelfTest`
+    /// (`anchor_seen` in the `face_head_selftest` record); no view reads it.
+    /// Freshness is `FaceHeadPose.isTracking`, not this flag.
     private(set) var faceAnchorSeen = false
 
     // MARK: Capability

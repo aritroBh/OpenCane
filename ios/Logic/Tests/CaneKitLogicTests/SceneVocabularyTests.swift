@@ -5,6 +5,17 @@
 //  Pins SceneVocabulary with the labels Apple Vision actually returned on Google Street View
 //  frames of the ISR → CIF route (ios/scripts/vision_probe.swift output, 2026-09-11).
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/SceneVocabulary.swift` — `nouns` / `narrationNouns`
+//  / `list` / `sentence` (Vision identifiers → plain pedestrian nouns, ranked, taxonomy words
+//  dropped), `isFaithful` (the gate on the on-device model's sentence), `mentionsDistance` and
+//  `readableTexts` (OCR junk filter). Callers: `OnDeviceVision` (facts, template, faithfulness gate),
+//  `SceneDescriber`, `VLMClient`. Fixture names WP1…WP9 are the route's waypoints.
+//  Breaks these catch: "conveyance" / "portal" / "machine" reaching speech; a crosswalk ranked
+//  below grass; a census of every label instead of the top two; and a language-model sentence that
+//  invents an object, a hazard word or a number (the real Street View nonsense: "No hazards
+//  detected. Distance: zero meters.") being spoken instead of the template. Test comments name the
+//  review that found each case (Muse, Antigravity, Claude review workflow).
+//
 
 import Testing
 @testable import CaneKitLogic

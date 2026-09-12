@@ -8,11 +8,20 @@
 //  "it interrupts each other"), a resume that starts mid-word, a resume loop that never advances, and
 //  a cut in the last clause that replays nothing useful.
 //
+//  Source pinned: `ios/Logic/Sources/CaneKitLogic/SpeechResume.swift` (`resumeOffset`, `remainder`,
+//  `spokenUTF16`, `mp3HeardUTF16`, `clipTime`, `nextResume`, `gapSeconds`; constants `clipLead`
+//  0.25 s, `maxResumes` 3, `crossBandGap` 0.35 s, `mp3MarginUTF16` 8 — all hypotheses to tune from
+//  the `resume_from` / `speech_end` trip-log events). Caller: `SpeechQueue` (app), for both the
+//  system voice (`willSpeakRangeOfSpeechString` progress, `stopSpeaking(at: .word)`) and the
+//  ElevenLabs mp3 path (played fraction). All offsets are UTF-16 code units. Public API only.
+//
 
 import CaneKitLogic
 import Foundation
 import Testing
 
+/// Resume-point and inter-band-gap rules, driven by the real route intro from the field log plus
+/// small hand-built lines for abbreviations, decimals and multi-unit characters.
 @Suite("Speech resume")
 struct SpeechResumeTests {
 

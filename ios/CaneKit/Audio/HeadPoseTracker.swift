@@ -9,10 +9,11 @@
 //  (phone heading) and presses Recenter → headYaw = 0 there.
 //
 //  Recentering (AGENTS.md deliberate behaviour): besides the manual Recenter button / watch
-//  command, AppModel auto-recenters via CaneKitLogic `StraightWalkDetector` (3 fixes > 0.9 m/s,
-//  steady course, still head), never within 15 m of a crossing and never on a timer. Until then
-//  AppModel feeds the beacon a head yaw of 0 (the stale reference would double-count a turn).
-//  The first sample after `start()` also seeds the reference.
+//  command, AppModel auto-recenters via CaneKitLogic `StraightWalkDetector` (3 fixes > 0.6 m/s —
+//  0.9 excluded slow cane walkers entirely — steady course, still head), never within 15 m of a
+//  crossing and never on a timer. Until then `HeadYawSelector` feeds the beacon a head yaw of 0 (the
+//  stale reference would double-count a turn). The first sample after `start()` also seeds the
+//  reference.
 //
 //  Nod to talk (Step 3 of the nod plan): the same motion stream's *pitch* feeds a CaneKitLogic
 //  `HeadNodDetector`; a double nod calls `onDoubleNod`, which AppModel turns into
@@ -30,6 +31,14 @@
 //
 //  Audio: none. Head motion rides the AirPods' existing A2DP link; this never touches the
 //  audio session. Requires `NSMotionUsageDescription` (the prompt appears at route start).
+//
+//  Owner: `AppModel.head` (one instance). Readers: `AppModel.startTicker` / auto-recenter through
+//  `HeadYawSelector` (AirPods win over the front camera's `FaceHeadPose`), GuideCard's head pill
+//  (`isConnected`), the status summary, and the `head_nod` trip-log event (`pitchDeg`).
+//  Tests: none for this wrapper (CoreMotion, device-only). Pinned in CaneKitLogic:
+//  `NavSupportTests` (`StraightWalkDetector`, when `recenter()` auto-fires), `HeadNodDetectorTests`
+//  (the double nod), `HeadYawSourcesTests` (source choice). ⚠ The sign convention needs the AirPods
+//  device walk: turn the head with the body still and the beacon click moves the other way.
 //
 
 import CaneKitLogic
@@ -81,12 +90,15 @@ final class HeadPoseTracker {
     /// consistent clock). Reset in `start()` and `stop()`.
     @ObservationIgnored private var nod = HeadNodDetector()
 
+    /// Starts with no data and no reference; nothing runs until `start()`.
     init() {}
 
     /// Begin head tracking: clear the reference (the first sample becomes forward), install the
     /// connection relay and start motion updates on the main queue. No-op when unsupported or
-    /// already active. Callers: `AppModel.beginRoute`, and `wireAudioRoute` when AirPods connect
-    /// mid-route (followed by a pending recenter).
+    /// already active. Callers: `AppModel.startRouteNow` (route start), and `wireAudioRoute` when
+    /// headphones connect mid-route (followed by a pending recenter).
+    /// ⚠ Open (CHANGELOG Step 34 audit, "still open"): route start calls this without checking
+    /// that headphones are connected (`AudioRouteMonitor.headphonesConnected`).
     func start() {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
         active = true
@@ -124,7 +136,8 @@ final class HeadPoseTracker {
     }
 
     /// Stop updates and forget everything (yaw, pitch, reference, connection, pending nod) so the
-    /// UI never shows stale head tracking. Callers: `AppModel.stopRoute` and arrival.
+    /// UI never shows stale head tracking. Callers: `AppModel.stopRoute`, `endRouteQuietly`, the
+    /// `nav.onArrived` handler and `wireAudioRoute` when headphones disconnect.
     func stop() {
         active = false
         isConnected = false             // the pill must not say "Head tracked" with no data

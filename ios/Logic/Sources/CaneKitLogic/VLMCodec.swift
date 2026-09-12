@@ -17,8 +17,20 @@
 //      center / right, and no numbers — the LiDAR fact supplies the only distance a walker hears.
 //    · Parsers never return an empty string: empty → `.emptyResponse(reason)`; undecodable →
 //      `.malformed`; provider refusal → `.refused`; non-2xx → `.http` (via `checkStatus`).
-//    · Anthropic `max_tokens` 1024 covers thinking + answer (256 starved the answer).
-//  Tests: VLMCodecTests.swift (8 tests; shapes only, not provider acceptance).
+//    · Anthropic `max_tokens` 1024 covers thinking + answer (256 starved the answer); the
+//      OpenAI-compatible path uses the same 1024 (`openAIMaxTokens`) because Muse Spark's reasoning
+//      tokens count against it too.
+//    · Every reply is still untrusted: `CloudSceneGate` (and `SceneVocabulary` on-device) decide
+//      whether a parsed sentence may be spoken. This file only guarantees "non-empty or thrown".
+//
+//  Callers: `VLMClient.swift` (app) — the provider clients build bodies with `VLMRequest.*`, post
+//  through `post(_:headers:body:)` which calls `VLMResponse.checkStatus`, then parse with
+//  `VLMResponse.*`; `VLMClientFactory` resolves `VLMProvider` from Secrets. "Where am I" passes
+//  `ScenePrompt.text`, the hazard watch `HazardPrompt.text`, "Ask OpenCane" `QuestionPrompt.text(for:)`.
+//  `SpokenDistance` is used by `CueSpeechPolicy`, `ObstacleNamer`, `SpokenPhrases`,
+//  `GroundHazard.spokenLine`, `PeopleAhead`, `AppModel.contextLine` and `LaneGridView`.
+//  Isolation: stateless and nonisolated; the providers call it from their own async tasks.
+//  Tests: VLMCodecTests.swift (11 tests; shapes only, not provider acceptance).
 //
 
 import Foundation
@@ -90,9 +102,16 @@ public enum VLMRequest {
     /// Gemini generateContent. Header: x-goog-api-key.
     /// Body: text + inline JPEG, `maxOutputTokens` 120, temperature 0.2, `thinkingBudget` 0
     /// (no thinking: latency matters more than depth for a one-liner).
+    /// - Parameters:
+    ///   - jpegBase64: the frame as base64 JPEG, no data-URI prefix.
+    ///   - prompt: the instruction text (default "Where am I").
     /// - Throws: only if `JSONEncoder` fails (never in practice).
     /// Pinned by `geminiRequestCarriesImageAndPrompt`.
     public static func gemini(jpegBase64: String, prompt: String = ScenePrompt.text) throws -> Data {
+        // Wire shape (camelCase is Gemini's own REST naming): `contents[0]` is one user turn whose
+        // `parts` are the text then `inlineData{mimeType, data}`; `generationConfig` carries
+        // `maxOutputTokens`, `temperature` and `thinkingConfig.thinkingBudget`. A part leaves its
+        // unused optional nil so the encoder omits it (a part is text XOR inline data).
         struct Body: Encodable {
             struct Part: Encodable { var text: String? = nil; var inlineData: Inline? = nil }
             struct Inline: Encodable { var mimeType: String; var data: String }
@@ -141,6 +160,10 @@ public enum VLMRequest {
     public static func openAICompatible(model: String, jpegBase64: String,
                                         prompt: String = ScenePrompt.text,
                                         reasoningEffort: String? = nil) throws -> Data {
+        // Wire shape (snake_case property names are the API's own keys, hence no CodingKeys):
+        // `model`, one user `messages[0]` whose `content` parts are `{type:"text", text}` and
+        // `{type:"image_url", image_url:{url:"data:image/jpeg;base64,…"}}`, then `max_tokens`,
+        // `temperature` and the optional top-level `reasoning_effort`.
         struct Body: Encodable {
             struct ImageURL: Encodable { var url: String }
             struct Part: Encodable {
@@ -167,9 +190,17 @@ public enum VLMRequest {
 
     /// Anthropic Messages API. Headers: x-api-key, anthropic-version: 2023-06-01.
     /// Body: content `[image (base64 JPEG), text]`, `max_tokens` 1024, `output_config.effort` "low".
-    /// - Parameter model: model id sent verbatim (e.g. "claude-opus-5").
+    /// - Parameters:
+    ///   - model: model id sent verbatim (e.g. "claude-opus-5").
+    ///   - jpegBase64: the frame as base64 JPEG, no data-URI prefix.
+    ///   - prompt: the instruction text.
+    /// - Throws: only if `JSONEncoder` fails (never in practice).
     /// Pinned by `anthropicRequestShape`.
     public static func anthropic(model: String, jpegBase64: String, prompt: String = ScenePrompt.text) throws -> Data {
+        // Wire shape: `model`, `max_tokens`, `output_config{effort}`, and one user message whose
+        // `content` blocks are the image first (`{type:"image", source:{type:"base64",
+        // media_type:"image/jpeg", data}}`) then `{type:"text", text}` — image before text, as the
+        // Messages API recommends and `anthropicRequestShape` pins.
         struct Body: Encodable {
             struct Source: Encodable { var type = "base64"; var media_type = "image/jpeg"; var data: String }
             struct Block: Encodable {
@@ -202,7 +233,9 @@ public enum VLMResponse {
 
     /// The `{"error": {"message", "type"}}` shape OpenAI, Anthropic and Gemini all use.
     private struct ErrorEnvelope: Decodable {
+        /// The inner error object; only `message` is used (`type` is decoded for completeness).
         struct Inner: Decodable { var message: String?; var type: String? }
+        /// The `error` member; a body without it fails to decode and `checkStatus` falls back to raw bytes.
         var error: Inner
     }
 
@@ -222,6 +255,9 @@ public enum VLMResponse {
     /// - Throws: `.malformed` if undecodable; `.emptyResponse(blockReason ?? finishReason ?? "no text")`.
     /// Pinned by `geminiResponseParses`.
     public static func gemini(_ data: Data) throws -> String {
+        // Only the fields read are declared, all optional, so an extra or missing field never
+        // throws: `candidates[].content.parts[].text`, `candidates[].finishReason`,
+        // `promptFeedback.blockReason` (set when the prompt itself was blocked, e.g. "SAFETY").
         struct R: Decodable {
             struct Part: Decodable { var text: String? }
             struct Content: Decodable { var parts: [Part]? }
@@ -244,6 +280,9 @@ public enum VLMResponse {
     ///   `refusal`; `.emptyResponse(finish_reason ?? "no content")` when the text is empty.
     /// Pinned by `openAIResponseParsesStringAndPartsAndRefusal`.
     public static func openAICompatible(_ data: Data) throws -> String {
+        // Only `choices[0].message.content` (string or parts — `ContentValue`), `.refusal` and
+        // `choices[0].finish_reason` are read; "length" there with no content means a reasoning
+        // model spent `max_tokens` thinking (why `openAIMaxTokens` is 1024).
         struct R: Decodable {
             struct Message: Decodable {
                 var content: ContentValue?
@@ -266,6 +305,8 @@ public enum VLMResponse {
     ///   `.emptyResponse(stop_reason ?? "no text")` when no text survived.
     /// Pinned by `anthropicResponseParsesAndDetectsRefusal`.
     public static func anthropic(_ data: Data) throws -> String {
+        // Only `content[].type` / `.text` and `stop_reason` are read; thinking blocks carry no
+        // `text` and are filtered out by `type == "text"`.
         struct R: Decodable {
             struct Block: Decodable { var type: String; var text: String? }
             var content: [Block]?
@@ -283,6 +324,8 @@ public enum VLMResponse {
     }
 
     /// Collapse whitespace; drop surrounding quotes some models add.
+    /// Every whitespace run (newlines included) becomes one space and the ends are trimmed; one
+    /// pair of surrounding straight double quotes is removed (a lone `"` is left alone).
     /// Pinned by `geminiResponseParses`, `openAIResponseParsesStringAndPartsAndRefusal`.
     static func clean(_ s: String) -> String {
         var t = s.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -311,8 +354,12 @@ public enum VLMResponse {
 // MARK: - Spoken distances (shared with obstacle names)
 
 /// Metres → natural spoken words, rounded to the nearest half metre. Used by
-/// `CueSpeechPolicy` ("One meter ahead."), the app's `ObstacleNamer` ("One meter ahead, door")
-/// and the debug grid's labels.
+/// `CueSpeechPolicy` ("One meter ahead."), the app's `ObstacleNamer` ("One meter ahead, door"),
+/// `GroundHazard.spokenLine` ("Two meters ahead, drop-off."), `PeopleAhead` ("About 3 meters
+/// ahead, two people."), `AppModel.contextLine`, `SpokenPhrases` (which enumerates the buckets for
+/// the voice prefetch) and the lane grid's accessibility labels.
+/// ⚠ Changing a phrase changes every cached natural-voice warning line: the new wording misses the
+/// mp3 cache until it is re-synthesized (`SpokenPhrases.warningLines`).
 public enum SpokenDistance {
     /// "One meter", "Two meters", "Half a meter" — `phrase` with its first letter upper-cased,
     /// for the distance-first warning lines ("Two meters ahead, door."). `.capitalized` is wrong
