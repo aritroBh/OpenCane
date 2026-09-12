@@ -2,15 +2,16 @@
 //  HazardsCard.swift
 //  CaneKit
 //
-//  "Hazards" card: the camera's second job made visible. Toggles for the three hazard sources
-//  (LiDAR drop-offs / potholes / curbs, sign reading, hazard watch), the last thing each one said,
-//  which backend the hazard watch uses, the hazard-map count with a share button, and an optional
-//  live camera view for the sighted spotter and the demo video: `LiveCameraView`, ARKit's own
-//  frames on the GPU at the camera's frame rate (it replaced a ~3 Hz JPEG refresh loop).
+//  "Hazards" card: the camera's second job made visible. Toggles for the hazard sources
+//  (LiDAR drop-offs / potholes / curbs, sign reading, hazard watch, naming people), the last thing
+//  each one said, which backend the hazard watch uses, the hazard-map count with a share button,
+//  and an optional live camera view for the sighted spotter and the demo video: `LiveCameraView`,
+//  ARKit's own frames on the GPU at the camera's frame rate (it replaced a ~3 Hz JPEG refresh loop).
 //
 //  Implements docs/design.md (cards, pills, toggles, big buttons). Accessibility: every toggle is
-//  a labelled switch ("Detect drop-offs", "Read signs", "Hazard watch", "Live camera view");
-//  the live view is hidden from VoiceOver (it carries no information a blind user needs).
+//  a labelled switch ("Detect drop-offs", "Read signs", "Hazard watch", "Name people ahead",
+//  "Live camera view"); the live view is hidden from VoiceOver (it carries no information a blind
+//  user needs).
 //
 
 import CaneKitLogic
@@ -33,6 +34,9 @@ struct HazardsCard: View {
             Toggle("Hazard watch", isOn: $model.hazardWatchEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .accessibilityHint("While walking a route, checks the path for cones, barriers and scooters every 8 seconds")
+            Toggle("Name people ahead", isOn: $model.namePeopleEnabled)
+                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .accessibilityHint("When you ask where am I, says how many people are ahead, which way and how far")
 
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: model.hazards.watchProvider, tone: .neutral, systemImage: "eye",
