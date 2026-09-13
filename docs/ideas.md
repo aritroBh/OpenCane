@@ -19,11 +19,7 @@
 > | Scene read | Gemini Flash on a tap | "Where am I": custom OpenAI-compatible (Muse 1.3) / Anthropic / Gemini / OpenAI, chosen in `Secrets.plist`; Action button App Shortcut, watch, on-screen button; Camera Control unverified under ARKit | [`ios/README.md` §4](../ios/README.md) |
 > | Day-2 list | Live Activity, YOLO, OCR, MTD, events | Live Activity **shipped** (Step 10). **[Built, Step 11]** on-device sign reading (Vision text), Apple's on-device language model for "Where am I" (`FoundationModels`), hazard map (GeoJSON). **[Built, Steps 13 and 23]** voice commands and the conversational assistant, with `SFSpeechRecognizer` (not SpeechAnalyzer). Still not built: YOLO names, SpeechAnalyzer, UWB, MTD buses, calendar events, Aira handoff, "find my cane" chirp | §5.2, §5.4, `CHANGELOG.md` |
 > | Added, not in the plan | — | MapKit "any destination"; trip card (distance, minutes, steps via HealthKit / pedometer); JSONL trip log; AirPods / watch presence announcements; Repeat everywhere | `CHANGELOG.md` Steps 6–10 |
-<<<<<<< HEAD
 > | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. **[Status, Sep 12]** After Step 37 the Logic package has 457 `@Test` annotations and 11 XCUITests (Step 37 run: 457/457, uitest 10 passed + 1 skipped, e2e PASS), and the build has been installed on the phone; current state is tracked in [`ios/README.md`](../ios/README.md) | [`docs/todo.md`](todo.md) |
-=======
-> | Code state | "uncompiled starter code" | **Historical Step 10 snapshot:** builds under Swift 6 strict concurrency; 79 logic tests, 6 XCUITests and a screenshot tour on the iPhone 17 Pro Max / iOS 27 simulator. The current checkout is tracked in [`ios/README.md`](../ios/README.md) and has 378 Logic-test annotations; device tests pending | [`docs/todo.md`](todo.md) |
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 >
 > "Shipped" above means the Step 10 build. Work in progress on Sep 11 when this banner was written: a
 > hazards layer (LiDAR drop-off / pothole / curb detection, on-device sign reading, a periodic vision

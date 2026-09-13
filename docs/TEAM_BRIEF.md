@@ -6,7 +6,6 @@ resume from its §10.
 
 ## Status right now — read this first
 
-<<<<<<< HEAD
 - **`main` contains Steps 0–37** plus the per-camera rotation fix for Both cameras. The last day on
   the app line added:
   - root tabs Guide / Sense / Settings (27);
@@ -41,36 +40,9 @@ resume from its §10.
   ahead?", indoor suggestion). None has started.
 - Until the phone tests pass, **the blindfolded walk is a no-go**. A sighted demo is always the
   fallback.
-=======
-- **Main contains Steps 0–29**, including the camera-transition depth interlock, sound-recognition
-  lifetime guard and the merged
-  conversational voice assistant / Action Button work. The current checkout has **378 Logic test
-  annotations**; run them with Swift 6/Xcode 27.
-- **The local review environment cannot rerun the full gates:** its Xcode 15.1 / Swift 5.9.2 is
-  older than the package's Swift tools 6.0, and XcodeGen/CoreSimulator/Muse/Antigravity/graphify are not
-  installed. Do not describe the historical green runs below as current verification.
-- **Historical physical-phone desk test (before this merge):**
-  - LiDAR, haptics, mesh object names ("table ahead"), the head-height cue, on-device "Where am I"
-    (Apple Vision + Apple's on-device model; no key or network needed);
-  - depth at 30 reports/s, heat nominal.
-- **Fixed after the phone test:**
-  - false "Hole ahead" while hand-held (ground hazards now need the mount's tilt);
-  - a 10 Hz timing bug;
-  - "Where am I" mixing two moments.
-- **Merged current features:** Siri/Action Button voice control, campus route search, live camera
-  view, on-device scene description, and the depth readiness interlock. Experimental Gemma work
-  remains outside the shipped targets.
-- **Step 28 safety hardening:** optional sound recognition now watches both route input/output,
-  interruption and permission health for its full lifetime; any degradation disables only sound
-  alerts, restores `.playback`, and speaks the existing failure cue. The AirPods HFP path still
-  needs the device checklist below.
-- **The live checklist is `docs/todo.md` → "TONIGHT".** Every item is ticked only after it was
-  verified.
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 ## What changed for you
 
-<<<<<<< HEAD
 - **Obstacle names are off by default now** (Step 36). Turn on Settings → Haptics → "Speak
   obstacle names" if a test expects "Two meters ahead, door" (stress plan D6 says so).
 - **Settings → Cues** is new and first on the Settings tab: **Quiet / Standard / Detailed** and
@@ -88,13 +60,10 @@ resume from its §10.
 
 ## Setup checklist (do these in order)
 
-1. **Pull:** `git pull`, then `cd ios && make test` (457 Logic tests, Swift 6 / Xcode 27). Check the
+1. **Pull:** `git pull`, then `cd ios && make test` (567 Logic tests after the Step 31 merge; the
+   historical Step 37 gate was 457, Swift 6 / Xcode 27). Check the
    command's own exit code; never trust `make test | tail`.
 2. **Natural voice (ElevenLabs): the key is not in the repo on purpose.** Open
-=======
-1. **Pull:** `git pull`, then `cd ios && make test` (378 Logic tests, Swift 6/Xcode 27).
-2. **Natural voice (ElevenLabs) — the key is not in the repo on purpose.** Open
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
    `ios/CaneKit/Resources/Secrets.plist` (git-ignored; `make gen` creates it from
    `ios/Secrets.example.plist`) and set `ELEVENLABS_API_KEY` (optionally `ELEVENLABS_VOICE_ID`).
    Rebuild and install after changing it, because the file is baked into the app. Without a key,
@@ -119,26 +88,12 @@ resume from its §10.
 
 ## Sagar and Tommy (hardware)
 
-<<<<<<< HEAD
 - [`hardware/README.md`](../hardware/README.md) has the quick start, the OpenSCAD models, test prints
   and a bench-test plan. The screwless mount's runbook is `hardware/mount_screwless/PRINTING.md`;
   run `scripts/verify_mount.ps1` after any `.scad` change.
 - The prototype shaft is a broom handle measured at **27.65 mm** by the bore rings (28.75 is
   retired as `pole_d` in both mount models). Next prints: `coupons_next` (thread + dovetail clearances), then
   collar + ring, cradle, arm.
-=======
-- The current source has 378 Logic tests plus the UI tests and replays described below. Historical
-  simulator/device results remain useful evidence but must be rerun after this merge with Xcode 27.
-- **The Step 25 camera interlock, Step 28 microphone guard and Step 29 sensor-mode interlock have not been device-validated in
-  this checkout yet.** The next safety task is the AirPods / permission checklist;
-  [`stress_test_plan.md`](stress_test_plan.md) has the checklist and the schedule.
-- Until the phone tests pass, the blindfolded walk is a no-go. A sighted demo is always the fallback.
-
-## Sagar (hardware)
-
-- [`hardware/README.md`](../hardware/README.md) has the quick start, the OpenSCAD model, test prints
-  and a bench-test plan.
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 - The mount is yours to redesign however you like. The app needs only four things:
   - the phone upright with the back camera and LiDAR clear;
   - the camera aimed **3–8° down, about 5°, not 10–20°**, or the cane buzzes on an empty sidewalk;

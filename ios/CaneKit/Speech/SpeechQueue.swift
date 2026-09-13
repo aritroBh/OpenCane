@@ -402,6 +402,13 @@ final class SpeechQueue {
         case voiceInput
     }
 
+    /// Lifecycle edges forwarded to the push-to-talk owner. The queue owns the shared audio
+    /// session; `VoiceInputEngine` decides whether its capture can continue.
+    enum MicrophoneInterruption: String, Equatable, Sendable {
+        case began
+        case ended
+    }
+
     /// What asking for microphone input did to the audio route.
     /// Returned by `setMicrophoneEnabled(_:owner:)` so the caller can tell the walker the truth.
     enum MicrophoneSessionResult: Equatable, Sendable {
@@ -437,6 +444,14 @@ final class SpeechQueue {
     /// granted (`startGrantedSession`) and cleared by `SoundWatcher.stop()` / `fail`.
     /// `VoiceInputEngine` installs no hook, so a revert during push-to-talk is silent to it.
     @ObservationIgnored var onMicrophoneRouteChanged: ((SoundRecognitionRoute, SoundRecognitionRoute) -> Void)?
+
+    /// Route callback for the push-to-talk owner. It is separate from the sound-recognition hook
+    /// because the two features have different teardown and cue paths while sharing one lease.
+    @ObservationIgnored var onVoiceInputRouteChanged: ((SoundRecognitionRoute, SoundRecognitionRoute) -> Void)?
+
+    /// Interruption edges for push-to-talk. The voice owner fails closed on `.began` and never
+    /// resumes a partial transcript after `.ended`.
+    @ObservationIgnored var onVoiceInputInterruption: ((MicrophoneInterruption) -> Void)?
 
     /// The complete route as it was when the microphone was granted; nil whenever the session is
     /// on plain `.playback`. Every route-change notification is compared against this, not against
@@ -628,6 +643,7 @@ final class SpeechQueue {
     ///   dropout still stops recognition (Step 28).
     private func outputRouteMayHaveChanged(forceInputDrop: Bool = false) {
         guard let held = microphoneRoute else { return }
+        let owner = microphoneOwner
         var now = Self.microphoneRoute(AVAudioSession.sharedInstance())
         // Preserve an old-device-unavailable edge even if the main-queue callback samples a route
         // that has already recovered. The event itself proves that a microphone dropout happened.
@@ -645,7 +661,14 @@ final class SpeechQueue {
            held.inputQuality == .unavailable,
            now.inputQuality == .usable {
             microphoneRoute = now
-            onMicrophoneRouteChanged?(held, now)
+            switch owner {
+            case .soundRecognition:
+                onMicrophoneRouteChanged?(held, now)
+            case .voiceInput:
+                onVoiceInputRouteChanged?(held, now)
+            case nil:
+                break
+            }
             return
         }
         // Order matters: drop the observer *before* reverting, or our own `setCategory(.playback)`
@@ -653,7 +676,14 @@ final class SpeechQueue {
         stopWatchingOutputRoute()
         let restoreResult = restorePlaybackSession()
         if restoreResult == nil { microphoneOwner = nil }
-        onMicrophoneRouteChanged?(held, now)
+        switch owner {
+        case .soundRecognition:
+            onMicrophoneRouteChanged?(held, now)
+        case .voiceInput:
+            onVoiceInputRouteChanged?(held, now)
+        case nil:
+            break
+        }
     }
 
     /// Put the session back to the one configuration the rest of the app relies on — byte-for-byte
@@ -741,14 +771,22 @@ final class SpeechQueue {
     /// ⚠ Known gap (Step 37 review, deferred to docs/todo.md): a retry task already scheduled by
     /// `resumeAfterInterruption` is not cancelled by a new `.began`.
     private func interruption(_ type: AVAudioSession.InterruptionType) {
+        let microphoneWasOwned = microphoneOwner != nil
+        // The voice callback is installed immediately before activation, while the lease owner is
+        // assigned only after `setActive` returns. Include the callback itself so an interruption
+        // during that narrow activation window cannot be missed.
+        let voiceInputWasActive = onVoiceInputInterruption != nil
         switch type {
         case .began:
+            // Mark the queue interrupted before the owner surfaces a failure. Its spoken cue must
+            // wait for the call/Siri session to end rather than trying to speak into it.
+            interrupted = true
+            if microphoneWasOwned || voiceInputWasActive { onVoiceInputInterruption?(.began) }
             if isSpeaking { requeueCurrent(fromClause: false) }
             stopCurrent()
             isSpeaking = false
             currentPriority = nil
             currentText = ""
-            interrupted = true
             // `.ended` is not guaranteed (the interrupting app may never deactivate): drain anyway.
             interruptionFallback?.cancel()
             interruptionFallback = Task { [weak self] in
@@ -757,6 +795,7 @@ final class SpeechQueue {
                 self.resumeAfterInterruption(attempt: 0, fromEnded: false)
             }
         case .ended:
+            if microphoneWasOwned || voiceInputWasActive { onVoiceInputInterruption?(.ended) }
             interruptionFallback?.cancel()
             resumeAfterInterruption(attempt: 0, fromEnded: true)
         @unknown default:

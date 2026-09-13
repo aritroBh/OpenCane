@@ -1,7 +1,7 @@
 # Team handoff: read this first after you pull
 
-<<<<<<< HEAD
-State of OpenCane / CaneKit at **HEAD `076fcaa`** (Sat 2026-09-12 evening): Steps 26–37 plus the
+State of OpenCane / CaneKit at **HEAD `076fcaa`** (Sat 2026-09-12 evening), with the Step 31
+voice-input safety merge being rebased onto it: Steps 26–37 plus the
 per-camera rotation fix are on `main`. Written for Aritro, Aarav, Tejas, Sagar and Tommy, and for
 AI agents picking the work up. It says what exists, what is proven, what is not, what is open, and
 which decisions are already made so nobody re-litigates them at 2 a.m. Every sentence marked
@@ -9,13 +9,6 @@ which decisions are already made so nobody re-litigates them at 2 a.m. Every sen
 against the code, `git log` and `CHANGELOG.md` at `076fcaa`. The commits after it (`e459b3a`,
 `c706856`, `d775d4b`) are documentation passes plus the new `ios/scripts/streetview_stim.py`; they
 change no Swift code outside comments, so every behaviour and test count here still holds.
-=======
-State of OpenCane / CaneKit after the Step 25 camera-transition interlock, Step 28 sound-recognition
-safety guard, Step 29 sensor-mode restart interlock and Steps 23–24 voice-assistant
-merge, for Aritro, Sagar and Aarav. It says what exists, what is proven, what is not, what each of
-us does next, and which decisions are already made so nobody re-litigates them at 2 a.m. Historical
-claims below are labelled; current counts and build limitations are in the status table.
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 > **The 2-minute version: [`TEAM_BRIEF.md`](TEAM_BRIEF.md). Open work: [`todo.md`](todo.md) →
 > "Cue design v2 — Steps 35–45".** AI agents: read §10 ("How an agent resumes") before touching
@@ -23,8 +16,8 @@ claims below are labelled; current counts and build limitations are in the statu
 
 ## 0. Start here (5 minutes)
 
-<<<<<<< HEAD
-1. `git pull`, then `cd ios && make test` (457 Logic tests, Swift 6 / Xcode 27). Check the exit
+1. `git pull`, then `cd ios && make test` (567 Logic tests after the Step 31 merge; the historical
+   076fcaa snapshot was 457, Swift 6 / Xcode 27). Check the exit
    code of `make test` itself, never through `| tail` (§10.4).
 2. Read the "Still needs the phone" list in §2.4. Most of the last day's work is built and
    simulator-green but not yet checked on the phone.
@@ -35,16 +28,6 @@ claims below are labelled; current counts and build limitations are in the statu
    D11 tests in `stress_test_plan.md`; you will feel the haptic patterns and wear the watch.
 5. **Anyone changing code:** read `AGENTS.md` (hard rules + "How we engineer"), then
    `docs/CODE_REFERENCE.md`, then ask the graph where things live: `graphify query "…"`.
-=======
-1. `git pull`, then `cd ios && make test` (378 Logic tests with the Swift 6 toolchain).
-2. Find your row in §3 and do its first item.
-3. **Sagar:** open `hardware/README.md` → quick start. The mount is yours to change; the app needs
-   only what §5 lists (phone upright, camera 3–8° down, firm, shaft out of view).
-4. **Aarav:** read §6 (what is on/off) and the D2 / D11 tests in `stress_test_plan.md`; you will feel
-   the haptic patterns and wear the watch.
-5. **Anyone changing code:** read `AGENTS.md` (rules + "How we engineer") and ask the graph where
-   things live: `graphify query "…"` (install once: `uv tool install graphifyy`).
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 6. Stuck? The symptom → fix tables are in `docs/devices_setup.md` and the gotchas in `ios/README.md` §6.
 
 ## 1. The one-paragraph version
@@ -71,20 +54,11 @@ yourself before claiming anything (AGENTS.md "How we engineer" 1).
 
 | Check | Result at `076fcaa` | How to rerun (from `ios/`) |
 |---|---|---|
-<<<<<<< HEAD
-| Logic tests (every rule with a number in it) | **457/457** passed (457 `@Test` annotations in `ios/Logic/Tests`; 6 named `@Suite`s) | `make test` |
+| Logic tests (every rule with a number in it) | **567/567** passed after the Step 31 merge (the historical 076fcaa snapshot was 457) | `make test` |
 | App + watch + widget build, Swift 6 strict | green | `make sim` |
 | XCUITests on the iPhone 17 Pro Max / iOS 27 simulator | **11 run, 10 passed, 1 skipped, 0 failures**. The 11 are the 10 in `CaneKitUITests.swift` (including Step 36's `testCuePickersChangeAndRestore`) plus `CaneKitVisualTour.testTour`. The skip is `testWhereAmIDescribesAStreetViewFrame`: CHANGELOG and the commits say "needs a key", but the code's `XCTSkip` fires when `CANEKIT_FRAME_DIR` is unset, so it only runs under `make uitest-streetview` with the local Street View frames | `make uitest` (set a simulator location first, §10.4) |
 | GPS replay through the real app | **PASS** (266 s) | `make e2e` (silent: the app mutes itself) |
 | Cue audit script fixtures | `cue_audit.py --selftest` ok | `python3 scripts/cue_audit.py --selftest` |
-=======
-| Logic tests (every rule with a number in it) | 378 annotations in the current checkout; the historical green run was 146 | `make test` |
-| App + watch + widget build, Swift 6 strict | historical green; current local Xcode 15.1 cannot build the Xcode 27 project | `make sim` |
-| UI tests + screenshot tour | historical green; current simulator unavailable in this environment | `make uitest`, `make tour` |
-| GPS replay of the whole route through the real app | 4 of 4 pass: clean, missed fence, ±6 m jitter, wrong turn | `make e2e` (~20 min, silent: the app mutes itself) |
-| Real `NavigationEngine` in a scratch harness, 72 simulated walks | 0 false "Veer"; an injected 35° veer caught 18/18 | see CHANGELOG Step 11 |
-| Street View camera stand-in (Google Street View frames of the route) | see §8 | `make e2e SCENARIO=streetview`, `make uitest-streetview` |
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 Steps 34, 36, 37 and the rotation fix each had their own adversarial review (multi-agent
 workflow, Muse, Antigravity). Step 35 had Muse only: its Antigravity run returned no output and was
@@ -248,11 +222,7 @@ still stand; the "Tonight" column is from before Steps 26–37.
 ```sh
 git pull
 cd ios
-<<<<<<< HEAD
-make test          # 457 Logic tests; requires the Swift 6 toolchain
-=======
-make test          # 378 logic tests; requires the Swift 6 toolchain
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
+make test          # 567 Logic tests; requires the Swift 6 toolchain
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
@@ -318,7 +288,6 @@ off at every launch.
 
 | Setting (tab → card) | Default | Why |
 |---|---|---|
-<<<<<<< HEAD
 | Cue detail (Settings → Cues) | **Detailed** | Owner decision: today's behaviour until a mounted log tunes the calmer levels. Detailed's one change from before: it never names walls |
 | Place (Settings → Cues) | **Outdoors** | Head distance 1.5 m outdoors; Indoors is 1.2 m, names nothing and reads only safety signs |
 | Obstacle cues on the cane (Settings → Haptics: "Silence haptics" mutes them) | on | The core product |
@@ -338,19 +307,6 @@ off at every launch.
 | Live camera view (Sense → Hazards) | off | For a sighted helper and the demo video |
 | Both cameras (pauses obstacle detection) (Sense → Hazards) | off | Pauses ARKit, so it is refused while a route guides |
 | Flashlight (Sense → Hazards) | off | Never persisted (pocket heater risk); works mid-route |
-=======
-| Obstacle cues on the cane (Haptics card: "Silence haptics" mutes them) | on | The core product. |
-| Phone held upright (portrait) (Mount card) | on | The clamp holds the phone upright; turn off only if it is clamped sideways. |
-| Mirror left / right (Mount card) | off | Turn on if a left obstacle buzzes as right (bench test D1). |
-| Audio beacon while navigating (Mount card) | on | Plays only into headphones. |
-| Write trip log (Mount card) | on | Every test needs a log; Files → On My iPhone → OpenCane. |
-| **Detect drop-offs** (Hazards card) | **off** | New, untuned on a real cane. Turn on for bench test D1-style curb checks, then decide. |
-| Read signs (Hazards card) | on | On-device, offline, speaks only safety / wayfinding phrases, once a minute each. |
-| **Hazard watch** (Hazards card) | **off** | Every 8 s while walking; on-device labels are weak (see §8), the cloud needs a key and network. |
-| **Head tracking without AirPods** (Hazards card) | **off** | Front-camera ARKit mode; changing it while a route is warming, guiding or its camera teardown is draining is refused so the 1–2 s ARSession restart cannot remove depth. |
-| **60 fps camera (warmer)** (Mount card) | **off** | Camera-format restart is refused while a route is warming, guiding or its camera teardown is draining; thermal mesh changes defer their ARSession restart until the route ends. |
-| Live camera view (Hazards card) | off | For a sighted helper and the demo video. |
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 
 ## 7. Decisions already made (do not re-open without new evidence)
 

@@ -2,8 +2,6 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-<<<<<<< HEAD
-<<<<<<< Updated upstream
 ## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
 
 **Why:** The user requested:
@@ -47,37 +45,30 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 
 test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab features full-width buttons with clear subtitles ("Campus Demo" vs "Live GPS"), open the Profile tab to view the custom circular profile avatar and verified emergency card details.
 
-## Step 45 — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
+## Step 31 — Voice input fails safe for its full microphone lifetime (Sat Sep 12)
 
-**Why:** The user provided Supabase project credentials (`https://ppmuqgswuyniwiwsdnto.supabase.co` with publishable and secret keys) to connect OpenCane to its dedicated cloud database backend.
+Push-to-talk voice capture now has the same fail-closed treatment as the optional sound watcher.
+`VoiceInputGuard` in `CaneKitLogic` is a pure, route-aware state machine: it rejects HFP or missing
+input, stops on output replacement, interruption, recognizer/engine failure or permission revocation,
+and ignores late callbacks after cancellation. `VoiceInputEngine` requests microphone and Speech
+permissions before activation, generation-fences callbacks and recognition results, observes audio
+engine configuration for the entire run, polls permission and engine health while listening, drops
+partial transcripts on failure, restores the shared `.playback` session and beacon, and sends the
+existing speech queue a clear OpenCane failure line. The Guide card exposes a cancellable
+“Starting…” state so a pending permission request cannot silently resurrect a microphone after the
+user turns it off. `SpeechQueue` forwards route and interruption edges to the active voice owner
+without adding another audio-session owner or requesting Bluetooth HFP.
 
-**What changed:**
-- `Secrets.plist` (git-ignored) & `Secrets.example.plist`:
-  - Added `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SECRET_KEY`.
-  - Secrets stay strictly outside git per AGENTS.md Hard Rule 4.
-- `SupabaseClient.swift` (`ios/CaneKit/Trip/SupabaseClient.swift`):
-  - Created native Swift URLSession PostgREST client (zero 3rd party SDKs, AGENTS.md Hard Rule 2).
-  - `resolveWalkerID(displayName:caneID:)`: finds or creates walker record in `walkers` table, caching the UUID in `UserDefaults` (`"opencane_supabase_walker_id"`).
-  - `syncMedicalProfile(_ profile:)`: live cloud sync for the emergency Medical ID card to `medical_profiles` table via merge-duplicates upsert.
-  - `syncMobilityStats(_ stats:date:)`: live sync of daily steps, walking distance (m), active duration (s), and cadence to `mobility_days` table.
-  - `recordHazard(...)`: logs detected obstacles, curbs, drop-offs, and vision signs to `hazards` table in real time for the web hazard map view.
-  - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:)`: mirrors dispatched family alert records to `family_alerts` table.
-  - `recordDevice(...)`: registers hardware metadata (model, system version, app version, LiDAR, watch, AirPods) to `devices` table.
-- `MedicalProfileStore.swift`:
-  - Automatically triggers `SupabaseClient.shared.syncMedicalProfile(profile)` on profile init and save.
-  - Automatically triggers `SupabaseClient.shared.syncMobilityStats(mobilityStats)` on trip completion and CMPedometer refreshes.
-- `FamilyAlerts.swift`:
-  - Automatically mirrors all delivered alert events to `SupabaseClient.shared.recordFamilyAlert`.
-- `AppModel.swift`:
-  - On launch (`start()`), registers device hardware capabilities in `devices` table.
-  - In `recordHazard(...)`, mirrors every detected ground hazard, sign, and vision warning to `hazards` table in Supabase.
-- Verification:
-  - `make test`: all 538 unit tests passing in CaneKitLogic.
-  - `make sim`: full clean simulator compilation.
-  - Live REST verified: confirmed `HTTP 200/201` upsert on `medical_profiles`, `mobility_days`, `hazards`, `family_alerts`, and `walker_dashboard`.
+Added Logic coverage for cold-start settling, HFP/input loss, output replacement and late callbacks,
+recognizer/interruption failure, permission revocation and cancellation. This is graceful degradation:
+only push-to-talk stops; navigation, LiDAR, haptics and route speech continue.
 
-test on device: open OpenCane; verify profile edits in the Profile tab sync seamlessly, check that today's steps update the cloud dashboard, and confirm that family alert test events and hazards populate the Supabase tables in real-time.
-=======
+**Verification:** Swift 6 Logic and changed app sources type-check/parse with the available toolchain;
+full `make test`, simulator/UI/tour/device, Muse, Antigravity and graphify checks remain host-gated
+until the Xcode 27/iOS 26–27 environment is available.
+
+test on device: start push-to-talk with AirPods connected, disconnect or force an HFP route change, and confirm capture stops within one route notification, the app says why, playback/beacon return to normal and navigation keeps running. Trigger a phone call or Siri while speaking and confirm the partial transcript is discarded. Revoke microphone permission in Settings while listening and confirm the button leaves “Listening…” with no orange recording dot. Cancel an open permission prompt, then grant access and confirm no microphone starts until the next explicit tap.
+
 ## Step 45 — Everything the phone knows, mirrored into Supabase (Sat Sep 12)
 
 **Why:** Every piece of state OpenCane held lived in exactly one place, on one phone, and died with
@@ -158,7 +149,6 @@ Supabase dashboard — one row, the destination, the metres and the steps the ar
 Turn a switch in Settings and watch `device_settings` change. Add a family email, press Save, and
 check `family_contacts`. Record a hazard with drop-offs on and confirm the row **and** its JPEG in
 the `hazard-photos` bucket.
->>>>>>> Stashed changes
 
 ## Step 44 — Medical ID Profile tab, mobility fitness tracking, streamlined Guide buttons, Dynamic Island indicator fix, and Grok Bot webhook integration (Sat Sep 12)
 
@@ -1014,7 +1004,6 @@ test on device: from a normal terminal `cd ios && make run`; then Settings → A
 Shortcut → Talk to OpenCane (if missing, open the Shortcuts app once to re-index, then retry);
 press → tick → "how is my battery" → press again → answer; walk past a doorway and confirm the
 order is "N meters ahead, door"; check the trip log for `voice_toggle {source: actionButton}`.
-=======
 ## Step 29 — Refuse AR sensor-mode restarts during navigation (Sat Sep 12)
 
 The route-time sensor interlock now covers the remaining ARKit reconfiguration gap. `SensorModeInterlock`
@@ -1044,7 +1033,6 @@ walker is moving because restarting it is the safety hazard this step removes.
 
 test on device: start a route, try enabling "Head tracking without AirPods" and "60 fps camera (warmer)" from Settings and confirm each switch snaps back, guidance never pauses, and the app says "Sensor settings cannot change while a route is guiding you. Stop the route first." During a route, heat the phone until the thermal warning appears and confirm lanes/haptics continue without a camera gap; stop or arrive, then confirm the deferred mesh configuration applies and the next route starts through the normal fresh-depth gate. Repeat both setting attempts while route start is warming and confirm the starting-specific message. With the debug sensor-self-test controls enabled, start the front-camera self-test first, then attempt a route and confirm the app refuses the route with "Finish the sensor self-test before starting a route." After the self-test finishes, start the route and confirm the normal gate runs. Cancel a queued route while the two-camera teardown is still draining, try either sensor self-test, and confirm it waits for the camera transition instead of restarting ARKit beside MultiCam.
 
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
 ## Step 28 — Sound recognition fails safe across its whole microphone lifetime (Sat Sep 12)
 
 The optional "Listen for sirens and horns" path now treats its microphone as untrusted unless the
