@@ -29,6 +29,12 @@
 //  can call it on `queue`; the `@unchecked Sendable` is justified by the locking model above,
 //  not added to silence the compiler (AGENTS.md hard rule 1).
 //
+//  Low light (Step 49): every report carries `ambientLux` (ARKit's `lightEstimate`, raw; the
+//  main-actor `LowLightPolicy` smooths and debounces it), and a frame whose camera tracking is not
+//  `.normal` publishes `centerHit = nil` — the world-anchored mesh under a drifting pose is the one
+//  path that could name the wrong thing with confidence in the dark. Lane distances are LiDAR and
+//  are published regardless of tracking; `CueDecider` never reads `trackingNormal`.
+//
 //  Budget: at 30 Hz a published frame has ~33 ms (60 Hz high-rate has ~16 ms). Frames between publishes return right after
 //  the rate check; the lane math reads the 256×192 depth map in place (no copy), and the mesh
 //  lookup is throttled to every 8th publish (`meshEveryNthFrame`: ≈ 3.75 Hz at 30 Hz, 7.5 Hz in
@@ -176,6 +182,15 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     private var scratch: [Float] = {                   // queue-only sample buffer
         var a = [Float](); a.reserveCapacity(2048); return a
     }()
+    /// Point-blank hold (CaneKitLogic `NearHold`, Step 48): a cell that goes blind (0 / NaN
+    /// samples, the LiDAR inside ~10 cm) right after a near reading is reported as 0.1 m, not
+    /// `.infinity` — the tiles, the decider, the watch and the island all see the same held grid.
+    /// Queue-only; reset only at session boundaries (`resetNearHold` from `dropLatestImage`).
+    private var nearHold = NearHold()                   // queue-only, remembers the last near reading
+
+    /// Forget the point-blank history: every ARKit re-run, pause and resume goes through
+    /// `dropLatestImage`, which hops here on `queue`. Never called for a transient depth gap.
+    private func resetNearHold() { nearHold.reset() }
     /// Last mesh lookup result, re-attached to the frames between lookups (so `centerHit` does
     /// not flicker between published frames); cleared when mesh lookup is disabled.
     private var lastMeshHit: MeshHit?                  // queue-only, reused between lookups
@@ -278,15 +293,24 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
             return false
         }()
         trackTilt(frame)   // every frame: the pose is gravity-aligned even mid-sweep (Muse); the EMA smooths the sweep
+        // Step 49: ARKit's ambient light estimate (lux) rides on every report, raw; `AppModel`'s
+        // `LowLightPolicy` smooths and debounces it. nil when ARKit gives none (light estimation
+        // is on by default in `ARWorldTrackingConfiguration`; the simulator never runs ARKit).
+        let ambientLux = frame.lightEstimate.map { Float($0.ambientIntensity) }
 
-        guard let (grid, snapshot) = computeGrid(frame: frame, config: s.lane) else {
+        guard let (rawGrid, snapshot) = computeGrid(frame: frame, config: s.lane) else {
+            // Deliberately no `nearHold.reset()` here: a one-frame depth gap happens exactly
+            // when a wall is being pressed (Muse F4b); the hold resets at session boundaries.
             continuation.yield(LaneReport(grid: .empty, isTrusted: trusted, rotationRate: ω,
                                           timestamp: now, depthAvailable: false,
                                           trackingNormal: trackingNormal,
                                           frameSequence: publishedCount, centerHit: nil,
-                                          cameraTiltDownDeg: tiltDownDeg))
+                                          cameraTiltDownDeg: tiltDownDeg, ambientLux: ambientLux))
             return
         }
+        // Step 48: blind-after-near cells become 0.1 m (held) before anyone reads the grid; a
+        // sweeping (untrusted) frame disarms the hold instead.
+        let grid = nearHold.apply(rawGrid, trusted: trusted)
 
         // Keep the depth grid next to the retained image, stamped with the same ARKit frame time
         // (`now` *is* `frame.timestamp`, above), so "Where am I" can prove the pair came from one
@@ -297,7 +321,12 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         imageLock.unlock()
 
         // Mesh classification at the image centre (step 4 fills `MeshClassifier`); throttled.
-        if s.meshLookupEnabled, publishedCount % max(1, s.meshEveryNthFrame) == 0 {
+        // Step 49: no mesh NAME under limited tracking (a dark hallway, a blank wall). The mesh is
+        // world-anchored; with the pose drifting the centre ray lands on the wrong face and the app
+        // would say "door" with confidence about a wall. Distances are LiDAR and stay.
+        if !trackingNormal {
+            lastMeshHit = nil
+        } else if s.meshLookupEnabled, publishedCount % max(1, s.meshEveryNthFrame) == 0 {
             lastMeshHit = MeshClassifier.nearestFace(to: grid.centerDepth, in: frame)
         } else if !s.meshLookupEnabled {
             lastMeshHit = nil
@@ -328,7 +357,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
                                       timestamp: now, depthAvailable: true,
                                       trackingNormal: trackingNormal,
                                       frameSequence: publishedCount, centerHit: lastMeshHit,
-                                      groundHazard: lastGroundHazard, cameraTiltDownDeg: tiltDownDeg))
+                                      groundHazard: lastGroundHazard, cameraTiltDownDeg: tiltDownDeg,
+                                      ambientLux: ambientLux))
     }
 
     /// Not called in practice (`SessionObserver` is the session delegate and handles failures);
@@ -400,7 +430,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         let w = CVPixelBufferGetWidth(depthMap)
         let h = CVPixelBufferGetHeight(depthMap)
 
-        let grid = LaneMath.computeLanes(
+        var grid = LaneMath.computeLanes(
             depth: depthBase,
             depthBytesPerRow: depthStride,
             confidence: confBase,
@@ -409,6 +439,25 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
             height: h,
             config: config,
             scratch: &scratch)
+        // Blind share from the RAW map when the smoothed one was used for distances: temporal
+        // smoothing holds stale finite values and inpaints neighbours for a few frames as the
+        // wall arrives, which delays or hides the blind share (Muse F3). Distances stay smoothed.
+        if frame.smoothedSceneDepth != nil, let raw = frame.sceneDepth, raw.depthMap !== depthMap,
+           CVPixelBufferGetPixelFormatType(raw.depthMap) == kCVPixelFormatType_DepthFloat32 {
+            let rawMap = raw.depthMap
+            CVPixelBufferLockBaseAddress(rawMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(rawMap, .readOnly) }
+            if let rawBase = CVPixelBufferGetBaseAddress(rawMap),
+               CVPixelBufferGetWidth(rawMap) == w, CVPixelBufferGetHeight(rawMap) == h {
+                let rawGrid = LaneMath.computeLanes(depth: rawBase, depthBytesPerRow: CVPixelBufferGetBytesPerRow(rawMap),
+                                                    confidence: nil, confidenceBytesPerRow: 0,
+                                                    width: w, height: h, config: config, scratch: &scratch)
+                for i in 0..<3 {
+                    grid.headBlind[i] = max(grid.headBlind[i], rawGrid.headBlind[i])
+                    grid.torsoBlind[i] = max(grid.torsoBlind[i], rawGrid.torsoBlind[i])
+                }
+            }
+        }
         // Unmirrored on purpose: the camera image the describer sends to Vision is only rotated
         // (`jpegSnapshot`), never mirrored, so the grid must line up with Vision's boxes.
         // `mirrorLeftRight` is applied to the spoken word instead (`PeopleAhead.bearing`).
@@ -520,6 +569,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     /// describing it (review round 5). Also called before every session re-run
     /// (`setHighFrameRate`, `setFaceTracking`, `setMeshClassification`). Thread-safe (`imageLock`).
     func dropLatestImage() {
+        queue.async { [weak self] in self?.resetNearHold() }   // session boundary: forget near history
         imageLock.lock()
         latestImage = nil
         latestImageFrameTime = 0

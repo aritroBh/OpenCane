@@ -139,6 +139,11 @@ final class HazardScanner {
     /// Inputs polled by the loop (set by `AppModel.wireHazards`).
     /// True while a route is guiding (`nav.isNavigating`); the hazard watch only asks then.
     @ObservationIgnored var isNavigating: () -> Bool = { false }
+    /// Dark with no torch lit (`AppModel.camerasInTheDark`, Step 49). Changes **no behaviour** —
+    /// signs are still read and the watch still asks — it only stamps `light: "dark"` on the `scan`
+    /// and `hazard_watch` records, so a walk log can show what the camera missed in the dark
+    /// before anyone tunes a gate for it. Default false (the simulator, tests).
+    @ObservationIgnored var isDark: () -> Bool = { false }
     /// Walking speed in m/s from the last GPS fix, or 0 when there is none or it is older than 5 s
     /// (CoreLocation stops sending fixes while standing, so a stale speed would keep the watch
     /// asking at a curb). Gates `HazardWatchPolicy.shouldAsk` (> 0.5 m/s) and sizes `maxReplyAge`.
@@ -272,8 +277,10 @@ final class HazardScanner {
             lastSign = line
             onHazard?(line, .sign, jpeg)
         }
-        onDiagnostic?("scan", ["texts": d.texts.prefix(8).map { $0.0 }, "said": line ?? "",
-                               "frame": frameName])
+        var fields: [String: Any] = ["texts": d.texts.prefix(8).map { $0.0 }, "said": line ?? "",
+                                     "frame": frameName]
+        if isDark() { fields["light"] = "dark" }          // Step 49: evidence, not a gate
+        onDiagnostic?("scan", fields)
     }
 
     /// One hazard-watch request: a 768 px JPEG (quality 0.6) → `watchClient.describe(prompt:
@@ -313,6 +320,7 @@ final class HazardScanner {
                                          // Who actually answered and why the cloud did not (Step 47).
                                          "source": lastWatchSource ?? "", "cloud_ms": outcome?.cloudMs ?? -1,
                                          "fallback_reason": lastWatchReason ?? ""]
+            if isDark() { fields["light"] = "dark" }      // Step 49: evidence, not a gate
             guard age <= maxAge else {
                 fields["dropped"] = "stale"
                 onDiagnostic?("hazard_watch", fields)

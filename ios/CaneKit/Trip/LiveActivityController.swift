@@ -172,6 +172,16 @@ final class LiveActivityController {
         Date(timeIntervalSinceNow: LiveActivityCoalescer.staleAfter)
     }
 
+    /// Obstacle-only refresh from the depth path (a point-blank hold or a head cell while the
+    /// walker stands still and no GPS fix arrives): keeps the last navigation fields and pushes
+    /// the new glance through the coalescer, whose hazard-transition rule emits at once.
+    func refreshObstacle(status: LiveActivityObstacleGlance, distanceM: Double, headM: Double) {
+        guard let last = lastState else { return }
+        update(instruction: last.instruction, distanceM: last.distanceM, kind: last.kind,
+               obstacleStatus: status, obstacleDistanceM: distanceM, headClearanceM: headM,
+               statusDetail: last.statusDetail, progress: last.progress)
+    }
+
     /// Navigation-only refresh (waypoint advanced by Next / the crown / skip-ahead, with no fix to
     /// carry the obstacle fields): keeps the last obstacle glance and GPS detail and pushes the new
     /// line, distance, glyph and progress through the same coalescer.

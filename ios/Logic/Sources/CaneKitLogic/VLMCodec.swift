@@ -89,10 +89,13 @@ public enum ScenePrompt {
     ///     invent the one thing it is worst at, so the prompt forbids numbers entirely and
     ///     `SceneDescriber` puts the measured LiDAR distance in front of the sentence, exactly as
     ///     `OnDeviceVLMClient` does.
-    /// The last line exists because a solid white frame produced "The path ahead is clear and
-    /// unobstructed" 4 times out of 4. `CloudSceneGate` enforces all of this on the reply; the
-    /// prompt is what makes enforcement rare.
-    public static let text = "You are describing what a cane-mounted camera sees, for a blind pedestrian. One sentence, under 20 words. Name what is actually there, hazards first, and say whether each thing is on the left, in the center or on the right. Never give a number, a distance or a count. Never say the way is clear, empty or safe. No preamble."
+    /// The "clear, empty or safe" line exists because a solid white frame produced "The path ahead
+    /// is clear and unobstructed" 4 times out of 4. The last sentence (Step 49) gives a model
+    /// looking at a black frame a way to say so — `CloudSceneGate.tooDark` — instead of inventing
+    /// a scene; `SceneDescriber` speaks it as the answer. `CloudSceneGate` enforces all of this on
+    /// the reply; the prompt is what makes enforcement rare. ⚠ Under 400 characters
+    /// (`scenePromptAsksForSidesNotNumbers`): it rides on every request.
+    public static let text = "You are describing what a cane-mounted camera sees, for a blind pedestrian. One sentence, under 20 words. Name what is actually there, hazards first, and say whether each thing is on the left, in the center or on the right. Never give a number, a distance or a count. Never say the way is clear, empty or safe. No preamble. If it is too dark to see, answer exactly: It is too dark to see."
 }
 
 // MARK: - Requests

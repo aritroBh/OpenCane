@@ -116,18 +116,43 @@ public struct DepthReadiness: Sendable, Equatable {
     /// transition while still failing promptly when ARKit never recovers.
     public static let standardConfiguration = Configuration()
 
+    /// Why a window timed out (Step 49). The raw value is logged (`route_readiness {reason}`), and
+    /// `AppModel.failQueuedRouteStart` picks its spoken line from it: the old "Obstacle detection
+    /// warming up. Guiding with GPS." was FALSE in a dark hallway, where ARKit sits in
+    /// `.limited(.insufficientFeatures)` for the whole wait while `sceneDepth` arrives and the lane
+    /// cues run (`CueDecider` never reads `trackingNormal`). Add cases, never rename them.
+    public enum TimeoutReason: String, Sendable, Equatable {
+        /// No report with scene depth arrived at all: the camera or LiDAR really is not delivering.
+        case depthMissing = "depth_missing"
+        /// Depth reports arrived but no frame ever had `.normal` tracking — low light, a blank wall,
+        /// a lens against a jacket. Obstacle detection is running on LiDAR; only the pose is drifting.
+        case trackingLimitedDepthLive = "tracking_limited_depth_live"
+        /// Depth and normal tracking were both seen, but never `requiredFrames` in a row within
+        /// `maxFrameGap` (a continuous cane sweep, a stuttering stream).
+        case depthUnsteady = "depth_unsteady"
+    }
+
     /// The policy used by this instance.
     public let configuration: Configuration
     /// Current state, observed by the app adapter.
     public private(set) var state: DepthReadinessState = .idle
     /// Number of qualifying frames in the current consecutive run.
     public private(set) var consecutiveFrames = 0
+    /// Why the last window timed out; nil unless `state == .timedOut`. Read by the app before
+    /// `cancel` (which clears it). Pinned by `timeoutInTheDarkNamesLimitedTrackingWithDepthLive`,
+    /// `timeoutReasonsTellDepthMissingFromUnsteady`.
+    public private(set) var timeoutReason: TimeoutReason?
 
     /// `now` of the `begin` that opened the window; nil when idle. Not moved by `invalidate`, so
     /// repeated interruptions cannot extend the request past `timeout`.
     private var startedAt: TimeInterval?
     /// `now` of the last qualifying frame in the current run; nil after a break.
     private var lastQualifyingFrameAt: TimeInterval?
+    /// Frames with scene depth seen since `begin` (kept across `invalidate`: evidence of what the
+    /// sensor could do during the whole wait is what the timeout reason is about).
+    private var depthFramesSeen = 0
+    /// Frames with `.normal` tracking seen since `begin` (kept across `invalidate` likewise).
+    private var normalTrackingSeen = 0
 
     /// Creates an idle gate. A route request starts the gate with `begin(at:)`.
     public init(configuration: Configuration = DepthReadiness.standardConfiguration) {
@@ -143,6 +168,9 @@ public struct DepthReadiness: Sendable, Equatable {
         consecutiveFrames = 0
         startedAt = now
         lastQualifyingFrameAt = nil
+        timeoutReason = nil
+        depthFramesSeen = 0
+        normalTrackingSeen = 0
         return state
     }
 
@@ -161,8 +189,12 @@ public struct DepthReadiness: Sendable, Equatable {
                                sceneDepthAvailable: Bool,
                                reportTrusted: Bool) -> DepthReadinessState {
         guard state == .warming else { return state }
+        // Counted before the deadline check: the frame that arrives at the deadline is still
+        // evidence of what the sensor was doing during the wait.
+        if sceneDepthAvailable { depthFramesSeen += 1 }
+        if trackingNormal { normalTrackingSeen += 1 }
         guard !expired(at: now) else {
-            state = .timedOut
+            timeOut()
             return state
         }
 
@@ -205,19 +237,36 @@ public struct DepthReadiness: Sendable, Equatable {
     @discardableResult
     public mutating func poll(at now: TimeInterval) -> DepthReadinessState {
         guard state == .warming, expired(at: now) else { return state }
-        state = .timedOut
+        timeOut()
         return state
     }
 
     /// Cancel a pending route-start request and return to idle (Stop, a newer destination, or the
-    /// route starting after `ready`).
+    /// route starting after `ready`). Clears `timeoutReason` — read it first.
     @discardableResult
     public mutating func cancel() -> DepthReadinessState {
         state = .idle
         consecutiveFrames = 0
         startedAt = nil
         lastQualifyingFrameAt = nil
+        timeoutReason = nil
+        depthFramesSeen = 0
+        normalTrackingSeen = 0
         return state
+    }
+
+    /// `timedOut`, with the reason read off the counters: no depth frame → `depthMissing`; depth
+    /// but never normal tracking → `trackingLimitedDepthLive`; both seen, no steady run →
+    /// `depthUnsteady`.
+    private mutating func timeOut() {
+        state = .timedOut
+        if depthFramesSeen == 0 {
+            timeoutReason = .depthMissing
+        } else if normalTrackingSeen == 0 {
+            timeoutReason = .trackingLimitedDepthLive
+        } else {
+            timeoutReason = .depthUnsteady
+        }
     }
 
     /// True once `timeout` has elapsed since `begin`; false when idle.

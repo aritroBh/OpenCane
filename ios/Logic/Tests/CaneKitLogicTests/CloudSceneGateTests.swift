@@ -227,3 +227,25 @@ private let lidar14 = "1.4 meters ahead, obstacle."
     #expect(SceneVocabulary.numbersAreGrounded("a bench ahead", in: ""))
     #expect(!SceneVocabulary.numbersAreGrounded("three meters ahead", in: "1.4 meters ahead, obstacle."))
 }
+
+// MARK: Step 49 — the too-dark answer
+
+/// `ScenePrompt.text` asks a model that cannot see to answer exactly "It is too dark to see." The
+/// gate must pass that sentence unchanged (it is the honest answer, not a promise or a guess), in
+/// the canonical spelling whatever the model did to the punctuation — and must still refuse a
+/// dark-frame guess that promises a clear path.
+@Test func tooDarkPassesTheGateUnchanged() {
+    #expect(CloudSceneGate.tooDark == "It is too dark to see.")
+    #expect(ScenePrompt.text.hasSuffix("answer exactly: " + CloudSceneGate.tooDark))
+    for spelling in ["It is too dark to see.", "it is too dark to see", "\"It is too dark to see.\"",
+                     "It is too dark to see", "  It is too dark to see.\n"] {
+        let v = CloudSceneGate.check(spelling, lidar: "", ocr: [], detectedNouns: [])
+        #expect(v.sentence == CloudSceneGate.tooDark, "\(spelling)")
+        #expect(v.note == "spoken")
+    }
+    // Not a licence for anything else that mentions the dark.
+    #expect(CloudSceneGate.sanitized("It is too dark to see, but the path is clear.", lidar: "",
+                                     ocr: [], detectedNouns: []) == nil)
+    #expect(CloudSceneGate.sanitized("It is dark. A pole on the left.", lidar: "", ocr: [],
+                                     detectedNouns: []) == "It is dark.")   // one sentence, as before
+}

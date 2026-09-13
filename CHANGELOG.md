@@ -2,6 +2,112 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 49 — Low light: the app notices the dark for a walker who cannot (Sat Sep 12, late)
+
+**Why.** Owner, 22:50: "In a low-light situation, how are we taking care of that? LiDAR doesn't
+depend on light, we have the flashlight — what else?" The honest inventory (a research agent read
+every subsystem; report in the session scratchpad): LiDAR depth, the gyro gate, GPS, compass,
+haptics, the watch and the island are light-independent; ARKit's *visual* tracking, sign reading,
+on-device scene words and people detection, the cloud "Where am I" and the hazard watch degrade or
+fail silently — and a blind walker cannot tell it is dark. Worse, a real bug: in a dark hallway
+ARKit sits in `.limited(.insufficientFeatures)`, the route-start gate never qualifies, and Step 42's
+timeout line said "Obstacle detection warming up. Guiding with GPS." while `sceneDepth` was arriving
+and the lane cues were live (`CueDecider` never reads `trackingNormal`).
+
+**What changed** (implementation agent, torch-loop fix by the orchestrator):
+- `LowLightPolicy` (CaneKitLogic, 12 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity`
+  (carried as `LaneReport.ambientLux`); dark after 3 s under 40 lux, lit after 5 s over 120, `unknown`
+  first. Torch-aware: an app-lit torch stays ≥ 60 s; **while app-lit the exit needs 400 lux
+  (`litWithTorchLux`)** — the reading is an auto-exposure proxy the torch itself raises, and without
+  this the torch switched itself off by its own glow every minute (`appLitTorchGlowDoesNotEndTheEpisode`);
+  a device cut-out backs the auto-torch off 60 s; never at ≤ 20 % battery. All numbers [H].
+- `AppModel`: setting "Flashlight on in the dark (routes)" (`autoTorchInDark`, **default ON** — a
+  deliberate exception to "ships off": the walker cannot see the dark, and the light both helps the
+  cameras and makes them visible to drivers; reasoning in code and AGENTS.md). The torch is lit only
+  while a route guides, through the KVO-confirmed `setTorch`; released on lit / Stop / arrival; a
+  torch the walker lit is never touched. One line per episode at `.nav`: "Low light. Obstacle
+  detection still works." (+ " Flashlight on."). `light {state, lux, torch, torch_by_app}`.
+- Readiness honesty: `DepthReadiness.TimeoutReason`; a timeout with depth live but tracking never
+  normal speaks "Camera tracking is limited, probably low light. Obstacle detection is running on
+  LiDAR." (`.safety`, 15 s) and starts the route; `route_readiness {state: timed_out_tracking_limited}`.
+- Vision honesty: "It is dark, so this may miss things. " before a description when dark with the
+  torch off; the prompts may answer "It is too dark to see." and `CloudSceneGate` passes it; `scan` /
+  `hazard_watch` records carry `light: dark`; `centerHit = nil` under limited tracking (no mesh
+  *name* from a drifting pose; distances stay LiDAR).
+- UI: "Light" row on the Scene engine card, a DARK pill beside the GPS pill on the Guide.
+- Docs: design.md §5.1 / §5.4 / §6.5 / Scene engine; CODE_REFERENCE; AGENTS.md (two deliberate
+  bullets); todo.md Step 49 device checklist (dark room, torch-lit hallway, lit crossing).
+
+**Verification.** `make test` 627 / 627; simulator build green; `make uitest` 12 run / 0 failures;
+`graphify update .` → 4,681 nodes · 10,872 edges · 216 communities; installed and launched on the
+phone (Steps 48 + 49 together). Reviews on this diff: Muse, Codex, OpenCode (recorded when they land); Antigravity
+cannot run headless here. Nothing measured on the phone yet — every threshold is a hypothesis
+until a dark walk's `light` records are read.
+
+test on device: in a dark room start a route — within ~4 s the torch comes on and you hear "Low
+light. Obstacle detection still works. Flashlight on."; the tiles still show the wall; Stop the
+route and the torch goes off. With the torch off (toggle in Settings → Mount), ask "Where am I" in
+the dark: it starts with "It is dark, so this may miss things." Start a route in a dark hallway:
+you hear the LiDAR line, never "Guiding with GPS".
+
+## Step 48 — Point-blank: a wall against the phone is STOP, never CLEAR (Sat Sep 12, late)
+
+**Why.** A teammate's photo at 22:44: phone against a wall, "Depth OK", six green CLEAR tiles, no
+sound — the inverted gradient Step 38 was meant to end. Step 38 accepts *low-confidence* returns
+down to 5 cm; inside roughly 10 cm the LiDAR does not return a low-confidence distance at all, it
+returns 0 or NaN. `LaneMath` discarded every such sample, the cell fell under `minSamplesPerCell`,
+reported `.infinity`, and `.infinity` is CLEAR everywhere downstream. The Step 38 decider latch
+(`nearDropoutHoldSeconds`, 1.5 s) covered the cue for a second and a half; the tiles never.
+
+**What changed.**
+- `LaneMath` counts *blind* samples (non-finite or ≤ 0.05 m) and reports the blind share per cell
+  (`LaneGrid.headBlind` / `torsoBlind`, `blindFractionIsReportedPerCell`); the value stays
+  `.infinity`, so nothing that reads distances changed on its own.
+- New pure `NearHold` (CaneKitLogic, 7 tests, suite "Near hold"), applied by `DepthFrameProcessor`
+  to every grid before it is published: a cell that reads `.infinity` with a blind share ≥ 0.5 and
+  whose last *measured* distance was under 0.6 m is reported as 0.1 m and flagged held — under
+  `CueThresholds.centerNear`, so tiles say STOP, the decider fires urgent, the watch and the island
+  follow. Any measurement releases it; a blind share under 0.5 is a real clear and disarms the cell.
+  It never arms without a prior near reading, so a blind sky or corridor nobody walked up to stays
+  clear (`blindWithoutNearHistoryStaysClear`, `farReadingDoesNotArm`). Known gap, on purpose: the
+  phone switched on already against a wall is not held until it has read the wall once between 5
+  and 60 cm — the trade against painting STOP over the sky.
+- Trip log `lanes` gains `head_blind`, `torso_blind`, `held` — the evidence for tuning the 0.5 / 0.6.
+- Merged onto the teammate's Step 45 cloud commit (`68c50f0`, `Cloud/CloudSync` + `CloudSchema`);
+  the CHANGELOG conflict (that commit carried leftover stash markers) resolved newest-first.
+
+**Muse review (xhigh), all verified and taken:** (F4) the hold memory was reset by any frame
+without depth — exactly when a wall is pressed — and never by a session change; now `resetNearHold`
+runs from `dropLatestImage` (every ARKit re-run / pause passes there) and a transient gap keeps the
+memory. (F2) a phone switched on already against a wall stayed silent: the **cold-start** rule —
+≥ 4 of 6 cells blind ≥ 0.8 with no history → 0.8 m (NEAR tile, Geiger, never STOP) until any cell
+measures; a head-only blind (a tilt at the sky) is not a cold start (`allBlindWithNoHistoryIsCaution`,
+`headOnlyBlindIsNotAColdStart`). (F1) history from before a cane swing describes another view:
+an untrusted frame disarms every cell (`aSweepDisarmsEveryCell`). (F3) `smoothedSceneDepth` holds
+stale finite values and inpaints for a few frames as the wall arrives: the blind share is now the
+max of the smoothed and the raw map. (F5a) Quiet / Indoors / a crossing settle would have turned a
+held torso cell back into silence: a held cell renders at every level (`pointBlankBypassesEveryTorsoHold`).
+(F5b) the wrist got one tap then nothing while pinned: the centre cue is re-mirrored while a cell
+is held (the link throttles). (F5c) the island only refreshed on a GPS fix, i.e. never while
+standing at a wall: `LiveActivityController.refreshObstacle` from the depth path on a glance
+transition. (F6) the blind share's denominator no longer counts far low-confidence pixels (a wall
+edge read 0.49). Disclosed, not changed: releasing a hold into a dropout-clear still waits the Step
+38 latch's 1.5 s before `.stop` (safe direction). Refuted by Muse itself: a data race on `nearHold`
+(serial queue), held values feeding back into arming (the pre-hold value is stored).
+
+**Verification.** `make test` 620 / 620 (their 18 cloud tests included); `make sim` green;
+installed and launched on the phone at 22:55 (first cut) and again after the review round.
+Codex (read-only, repo copy) reached the same four findings as Muse independently (sweep frames
+must not mutate the hold, session-boundary reset, smoothed-depth lag, island only on GPS fixes) —
+all fixed above — and added one kept as a known gap: a glossy or absorptive surface between
+0.35 m and a few metres returns *finite low-confidence* samples that are neither valid nor blind, so
+such a cell can still read CLEAR (the Step 38 boundary; `docs/todo.md`). OpenCode's third run
+produced no output; Antigravity's plan-mode run printed nothing again.
+
+test on device: hold the phone 15 cm from a wall, then push it to the wall: STOP tiles and the
+urgent buzz must continue at 2 cm; step back to 1 m: tiles clear within a frame. Point the phone
+at the night sky and at a long corridor from where you stand: no STOP.
+
 ## Step 47 — The Dynamic Island from its first pictures, cue levels that differ on the cane, a Details tab that says which model answered, and the Guide tile pair (Sat Sep 12, evening)
 
 Four things the owner asked for in one message after walking with Step 46, plus a documentation

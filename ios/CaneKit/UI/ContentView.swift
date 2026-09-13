@@ -443,6 +443,10 @@ private struct SettingsPage: View {
                 .accessibilityHint("Smoother live view; uses more battery and heat. Obstacle cues are the same either way.")
             Toggle("Audio beacon while navigating", isOn: model.beaconEnabled)
                 .accessibilityHint("A soft click from the direction to walk, through the AirPods")
+            // Step 49. Default ON on purpose (see `AppModel.autoTorchInDark`): a blind walker cannot
+            // see the dark, so the app notices it for them.
+            Toggle("Flashlight on in the dark (routes)", isOn: model.autoTorchInDark)
+                .accessibilityHint("When the camera sees low light while a route guides, OpenCane turns the flashlight on so the cameras can see and drivers can see you, and off again when the light returns or the route ends. Obstacle detection works in the dark either way.")
             // ⚠ test contract: switches["Write trip log"].
             Toggle("Write trip log", isOn: model.loggingEnabled)
                 .accessibilityHint("Saves a JSONL log of lanes, cues and location to the Files app")
@@ -611,7 +615,11 @@ private struct SceneEngineCard: View {
             secondsSinceWatch: h.lastWatchAt.map { max(0, now.timeIntervalSince($0)) },
             lastWatchError: h.lastError,
             cueLevelTitle: model.cueLevel.title, cuePlaceTitle: model.cuePlace.title,
-            namesOn: model.obstacleNamesEnabled)
+            namesOn: model.obstacleNamesEnabled,
+            // Step 49: the light the cameras have. `ambientLux` is not observed (30 Hz), so the
+            // Light row lives inside the 10 s `TimelineView` below and reads it there.
+            lightState: model.lightState, ambientLux: model.ambientLux,
+            torchOn: model.torchEnabled, torchByApp: model.torchLitByApp)
     }
 
     /// The card. Only the two age-bearing rows ("2 min ago", "· 30 s ago") sit inside the
@@ -639,7 +647,13 @@ private struct SceneEngineCard: View {
             }
             if let gate = SceneEngineSummary.gate(f) { row("Gate", gate) }
             TimelineView(.periodic(from: .now, by: Self.ageRefresh)) { timeline in
-                row("Watch", SceneEngineSummary.hazardWatch(facts(at: timeline.date)))
+                let live = facts(at: timeline.date)
+                row("Watch", SceneEngineSummary.hazardWatch(live))
+                // Step 49: "Light: lit (640 lux)" / "Light: dark (12 lux) · flashlight on (by
+                // OpenCane)" / "… flashlight off — cameras may miss things" / "Light: unknown".
+                // In the timeline so the lux number refreshes every 10 s; a state change redraws
+                // it at once through `model.lightState`.
+                row("Light", SceneEngineSummary.light(live))
             }
             row("Cues", SceneEngineSummary.cues(f))
         }

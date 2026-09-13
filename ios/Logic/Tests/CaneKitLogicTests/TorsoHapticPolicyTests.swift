@@ -124,6 +124,20 @@ struct TorsoHapticPolicyTests {
         #expect(creep[7] == nil)                                            // once per approach
     }
 
+    @Test("a point-blank held torso cell renders at Quiet, Indoors and during a crossing settle")
+    func pointBlankBypassesEveryTorsoHold() {
+        let held = LaneReport(grid: LaneGrid(head: [4, 4, 4], torso: [4, 0.1, 4], centerDepth: 0.1,
+                                             torsoHeld: [false, true, false]),
+                              isTrusted: true, depthAvailable: true)
+        var q = Rig(quiet)
+        let a = q.step(held, at: 0)
+        #expect(a == .render(.centerApproach(distance: 0.5)))          // the decider floors at 0.5
+        var i = Rig(CueRules(level: .detailed, place: .indoors))
+        #expect(i.step(held, at: 0) == .render(.centerApproach(distance: 0.5)))
+        var c = Rig(.default); c.crossing = true
+        #expect(c.step(held, at: 0) == .render(.centerApproach(distance: 0.5)))
+    }
+
     @Test("torsoIsHeld names every hold and nothing else")
     func torsoIsHeldNamesEveryHold() {
         let p = TorsoHapticPolicy()

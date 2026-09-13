@@ -125,7 +125,19 @@ public struct SceneEngineFacts: Sendable, Equatable {
     /// "Speak obstacle names" switch.
     public var namesOn: Bool
 
-    /// Memberwise, every field required so a new fact cannot be forgotten at the one call site.
+    /// `AppModel.lightState` — `LowLightPolicy`'s verdict (Step 49). `.unknown` before the first
+    /// ARKit light estimate (and always in the simulator).
+    public var lightState: LowLightPolicy.State
+    /// The smoothed ambient lux behind that verdict (`LowLightPolicy.smoothedLux`); nil before the first estimate.
+    public var ambientLux: Float?
+    /// `AppModel.torchEnabled` — the flashlight as the switch shows it.
+    public var torchOn: Bool
+    /// `AppModel.torchLitByApp` — the app lit it for the dark (it will switch it off again).
+    public var torchByApp: Bool
+
+    /// Memberwise, every field required so a new fact cannot be forgotten at the one call site
+    /// (the Step 47 review's `lastWatchError` and the Step 49 light facts default, so older
+    /// tests and call sites keep compiling).
     public init(cloudName: String?, onDeviceName: String, lastSource: String?, lastCloudMs: Int?,
                 lastLatencyMs: Int?, lastFallbackReason: String?, lastGate: String?, lastError: String?,
                 secondsSinceLast: TimeInterval?, lastTrigger: DescribeTrigger?, hazardWatchOn: Bool,
@@ -133,7 +145,9 @@ public struct SceneEngineFacts: Sendable, Equatable {
                 lastWatchSource: String?, lastWatchMs: Int?, lastWatchReason: String?,
                 secondsSinceWatch: TimeInterval?, lastWatchError: String? = nil,
                 cueLevelTitle: String, cuePlaceTitle: String,
-                namesOn: Bool) {
+                namesOn: Bool,
+                lightState: LowLightPolicy.State = .unknown, ambientLux: Float? = nil,
+                torchOn: Bool = false, torchByApp: Bool = false) {
         self.cloudName = cloudName
         self.onDeviceName = onDeviceName
         self.lastSource = lastSource
@@ -155,6 +169,10 @@ public struct SceneEngineFacts: Sendable, Equatable {
         self.cueLevelTitle = cueLevelTitle
         self.cuePlaceTitle = cuePlaceTitle
         self.namesOn = namesOn
+        self.lightState = lightState
+        self.ambientLux = ambientLux
+        self.torchOn = torchOn
+        self.torchByApp = torchByApp
     }
 }
 
@@ -366,11 +384,41 @@ public enum SceneEngineSummary {
                                spoken: "Cues: \(f.cueLevelTitle), \(f.cuePlaceTitle), obstacle \(names).")
     }
 
+    /// The light the cameras have (Step 49), in one line — the answer to "how do you cope with the
+    /// dark" that a blind walker cannot see for themselves:
+    ///   · unknown: "Light: unknown" (no ARKit estimate yet; always in the simulator)
+    ///   · lit: "Light: lit (640 lux)" ("Light: lit" without a number)
+    ///   · dark, torch on by the app: "Light: dark (12 lux) · flashlight on (by OpenCane)"
+    ///   · dark, torch on by the walker: "Light: dark (12 lux) · flashlight on"
+    ///   · dark, torch off: "Light: dark (12 lux) · flashlight off — cameras may miss things"
+    /// The lux is the policy's smoothed value, rounded. Pinned by `lightRowSaysWhatTheCamerasHave`,
+    /// `lightRowNamesWhoLitTheTorch`, `lightRowUnknownBeforeAnEstimate`.
+    public static func light(_ f: SceneEngineFacts) -> SceneEngineLine {
+        let lux = f.ambientLux.map { " (\(Int($0.rounded())) lux)" } ?? ""
+        let luxSpoken = f.ambientLux.map { ", \(Int($0.rounded())) lux" } ?? ""
+        switch f.lightState {
+        case .unknown:
+            return SceneEngineLine(text: "Light: unknown",
+                                   spoken: "Light level unknown. No camera light estimate yet.")
+        case .lit:
+            return SceneEngineLine(text: "Light: lit\(lux)", spoken: "Light: lit\(luxSpoken).")
+        case .dark:
+            if f.torchOn {
+                let who = f.torchByApp ? " (by OpenCane)" : ""
+                let whoSpoken = f.torchByApp ? ", switched on by OpenCane" : ""
+                return SceneEngineLine(text: "Light: dark\(lux) · flashlight on\(who)",
+                                       spoken: "Light: dark\(luxSpoken). Flashlight on\(whoSpoken).")
+            }
+            return SceneEngineLine(text: "Light: dark\(lux) · flashlight off — cameras may miss things",
+                                   spoken: "Light: dark\(luxSpoken). Flashlight off, so the cameras may miss things. Obstacle detection still works.")
+        }
+    }
+
     /// The whole card as one VoiceOver paragraph (chain, last answer, when, gate, hazard watch,
-    /// cues — in that fixed order, empty rows skipped). Pinned by `summaryReadsEveryRowInOrder`.
+    /// light, cues — in that fixed order, empty rows skipped). Pinned by `summaryReadsEveryRowInOrder`.
     public static func spokenSummary(_ f: SceneEngineFacts) -> String {
         [chain(f).spoken, lastAnswer(f).spoken, when(f)?.spoken, gate(f)?.spoken,
-         hazardWatch(f).spoken, cues(f).spoken]
+         hazardWatch(f).spoken, light(f).spoken, cues(f).spoken]
             .compactMap { $0 }
             .joined(separator: " ")
     }
