@@ -83,7 +83,11 @@ public final class MedicalProfileStore {
     /// phone exactly as before.
     @ObservationIgnored public var onProfileSaved: ((CKMedicalProfile) -> Void)?
 
-    /// Today's mobility numbers after every pedometer refresh, for `mobility_days`.
+    /// Today's mobility numbers after every pedometer refresh.
+    ///
+    /// ⚠ Since Step 60 the far end is a no-op seam (`CloudSync.saveMobility`): `mobility_days` was
+    /// dropped, so these numbers never leave the phone. The hook stays wired so the call site does
+    /// not have to be found again if a mobility mirror returns.
     @ObservationIgnored public var onMobilityRefreshed: ((CKMobilityStats) -> Void)?
 
     public var mobilityStats = CKMobilityStats()

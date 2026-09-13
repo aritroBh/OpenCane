@@ -1057,6 +1057,16 @@ final class AppModel {
     /// The full settings snapshot for `device_settings`: one property per persisted
     /// `UserDefaults` key, in the order the Settings screen shows them.
     ///
+    /// ⚠ **Adding a persisted setting means adding it here and to `DeviceSettingsRow`.**
+    /// `Settings.onChange` fires for every key, so a new one needs no wiring — which is precisely
+    /// why forgetting it is invisible: the app keeps working and that switch simply never reaches
+    /// the row. `CloudSchemaTests.settingsColumnsCoverEveryPersistedKey` is the guard.
+    ///
+    /// ⚠ Since Step 60 this snapshot **goes nowhere**: `device_settings` was dropped from the live
+    /// project and `CloudSync.saveSettings` is a no-op seam. It is still built and still asserted,
+    /// so it cannot fall behind the Settings screen while the table is away — but do not read this
+    /// property as evidence that a switch is synced.
+    ///
     /// ⚠ Deliberately excludes the keys that do NOT persist (`liveViewEnabled`,
     /// `bothCamerasEnabled`, `faceHeadTrackingEnabled`, `dangerSoundsEnabled`, `nodToTalkEnabled`,
     /// `torchEnabled` — see `Settings`): a column for a switch that resets every launch would say
@@ -1075,6 +1085,7 @@ final class AppModel {
                           hazardWatchEnabled: hazardWatchEnabled,
                           namePeopleEnabled: namePeopleEnabled,
                           highFrameRateCamera: highFrameRateCamera,
+                          autoTorchInDark: autoTorchInDark,
                           familyAlertsEnabled: familyAlertsEnabled,
                           familyAlertsAIContext: familyAlertsAIContext,
                           fallDetectionEnabled: fallDetectionEnabled,

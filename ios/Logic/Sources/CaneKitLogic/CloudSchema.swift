@@ -14,8 +14,19 @@
 //
 //  ⚠ **The phone stays the source of truth.** Every local writer (`TripLogger`, `HazardLog`,
 //  `PostStore`, `MedicalProfileStore`, `Settings`) still writes exactly what it wrote before, and
-//  the cloud is a mirror fed from the same call sites. A walk with no signal is a complete walk;
-//  `CloudSync` queues and catches up. Nothing in the cue path may ever await an upload.
+//  the cloud is a mirror fed from the same call sites. A walk with no signal is a complete walk.
+//  Nothing in the cue path may ever await an upload.
+//
+//  ⚠ **Step 60 reduced what the app actually writes to seven tables** — `walkers`, `devices`,
+//  `medical_profiles`, `family_contacts`, `trips`, `hazards` (plus the `hazard-photos` bucket) and
+//  `family_alerts`. The detail tables were dropped from the live project by migration
+//  `reduce_to_mvp_cloud_schema`, and `CloudSync`'s writers for them are documented no-op seams.
+//  The row types for them stay HERE, with their tests, because the wire shape is the contract with
+//  the migrations and the reduction is a product decision that can be reversed. Read every row
+//  type's own doc comment for whether the app writes it today: `TripEventRow`, `DeviceSettingsRow`,
+//  `PostRow`, `ConversationTurnRow`, `MobilityDayRow`, `AppLaunchRow`, `RouteRow` and
+//  `RouteWaypointRow` are **not written by the shipped app**. `family_alert_recipients` never had a
+//  row type here at all (`CloudSync.linkRecipients` built it inline); that method is gone.
 //
 //  Key invariants:
 //    · **Uniform keys.** PostgREST rejects a bulk insert whose objects do not all carry the same
@@ -23,9 +34,16 @@
 //      2026-09-13). `TripEventRow` therefore encodes every column on every row, writing an
 //      explicit JSON null rather than omitting the key. Never make one of its fields "omit when
 //      nil" — it silently 400s a whole batch, and the batch is a walk.
-//    · Column names are the contract (`t_seconds`, `text_spoken`, `walker_id`); they match
-//      migrations `opencane_01`…`opencane_06` in the Supabase project. Renaming one here without
-//      a migration drops that field on the floor with a 400.
+//    · ⚠ A new persisted setting still needs a case in `DeviceSettingsRow` and a line in
+//      `AppModel.cloudSettings`, and would need a `device_settings` column to sync at all.
+//      `Settings.onChange` means it needs no new *wiring*, which is exactly what makes the drift
+//      invisible: everything keeps working and the new key simply never leaves the phone.
+//      `settingsColumnsCoverEveryPersistedKey` asserts the exact key set and is what catches it
+//      (it caught `autoTorchInDark`). Since Step 60 no settings snapshot is uploaded at all.
+//    · Column names are the contract (`t_seconds`, `text_spoken`, `walker_id`); for the seven live
+//      tables they match migrations `opencane_01`…`opencane_07` as narrowed by
+//      `reduce_to_mvp_cloud_schema`. Renaming one here without a migration drops that field on the
+//      floor with a 400.
 //    · Timestamps are ISO-8601 UTC via `OpenCaneEvent.iso8601` — the format Postgres `timestamptz`
 //      accepts and the same one the alert bot already receives.
 //    · `CloudBatchPolicy` holds every number (batch size, flush interval, queue ceiling, backoff).
@@ -37,12 +55,19 @@ import Foundation
 
 // MARK: - Batching policy
 
-/// When a queued row leaves the phone, and what happens when it cannot.
+/// When a row leaves the phone, and what happens when it cannot.
 ///
 /// The shape of the problem: a walk produces a few hundred log lines a minute, the phone is on
 /// campus Wi-Fi that comes and goes, and the depth pipeline must never wait for any of it. So rows
 /// go into an in-memory queue, leave in batches, and a failed batch goes back to the front rather
 /// than being lost.
+///
+/// ⚠ Since Step 60 the shipped app uses only `flushInterval` (the maintenance loop, which retries
+/// registration and a deferred `trips` insert) and `maxPhotoUploads` (the hazard-photo cap). The
+/// batching members — `maxBatchSize`, `maxQueuedRows`, `maxAttempts`, `backoff`, `split`, `trim` —
+/// describe the `trip_events` queue that the MVP reduction deleted; they are kept with their tests
+/// because they are the tuned answer if a detailed mirror comes back. Do not read a value here as
+/// evidence that something is being uploaded today.
 public struct CloudBatchPolicy: Sendable, Equatable {
 
     /// Rows per POST. 200 keeps a batch body well under a megabyte even for `lanes` records (the
@@ -90,17 +115,6 @@ public struct CloudBatchPolicy: Sendable, Equatable {
         return (Array(queued.prefix(maxBatchSize)), Array(queued.dropFirst(maxBatchSize)))
     }
 
-    /// Where a walk's lines begin, after `flushed` rows have been taken off the FRONT of the queue.
-    ///
-    /// The mark is an index into the live queue, so every flush shifts it down by exactly what it
-    /// removed — and a failed batch put back on the front shifts it up again. Getting this wrong is
-    /// silent: the walk's first lines simply keep a null `trip_id` and the walk looks shorter than
-    /// it was. Clamped at 0, because a mark that has been entirely flushed away means "the whole
-    /// remaining queue belongs to this walk".
-    public func shiftMark(_ mark: Int, flushed: Int) -> Int {
-        max(0, mark - flushed)
-    }
-
     /// `queued` trimmed to `maxQueuedRows` by dropping the OLDEST rows.
     /// Returns the kept rows and how many were dropped (the caller logs the number, because a
     /// silent drop would make a gap in the cloud walk look like a gap in the real one).
@@ -114,6 +128,10 @@ public struct CloudBatchPolicy: Sendable, Equatable {
 // MARK: - Rows
 
 /// One line of the JSONL trip log, as a Postgres row.
+///
+/// ⚠ **Not written by the shipped app.** Step 60 dropped `trip_events` from the live project and
+/// made `CloudSync.logEvent` a no-op seam: the detailed log is `Documents/canekit-*.jsonl` on the
+/// phone and nowhere else. Kept with its tests as the wire contract if the mirror returns.
 ///
 /// ⚠ Every property is encoded on every row, `nil` included (see the file header: PostgREST
 /// requires uniform keys across a bulk insert). `lat`, `lon` and `textSpoken` are lifted out of
@@ -136,6 +154,21 @@ public struct TripEventRow: Sendable, Equatable, Encodable {
     /// Lifted from the payload for `speech` lines: what the walker actually heard.
     public var textSpoken: String?
 
+    /// Which walk this line belongs to, before that walk has a `trips` row to point at.
+    ///
+    /// ⚠ **Never encoded** — it is not a column, it is bookkeeping meant to ride along with the row
+    /// in a queue, so that when a deferred `trips` insert finally returns an id, every row carrying
+    /// the matching token can be given it.
+    ///
+    /// ⚠ **Nothing sets it today.** It was designed to replace an *index* into `CloudSync`'s queue,
+    /// which was wrong three ways at once: a flush took rows off the front and shifted every later
+    /// row down, `trim` did the same when the queue hit its ceiling, and a new walk could overwrite
+    /// the index while a flush was suspended mid-await — all three silently left a walk's first
+    /// lines with a null `trip_id`. Step 60 then deleted the queue outright, so the bug and its fix
+    /// are both moot. The field and `theWalkTokenNeverReachesTheWire` stay so that a returning
+    /// mirror is built on a token that travels with the row, never on an index into a live queue.
+    public var walkToken: Int?
+
     /// The column names in `public.trip_events`.
     public enum CodingKeys: String, CodingKey {
         case walkerID = "walker_id"
@@ -147,7 +180,7 @@ public struct TripEventRow: Sendable, Equatable, Encodable {
 
     public init(walkerID: String, tripID: String?, tSeconds: Double, kind: String,
                 payload: [String: OpenCaneJSON] = [:], lat: Double? = nil, lon: Double? = nil,
-                textSpoken: String? = nil) {
+                textSpoken: String? = nil, walkToken: Int? = nil) {
         self.walkerID = walkerID
         self.tripID = tripID
         self.tSeconds = tSeconds
@@ -156,6 +189,7 @@ public struct TripEventRow: Sendable, Equatable, Encodable {
         self.lat = lat
         self.lon = lon
         self.textSpoken = textSpoken
+        self.walkToken = walkToken
     }
 
     /// ⚠ Hand-written so a nil becomes an explicit `null` instead of a missing key. Codable's
@@ -357,6 +391,9 @@ public struct HazardRow: Sendable, Equatable, Encodable {
 
 /// One named place, mirrored from `WalkMarker`. The phone's UUID is the primary key, so a
 /// re-upload after an outage updates rather than duplicates.
+///
+/// ⚠ **Not written by the shipped app** (Step 60): posts live in `Documents/posts/posts.json` and
+/// `CloudSync.recordPost` is a no-op seam. Kept with its tests as the wire contract.
 public struct PostRow: Sendable, Equatable, Encodable {
     public var id: String
     public var walkerID: String
@@ -499,6 +536,11 @@ public struct FamilyAlertDeliveryPatch: Sendable, Equatable, Encodable {
 
 /// The full persisted settings snapshot for one phone. Column per `UserDefaults` key, so the
 /// table reads like the Settings screen.
+///
+/// ⚠ **Not written by the shipped app** (Step 60): settings stay in `UserDefaults` and
+/// `CloudSync.saveSettings` is a no-op seam. `AppModel.cloudSettings` still builds this row, and
+/// `settingsColumnsCoverEveryPersistedKey` still asserts its exact key set, so the snapshot cannot
+/// quietly fall behind the Settings screen while the table is away.
 public struct DeviceSettingsRow: Sendable, Equatable, Encodable {
     public var portraitMode: Bool
     public var mirrorLeftRight: Bool
@@ -513,6 +555,8 @@ public struct DeviceSettingsRow: Sendable, Equatable, Encodable {
     public var hazardWatchEnabled: Bool
     public var namePeopleEnabled: Bool
     public var highFrameRateCamera: Bool
+    /// Turn the flashlight on by itself when the scene is too dark for the camera (Steps 48–49).
+    public var autoTorchInDark: Bool
     public var familyAlertsEnabled: Bool
     public var familyAlertsAIContext: Bool
     public var fallDetectionEnabled: Bool
@@ -535,6 +579,7 @@ public struct DeviceSettingsRow: Sendable, Equatable, Encodable {
         case hazardWatchEnabled = "hazard_watch_enabled"
         case namePeopleEnabled = "name_people_enabled"
         case highFrameRateCamera = "high_frame_rate_camera"
+        case autoTorchInDark = "auto_torch_in_dark"
         case familyAlertsEnabled = "family_alerts_enabled"
         case familyAlertsAIContext = "family_alerts_ai_context"
         case fallDetectionEnabled = "fall_detection_enabled"
@@ -547,6 +592,7 @@ public struct DeviceSettingsRow: Sendable, Equatable, Encodable {
                 obstacleNamesEnabled: Bool, hapticsSilenced: Bool, beaconEnabled: Bool,
                 fallbackToWatch: Bool, groundHazardsEnabled: Bool, signsEnabled: Bool,
                 hazardWatchEnabled: Bool, namePeopleEnabled: Bool, highFrameRateCamera: Bool,
+                autoTorchInDark: Bool,
                 familyAlertsEnabled: Bool, familyAlertsAIContext: Bool, fallDetectionEnabled: Bool,
                 familyContactsRegistered: Bool, loggingEnabled: Bool,
                 extraSettings: [String: OpenCaneJSON] = [:]) {
@@ -563,6 +609,7 @@ public struct DeviceSettingsRow: Sendable, Equatable, Encodable {
         self.hazardWatchEnabled = hazardWatchEnabled
         self.namePeopleEnabled = namePeopleEnabled
         self.highFrameRateCamera = highFrameRateCamera
+        self.autoTorchInDark = autoTorchInDark
         self.familyAlertsEnabled = familyAlertsEnabled
         self.familyAlertsAIContext = familyAlertsAIContext
         self.fallDetectionEnabled = fallDetectionEnabled
@@ -630,6 +677,9 @@ public struct MedicalProfileRow: Sendable, Equatable, Encodable {
 
 /// One walker-day of mobility: steps, distance, time on foot, walks completed.
 /// Upserted on (`walker_id`, `day`).
+///
+/// ⚠ **Not written by the shipped app** (Step 60): `MedicalProfileStore.mobilityStats` stays local
+/// and `CloudSync.saveMobility` is a no-op seam. Kept with its tests as the wire contract.
 public struct MobilityDayRow: Sendable, Equatable, Encodable {
     public var walkerID: String
     /// `yyyy-MM-dd` in the walker's own time zone — a "day" is the day they lived, not UTC's.
@@ -671,6 +721,9 @@ public struct MobilityDayRow: Sendable, Equatable, Encodable {
 }
 
 /// One spoken question and the answer OpenCane gave.
+///
+/// ⚠ **Not written by the shipped app** (Step 60): a transcript never leaves the phone and
+/// `CloudSync.recordConversationTurn` is a no-op seam. Kept with its tests as the wire contract.
 public struct ConversationTurnRow: Sendable, Equatable, Encodable {
     public var walkerID: String
     public var tripID: String?
@@ -712,6 +765,9 @@ public struct ConversationTurnRow: Sendable, Equatable, Encodable {
 
 /// One launch, and whether it was a recovery. A `recovered` row is the evidence that a persisted
 /// optional feature killed the previous launch (`LaunchRecovery`).
+///
+/// ⚠ **Not written by the shipped app** (Step 60): `CloudSync.recordLaunch` is a no-op seam, so the
+/// recovery evidence is the trip log alone. Kept with its tests as the wire contract.
 public struct AppLaunchRow: Sendable, Equatable, Encodable {
     public var walkerID: String
     public var deviceID: String?
@@ -744,6 +800,10 @@ public struct AppLaunchRow: Sendable, Equatable, Encodable {
 }
 
 /// A route and its waypoints, uploaded once when a walk starts.
+///
+/// ⚠ **Not written by the shipped app** (Step 60): route geometry stays in the bundled JSON or
+/// MapKit and `CloudSync.uploadRoute` is a no-op seam — the cloud keeps only a walk's destination
+/// name and summary on `trips`. Kept with its tests as the wire contract.
 public struct RouteRow: Sendable, Equatable, Encodable {
     public var walkerID: String
     public var name: String
@@ -774,6 +834,8 @@ public struct RouteRow: Sendable, Equatable, Encodable {
 
 /// One waypoint of an uploaded route. ⚠ Bulk-inserted, so — like `TripEventRow` — every key is
 /// written on every row, nil included.
+///
+/// ⚠ **Not written by the shipped app** (Step 60), for the same reason as `RouteRow`.
 public struct RouteWaypointRow: Sendable, Equatable, Encodable {
     public var routeID: String
     public var seq: Int

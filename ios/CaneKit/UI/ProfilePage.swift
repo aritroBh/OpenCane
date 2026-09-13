@@ -37,10 +37,16 @@ struct ProfilePage: View {
 
     /// Privacy control for the optional Supabase mirror. The default is off; the copy names the
     /// categories that include location and Medical ID data so consent is informed and reversible.
+    ///
+    /// ⚠ **The hint must name only what the app actually uploads.** Step 60 cut the mirror to seven
+    /// tables, so mobility statistics, route geometry and the detailed trip log no longer leave the
+    /// phone at all — a consent line still promising them describes an app that does not exist, and
+    /// this one is read aloud to a blind walker deciding whether to opt in. When a writer in
+    /// `CloudSync` stops being a no-op seam, this sentence changes in the same commit.
     private func privacyCard(model: Bindable<AppModel>) -> some View {
         CKCard(title: "Privacy") {
             Toggle("Share data with OpenCane cloud", isOn: model.cloudSharingEnabled)
-                .accessibilityHint("When on, uploads Medical ID, mobility, route locations and trip logs to the configured cloud. Off stops future uploads and clears queued data.")
+                .accessibilityHint("When on, uploads your Medical ID, family contacts, a summary of each walk with where it started and ended, and any hazard the cane detects, with its photo. The detailed trip log, your settings and anything you say stay on this phone. Off stops future uploads.")
                 .disabled(!self.model.cloud.isConfigured)
             Text(self.model.cloud.isConfigured
                  ? (self.model.cloudSharingEnabled

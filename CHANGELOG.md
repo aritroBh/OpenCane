@@ -2,6 +2,40 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 60 — Consent-gated Supabase MVP (Sun Sep 13)
+
+⚠ Numbered 60, not 56: "Steps 56–59" below is the voice shell, and this entry was drafted twice, as
+"Step 56" and as a second "Step 51", in `docs/todo.md`. Both drafts are now this one entry.
+
+**Why.** A compact MVP needs safety records that matter away from the phone, not copies of every
+local state change. The live project had already been reduced to seven product tables, but the
+new consent-gated app work still contained writers for the retired detail tables.
+
+**What changed.** Reconciled the privacy opt-in with the MVP schema. With cloud sharing enabled,
+OpenCane mirrors only `walkers`, `devices`, `medical_profiles`, `family_contacts`, `trips`,
+`hazards` (plus capped `hazard-photos`) and `family_alerts`. Detailed JSONL, route geometry,
+settings, posts, conversation transcripts, launch recovery and daily mobility remain on the phone.
+The compatibility callbacks are intentional no-ops, so an old call site cannot recreate a removed
+cloud write path. Turning sharing off still cancels deferred work and prevents later uploads.
+
+**Verification.** Supabase MCP inventory confirmed those seven application tables, each with RLS
+enabled (from the session that wrote the migration; the MCP server was not authenticated when this
+entry was finalised, so that half is not re-verified here). The adapter contains no request string
+for a retired table: `grep -n '"trip_events"\|"device_settings"\|"posts"\|"conversation_turns"\|
+"mobility_days"\|"app_launches"\|"routes"\|"route_waypoints"\|"family_alert_recipients"'
+ios/CaneKit/Cloud/CloudSync.swift` is empty. `cd ios && make test` = 761 tests in 18 suites, exit 0;
+`make sim` = BUILD SUCCEEDED. Device verification remains open below.
+
+**Rejected.** Deleting `TripEventRow` / `DeviceSettingsRow` from `CaneKitLogic` along with their
+writers. The wire shape is the contract with the migrations, and the MVP reduction is a product
+decision that can be reversed; a row type with tests costs nothing and is the thing that will catch
+the next drift. Their doc comments now say plainly that the app writes neither today, which is what
+was actually wrong (a comment described a `CloudSync` queue this same change deleted).
+
+test on device: enable cloud sharing, take one short route and confirm one `trips` summary; edit
+Medical ID, record a hazard and send a family alert, then disable sharing and confirm no later
+writes occur.
+
 ## Step 52 — "Head height." only for things at head height, once per overhang (Sun Sep 13)
 
 **Why.** The first cane walk (`canekit-2026-09-13T04-36-32Z.jsonl`) had 137 head cues and 8 "Head

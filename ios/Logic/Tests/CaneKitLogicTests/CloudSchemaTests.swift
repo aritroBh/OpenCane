@@ -213,14 +213,19 @@ private func wireArray<T: Encodable>(_ rows: [T]) throws -> [[String: Any]] {
 
 // MARK: - Settings, mobility
 
-/// Every settings column is the `UserDefaults` key, snake_cased. The list is the contract with
-/// migration `opencane_02`.
+/// Every settings column is the `UserDefaults` key, snake_cased.
+///
+/// ⚠ This asserts an EXACT key set on purpose, so adding a persisted setting to the app without
+/// adding a column here fails loudly instead of silently not syncing. It has already caught one:
+/// `autoTorchInDark` (Steps 48–49) was persisted on the phone for two steps with no column, and
+/// nothing else noticed, because `Settings.onChange` means a new key needs no new wiring.
 @Test func settingsColumnsCoverEveryPersistedKey() throws {
     let row = DeviceSettingsRow(
         portraitMode: true, mirrorLeftRight: false, cueLevel: "detailed", cuePlace: "outdoors",
         obstacleNamesEnabled: false, hapticsSilenced: false, beaconEnabled: true,
         fallbackToWatch: false, groundHazardsEnabled: false, signsEnabled: true,
         hazardWatchEnabled: false, namePeopleEnabled: true, highFrameRateCamera: false,
+        autoTorchInDark: false,
         familyAlertsEnabled: false, familyAlertsAIContext: true, fallDetectionEnabled: true,
         familyContactsRegistered: false, loggingEnabled: true)
     let json = try wire(row)
@@ -229,6 +234,7 @@ private func wireArray<T: Encodable>(_ rows: [T]) throws -> [[String: Any]] {
         "portrait_mode", "mirror_left_right", "cue_level", "cue_place", "obstacle_names_enabled",
         "haptics_silenced", "beacon_enabled", "fallback_to_watch", "ground_hazards_enabled",
         "signs_enabled", "hazard_watch_enabled", "name_people_enabled", "high_frame_rate_camera",
+        "auto_torch_in_dark",
         "family_alerts_enabled", "family_alerts_ai_context", "fall_detection_enabled",
         "family_contacts_registered", "logging_enabled", "extra_settings",
     ]
@@ -315,18 +321,20 @@ private func wireArray<T: Encodable>(_ rows: [T]) throws -> [[String: Any]] {
     #expect(CloudBatchPolicy().maxPhotoUploads == 200)
 }
 
-/// ⚠ The trip mark is an index into the live queue, so a flush must shift it. Found by audit on
-/// 2026-09-13: `tick()` removed rows from the front without moving the mark, so when the trip id
-/// landed the stamping loop started at the wrong offset and the walk's first lines kept a null
-/// `trip_id` — the walk looked shorter than it was, silently.
-@Test func theTripMarkFollowsTheQueueAcrossAFlush() {
-    let policy = CloudBatchPolicy()
-    // 50 lines logged before Start, then the walk's lines.
-    #expect(policy.shiftMark(50, flushed: 0) == 50)
-    // A flush takes 20 rows off the front: the walk now begins 20 slots earlier.
-    #expect(policy.shiftMark(50, flushed: 20) == 30)
-    // A flush that swallows the pre-trip rows entirely: everything left is the walk's.
-    #expect(policy.shiftMark(50, flushed: 50) == 0)
-    #expect(policy.shiftMark(50, flushed: 200) == 0)   // clamped, never negative
-    #expect(policy.shiftMark(0, flushed: 10) == 0)
+/// ⚠ `walkToken` is bookkeeping, not a column: it must never reach the wire, and adding it must
+/// not break the uniform-key rule. It replaced an index into the queue that a flush, a `trim` or a
+/// concurrent new walk could each invalidate, silently leaving a walk's first lines unattributed.
+@Test func theWalkTokenNeverReachesTheWire() throws {
+    let tagged = TripEventRow(walkerID: "w", tripID: nil, tSeconds: 1, kind: "gps", walkToken: 7)
+    let untagged = TripEventRow(walkerID: "w", tripID: nil, tSeconds: 2, kind: "gps")
+    #expect(tagged.walkToken == 7)
+
+    let json = try wire(tagged)
+    #expect(json["walkToken"] == nil)
+    #expect(json["walk_token"] == nil)
+    // Still exactly the eight real columns, tagged or not.
+    let expected: Set<String> = ["walker_id", "trip_id", "t_seconds", "kind", "payload",
+                                 "lat", "lon", "text_spoken"]
+    #expect(Set(json.keys) == expected)
+    #expect(Set(try wire(untagged).keys) == expected)
 }
