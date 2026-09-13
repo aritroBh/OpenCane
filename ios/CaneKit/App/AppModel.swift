@@ -416,6 +416,74 @@ final class AppModel {
         self.cueLevel = level
     }
 
+    // MARK: - Voice-first surface (docs/UX.md)
+
+    /// How much of the screen to draw: today's four-tab layout, or the voice-only screen.
+    ///
+    /// ⚠ **Ships `.full`** (`AGENTS.md` → "Safety beats features", docs/UX.md rule 9). Voice-only is
+    /// not wrong, but "the walker can no longer reach Recenter with a finger" is exactly the kind of
+    /// claim that needs a walk on the mounted cane before it is a default. The owner flips the
+    /// switch (Settings → Voice), not the code.
+    ///
+    /// Persisted under `voiceOnlyScreen` — a Bool, not the enum's raw value, because there are two
+    /// layouts and a Bool is what the Settings switch binds to. `GuideLayout.rawValue` is still
+    /// stable (`rawValuesAreStable`) for the day there is a third.
+    var voiceOnlyScreen: Bool = Settings.bool("voiceOnlyScreen", default: false) {
+        didSet {
+            guard voiceOnlyScreen != oldValue else { return }
+            Settings.set(voiceOnlyScreen, "voiceOnlyScreen")
+            // Say what is LEFT, not "on": the walker cannot see what went away (docs/UX.md rule 2).
+            speech.say(guideLayout.spokenLine, .nav, ttl: 8)
+            logger.event("guide_layout", ["layout": guideLayout.rawValue, "by": "settings"])
+        }
+    }
+
+    /// `voiceOnlyScreen` as the layout rule the views ask (`GuideLayout`, CaneKitLogic).
+    /// The views never branch on the Bool themselves — the rule has a safety exception in it
+    /// (Stop route survives voice-only) and that exception is tested, not re-derived per view.
+    var guideLayout: GuideLayout { voiceOnlyScreen ? .voiceOnly : .full }
+
+    /// Everything "read my settings" reads (`SpokenSettingsReport`), gathered in one place so the
+    /// report itself stays pure.
+    ///
+    /// ⚠ The feature loop is an **exhaustive switch over `VoiceControlGrammar.Feature`**, and that is
+    /// deliberate: it is the compile-time guard that a feature added to the voice grammar cannot ship
+    /// without the read-back knowing its state. A dictionary literal keyed by case would compile
+    /// happily with one missing, and the read-back would quietly report the new switch as off —
+    /// which, for a warning channel, is the worst thing this line could say.
+    var settingsSnapshot: SpokenSettingsReport.Snapshot {
+        var features: [VoiceControlGrammar.Feature: Bool] = [:]
+        for feature in VoiceControlGrammar.Feature.allCases {
+            features[feature] = switch feature {
+            case .dropOffs: groundHazardsEnabled
+            case .signs: signsEnabled
+            case .hazardWatch: hazardWatchEnabled
+            case .namePeople: namePeopleEnabled
+            case .obstacleNames: obstacleNamesEnabled
+            case .beacon: beaconEnabled
+            case .sirens: dangerSoundsEnabled
+            case .nodToTalk: nodToTalkEnabled
+            // The flashlight's *requested* state, which is what `torchEnabled` holds after KVO
+            // confirms it (Step 34 — never `AVCaptureDevice.isTorchActive` read inline).
+            case .torch: torchEnabled
+            }
+        }
+        return SpokenSettingsReport.Snapshot(level: cueLevel, place: cuePlace,
+                                             hapticsSilenced: hapticsSilenced,
+                                             features: features,
+                                             voiceOnly: voiceOnlyScreen)
+    }
+
+    /// Speak the whole settings read-back at `.scene`, the lowest band, so a curb warning cuts it and
+    /// `SpeechResume` resumes it from the clause it was cut in.
+    /// Caller: `SettingsPage`'s "Read my settings" button; the voice path returns the line from
+    /// `ConversationCoordinator.executeAction` instead, so it goes through the normal answer route.
+    func speakSettingsReport() {
+        let line = SpokenSettingsReport.line(settingsSnapshot)
+        speech.say(line, .scene, ttl: 30)
+        logger.event("settings_report", ["by": "button", "text": line])
+    }
+
     /// Persist, apply, speak and log a level or place change. Called only from the two `didSet`s;
     /// an unchanged value (a picker re-selecting its current segment) does nothing.
     private func cueProfileChanged(levelChanged: Bool, placeChanged: Bool) {

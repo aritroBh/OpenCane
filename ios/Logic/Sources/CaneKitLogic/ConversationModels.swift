@@ -405,4 +405,36 @@ public enum ConversationAction: Sendable, Equatable {
     case emergency
     /// "yes" (true) / "no", "cancel" (false): the answer to a pending emergency prompt.
     case confirm(Bool)
+
+    // MARK: Voice shell tier 2 — produced by `FastPathIntentClassifier` rule 0b
+    //       (`VoiceControlGrammar`). docs/UX.md §4.3.
+    //
+    // Why these are cases of their own rather than `updateSetting` strings: each one has an app
+    // effect that is not "set a bool", and a string-keyed action cannot be checked by the compiler.
+    // The one that *is* a bool — a `HandsFreeOption` — deliberately still goes through
+    // `updateSetting`, so tier 2 adds no second way to do a thing that already had one.
+
+    /// "indoors" / "outdoors": set where the walker is (`AppModel.setCuePlace`). Indoors shortens
+    /// the head distance and names nothing (`CueRules`).
+    case setCuePlace(CuePlace)
+    /// "read my settings": speak every switch, level and place (`SpokenSettingsReport`).
+    /// ⚠ Read-only. It is spoken at `.scene`, so a curb warning cuts it.
+    case readSettings
+    /// "what can I say": speak the tier-2 grammar (`VoiceControlGrammar.listLine`).
+    case listCommands
+    /// "read my medical ID": speak the Medical ID paragraph.
+    /// ⚠ It is a blood type and an emergency contact read aloud in public, so it is explicit only —
+    /// never automatic, and never a step inside another command (docs/UX.md §4.3).
+    case readMedicalID
+    /// "flashlight on/off": the torch, through `AppModel.setTorch(_:byApp:)` so KVO still confirms
+    /// it. Not a `HandsFreeOption`: the flashlight is a device state, and it is never persisted.
+    case setTorch(on: Bool)
+    /// "voice only" / "full screen": the voice-only screen (docs/UX.md §4.4, `GuideLayout`).
+    /// ⚠ "full screen" is the spoken escape hatch the mode promises out loud, because the mode
+    /// hides the tab bar and the Settings switch with it. The finger escape is "Show buttons"
+    /// (`GuideLayout.showsEscapeButton`) — a mode whose only exit is the recogniser is a trap.
+    case setVoiceOnlyScreen(Bool)
+    /// "cancel" with nothing pending: say so rather than succeed silently (docs/UX.md rule 2).
+    /// A cancel *while* an emergency prompt is pending is `.confirm(false)`, matched by rule 0.
+    case cancelPending
 }

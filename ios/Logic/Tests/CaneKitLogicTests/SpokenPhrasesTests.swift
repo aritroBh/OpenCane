@@ -201,7 +201,10 @@ import Testing
 /// The shell's whole fixed vocabulary costs at most `shellCharacterBudget` characters of
 /// ElevenLabs quota, once. A reworded menu or a new confirmation changes the count on purpose.
 @Test func shellLinesStayInsideTheirBudget() {
-    #expect(SpokenPhrases.shellCharacterBudget == 1_500)
+    // Raised from 1,500 when tier 2 of the shell shipped (docs/UX.md §4.3): the reasoning for the
+    // new number is on `shellCharacterBudget` itself. This assertion is the thing that made it a
+    // decision instead of a silent bill, which is the whole point of having it.
+    #expect(SpokenPhrases.shellCharacterBudget == 2_000)
     let cost = SpokenPhrases.characterCount(SpokenPhrases.shellLines)
     #expect(cost <= SpokenPhrases.shellCharacterBudget, "shell lines cost \(cost) characters")
     #expect(SpokenPhrases.shellLines.count == Set(SpokenPhrases.shellLines).count, "no line twice")
@@ -222,6 +225,7 @@ import Testing
     spoken += EmergencyConfirm.fixedLines
     spoken += StatusSummary.fixedLines
     spoken += CueLevel.allCases.map(\.spokenLine)
+    spoken += CuePlace.allCases.map(\.spokenLine)
     for line in spoken {
         #expect(prefetched.contains(line), "not prefetched: \(line)")
     }

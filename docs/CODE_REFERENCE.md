@@ -542,6 +542,17 @@ Foundation-only conversational assistant decisions and models:
 - **`ConversationTurn` & `ConversationHistory`**: 6-turn rolling buffer tracking user queries, assistant responses, and tool calls.
 - **`ConversationTool` & `ConversationAction`**: Structured tools (`navigateTo`, `stopNavigation`, `dropMarker`, `queryScene`, `queryStatus`, `queryHistory`, `setSetting`, `setCaneSilenced`).
 - **`FastPathIntentClassifier`**: Sub-millisecond deterministic intent matcher resolving settings, status aspects, campus gazetteer destinations (`CampusPlaces`), marker drops, and trip metrics with zero LLM tokens. **Rule 0 (Step 56)** is the voice shell: `VoiceMenu.match` / `verb` / `confirmation`, whole utterance, before every other rule → `action(for:)`; rule 12 (distance walked) now runs before rule 8 ("how far"). Voice-shell `ConversationAction` cases: `startDefaultRoute`, `describeScene`, `speakStatus`, `repeatInstruction`, `nextWaypoint`, `setCueLevel(CueLevel)`, `help`, `emergency`, `confirm(Bool)`. Tests add `ivrRuleRunsBeforeEverythingElse`, `stopPhrasesStillStopBehindRuleZero`, `howFarHaveIWalkedIsTheDistanceWalked`.
+- **Rule 0b (Step 62)** is tier 2, `VoiceControlGrammar.match` → `action(for command:)`. It sits
+  **after** rule 0 and **before** the stop rule, which is only safe because "stop" is deliberately not
+  one of the grammar's off-verbs (`controlGrammarRunsAfterTheMenuAndBeforeStop`,
+  `stopIsNotAControlPhrase`); it is ahead of rules 2–5b so the tight whole-utterance forms win over
+  their looser `contains` matching, and those looser rules still catch the phrasings tier 2 refuses
+  ("please turn off the drop off warnings" — `theOlderSettingsRulesStillWork`). ⚠ `action(for:)` maps
+  eight of the nine features to the **existing** `.updateSetting(option:enabled:)` using
+  `Feature.rawValue` — the same action Siri and the screen already use, so a switch cannot behave
+  differently depending on how it was flipped — and `torch` to `.setTorch(on:)`, because the flashlight
+  has no `HandsFreeOption`. Tier-2 `ConversationAction` cases: `setCuePlace(CuePlace)`, `readSettings`,
+  `listCommands`, `readMedicalID`, `setTorch(on:)`, `setVoiceOnlyScreen(Bool)`, `cancelPending`.
 - **`ConversationPrompt` & `ConversationResponseParser`**: Compact telemetry serialization with strict anti-slop rules (< 25 words, no pleasantries) and `CloudSceneGate` safety filters stripping false "all clear" reassurance. Tests: `ConversationLogicTests.swift`.
 
 ### `CloudSchema.swift` — the Supabase wire schema and the batching numbers (Step 45)
@@ -632,7 +643,80 @@ Tests: `CloudSchemaTests.swift` (18).
 
 ### `VoiceMenu.swift` — the voice shell's eight words (Step 56)
 
-`public enum VoiceMenu` (pure, nonisolated). `enum Item: String, CaseIterable` — `route`, `whereAmI`, `describe`, `status`, `repeatLast`, `quiet`, `help`, `emergency` (raw value = `conv_turn.ivr`); `word(_:)` ("route" … "emergency"), `digit(_:)` (1…8 in that order), `digitWord(_:)` ("one" … "eight"); `menuLine` = "Say route, where am I, describe, status, repeat, quiet, help, or emergency." (pinned byte for byte); `helpLine` = "One, route. Two, where am I. … Eight, emergency. Or say stop to end the route." (built from the items); `Item.confirmationLine` (short cached line per item; `quiet` reuses `CueLevel.quiet.spokenLine`, `help` is `helpLine`, `emergency` is `EmergencyConfirm.noContactLine`); `match(_:) -> Item?` (whole utterance after `normalize` — lower-case, punctuation dropped, whitespace collapsed; words, digit words, numerals, a few narrow aliases; **no homophones**: "won", "to", "for" are nil); `enum Verb { next, standard, detailed }` + `extraVerbs` table + `verb(_:)`; `confirmation(_:) -> Bool?` (yes / yeah / yep / confirm … → true; no / nope / cancel / don't call … → false). "stop" is deliberately in none of the tables (it stays the classifier's exact-phrase rule 1). Callers: `FastPathIntentClassifier` rule 0, `ConversationCoordinator`, `SpokenPhrases.shellLines`. Tests: `VoiceMenuTests` (9).
+`public enum VoiceMenu` (pure, nonisolated). `enum Item: String, CaseIterable` — `route`, `whereAmI`, `describe`, `status`, `repeatLast`, `quiet`, `help`, `emergency` (raw value = `conv_turn.ivr`); `word(_:)` ("route" … "emergency"), `digit(_:)` (1…8 in that order), `digitWord(_:)` ("one" … "eight"); `menuLine` = "Say route, where am I, describe, status, repeat, quiet, help, or emergency." (pinned byte for byte); `helpLine` = "One, route. Two, where am I. … Eight, emergency. Or say stop to end the route, or what can I say for more." (built from the items; the tail names tier 2); `Item.confirmationLine` (short cached line per item; `quiet` reuses `CueLevel.quiet.spokenLine`, `help` is `helpLine`, `emergency` is `EmergencyConfirm.noContactLine`); `match(_:) -> Item?` (whole utterance after `normalize` — lower-case, punctuation dropped, whitespace collapsed; words, digit words, numerals, a few narrow aliases; **no homophones**: "won", "to", "for" are nil); `enum Verb { next, standard, detailed }` + `extraVerbs` table + `verb(_:)`; `confirmation(_:) -> Bool?` (yes / yeah / yep / confirm … → true; no / nope / cancel / don't call … → false). "stop" is deliberately in none of the tables (it stays the classifier's exact-phrase rule 1). Callers: `FastPathIntentClassifier` rule 0, `ConversationCoordinator`, `SpokenPhrases.shellLines`. Tests: `VoiceMenuTests` (9).
+
+### `VoiceControlGrammar.swift` — tier 2 of the voice shell: every switch, spoken (Step 62)
+
+`public enum VoiceControlGrammar` (pure, nonisolated). Everything a walker can say that is **not** one
+of `VoiceMenu`'s eight words: the nine feature switches, the cue level and place, the flashlight, the
+two read-backs and cancel. Why the tier split, rather than more menu items: the eight words are what
+you need *while moving* and are spoken at launch; this is what you set up *while standing*, and mixing
+thirty settings phrasings into that list would dilute the thing a walker has to remember
+(docs/UX.md §4.2).
+
+- `enum Command: Equatable` — `setFeature(Feature, on:)`, `setCueLevel(CueLevel)`,
+  `setCuePlace(CuePlace)`, `readSettings`, `listCommands`, `readMedicalID`, `setVoiceOnlyScreen(Bool)`,
+  `cancel`.
+- `enum Feature: String, CaseIterable` — `dropOffs`, `signs`, `hazardWatch`, `namePeople`,
+  `obstacleNames`, `beacon`, `sirens`, `nodToTalk`, `torch`. ⚠ **Raw values are `HandsFreeOption`'s raw
+  values** so Siri, the trip log's `option_set.option` and this grammar name the same thing;
+  `torch` is the one case with no `HandsFreeOption` (a device state, never persisted). `spokenName`
+  (matches `HandsFreeOption.spokenName` word for word), `listName` (same, de-capitalised, for the
+  read-back's lists), `nouns` (the narrow alias list per feature).
+- `match(_:) -> Command?` — whole utterance after `VoiceMenu.normalize`, never `contains`. Fixed-set
+  lookups first (read-backs, cancel, **the layout forms**, level, place), then the feature parser.
+- `listLine` (what "what can I say" reads — shapes, not every alias), `cancelledLine`,
+  `medicalUnavailableLine`, `fixedLines` (all prefetched via `SpokenPhrases.shellLines`).
+
+⚠ **A false hit acts.** Four of the nine are warning channels, so an accidental "off" costs a warning
+the walker was relying on: a feature always needs an explicit on/off word beside its noun ("turn on
+signs", never a bare "signs" — a bare noun is what a walker says when *asking about* something).
+⚠ **The safety floor is not in this file**: no utterance can turn off "Head height.", the `.head`
+haptic or the ground-hazard warning path (docs/UX.md rule 7).
+⚠ **"stop" is not an off-verb**, deliberately — it stays `FastPathIntentClassifier` rule 1, so "stop
+the beacon" can never be confused with ending a route (`stopIsNotAControlPhrase`).
+Callers: `FastPathIntentClassifier` rule 0b (after the menu, before the stop rule),
+`ConversationCoordinator.executeAction`, `SettingsPage`'s "What can I say" button,
+`SpokenPhrases.shellLines`. Tests: `VoiceControlGrammarTests`.
+
+### `SpokenSettingsReport.swift` — "read my settings", so the Settings screen is optional (Step 62)
+
+`public enum SpokenSettingsReport` (pure). `struct Snapshot` (cue `level`, `place`,
+`hapticsSilenced`, `voiceOnly`, `features: [VoiceControlGrammar.Feature: Bool]`) and `line(_:) -> String`, which
+reads the two safety-relevant things first (level × place, then haptics and whether the voice-only
+screen is on) and then groups the switches
+as "On: …" / "Off: …" rather than reading nine sentences — one nine-item read-back is already at the
+edge of the auditory budget (docs/auditory-load.md). `fixedLines` is the safety-floor clause every
+report ends with; the report itself is built per call and therefore **cannot** be prefetched, which is
+why it is spoken at `.scene` where a cache miss costs a 2.5 s race and never a warning.
+Fed by `AppModel.settingsSnapshot`, whose feature loop is an **exhaustive switch** over `Feature` — the
+compile-time guard that a feature added to the grammar cannot ship with the read-back silently
+reporting it as off. Tests: `VoiceControlGrammarTests` (`SpokenSettingsReport` suite).
+
+### `GuideLayout.swift` — which controls the screen shows at all (Step 62)
+
+`public enum GuideLayout: String, CaseIterable` — `full` (today's four tabs and every button) and
+`voiceOnly` (the microphone, the instruction, the last answer). `showsSituationalButtons`,
+`showsStopRoute`, `showsSecondaryControls`, `showsStatusPills`, `showsTabBar`, `showsEscapeButton`;
+`switchTitle` "Voice-only screen" and `escapeButtonTitle` "Show buttons" (both UI-test contracts);
+`spokenLine` per case, `spokenLines`, `escapePhrase` "full screen".
+
+⚠ **Two things survive voice-only, and both are safety rather than compromise.** `showsStopRoute` is
+true in **both** modes — ending guidance must never depend on a recogniser working. `showsEscapeButton`
+is the non-voice way out of the mode, for the same reason: voice-only hides the tab bar and the
+Settings switch with it, so without a button the only exit is the phrase "full screen", and every
+reason the voice path fails (wind, traffic, a sore throat, a microphone the OS handed to another app)
+is a reason the walker wants out. A mode whose only escape depends on the component most likely to
+have failed is a trap. Pinned by `stopRouteSurvivesVoiceOnly` and `voiceOnlyModeHasANonVoiceWayOut`;
+do not collapse `showsStopRoute` / `showsEscapeButton` into `showsSituationalButtons`.
+⚠ **Ships `full`** (`AGENTS.md` → "Safety beats features"): the mode is a real answer to docs/UX.md §1,
+but "the walker can no longer reach Recenter with a finger" needs a walk on the mounted cane first.
+Owner: `AppModel.guideLayout` (from `Settings.bool("voiceOnlyScreen")`, default false); read by
+`GuideCard`, `ContentView` (the tab bar **and** `shownTab`, which forces the Guide so the walker is
+never left on a Settings page with no tab bar under it; entering the mode also pins `tab` to
+`.guide`, so Show buttons / "full screen" land on Guide rather than restoring Settings) and
+`SettingsPage`'s Voice card.
+Tests: `GuideLayoutTests`.
 
 ### `ConversationBudget.swift` — a cloud turn's latency budget; latest wins (Step 57)
 
@@ -1071,6 +1155,7 @@ Each is a stored `var` initialised from `Settings.bool(key, default:)` (persiste
 | `familyContactsRegistered` | `false` (`private(set)`) | set once the bot accepted a contact list; drives `send_test` |
 | `highFrameRateCamera` | `false` (heat untested over a long walk) | `depth.setHighFrameRate(_:)` (re-runs the AR session; user changes are refused while a route starts/guides, thermal changes are deferred); also read by `HazardsCard` for the live-view rate. Mount card "60 fps camera (warmer)" |
 | `autoTorchInDark` | **`true`** (Step 49 — the deliberate exception to "ships off": a blind walker cannot see the dark; AGENTS.md deliberate list) | read by `lowLightAct`; Mount card "Flashlight on in the dark (routes)". Not yet in `cloudSettings` (schema change, todo) |
+| `voiceOnlyScreen` | **`false`** (Step 62 — ships off until walked on the mounted cane) | `guideLayout` (`GuideLayout.voiceOnly` when true). Settings → Voice "Voice-only screen"; spoken via `GuideLayout.spokenLine` at `.nav`; logged `guide_layout {layout, by}`. The views ask `guideLayout`, never the Bool. `settingsSnapshot` / `speakSettingsReport()` feed `SpokenSettingsReport` |
 
 **Not persisted** (off at every launch): `liveViewEnabled` (HazardsCard "Live camera view"; the card renders `LiveCameraView` from `depth.arSession`, no JPEG polling), `bothCamerasEnabled`, `dangerSoundsEnabled`, `nodToTalkEnabled`, `faceHeadTrackingEnabled` (no longer persisted — `LaunchRecovery.optionalFeatureKeys` still clears the key an older build left on disk), `torchEnabled`, and the simulator-only `isSimulatingWalk` / `simulationSpeedMps` (1.4 m/s).
 
@@ -2697,7 +2782,7 @@ Purpose: a blind walker with one hand on the cane asks for things by voice — s
 - `@MainActor @Observable final class ConversationCoordinator` — `init(appModel:client:)` (called once from `AppModel.init`, after every stored property is set; `appModel` is **weak** and re-read per call — a query may outlive a torn-down model across the network await); published `private(set) var history = ConversationHistory()` (last 6 turns, every path appends one; the last 3 go to the model as `[RECENT DIALOGUE]`; in memory only), `var markers: [WalkMarker] { store.markers }`, `let store = PostStore()`, `private(set) var isProcessing` (one query at a time; GuideCard "Thinking…"), `private(set) var lastResponse: String?`; private `client: any VLMClient` (the same client as the describer), `minimalJPEG`.
 - Private: `executeAction(_:) -> (response, alreadySpoken)`, `executeTool(_:) -> Bool`, `dropPost(name:)` (→ `store.append`, logs `marker_dropped` with `store.lastError`), `buildContext() -> ConversationContext`, `currentStatusFacts() -> StatusFacts`.
 - Every answer is spoken at `.scene` (lowest band) in the one natural voice (Step 54: cached → at once, else the 2.5 s race; `immediate: true` removed from all five call sites, "One moment." and the fallback included). Effects that announce themselves (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) are not echoed (double-speak). Every turn is logged: `conv_turn` / `conv_error` / `marker_dropped`. The JPEG is encoded in a detached task.
-- Voice shell (Steps 56, 57, 59): rule-0 actions map to `AppModel.startDemoRoute` ("route"; while navigating the route clause instead), `describeScene(trigger: .voice)` ("Looking." / the describer's busy line), `speakStatus`, `repeatInstruction`, `nextWaypoint`, `setCueLevel` (confirms an unchanged level itself), `VoiceMenu.helpLine`; `conv_turn.ivr` names the item. **Latest wins**: `handleQuery` no longer drops a query while `isProcessing` — it calls `supersedeCloudTurn()` (`budget.cancel()`, cancels `cloudTask` / `tickerTask`); the cloud path runs `runCloudTurn(id:…)` under `budget.begin` with `runBudgetTicker` every 0.25 s ("One moment." at 1.5 s, `.scene` ttl 3; at 4 s cancel + `ConversationBudget.timeoutLine` + `conv_error {timeout: true}`); a completion speaks only if `budget.finished(id:)`, else `logStaleTurn` writes `conv_turn {superseded | timed_out, budget_ms, filler_spoken}`. `isProcessing` is cleared only by the latest call (`queryGeneration`). **Emergency**: `EmergencyConfirm` instance; `.emergency` speaks the prompt (`.nav`, ttl 8) and `scheduleEmergencyExpiry()` ("Emergency canceled." after 8.1 s with no answer); `.confirm(true)` inside the window logs `emergency {action: confirmed, contact}` (name, never the number), `logger.flush()`, then `UIApplication.shared.open(tel:)`; `awaitingEmergencyAnswer` for the shell's answer window.
+- Voice shell (Steps 56, 57, 59, 61): rule-0 actions map to `AppModel.startDemoRoute` ("route"; while navigating the route clause instead), `describeScene(trigger: .voice)` ("Looking." / the describer's busy line), `speakStatus`, `repeatInstruction`, `nextWaypoint`, `setCueLevel` (confirms an unchanged level itself), `VoiceMenu.helpLine`; `conv_turn.ivr` names the item. **Tier 2 (rule 0b):** `setCuePlace`, `readSettings` (`SpokenSettingsReport.line`), `listCommands` (`VoiceControlGrammar.listLine`), `readMedicalID` (`MedicalProfileStore.spokenSummary`), `setTorch` (`alreadySpoken: true` — KVO speaks the confirmation), `setVoiceOnlyScreen` (`GuideLayout.spokenLine` via the `didSet`), `cancelPending`. **Latest wins**: `handleQuery` no longer drops a query while `isProcessing` — it calls `supersedeCloudTurn()` (`budget.cancel()`, cancels `cloudTask` / `tickerTask`); the cloud path runs `runCloudTurn(id:…)` under `budget.begin` with `runBudgetTicker` every 0.25 s ("One moment." at 1.5 s, `.scene` ttl 3; at 4 s cancel + `ConversationBudget.timeoutLine` + `conv_error {timeout: true}`); a completion speaks only if `budget.finished(id:)`, else `logStaleTurn` writes `conv_turn {superseded | timed_out, budget_ms, filler_spoken}`. `isProcessing` is cleared only by the latest call (`queryGeneration`). **Emergency**: `EmergencyConfirm` instance; `.emergency` speaks the prompt (`.nav`, ttl 8) and `scheduleEmergencyExpiry()` ("Emergency canceled." after 8.1 s with no answer); `.confirm(true)` inside the window logs `emergency {action: confirmed, contact}` (name, never the number), `logger.flush()`, then `UIApplication.shared.open(tel:)`; `awaitingEmergencyAnswer` for the shell's answer window.
 - Callers: `AppModel`'s `voiceInput.onTranscriptionFinalized` (push-to-talk, head nod) and `AppModel.handleSpokenQuery` (`TalkToOpenCaneIntent` with a filled query). Tests: `ConversationLogicTests` (classifier, parser, history ring, `sceneQuestionDetection`, `walkMarkerJSONRoundTrip`), `NodToTalkFastPathTests`; the class itself is device-tested (CHANGELOG Step 23).
 
 ### `ios/CaneKit/Conversation/VoiceInputEngine.swift` — push-to-talk speech-to-text
@@ -2980,7 +3065,7 @@ Purpose: persistence and telemetry bridge for emergency Medical ID card and mobi
 
 - `public struct CKMedicalProfile: Codable, Sendable, Equatable` — user identity, emergency notes, date of birth, blood type, height, weight, allergies, medications, home address, a **single** emergency contact (`emergencyContactName` / `emergencyContactPhone` / `emergencyContactRelation`), cane specification, organ donor status. Defaulted to `CKMedicalProfile.standardDefault`.
 - `struct CKMobilityStats: Sendable, Equatable` — today's steps, distance in meters, active duration, completed trips count, average walking pace.
-- `@MainActor @Observable public final class MedicalProfileStore` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` and the completed-trip count under `"opencane_completed_trips_count"` in `UserDefaults.standard`; `public private(set) var isFetchingPedometer` is true while a `CMPedometer` query is in flight; `save()`, `recordCompletedTrip()`, `refreshMobilityStats()`, private `triggerSync()`. Fresh defaults are privacy-safe (`Not set`, blank contact, no DOB/address/phone); initialization only preserves a profile the user saved and clears the old seeded 555 placeholder. The saved profile is mirrored to `medical_profiles` only after the explicit Profile privacy switch is enabled; disabling it cancels future writes (existing remote rows are not implicitly deleted). ⚠ The **mobility** numbers are local-only since Step 60 — `CloudSync.saveMobility` is a no-op seam and `mobility_days` is gone from the live project. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
+- `@MainActor @Observable public final class MedicalProfileStore` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` and the completed-trip count under `"opencane_completed_trips_count"` in `UserDefaults.standard`; `public private(set) var isFetchingPedometer` is true while a `CMPedometer` query is in flight; `save()`, `recordCompletedTrip()`, `refreshMobilityStats()`, `spokenSummary` (Step 62: the one Medical ID paragraph both the Profile "Announce Medical ID" button and the "read my medical ID" voice command read; **nil** when `name` is still the privacy-safe default), private `triggerSync()`. Fresh defaults are privacy-safe (`Not set`, blank contact, no DOB/address/phone); initialization only preserves a profile the user saved and clears the old seeded 555 placeholder. The saved profile is mirrored to `medical_profiles` only after the explicit Profile privacy switch is enabled; disabling it cancels future writes (existing remote rows are not implicitly deleted). ⚠ The **mobility** numbers are local-only since Step 60 — `CloudSync.saveMobility` is a no-op seam and `mobility_days` is gone from the live project. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
 
 ---
 

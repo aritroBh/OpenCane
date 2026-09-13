@@ -1,7 +1,7 @@
 # UX.md — why OpenCane's interface is a conversation, not a screen
 
 Status: **design spec, written 2026-09-13.** It is the argument and the rules for the voice-first
-UX; `CHANGELOG.md` Step 61 and the `ux/voice-first` branch are the first implementation of §4.
+UX; `CHANGELOG.md` Step 62 and the `ux/voice-first` branch are the first implementation of §4.
 Numbers marked **[H]** are hypotheses, not measurements — the standing rule in this repo is that a
 cue number may only be tuned from a trip log taken on the mounted cane (`AGENTS.md` → "Measure
 first"). Nothing here overrides `AGENTS.md`; where they disagree, `AGENTS.md` wins.

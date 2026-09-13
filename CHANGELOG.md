@@ -2,6 +2,46 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 62 — Voice-first surface: every walker switch is a spoken utterance (Sun Sep 13)
+
+**Why.** The walker is blind and the phone is clamped to a sweeping cane. Eleven Guide buttons and
+ten Sense switches are a VoiceOver scan, not an interface (`docs/UX.md`). Step 56–59 shipped the
+eight-word menu and the giant microphone; this step is the rest of that idea: a second grammar for
+the settings, a spoken read-back that replaces the Settings screen, and a voice-only layout that
+ships off until a mounted walk.
+
+**What changed.**
+- `VoiceControlGrammar` (CaneKitLogic): whole-utterance tier-2 commands — turn on/off each of the
+  nine features (the eight `HandsFreeOption`s + the flashlight), cue level and place, "read my
+  settings", "what can I say", "read my medical ID", voice-only / full screen, cancel. A bare noun
+  is not a command. "stop" is not an off-verb.
+- `SpokenSettingsReport`: one line, safety first (level, place, haptics, voice-only), then on/off
+  groups, then "Head-height warnings are always on."
+- `GuideLayout`: `full` vs `voiceOnly`. Stop route and **Show buttons** survive voice-only on
+  purpose — a mode whose only exit is the recogniser is a trap. Default `.full`.
+- Fast-path rule 0b sits after the eight-word menu and before the stop rule.
+  `ConversationCoordinator` performs the new `ConversationAction`s. Flashlight confirmation is
+  left to KVO (`alreadySpoken: true`) so the walker does not hear "Flashlight on." twice.
+- Guide / Settings UI: Voice card gains **Read my settings**, **What can I say**, **Voice-only
+  screen**. Voice-only hides the tab bar, the arrival card, and every secondary Guide control.
+  Entering the mode pins the selected tab to Guide, so **Show buttons** does not dump the walker
+  back onto Settings.
+- `MedicalProfileStore.spokenSummary` is the one paragraph both the Profile button and the voice
+  command read.
+- Docs: `docs/UX_UPDATE.md` (what shipped), `handsfree.md` §1c, `AGENTS.md` rule 9 labels.
+
+**Deferred, on purpose (not a miss).** Editing the Medical ID or a family contact, and the
+mount / camera / family-alert setup switches, stay helper-only forms. `UX.md` rule 1 is not
+closed; `docs/UX_UPDATE.md` §4 names the gap.
+
+**Verification.** `make test` 798 / 798 in 62 files; `make sim` green; `make uitest` 14 run /
+1 skipped (Street View) / 0 failures, including the two new Voice-card tests. Device walk of the
+grammar is still owed. `graphify` is not on this PATH; the knowledge graph was not refreshed.
+
+test on device: say "what can I say", then "read my settings"; say "turn off the beacon" and hear
+the consequence; say "voice only", confirm the tab bar is gone and Stop route is still there if a
+route is guiding, then say "full screen" (or tap Show buttons). A quiet room must not tune this.
+
 ## Step 61 — First launch in Apple's voice: the ElevenLabs account is out of credit; a refused key is now one voice, not two (Sun Sep 13)
 
 **Why.** Owner: "when I restarted and started up for the first time it's still using the Apple voice."
