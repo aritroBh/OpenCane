@@ -490,6 +490,7 @@ While a route runs                                  Idle (before a route / after
 - **The voice tile (Step 58, owner decision 2026-09-13)**: a giant round microphone in the middle of the page inside ~40 thin, hand-drawn-looking concentric contour rings (a `Canvas`, seeded per-ring noise — the same drawing every launch). The whole ring square, at least 60 % of the page height, is one button → `toggleVoiceInput()`; a thumb anywhere near the middle of the phone talks. Rings **ripple outward while listening**, **breathe while the app speaks**, and are **still when idle**; Reduce Motion keeps them still. Disc: `accent` (ink / ivory), `danger` while listening or starting. VoiceOver sees one button ("Talk to OpenCane" / "Listening…" / "Starting…" / "Thinking…"). Under it one status line: the assistant's last answer, or "Say route, where am I, or help." before the first.
 - **The compact row, directly under the tile**: idle → Where am I | Start route to CIF; navigating → Repeat | Next | Stop route. Tiles (`CKBigButton(layout: .tile)`), one `HStack` fixed vertically so they are one shape. **This is the one exception to "never more than two per row"**: tiles wrap "Stop route" onto two lines instead of hyphenating, and a sighted spotter needs Stop reachable without scrolling now that the microphone owns the top of the page. Trade-off, accepted: Stop sits beside Next (Guided Access on the walk).
 - **Below the fold**, labels unchanged (hard rule 9; the UI tests `scrollTo` them): navigating → Recenter, the beacon / head pills, Simulate walk / Stop simulation; idle → Repeat (after arrival only), Cancel route start (while waiting), Navigate to CIF from here, Simulate walk, the route-start status, the destination field. Route buttons are full-width rows with a subtitle (Step 46).
+- **Indoor state (Step 62)**, while an indoor step script is walked (`AppModel.indoor.isActive`): the instruction line is the current indoor step's `say`; directly under it a plain status line **"Indoors · step 3 of 5"** ("Indoors · at the exit" once the last step is done); the compact row is the navigating one, **Repeat | Next | Stop route** with the same labels (hard rule 9) acting on the indoor step; no distance row, beacon, Recenter or route picker; below the fold only **Simulate walk** / **Stop simulation** (synthetic steps). After the GPS handover the card is the ordinary navigating card of the outdoor route.
 - The Talk tile of Step 47 is gone (the microphone replaces it); Where am I is in the idle compact row, and by voice ("where am I") in both states.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
@@ -667,7 +668,7 @@ the walk). **Not built**: the checkmark hero, "Describe where I am" and "Done" b
 ### 6.5 Settings and debug cards
 
 Three pages hold the controls. **Settings** (`ContentView.SettingsPage`) is, top to bottom: **Cues**
-(two segmented pickers), **Haptics**, **Watch**, **Mount**, **Family alerts** (Step 39), **This phone**.
+(two segmented pickers), **Haptics**, **Voice**, **Watch**, **Mount**, **Family alerts** (Step 39), **Record indoor route** (Step 62), **This phone**.
 **Sense** carries the **Hazards** card (`HazardsCard`) under the status card, the Scene engine card and
 the Obstacles grid. **Profile** holds the Medical ID editor and the mobility refresh (§6.8). Every switch is a system
 `Toggle` (visible label = VoiceOver label, plus a hint; VoiceOver announces "switch button, on / off"
@@ -705,6 +706,13 @@ there — `AppModel` doc comments). Separately, after a launch that never report
 | Family alerts (Settings) | "Add AI context" | **on**, persisted `familyAlertsAIContext`; **disabled** without a model key (grey caption "No model key, so alerts carry facts only."; with one, "Context written by <model>.") | "A small model writes one sentence of context for your family from what the phone knew. The facts are sent either way." |
 | Family alerts (Settings) | "Send test event" (`CKBigButton`, secondary) | works while the switch is **off** (checking the wiring is the point); one press per 10 s (`ActionRateLimit`, refusal spoken "Just a moment. Try again in N seconds.", §5.1) | "Posts one sample fall event to the Grok Bot routine and reports what it answered". The line under it is the last answer, read as "Last family alert: <status>" |
 | Family alerts (Settings) | **Family emails** (`FamilyContactsEditor`): header, one row per address with a trash button, an add field + "+", an error line, "Save family emails" (`CKBigButton`) | list persisted `familyContactEmails` (`FamilyContacts.normalize`: trim / lowercase / dedupe / cap 10); Save is **primary** while an edit is unregistered (caption "Not registered yet — press Save."), otherwise secondary; disabled without the webhook key; one Save per 10 s | Header reads "Family emails, none yet" / "Family emails, N on the list"; field "Family email", hint "Type an address, then Add. Press Save to register the list."; "Add", hint "Adds the typed address to the list" (disabled until something is typed; no fake address as placeholder); each row's button is "Remove <address>" so four rows never read as four identical "Remove"s; Save's hint "Registers the list with the OpenCane Grok Bot, which emails your family when the cane reports a fall or SOS" |
+| Record indoor route (Settings, Step 62) | "Route id" (`TextField`) | `isr_townsend_to_front_doors`, **not persisted** (the id that replaces the ISR draft) | "The file name; the ISR id replaces the floor-plan draft" |
+| Record indoor route (Settings) | "Start recording" (`CKBigButton`, secondary) | disabled while an indoor route is walked; spoken "Recording started. Walk to the exit door. Tap Add landmark to name what you pass." | "Counts steps and turns until you finish at the exit" |
+| Record indoor route (Settings) | "Add landmark" (secondary, while recording) | disabled after Finish or while a landmark is awaited; the next transcript within 20 s becomes the landmark, spoken "Landmark added: <text>" | "Listens once; what you say is attached to the current step" |
+| Record indoor route (Settings) | "Finish at the exit" (secondary, while recording) | value "reading GPS" during the up-to-8 s window; spoken "Hold still at the exit door for a few seconds." then "Exit recorded. N steps. Tap Save." | "Stand just outside the exit door; takes up to 8 seconds of GPS" |
+| Record indoor route (Settings) | "Save" (primary, while recording) | enabled after Finish; writes Documents/indoor/<id>.json (walked), spoken "Indoor route saved. N steps." | "Saves the walk as route <id>" |
+| Record indoor route (Settings) | "Cancel recording" (destructive, while recording) | spoken "Recording canceled." | "Discards this recording" |
+| Record indoor route (Settings) | "Start indoor route" (secondary, idle) | disabled while indoors, navigating or a route start waits; walks the ISR script to the CIF route. Under it the catalog line "Indoor routes: <name> (not walked yet)". The card's last line is the last recording status. None of these labels is in the UI-test contract | "Walks the saved ISR indoor route, then the route to CIF" |
 
 ⚠ **Wording contract for the Family alerts card** (`SettingsPage.familyAlertsCard` and
 `FamilyContactsEditor` headers, not decoration): an HTTP 200 from the webhook means the Grok Bot
@@ -806,69 +814,102 @@ wrist-down. **Not built**: the two-page `TabView`, the TRUSTED pill and the "cro
 
 ### 6.7 Live Activity / Dynamic Island
 
-Redesigned in Step 47 from the first automated pictures of the island (`make island` →
-`ios/build/shots/NN-island-*.png`, `CaneKitIslandTour`). Before them, every change to the widget
-had been verified by a person looking at a phone, and the owner reported it "weird" three times.
+Redesigned twice from automated pictures of the island (`make island` → `NN-island-*.png`,
+`CaneKitIslandTour`): Step 47 fixed the layout; **Step 64** gave it an identity, phases and an honest
+sensing fact after the owner said "the island looks kind of bad… just a location icon thing" and the
+audit found a safety bug — a green "Path clear" on the lock screen while depth was paused.
+
+**States (Step 64).** One activity per walk, from the warm-up to a closing card. `IslandPhasePolicy`
+(CaneKitLogic) decides the phase with the priority listening > thinking > warming > indoor > walking;
+arrived / stopped are set by `LiveActivityController.end`. Obstacle alerts are not a phase: they ride
+on top as `alertLevel` and win the keyline tint and the relevance score.
 
 ```
+                compact leading          compact trailing       minimal        expanded bottom
+WARMING         ◎ ⏳ 0:04                ◔ (ring)               ◎ ivory        "Obstacle detection warming up"
+WALKING live    ◎ ↱ 42 m                 ◕ ✓ (green only live)  ◎ ivory        instruction ≤ 3 lines
+                                                                               [● Path clear] ▬▬○── 3 of 6
+WALKING locked  ◎ ↑ 120 m                ◕ ⏸ (amber)            ◎ amber        [⏸ Obstacles paused — unlock]
+ALERT stop/head ◎ ↑ 42 m                 ⚠ HEAD / ✋ STOP (red)   ◎ red          [⚠ Head height 0.8 m] (red keyline)
+INDOOR          ◎ ↰ 3/5                  ◔ (ring)               ◎ ivory        "Step 3 of 5" + the step's line
+LISTENING       ◎ ≋                      Listening (blue)       ◎ blue
+THINKING        ◎ …                      Thinking (blue)        ◎ blue
+ARRIVED         ◎ ⚑                      Arrived (green)        ◎ green        60 s on the lock screen
+STOPPED         ◎ ⏹                      Stopped                ◎ ivory        "Route stopped", 10 s
+
+Expanded
+  leading  : ◎ mark + phase / manoeuvre glyph (26 pt) over its caption ("Turn right", "Warming up", "Indoors")
+  trailing : distance 28 pt rounded heavy, tabular (warming: countdown; indoor: 3/5; arrived: seal)
+             over "to next · ±5m GPS" / "to start" / "indoor step" / "No update"
+  bottom   : instruction .subheadline ≤ 3 lines at ≥ 85 % scale; one row: glance pill · progress bar ·
+             "3 of 6" (or the route name when the count is unknown), `.numericText()` transitions
+
 Lock screen / banner
-┌────────────────────────────────────────────────────────────────┐
-│ ↱        Goodwin Avenue. Intersection. Turn right…        120 m │  glyph 30 pt bold over its word ("Turn right");
-│ Turn     ● Obstacle 1.2 m   ISR Townsend Hall to CIF    to next │  instruction .headline ≤ 2 lines; glance pill + route
-│ right                                                            │  name; distance 28 pt rounded heavy, tabular, "to next"
-└────────────────────────────────────────────────────────────────┘
-Dynamic Island
-  expanded : leading = glyph + word · trailing = distance + "to next · ±5m GPS" · bottom = instruction (full
-             width, 2 lines) then one row: [glance pill] + the route progress bar filling the rest; the GPS fact is the trailing caption ("to next · ±5m GPS")
-  compact  : leading = glyph + distance · trailing = glance glyph only when clear, glyph + metres /
-             HEAD / CURB when not
-  minimal  : the glance glyph when not clear, else the manoeuvre glyph — never the distance
+┌──────────────────────────────────────────────────────────────┐
+│ ◎ OpenCane · ISR Townsend Hall to CIF          ● LiDAR live  │   sensing badge: LiDAR live / Sensing paused /
+│ ↱   At the corner turn right onto Goodwin…          42 m     │   Sensing unknown / Warming up / No update
+│     …                                             to next    │
+│ [● Path clear]  ▬▬▬▬▬○──────────────              3 of 6     │
+└──────────────────────────────────────────────────────────────┘
+StandBy (isActivityFullscreen): giant glyph · 56 pt figure · glance word · mark, level colour band along the bottom
+Watch Smart Stack / CarPlay (.supplementalActivityFamilies([.small])): mark + glyph + figure over the glance word
 ```
 
-- **OpenCane owns the island, like Apple Maps / Google Maps — which needs Always location.** On
-  When-In-Use authorization a route that runs with the screen locked needs a
-  `CLBackgroundActivitySession`, and iOS then draws its blue location pill *in* the island and
-  demotes the Live Activity to the minimal bubble (owner's phone, 2026-09-12 21:48: a blue arrow in
-  the pill, our head-height glance in a detached circle — "why is the blue location thing the
-  main thing"). The first route start now asks for Always
-  (`LocationService.requestAlwaysAuthorization`, `NSLocationAlwaysAndWhenInUseUsageDescription`);
-  with Always no session is armed (`reconcileBackgroundSession`), no pill is drawn, and the compact
-  island is ours. A walker who declines keeps the session (GPS survives the lock) and the pill.
-  Trip log: `location_auth {status, background_session}` at route start and on every change.
+- **⚠ Never green unless sensing is live.** `ContentState.sensing` is `live | paused | none` (default
+  `none`, decoded leniently). The widget draws "Path clear" / the green check only when
+  `sensing == .live` and the activity is not stale (`NavIslandSensing.showsClear`, mirroring
+  `IslandPhasePolicy.showsClear`, pinned by `showsClearOnlyWhenLive`). The app backgrounded with a
+  route or warm-up → `paused` ("Obstacles paused — unlock", amber); no LiDAR, warm-up, untrusted
+  frames or an old payload → `none` ("Sensing unknown"); stale → "No update · sensing unknown". The
+  controller also sends the obstacle fields as clear / 0 whenever sensing is not live, so a stale
+  hazard can never be drawn either.
+- **The brand is on every presentation.** `OpenCaneMark` — four static contour rings from the voice
+  tile's ring math (ios/Shared/Brand/ContourRingGeometry.swift, shared with `ContourRings`) — sits in
+  compact leading, alone in minimal, beside the glyph in expanded and at the top of the lock-screen
+  card. `.keylineTint` and the mark's stroke follow the level: alert tint (orange near / purple curb /
+  red stop or head) > voice blue > arrived green > paused amber > ivory.
+- **Warm-up has a face.** `AppModel.queueRouteStart` requests the activity in `warming` with
+  `warmupEndsAt = now + DepthReadiness.standardConfiguration.timeout`; the countdown is
+  `Text(timerInterval:countsDown:)`, so it ticks with no updates. `startRouteNow` updates that same
+  activity to walking (never a second one); a cancelled warm-up ends it at once. `Activity.request`
+  throws from the background, which is fine: a route start is a foreground action.
+- **Stop leaves a closing card** ("Route stopped", last progress, 10 s); arrival keeps 60 s; a route
+  restart still ends at once (`end(immediate: true)`, Step 20).
+- **Alerts** (`AlertConfiguration`, default sound): only on an escalation (clear → near / curb,
+  near → stop / head), at most one per level per 30 s, never on de-escalation, never while the app is
+  frontmost, reset per route (`IslandAlertThrottle`). A torso obstacle at ≤ 0.6 m is `stop`
+  (`IslandAlertLevel.stopWithinM`). ⚠ Today depth pauses in the background, so sensing is `paused`
+  there and obstacle fields are clear: alerts can only fire while the app is `.inactive` (Notification
+  Center / Control Center pulled over it) with depth still running. The path exists for a future
+  background depth mode; it is not a warning channel the walker relies on.
+- **Relevance** (`relevanceScore`): any alert 100, guidance 75, voice 50, final card 10.
+- **Update rate:** coalesced by `LiveActivityCoalescer` (instruction or glyph change, distance bands
+  2 / 5 / 10 m, hazard transitions at once with a 0.2 s flap guard, 0.8 s floor otherwise); since
+  Step 64 a phase or sensing change also emits at once. The island is a summary, not a gauge.
+- **Stale after 5 minutes** (`LiveActivityCoalescer.staleAfter`): distance dims, "No update".
+- **OpenCane owns the island only with Always location** (Step 47). On When-In-Use a locked route
+  needs `CLBackgroundActivitySession`, and iOS then draws its blue location pill in the island and
+  demotes our activity to the minimal bubble — which is why minimal carries the tinted mark, not a
+  bare SF glyph. `location_auth {status, background_session}` at route start is the evidence. The
+  simulator never draws the pill.
 - **Glyphs never look like the system's location arrow.** Straight = `figure.walk`, turns =
   `arrow.turn.up.left` / `.right`, crossing = `figure.walk.diamond.fill` (yellow), arrived =
-  `flag.checkered` (green). `arrow.up` is retired: two arrows side by side read as one broken icon.
-- **Progress bar** (the Google Maps reference): a thin ivory bar with the walker's dot, waypoints
-  passed over total (`ContentState.progress`, 1 on arrival), under the expanded island's pills and
-  the lock-screen row. The metres countdown is the fine grain; the bar is the whole walk.
-- **The glance says nothing when there is nothing to say.** Clear = one small green check in the
-  compact trailing bubble, no word; the word "Path clear" appears only in the pill of the expanded
-  and lock-screen layouts. Obstacle / head / drop-off get a glyph, a tint (orange / red / purple)
-  and a word or a distance — never colour alone.
-- **The instruction owns the full width.** Expanded bottom region, two lines (a third pushed the pills off the region), `fixedSize`
-  vertical; the leading column holds only the glyph and its word, the trailing column the
-  distance. (Before: the instruction sat in the leading column and truncated to "Leaving
-  Townsend…".) The glance pill has first claim on the pill row (`layoutPriority(1)`); the route
-  name is on the lock screen only — beside the pill in the island it truncated both ("Head heig…",
-  "ISR Tow…ll to CIF").
-- **Stale after 5 minutes** (`LiveActivityCoalescer.staleAfter`, set as `staleDate` on every
-  request and update): the distance dims and the caption reads "No update" — an app killed
-  mid-route leaves an island iOS keeps up for hours, and a frozen "120 m" must not look live.
-- Colours are fixed, not `CKColor`: ink ground (`activityBackgroundTint` ≈ `#171410`) with ivory
-  text (≈ `#F5F2EB`); glance tints ≈ `#4ADE80` / `#FB923C` / `#F87171` / `#BF8CFA`.
-- Update rate: on every GPS fix, coalesced by `LiveActivityCoalescer` (instruction or glyph
-  change, distance bands 2 / 5 / 10 m, hazard transitions at once with a 0.2 s flap guard, 0.8 s
-  floor otherwise). The island is a summary, not a gauge.
-- Ends on arrival with the arrival glyph and a 60 s lock-screen dismissal; Stop ends it immediately (`end(immediate: true)`); the island
-  itself drops an ended activity at once (`04-island-after-stop.png` is empty). `start` ends any
-  previous activity immediately (Step 20) and launch ends orphans (Step 42). Tapping opens the
-  app. No interactive buttons: "Next" from the lock screen is too easy to hit by accident with
-  the phone on a cane.
-- VoiceOver reads one sentence per presentation ("OpenCane, on route ISR Townsend Hall to CIF: in
-  120 meters, turn right. Goodwin Avenue. Path is clear."), never a raw kind — the old
-  "turnLeft" label in §10 is gone.
-- **Not built**: the "14 min left · 820 steps" line; a lock-screen picture in `make island` (no
-  public API locks the simulator from XCUITest).
+  `flag.checkered` (green).
+- **No interactive buttons in the Live Activity**: "Next" / "Stop" on the lock screen is too easy to
+  hit with the phone on a cane. Tapping opens the app (`widgetURL` `opencane://guide`, scheme in
+  `ios/project.yml`).
+- **Idle brand, honestly** (Step 64 extras): no "OpenCane ready — guarding" activity (depth and GPS
+  are off in the background, so it would be false). Instead a Control Center / Lock Screen / Action
+  button control "Talk to OpenCane" (`TalkControl` → `TalkControlIntent`, opens the app listening)
+  and a lock-screen accessory widget with the mark (`OpenCaneAccessoryWidget`, `opencane://talk`).
+- Colours are fixed, not `CKColor`: ink ground ≈ `#171410`, ivory text ≈ `#F5F2EB`; tints clear
+  `#4ADE80`, near `#FB923C`, stop / head `#F87171`, curb `#BF8CFA`, paused `#FCCC4D`, voice `#73B3FF`.
+- VoiceOver reads one sentence per presentation, phase-specific ("OpenCane, on route …: in 120
+  meters, turn right. … Path is clear." / "… obstacle detection warming up. The route starts
+  automatically." / "Obstacle warnings are paused until you unlock."), never a raw kind.
+- **Not built / not pictured**: the "14 min left · 820 steps" line; lock-screen, StandBy and Smart
+  Stack pictures (no public API locks the simulator from XCUITest); warming and arrived pictures
+  (the simulator has no LiDAR, so a route skips the warm-up, and the simulated walk takes ~7 min).
 
 ### 6.8 Profile (Medical ID + Mobility)
 

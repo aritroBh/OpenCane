@@ -1,3 +1,41 @@
+# LIVE TRACKER — Sun Sep 13 (updated as work lands; newest first)
+
+- [x] Step 61 — first launch in Apple's voice: ElevenLabs account has 0 of 10,000 credits (HTTP 401 quota_exceeded); a refused key now keeps the session in one voice (pushed 7b62b0b, on the phone)
+- [ ] **Owner action:** top up ElevenLabs (or a paid key in Secrets.plist), then Settings → Voice → System → Natural
+- [ ] Step 62 — indoor → outdoor guidance (step script + handover, owner decision)
+  - [x] Plan + Muse review (scratchpad plan_indoor.md; Muse: skip ARKit breadcrumbs tonight)
+  - [x] ISR indoor draft `indoor_isr.json` from the Housing 1st-floor plan (walked: false) + docs/route_isr_cif.md "Indoor draft"
+  - [x] Logic: IndoorScript / IndoorProgress / IndoorHandover / IndoorRecorder + "from A to B" + "I'm outside" + ISR alias fix (799 tests green)
+  - [x] App: IndoorGuide (pedometer, speech, handover → CIF route), Guide card, voice actions, recording card in Settings, sim step hook (`make sim` green; simulator walk logged the handover)
+  - [x] Locked phone: keep GPS while indoor is active in background (Step 64 merge) + GPS-only handover (review round)
+  - [ ] Reviews: Muse, OpenCode, Codex, Antigravity → fixes
+  - [ ] Gate: make test / sim / uitest / e2e, install on phone, commit + push
+  - [ ] Owner/teammate: record the real lab → doors walk with the recording mode
+- [ ] Step 64 — Dynamic Island / widgets
+  - [x] Audit (scratchpad island/): activity exists only while a route guides; blue pill was the whenInUse session (Always now granted on the phone); design reads as a system glyph; **safety bug: "Path clear" while locked and depth paused**
+  - [x] Safety: sensing live/paused/none in ContentState; never "clear" unless depth is live (CHANGELOG Step 64)
+  - [x] Phases: warming (countdown), walking, indoor step i/n, listening/thinking, arrived, stopped card; IslandPhasePolicy + IslandAlertThrottle in Logic with tests
+  - [x] Look: OpenCane contour-ring mark, keyline tint, progress ring, expanded layout fixes, StandBy layout, Smart Stack family (StandBy / Smart Stack not pictured — phone)
+  - [x] Alerts: escalation-only AlertConfiguration ≤ 1 per 30 s per level (⚠ can only fire while `.inactive`: depth pauses in the background)
+  - [x] Extras: Control Center "Talk to OpenCane" control + lock-screen accessory widget (device check pending)
+  - [~] make island pictures reviewed (done); Muse / multi-agent / Antigravity reviews, make uitest / e2e, phone — open
+- [x] Device test checklist: docs/test_checklist.md (launch/voice, emergency, obstacles, indoor, recording, outdoor, island, other)
+- [ ] Pull teammate d2b8efb (their "Step 64"; island becomes Step 64) and merge
+- [~] Reviews on the merged Steps 62 + 64: Codex ✅ OpenCode ✅ Antigravity ✅ Muse ✅ → fixes written (CHANGELOG "Steps 62 + 64 review round"; Logic 845 ✅; app code not yet built)
+  - [x] 1 landmark hook lets commands through (`isLandmarkText`)
+  - [x] 2 GPS-only handover (3 × ≤ 10 m within 15 m) + `paused_background` / `resumed` log — [ ] device: locked walk out of the ISR doors
+  - [x] 3 indoor walk requests the Live Activity (`beginIndoor`); outdoor leg reuses it; `endIfIdle`
+  - [x] 4 ActivityKit request serialized behind the end chain (generation fence)
+  - [x] 5 background request deferred → `flushPendingRequest` on `.active`
+  - [x] 6 exit fallback ≤ 30 m and ≤ 20 s old
+  - [x] 7 alert throttle keeps the previous level on a throttled escalation
+  - [x] 8 / Muse M4 "I'm outside" recent fix must be inside the exit radius; why pre-exit fixes count documented
+  - [x] 9 lows (a–e); Muse M3 (every "to B from A" prefix), M8 (stopped figure), M11 (recording refusals)
+  - [x] Rejected with evidence: Muse M6, M9, M10
+  - [ ] make sim / uitest / e2e on the fixes (orchestrator)
+- [ ] Gate after fixes: make test ✅ 845 / sim ✅ / device build + install ✅ / commit + push ✅ / uitest + e2e (running on the final build)
+- [ ] Commit + push after each step; pull teammates' changes first
+
 # CaneKit — strict build checklist
 
 Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested · `[!]` blocked on a person
@@ -916,3 +954,21 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
   - [ ] Device: "Head height." during dictation never becomes the query (`voice_self_hear`); tune `SelfHearFilter.window` / `tailSeconds` from `pause_ms`
   - [ ] Later: cap `prefetchBacklog` if a long outage with many novel answers ever makes it large (unbounded today, grows only by lines actually spoken)
   - [ ] Later: character budget — novel answers and status clauses now consume ElevenLabs characters (10,000 / month free tier); watch the account
+
+## Step 62 — indoor → outdoor (Sun Sep 13; owner decision: step script + handover, recording mode, ISR floor-plan draft)
+
+- [x] Logic: `IndoorRoute.swift` — `IndoorScript` / `IndoorStep` / `IndoorTurn` / `IndoorExit` schema + `load` + `validate` (aliases, steps, counts > 0, say ≤ 140, radius 10–60)
+- [x] Logic: `IndoorProgress` — draft caveat, advance at ceil(0.85·n) on nominal boundaries, landmark once at 0.7·n, `next()`, never backwards, nothing after the exit, a jump ≤ 2 lines
+- [x] Logic: `IndoorHandover` — 3 consecutive fixes ≤ 15 m within the radius after the exit; `forced(now:)` at once with a fix ≤ 30 m within the exit radius in 20 s (review round: was 60 m), else the first fix ≤ 20 m within the radius; GPS-only 3 × ≤ 10 m within 15 m (review round)
+- [x] Logic: `IndoorRecorder` — turn = |Δyaw| ≥ 60° held 1.5 s, ≥ 150° around, landmarks attach, generated says, stride from a measured distance
+- [x] Logic: `FastPathIntentClassifier` rule 13b "from A to B" → `.routeFromTo(from:to:)` ("from here" stays `.startRoute`), rule 1b "I'm outside" → `.indoorOutside`; coordinator placeholder cases
+- [x] Logic: `CampusPlaces` ISR alias "Townsend Hall doors" — every place name round-trips through `match`
+- [x] Tests: `IndoorRouteTests` + `ConversationLogicTests` (3) + `CampusPlacesTests` (1); `swift test` green
+- [x] Data: `ios/CaneKit/Resources/indoor_isr.json` floor-plan draft (`walked: false`, exit = route WP1, radius 25)
+- [x] App: `IndoorGuide` (CMPedometer → `IndoorProgress`, LocationService → `IndoorHandover`, `.nav` ttl 20, `indoor {action, index, steps, walked}` logs, handover → `startDemoRoute` via `beginRoute`), next / repeat / Stop route / status clause, Guide card "Indoors · step N of M"
+- [x] App: `ConversationCoordinator` `.routeFromTo` / `.indoorOutside` wired; `CANEKIT_INDOOR_SIM_STEPS_PER_S` hook
+- [x] App: Settings "Record indoor route" card (Start, Add landmark, Finish at the exit, Save → Documents/indoor/<id>.json)
+- [x] Logic for the app half: `IndoorScriptCatalog`, `IndoorExitAverager`, `IndoorStatus`, `IndoorYawUnwrapper`, `IndoorSimSteps`, `StatusFacts.indoorClause` (11 tests, written first)
+- [x] CHANGELOG Step 62 entry; CODE_REFERENCE, handsfree.md §1c, design.md §6.1 / §6.5
+- [ ] Gate: `make test sim uitest e2e`; reviews (multi-agent + Muse + Antigravity)
+- [ ] Device: record the real lab → front doors with a sighted teammate; walk it with the cane; handover at the ISR doors

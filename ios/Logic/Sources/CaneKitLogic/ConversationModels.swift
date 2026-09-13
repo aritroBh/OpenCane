@@ -405,4 +405,15 @@ public enum ConversationAction: Sendable, Equatable {
     case emergency
     /// "yes" (true) / "no", "cancel" (false): the answer to a pending emergency prompt.
     case confirm(Bool)
+
+    // MARK: Indoor → outdoor (Step 62) — produced by `FastPathIntentClassifier` rules 1b / 13b
+
+    /// "take me from A to B", "from A to B", "go from A to B", "navigate from A to B", "take me to B
+    /// from A": both ends as spoken (case kept, edge punctuation trimmed). The coordinator walks the
+    /// `IndoorScript` whose `fromAliases` match `from`, then the outdoor route to `to`; an unmatched
+    /// `from` is a plain `navigate(to:)`. "from here" never produces this (it is `.startRoute`).
+    case routeFromTo(from: String, to: String)
+    /// "I'm outside" / "we're outside" / "outside now": the walker ends the indoor leg
+    /// (`IndoorHandover.forced(now:)`).
+    case indoorOutside
 }

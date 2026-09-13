@@ -130,6 +130,9 @@ final class AppModel {
     let describer: SceneDescriber
     /// Elapsed / distance / steps for the arrival card (step 9).
     let trip = TripTracker()
+    /// The indoor leg: step script → GPS handover → outdoor route, and the recording mode (Step 62,
+    /// `AppModel+Indoor.swift`). Attached in `start()`.
+    let indoor = IndoorGuide()
     /// Dynamic Island / lock screen (step 9).
     let liveActivity = LiveActivityController()
     /// Medical ID card, emergency profile and mobility fitness tracking (step 43).
@@ -1263,8 +1266,10 @@ final class AppModel {
         Settings.armLaunchMarker()
         observeThermalAndBattery()
         observeLaunchHealth()
+        observeVoiceForIsland()
         logger.start()
         startCloudMirror()
+        liveActivity.onLog = { [weak self] fields in self?.logger.event("live_activity", fields) }
         liveActivity.endAllOrphanedActivities()
         recordDeviceCapabilities()
         speech.onSuppressed = { [weak self] text, load, reason in
@@ -1327,6 +1332,7 @@ final class AppModel {
             logger.event("audio_session", ["state": "startup_failed", "error": audioError])
         }
         wireNavigation()
+        indoor.attach(self)                  // Step 62: indoor scripts (logs the catalog)
         // GPS runs from launch, not from route start. Three reasons, in order of how much they
         // matter: the walker can SEE whether GPS is working before trusting it with a route (the
         // card said "Off", which reads as broken); a first fix takes seconds, so starting a route
@@ -1390,6 +1396,8 @@ final class AppModel {
         voiceInput.onTranscriptionFinalized = { [weak self] transcript in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // Step 62: "Add landmark" while recording takes this one transcript, not the conversation.
+                if self.indoor.takeTranscript(transcript) { self.voiceInput.finishProcessing(); return }
                 // Latest wins (Step 57): the coordinator cancels a cloud turn still in flight.
                 await self.conversation.handleQuery(transcript)
                 self.voiceInput.finishProcessing()
@@ -1631,6 +1639,25 @@ final class AppModel {
     /// concerns from growing into each other. Registered with `queue: .main`, so
     /// `MainActor.assumeIsolated` is sound (AGENTS.md hard rule 1), exactly like
     /// `observeThermalAndBattery`. Caller: `start()`.
+    /// Step 64: mirrors the voice shell into the Live Activity's listening / thinking phase.
+    /// Re-arms itself on every change (`withObservationTracking` fires once). The controller ignores
+    /// it when no activity is running (voice never starts one) and when nothing changed.
+    /// Caller: `start()`.
+    private func observeVoiceForIsland() {
+        guard let voiceInput, let conversation else { return }
+        let listening = withObservationTracking {
+            voiceInput.isListening || voiceInput.isStarting
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeVoiceForIsland() }
+        }
+        let thinking = withObservationTracking {
+            conversation.isProcessing
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeVoiceForIsland() }
+        }
+        liveActivity.setVoicePhase(listening: listening, thinking: thinking)
+    }
+
     private func observeLaunchHealth() {
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
@@ -1792,6 +1819,11 @@ final class AppModel {
             // Put GPS back if the background branch stopped it, so the card never reads "Off" on a
             // screen somebody is looking at. Idempotent when it is already running.
             location.start()
+            // Step 64: foreground again; sensing is unknown until the next GPS fix sees trusted depth.
+            liveActivity.setSensors(appActive: true, depthTrusted: false)
+            // Review round: a Live Activity request made while locked (the indoor handover) runs now.
+            liveActivity.flushPendingRequest()
+            indoor.sceneChanged(active: true)
         case .inactive:
             break
         case .background:
@@ -1816,7 +1848,10 @@ final class AppModel {
             // there is nobody to guide, so holding the receiver on would just drain the battery in
             // a pocket. A running route keeps it: the walk continues with the screen locked, which
             // is the normal way this app is used.
-            if !nav.isNavigating { location.stop() }
+            // Step 62: an indoor step script also keeps GPS, or the indoor → outdoor handover (the
+            // first good fix past the exit) would wait for an unlock.
+            if !nav.isNavigating && !indoor.isActive { location.stop() }
+            indoor.sceneChanged(active: false)   // logs `indoor {action: paused_background}` only
             // The two-camera spotter view must never survive a backgrounding: it would hold both
             // cameras with nothing on screen, and the walker would come back to an app whose
             // obstacle channel is silently off.
@@ -1859,6 +1894,8 @@ final class AppModel {
             faceHead.stop()                  // ARKit pauses: no face anchors, so no head pose
             sceneContext.set("")             // LiDAR facts from here are stale once we come back
             depth.pause()
+            // ⚠ Step 64 safety: the island must say "Obstacles paused — unlock", never "Path clear".
+            liveActivity.setSensors(appActive: false, depthTrusted: false)
             haptics.stopAll()
             decider.reset()
             torsoPolicy.reset()              // its closing / shoreline history is as stale as the zones
@@ -2993,6 +3030,7 @@ final class AppModel {
             FrameReplay.shared.update(position: fix.coordinate)   // simulator Street View e2e only
             self.nav.update(fix: fix)
             self.trip.ingest(fix)
+            self.indoor.ingest(fix)          // Step 62: indoor handover gate + recording exit window
             if self.nav.isNavigating {
                 let rep = self.depth.report
                 let obsStatus: LiveActivityObstacleGlance
@@ -3050,7 +3088,12 @@ final class AppModel {
                     obstacleDistanceM: obsDist,
                     headClearanceM: headM,
                     statusDetail: detail,
-                    progress: progress
+                    progress: progress,
+                    // Step 64: "Path clear" only while depth is running and trusted (and the
+                    // controller adds the scene phase); "3 of 6" in the expanded island.
+                    depthTrusted: self.depth.isRunning && rep.isTrusted,
+                    waypointIndex: self.nav.waypointIndex,
+                    waypointCount: total
                 )
                 // The link dedups (same text and < 5 m change), so this is ~1 message / 5 s.
                 self.pushStatusToWatch()
@@ -3207,6 +3250,7 @@ final class AppModel {
     /// Delegates to `nav.repeatInstruction()`, which speaks the last line actually spoken plus
     /// the distance to the next waypoint, through `onRepeat` (bypasses queue coalescing).
     func repeatInstruction() {
+        if indoorHandlesRepeat() { return }  // Step 62: the indoor step's line while indoors
         nav.repeatInstruction()
         logger.event("repeat")
     }
@@ -3396,6 +3440,7 @@ final class AppModel {
             guard let fix = self.location.fix else {
                 self.routeError = "No GPS fix yet"
                 self.speech.say("No GPS fix yet. Try again outside.", .nav)
+                self.liveActivity.endIfIdle()    // review round: an indoor walk's island must not freeze here
                 return
             }
             do {
@@ -3414,6 +3459,7 @@ final class AppModel {
                 guard isCurrent() else { return }
                 self.routeError = error.localizedDescription
                 self.speech.say("Could not build a route. \(error.localizedDescription)", .nav)
+                self.liveActivity.endIfIdle()    // review round: an indoor walk's island must not freeze here
             }
         }
     }
@@ -3430,6 +3476,7 @@ final class AppModel {
     /// Skip to the next waypoint (`GuideCard` Next, Siri `NextWaypointIntent`, watch Next / crown).
     /// Says "No route running." (`.nav`, 2 s TTL) when idle, like the watch always did.
     func nextWaypoint() {
+        if indoorHandlesNext() { return }    // Step 62: the next indoor step while indoors
         if nav.isNavigating { nav.next() } else { speech.say("No route running.", .nav, ttl: 2) }
     }
 
@@ -3441,6 +3488,7 @@ final class AppModel {
     /// "Route stopped.", logs `route {action: stop}` and pushes the idle status to the watch.
     /// Speaks even with no route running (it doubles as "cancel whatever I asked for").
     func stopRoute() {
+        indoor.stop(reason: "stop_route")    // Step 62: Stop route ends the indoor leg too
         stopSimulatedWalk()
         cancelRouteBuild()
         cancelPendingRouteStart()
@@ -3466,7 +3514,7 @@ final class AppModel {
         head.stop()
         stopTicker()
         Task { [weak self] in await self?.trip.stop() }
-        liveActivity.end(immediate: true)
+        liveActivity.end(stopped: true)      // Step 64: a "Route stopped" card for 10 s, not a vanishing island
         speech.routeLines = []               // and nothing of that route stays on the prefetch list
         speech.say("Route stopped.", .nav)
         logger.event("route", ["action": "stop"])
@@ -3483,6 +3531,7 @@ final class AppModel {
     /// Starts an on-device walk simulation along the active route (or starts the bundled demo route if idle).
     /// Advances synthesized GPS fixes between waypoints at `simulationSpeedMps` (default 1.4 m/s).
     func startSimulatedWalk(speedMps: Double? = nil) {
+        if indoorHandlesSimulate() { return } // Step 62: synthetic steps while indoors
         stopSimulatedWalk()
         simulatedWalkGeneration &+= 1
         let generation = simulatedWalkGeneration
@@ -3559,6 +3608,7 @@ final class AppModel {
 
     /// Stops the in-progress simulated walk.
     func stopSimulatedWalk() {
+        indoor.stopSimulation()              // Step 62
         simulatedWalkGeneration &+= 1
         isSimulatingWalk = false
         simulatedWalkTask?.cancel()
@@ -3734,6 +3784,10 @@ final class AppModel {
         routeError = nil
         speech.say("Obstacle detection warming up. Route will start when it is ready.", .nav, ttl: 8)
         watch.send(status: "Obstacle detection warming up", distanceM: -1)
+        // Step 64: the island shows OpenCane and a countdown while depth warms up (the same
+        // activity becomes the walk in `startRouteNow`; `cancelPendingRouteStart` ends it).
+        liveActivity.beginWarmup(routeName: route.name, line: "Obstacle detection warming up",
+                                 waitSeconds: DepthReadiness.standardConfiguration.timeout)
         logger.event("route_readiness", ["state": "warming", "timeout_s": DepthReadiness.standardConfiguration.timeout,
                                            "required_frames": DepthReadiness.standardConfiguration.requiredFrames])
 
@@ -3872,6 +3926,7 @@ final class AppModel {
         depth.cancelReadiness()
         location.setNavigating(false)
         finishSensorModeRoute()
+        liveActivity.cancelWarmup()          // Step 64: a cancelled warm-up leaves no island behind
         logger.event("route_readiness", ["state": "cancelled"])
     }
 
@@ -3961,7 +4016,10 @@ final class AppModel {
         startTicker()
         trip.start()
         lastNavKind = "straight"
-        liveActivity.start(routeName: route.name, instruction: nav.instruction, distanceM: nav.distanceToNext ?? 0)
+        // Step 64: updates the warming activity in place (same route) or requests one; sensing is
+        // live only with depth running and trusted.
+        liveActivity.start(routeName: route.name, instruction: nav.instruction, distanceM: nav.distanceToNext ?? 0,
+                           depthTrusted: depth.isRunning && depth.report.isTrusted)
         if let err = liveActivity.lastError {
             logger.event("live_activity", ["action": "error", "error": err])
         } else {

@@ -190,6 +190,57 @@ struct ConversationLogicTests {
         #expect(FastPathIntentClassifier.classify(query: "how far to next point") == .answerStatus(aspect: .route))
     }
 
+    /// Step 62: "from A to B" in its five spoken forms is an indoor-then-outdoor route request with
+    /// both ends as said (case kept, punctuation and spaces trimmed); the coordinator matches them.
+    @Test func fromAToBIsARouteFromTo() {
+        #expect(FastPathIntentClassifier.classify(query: "Take me from ISR to CIF.") == .routeFromTo(from: "ISR", to: "CIF"))
+        #expect(FastPathIntentClassifier.classify(query: "from the lab to Grainger") == .routeFromTo(from: "the lab", to: "Grainger"))
+        #expect(FastPathIntentClassifier.classify(query: "go from Townsend Hall to the Illini Union")
+                == .routeFromTo(from: "Townsend Hall", to: "the Illini Union"))
+        #expect(FastPathIntentClassifier.classify(query: "navigate from ISR lab to CIF") == .routeFromTo(from: "ISR lab", to: "CIF"))
+        #expect(FastPathIntentClassifier.classify(query: "take me to CIF from ISR") == .routeFromTo(from: "ISR", to: "CIF"))
+        #expect(FastPathIntentClassifier.classify(query: "take me to the office from the lab")
+                == .routeFromTo(from: "the lab", to: "the office"))
+    }
+
+    /// "from here" is no origin: the plain rule-14 route. Half a request is not one, and a
+    /// "take me to" with no "from" is unchanged.
+    @Test func fromHereOrHalfARouteIsNotARouteFromTo() {
+        #expect(FastPathIntentClassifier.classify(query: "take me to CIF from here") == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "from here to Grainger") == .startRoute(destination: "Grainger Engineering Library"))
+        #expect(FastPathIntentClassifier.classify(query: "from my location to Grainger") == .startRoute(destination: "Grainger Engineering Library"))
+        #expect(FastPathIntentClassifier.classify(query: "from ISR") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "from ISR to") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "take me from ISR") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "take me to CIF") == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "route") == .startDefaultRoute)
+    }
+
+    /// Muse M3: "B from A" works after every rule-14 prefix, not only "take me to" ("navigate to CIF
+    /// from ISR" used to become a MapKit search for "Cif From Isr"); "from here" stays a plain route.
+    @Test func everyDestinationPrefixTakesAFromOrigin() {
+        for prefix in ["take me to", "route to", "navigate to", "go to", "walk to", "set destination to",
+                       "set location to", "change destination to", "set my destination to"] {
+            #expect(FastPathIntentClassifier.classify(query: "\(prefix) CIF from ISR")
+                    == .routeFromTo(from: "ISR", to: "CIF"), "\(prefix)")
+            #expect(FastPathIntentClassifier.classify(query: "\(prefix) CIF from here")
+                    == .startRoute(destination: "the CIF east entrance"), "\(prefix)")
+        }
+        #expect(FastPathIntentClassifier.destinationPrefixes.count == 9)
+    }
+
+    /// Step 62: "I'm outside" (whole utterance, straight or curly apostrophe) is the walker's indoor
+    /// handover; a sentence that merely contains "outside" is not.
+    @Test func imOutsideIsTheIndoorHandover() {
+        for phrase in ["I'm outside", "I’m outside.", "im outside", "I am outside", "we're outside",
+                       "we are outside", "outside now", "I'm outside now"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == .indoorOutside, "\(phrase)")
+        }
+        #expect(FastPathIntentClassifier.classify(query: "outside") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "is it cold outside") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "stop") == .stopRoute)
+    }
+
     @Test("FastPath leaves open-ended and visual queries for LLM")
     func fastPathDelegatesOpenEnded() {
         #expect(FastPathIntentClassifier.classify(query: "what is in front of me") == nil)

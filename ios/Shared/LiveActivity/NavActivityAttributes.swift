@@ -19,6 +19,13 @@
 //    · Wire contract between app and widget extension: uses decodeIfPresent with fallbacks so
 //      new fields never crash a widget running against an older payload format.
 //    · Every `kind` string the app sends must be handled by the widget's glyph switch.
+//    · ⚠ Step 64 safety: `sensing` defaults to `.none` (an old payload, a decode of an unknown value,
+//      or a stale activity) and the widget may draw "Path clear" / the green check ONLY when it is
+//      `.live` and the activity is not stale (`NavIslandSensing.showsClear`, mirroring
+//      `IslandPhasePolicy.showsClear` in CaneKitLogic, pinned by `showsClearOnlyWhenLive`).
+//    · The phase / sensing / alert raw values are the same strings as CaneKitLogic's `IslandPhase`,
+//      `IslandSensing`, `IslandAlertLevel` (the widget cannot link the package, so they are
+//      mirrored here; `LiveActivityController` converts by raw value).
 //
 
 import ActivityKit
@@ -30,6 +37,40 @@ public enum LiveActivityObstacleGlance: String, Codable, Hashable, Sendable {
     case warning
     case head
     case dropOff
+}
+
+/// What the Live Activity is about right now (mirror of CaneKitLogic `IslandPhase`, Step 64).
+/// Decoded leniently: an unknown string is `.walking`.
+public enum NavIslandPhase: String, Codable, Hashable, Sendable {
+    case warming, walking, indoor, listening, thinking, arrived, stopped
+
+    public init(from decoder: Decoder) throws {
+        self = NavIslandPhase(rawValue: (try? decoder.singleValueContainer().decode(String.self)) ?? "") ?? .walking
+    }
+}
+
+/// Whether obstacle detection is running (mirror of CaneKitLogic `IslandSensing`, Step 64).
+/// Decoded leniently: an unknown string is `.none` — never green.
+public enum NavIslandSensing: String, Codable, Hashable, Sendable {
+    case live, paused, none
+
+    public init(from decoder: Decoder) throws {
+        self = NavIslandSensing(rawValue: (try? decoder.singleValueContainer().decode(String.self)) ?? "") ?? .none
+    }
+
+    /// The only condition under which the widget may say "Path clear" / draw the green check.
+    /// ⚠ Mirror of `IslandPhasePolicy.showsClear` (CaneKitLogic, `showsClearOnlyWhenLive`).
+    public func showsClear(isStale: Bool) -> Bool { self == .live && !isStale }
+}
+
+/// Obstacle urgency for the keyline tint and the alert (mirror of CaneKitLogic `IslandAlertLevel`).
+/// Decoded leniently: an unknown string is `.none`.
+public enum NavIslandAlert: String, Codable, Hashable, Sendable {
+    case none, near, curb, stop, head
+
+    public init(from decoder: Decoder) throws {
+        self = NavIslandAlert(rawValue: (try? decoder.singleValueContainer().decode(String.self)) ?? "") ?? .none
+    }
 }
 
 /// The navigation Live Activity's attributes: the static route name plus the `ContentState`
@@ -57,6 +98,21 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
         /// Route progress 0…1 (waypoints passed / waypoints total) for the island's progress bar
         /// (Step 47, the Google Maps reference). 0 when unknown; 1 on arrival.
         public var progress: Double
+        /// Step 64: what the island is about (warming countdown, walking, indoor step, voice, final
+        /// card). `decodeIfPresent` default `.walking`.
+        public var phase: NavIslandPhase
+        /// Step 64: obstacle detection live / paused (app in background) / none (unknown, no
+        /// LiDAR, warming). `decodeIfPresent` default `.none`. ⚠ Never green unless `.live`.
+        public var sensing: NavIslandSensing
+        /// Step 64: current indoor step, 0-based (`IndoorProgress.index`); the widget shows +1.
+        public var stepIndex: Int
+        /// Step 64: indoor step count; 0 when not indoors.
+        public var stepCount: Int
+        /// Step 64: when the depth readiness wait ends (warming phase), for a
+        /// `Text(timerInterval:)` countdown that needs no updates. nil otherwise.
+        public var warmupEndsAt: Date?
+        /// Step 64: obstacle urgency (keyline tint, alert escalation). Default `.none`.
+        public var alertLevel: NavIslandAlert
 
         public init(
             instruction: String,
@@ -66,8 +122,20 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
             obstacleDistanceM: Double = 0.0,
             headClearanceM: Double = 0.0,
             statusDetail: String = "",
-            progress: Double = 0
+            progress: Double = 0,
+            phase: NavIslandPhase = .walking,
+            sensing: NavIslandSensing = .none,
+            stepIndex: Int = 0,
+            stepCount: Int = 0,
+            warmupEndsAt: Date? = nil,
+            alertLevel: NavIslandAlert = .none
         ) {
+            self.phase = phase
+            self.sensing = sensing
+            self.stepIndex = max(0, stepIndex)
+            self.stepCount = max(0, stepCount)
+            self.warmupEndsAt = warmupEndsAt
+            self.alertLevel = alertLevel
             self.instruction = instruction
             self.distanceM = distanceM
             self.kind = kind
@@ -89,18 +157,32 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
             let rawDetail = try container.decodeIfPresent(String.self, forKey: .statusDetail) ?? ""
             self.statusDetail = String(rawDetail.prefix(120))
             self.progress = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .progress) ?? 0))
+            // Step 64 fields: every one optional on the wire; the defaults never claim "live".
+            self.phase = (try? container.decodeIfPresent(NavIslandPhase.self, forKey: .phase)) ?? .walking
+            self.sensing = (try? container.decodeIfPresent(NavIslandSensing.self, forKey: .sensing)) ?? .none
+            self.stepIndex = max(0, (try? container.decodeIfPresent(Int.self, forKey: .stepIndex)) ?? 0)
+            self.stepCount = max(0, (try? container.decodeIfPresent(Int.self, forKey: .stepCount)) ?? 0)
+            self.warmupEndsAt = try? container.decodeIfPresent(Date.self, forKey: .warmupEndsAt)
+            self.alertLevel = (try? container.decodeIfPresent(NavIslandAlert.self, forKey: .alertLevel)) ?? .none
         }
 
         private enum CodingKeys: String, CodingKey {
             case instruction, distanceM, kind, obstacleStatus, obstacleDistanceM, headClearanceM, statusDetail, progress
+            case phase, sensing, stepIndex, stepCount, warmupEndsAt, alertLevel
         }
     }
 
     /// Static for the activity's lifetime: the route name ("ISR Townsend Hall to CIF" for the
-    /// bundled route, "To <place>" for a MapKit route — `RouteSource`).
+    /// bundled route, "To <place>" for a MapKit route — `RouteSource`; the trip's name for an indoor
+    /// walk, kept by its outdoor leg). At most `maxRouteNameCharacters`.
     public var routeName: String
 
+    /// Longest `routeName`, characters (review round 9c: a spoken "to <anything>" destination must
+    /// not bloat the ActivityKit payload; same cap as `statusDetail`).
+    public static let maxRouteNameCharacters = 120
+
+    /// - Parameter routeName: the route / trip name; cut to `maxRouteNameCharacters`.
     public init(routeName: String) {
-        self.routeName = routeName
+        self.routeName = String(routeName.prefix(Self.maxRouteNameCharacters))
     }
 }

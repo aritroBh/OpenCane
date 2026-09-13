@@ -116,6 +116,7 @@ extension AppModel {
             metresToNext: nav.distanceToNext,
             batteryPercent: batteryPercent)
         facts.voice = voiceFacts()
+        facts.indoorClause = indoor.statusClause   // Step 62: "Indoors: step 3 of 5." instead of "No route running."
         // One line (Muse review 2026-09-13): per clause, every number-bearing clause paid its own
         // 2.5 s natural-voice race and the status dribbled out over 5–15 s. A warning that cuts it
         // resumes at the clause it cut (`SpeechResume`), which is what the split used to protect.

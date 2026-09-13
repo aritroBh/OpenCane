@@ -100,6 +100,12 @@ public struct StatusFacts: Sendable, Equatable {
     /// not. Not an `init` parameter so the existing call sites stay as they are; a caller that
     /// measures it sets it after building the value.
     public var voice: VoiceFacts? = nil
+    /// Step 62: the indoor leg's progress ("Indoors: step 3 of 5.", `IndoorStatus.statusClause`), or
+    /// nil when no indoor script is being walked. While set and no outdoor route runs, `routeLine`
+    /// speaks it instead of "No route running." Set after building the value, like `voice`
+    /// (`AppModel.speakStatus`, `ConversationCoordinator.currentStatusFacts`).
+    /// Pinned by `statusRouteClauseSpeaksIndoorProgress`.
+    public var indoorClause: String? = nil
 
     /// Memberwise, with every field required: a new fact must be decided at every call site rather
     /// than silently defaulting to "fine".
@@ -320,7 +326,7 @@ public enum StatusSummary {
     /// question when you cannot see the card.
     /// Pinned by `noRouteIsStillAnAnswer`, `everyStatusClauseIsOneFinishedSentence`.
     public static func routeLine(_ f: StatusFacts) -> String {
-        guard f.routeRunning else { return noRouteLine }
+        guard f.routeRunning else { return f.indoorClause ?? noRouteLine }
         let instruction = f.routeInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         var line = instruction.isEmpty ? "Route running." : "Route running: \(sentenceCased(instruction))"
         if !line.hasSuffix(".") { line += "." }

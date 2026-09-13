@@ -158,12 +158,10 @@ struct ContourRings: View {
         let steps = 144
         for i in 0..<ringCount {
             let f = Double(i) / Double(ringCount - 1)          // 0 innermost … 1 outermost
-            var rng = SeededNoise(seed: UInt64(i + 1) &* 0x9E37_79B9_7F4A_7C15)
-            let k1 = 2 + Double(rng.next() % 3), k2 = 5 + Double(rng.next() % 4), k3 = 9 + Double(rng.next() % 5)
-            let p1 = rng.unit() * 2 * .pi, p2 = rng.unit() * 2 * .pi, p3 = rng.unit() * 2 * .pi
+            // Ring math shared with the island's brand mark (Step 64: ios/Shared/Brand/ContourRingGeometry.swift).
+            let params = ContourRingParameters(index: i)
             // Wobble grows outward, like contour lines loosening away from a summit.
             let a = side * (0.0025 + 0.009 * f)
-            let a1 = a * (0.6 + 0.4 * rng.unit()), a2 = a * 0.45 * rng.unit(), a3 = a * 0.2 * rng.unit()
             var base = inner + (outer - inner) * f
             var gain = 1.0
             var drift = 0.0
@@ -179,35 +177,11 @@ struct ContourRings: View {
             case .breathe:
                 base *= 1 + 0.025 * sin(t * .pi - f * 1.2)
             }
-            var path = Path()
-            for s in 0...steps {
-                let th = Double(s) / Double(steps) * 2 * .pi
-                let r = base + gain * (a1 * sin(k1 * th + p1 + drift)
-                                       + a2 * sin(k2 * th + p2 - drift)
-                                       + a3 * sin(k3 * th + p3))
-                let pt = CGPoint(x: cx + r * cos(th), y: cy + r * sin(th))
-                if s == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
-            }
-            path.closeSubpath()
+            let path = ContourRingGeometry.ring(params, center: CGPoint(x: cx, y: cy), base: base,
+                                                amplitude: a, gain: gain, drift: drift, steps: steps)
             ctx.stroke(path, with: .color(ink.opacity(0.75 - 0.5 * f)), lineWidth: 1)
         }
     }
 }
 
-/// SplitMix64: a tiny deterministic generator so every ring's wobble is the same on every frame.
-nonisolated struct SeededNoise {
-    /// Internal state.
-    private var state: UInt64
-    /// - Parameter seed: any value; ring index scrambled by the caller.
-    init(seed: UInt64) { state = seed }
-    /// Next 64-bit value.
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-    /// Next value in [0, 1).
-    mutating func unit() -> Double { Double(next() >> 11) / Double(1 << 53) }
-}
+// `SeededNoise` moved to ios/Shared/Brand/ContourRingGeometry.swift in Step 64 (shared with the widget).

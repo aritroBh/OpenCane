@@ -17,6 +17,11 @@
 //  ≥ 60 % of the page height) → the compact row (idle: Where am I | Start route to CIF; navigating:
 //  Repeat | Next | Stop route) → describer text → everything else below the fold, labels unchanged.
 //
+//  Step 62 indoor state (`model.indoor.isActive`): the instruction shows the indoor step's line, a
+//  status line "Indoors · step 3 of 5" follows it, the compact row is the navigating one (Repeat |
+//  Next | Stop route — same labels, hard rule 9, routed to the indoor step by AppModel+Indoor's
+//  hooks), and below the fold only Simulate walk / Stop simulation.
+//
 //  Accessibility contract — everything the XCUITests drive lives here (AGENTS.md rule 9):
 //    ⚠ test contract buttons: "Start route to CIF", "Navigate to CIF from here", "Stop route",
 //      "Repeat", "Next", "Recenter", "Where am I" (queried as `app.buttons[label]`); "Go" is in
@@ -67,13 +72,22 @@ struct GuideCard: View {
         @Bindable var model = model
         CKCard(title: "Guide") {
             // ⚠ test contract: plain Text whose accessibility label is the instruction itself.
-            Text(model.nav.instruction)
+            Text(model.indoor.isActive ? model.indoor.currentSay : model.nav.instruction)
                 .font(CKFont.instruction)
                 .foregroundStyle(CKColor.textPrimary)
                 // Never truncate: the spotter reads this line over the walker's shoulder.
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits([.isHeader, .updatesFrequently])
+
+            // Step 62: where the walker is in the indoor script; plain text, its label is its content.
+            if model.indoor.isActive {
+                Text(model.indoor.guideLine)
+                    .font(CKFont.button)
+                    .foregroundStyle(CKColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
 
             // Distance row: only with a GPS-derived distance (never in the simulator without a fix).
             if let d = model.nav.distanceToNext, model.nav.isNavigating || model.nav.arrived {
@@ -121,7 +135,8 @@ struct GuideCard: View {
             // "Where am I" and "Start route to CIF" while idle. While describing, "Where am I"
             // becomes "Describing…" and is disabled; testWhereAmIWithoutKeyReportsGracefully relies
             // on it returning to "Where am I" and on the "camera" / "Scene:" static text below.
-            if model.nav.isNavigating {
+            // Step 62: the indoor leg uses the same row; next / repeat / stop reach the indoor step.
+            if model.nav.isNavigating || model.indoor.isActive {
                 HStack(alignment: .top, spacing: CKSpacing.sm) {
                     CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise", layout: .tile,
                                 hint: "Says the current instruction again") { model.repeatInstruction() }
@@ -187,6 +202,15 @@ struct GuideCard: View {
                 } else {
                     CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
                                 hint: "Simulates walking along the active route indoors") { model.startSimulatedWalk() }
+                }
+            } else if model.indoor.isActive {
+                // Step 62: indoors there is no beacon, recenter or route picker — only the step simulation.
+                if model.indoor.isSimulating {
+                    CKBigButton(title: "Stop simulation", systemImage: "pause.circle.fill", role: .secondary,
+                                hint: "Pauses the indoor step simulation") { model.stopSimulatedWalk() }
+                } else {
+                    CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
+                                hint: "Simulates walking the indoor steps without moving") { model.startSimulatedWalk() }
                 }
             } else {
                 if model.nav.arrived {
@@ -258,6 +282,9 @@ struct GuideCard: View {
         }
         .onChange(of: model.nav.isNavigating) { _, navigating in
             if !navigating { stopConfirmation.reset() }
+        }
+        .onChange(of: model.indoor.isActive) { _, active in
+            if !active { stopConfirmation.reset() }
         }
     }
 

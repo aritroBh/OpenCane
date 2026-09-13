@@ -10,6 +10,8 @@
 //    3. Immediate emission on navigation instruction or turn kind changes.
 //    4. Rate-limit time floor (minIntervalSec) for routine updates.
 //    5. Suppression of statusDetail string jitter.
+//    6. Immediate emission on an island phase or sensing change (Step 64: a locked screen must say
+//       "Obstacles paused" at once; listening / indoor steps are what the walker is doing now).
 //
 //  Owner: module `navigation-trip`. Callers: `LiveActivityController` (app).
 //  Isolation: Sendable struct, nonisolated.
@@ -35,6 +37,10 @@ public struct LiveActivitySnapshot: Equatable, Sendable, Codable {
     public var obstacleDistanceM: Double
     public var headClearanceM: Double
     public var statusDetail: String
+    /// Island phase raw value (`IslandPhase`), Step 64. Default "walking".
+    public var phase: String
+    /// Sensing raw value (`IslandSensing`), Step 64. Default "none" — never assume live.
+    public var sensing: String
 
     public init(
         instruction: String,
@@ -43,8 +49,12 @@ public struct LiveActivitySnapshot: Equatable, Sendable, Codable {
         obstacleStatus: LiveActivityObstacleStatus = .clear,
         obstacleDistanceM: Double = 0.0,
         headClearanceM: Double = 0.0,
-        statusDetail: String = ""
+        statusDetail: String = "",
+        phase: String = IslandPhase.walking.rawValue,
+        sensing: String = IslandSensing.none.rawValue
     ) {
+        self.phase = phase
+        self.sensing = sensing
         self.instruction = instruction
         self.distanceM = distanceM
         self.kind = kind
@@ -64,10 +74,12 @@ public struct LiveActivitySnapshot: Equatable, Sendable, Codable {
         self.headClearanceM = try container.decodeIfPresent(Double.self, forKey: .headClearanceM) ?? 0.0
         let rawDetail = try container.decodeIfPresent(String.self, forKey: .statusDetail) ?? ""
         self.statusDetail = String(rawDetail.prefix(120))
+        self.phase = try container.decodeIfPresent(String.self, forKey: .phase) ?? IslandPhase.walking.rawValue
+        self.sensing = try container.decodeIfPresent(String.self, forKey: .sensing) ?? IslandSensing.none.rawValue
     }
 
     private enum CodingKeys: String, CodingKey {
-        case instruction, distanceM, kind, obstacleStatus, obstacleDistanceM, headClearanceM, statusDetail
+        case instruction, distanceM, kind, obstacleStatus, obstacleDistanceM, headClearanceM, statusDetail, phase, sensing
     }
 }
 
@@ -99,6 +111,14 @@ public struct LiveActivityCoalescer: Sendable {
     /// Returns true and updates recorded state if the update should be sent.
     public mutating func shouldEmit(snapshot: LiveActivitySnapshot, now: Double) -> Bool {
         guard let last = lastEmitted else {
+            lastEmitted = snapshot
+            lastEmittedAt = now
+            return true
+        }
+
+        // 0. Island phase or sensing change fires immediately (Step 64). Pinned by
+        //    `sensingChangeBypassesFloor`, `phaseChangeBypassesFloor`.
+        if snapshot.phase != last.phase || snapshot.sensing != last.sensing {
             lastEmitted = snapshot
             lastEmittedAt = now
             return true

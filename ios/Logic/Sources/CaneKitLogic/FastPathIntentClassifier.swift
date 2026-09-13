@@ -9,6 +9,8 @@
 //    · Resolves high-confidence operational queries instantly on-device before invoking a cloud LLM.
 //    · Supports settings toggles (silence cane, beacon on/off, drop-offs), telemetry status (battery,
 //      AirPods, route distance), campus navigation ("take me to CIF"), route stop, and voice markers ("set a post").
+//    · Step 62: "take me from A to B" (`.routeFromTo`, rule 13b) and "I'm outside" (`.indoorOutside`,
+//      rule 1b) for the indoor-then-outdoor walk (`IndoorRoute.swift`).
 //
 //  Key invariants:
 //    · Pure Foundation only; no side effects.
@@ -31,7 +33,9 @@
 //  Tests: `ConversationLogicTests` (`fastPathSettings`, `fastPathStatusAndStop`,
 //  `fastPathMarkersAndTrends`, `fastPathCampusNavigation`, `fastPathDelegatesOpenEnded`,
 //  `sceneQuestionDetection`, `ivrRuleRunsBeforeEverythingElse`, `stopPhrasesStillStopBehindRuleZero`,
-//  `howFarHaveIWalkedIsTheDistanceWalked`), `VoiceMenuTests` and `NodToTalkFastPathTests` (rule 5b).
+//  `howFarHaveIWalkedIsTheDistanceWalked`, Step 62: `fromAToBIsARouteFromTo`,
+//  `fromHereOrHalfARouteIsNotARouteFromTo`, `imOutsideIsTheIndoorHandover`), `VoiceMenuTests` and
+//  `NodToTalkFastPathTests` (rule 5b).
 //
 
 import Foundation
@@ -74,6 +78,12 @@ public enum FastPathIntentClassifier {
         if cleaned == "stop" || cleaned == "stop route" || cleaned == "stop navigating"
             || cleaned == "stop navigation" || cleaned == "cancel route" || cleaned == "end route" {
             return .stopRoute
+        }
+
+        // 1b. Indoor handover (Step 62): "I'm outside" — whole utterance only (a curly apostrophe
+        //     from the recogniser counts), so "is it cold outside" is not a handover.
+        if outsideForms.contains(cleaned.replacingOccurrences(of: "\u{2019}", with: "'")) {
+            return .indoorOutside
         }
 
         // 2. Settings: Silence / Unsilence Cane Haptics
@@ -197,33 +207,92 @@ public enum FastPathIntentClassifier {
             return .answerHistory(metric: .hazardsEncountered, windowSeconds: nil)
         }
 
+        // 13b. From A to B (Step 62) — before rule 14, whose prefixes would otherwise swallow
+        //      "navigate to CIF from ISR". See `routeFromTo(_:)`.
+        if let fromTo = routeFromTo(trimmed) {
+            return fromTo
+        }
+
         // 14. Campus Navigation via Gazetteer ("set location to X" is how walkers say it on
         // the phone — a recogniser hears "set", not "take", half the time).
         // A gazetteer hit returns the place's spoken `name` (not its id), and `AppModel.navigate(to:)`
-        // re-matches it — ⚠ "the Townsend Hall doors" is not an ISR alias, so ISR falls through to
-        // MapKit there (see `CampusPlace.name`). Any other target after a prefix starts a route to
-        // `target.capitalized` through MapKit (⚠ "go to settings" becomes a place search).
-        for prefix in ["take me to ", "route to ", "navigate to ", "go to ", "walk to ",
-                       "set destination to ", "set location to ", "change destination to ",
-                       "set my destination to "] {
+        // re-matches it (every name is an alias since Step 62, `everyCampusPlaceNameRoundTripsThroughMatch`).
+        // Any other target after a prefix starts a route to `target.capitalized` through MapKit
+        // (⚠ "go to settings" becomes a place search).
+        for prefix in destinationPrefixes {
             if cleaned.hasPrefix(prefix) {
                 let target = String(cleaned.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let normalized = CampusPlaces.normalize(target)
-                for place in CampusPlaces.all {
-                    for alias in place.aliases {
-                        if CampusPlaces.normalize(alias) == normalized {
-                            return .startRoute(destination: place.name)
-                        }
-                    }
-                }
-                // If it starts with an explicit navigation command, route to the target destination
-                if !target.isEmpty {
-                    return .startRoute(destination: target.capitalized)
+                if let action = destinationAction(target) {
+                    return action
                 }
             }
         }
 
         return nil
+    }
+
+    /// Rule 1b's whole utterances (lower case, edge punctuation trimmed, curly apostrophe folded).
+    /// Kept narrow: a false hit hands the walker to GPS guidance while still inside.
+    static let outsideForms: Set<String> = [
+        "i'm outside", "im outside", "i am outside", "we're outside", "we are outside",
+        "outside now", "i'm outside now", "i am outside now", "we're outside now",
+    ]
+
+    /// Rule 14's destination prefixes (lower case, trailing space). Rule 13b splits "<prefix> B from
+    /// A" after every one of them (Muse M3). Pinned by `everyDestinationPrefixTakesAFromOrigin`.
+    public static let destinationPrefixes = ["take me to ", "route to ", "navigate to ", "go to ", "walk to ",
+                                      "set destination to ", "set location to ", "change destination to ",
+                                      "set my destination to "]
+
+    /// Rule 13b's origins that mean "where I am", compared after `CampusPlaces.normalize`: a route
+    /// from here is a plain rule-14 route, never an indoor script.
+    static let hereOrigins: Set<String> = [
+        "here", "right here", "my location", "my current location", "current location",
+        "this location", "where i am",
+    ]
+
+    /// Rule 13b (Step 62): "take me from A to B", "go from A to B", "navigate from A to B",
+    /// "from A to B" (split at the first " to ") and "<any `destinationPrefixes`> B from A" —
+    /// "take me to / navigate to / go to / walk to / set destination to … B from A" (split at the
+    /// last " from "; Muse M3, it was "take me to" only). Both ends keep the speaker's case, edge
+    /// whitespace / punctuation trimmed; either end empty → nil (the later rules run). A "here"
+    /// origin (`hereOrigins`) → `destinationAction(to)`. ⚠ A destination that itself contains
+    /// " from " ("across from the Union") splits there too.
+    /// Pinned by `fromAToBIsARouteFromTo`, `fromHereOrHalfARouteIsNotARouteFromTo`,
+    /// `everyDestinationPrefixTakesAFromOrigin`.
+    /// - Parameter query: the whitespace-trimmed query, original case.
+    /// - Returns: `.routeFromTo`, `.startRoute` for a "here" origin, or nil.
+    static func routeFromTo(_ query: String) -> ConversationAction? {
+        let edge = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".?!,\"';:"))
+        let text = query.trimmingCharacters(in: edge)
+        func clean(_ part: Substring) -> String { String(part).trimmingCharacters(in: edge) }
+        var from = "", to = ""
+        if let prefix = destinationPrefixes.lazy
+                .compactMap({ text.range(of: $0, options: [.anchored, .caseInsensitive]) }).first,
+           let split = text.range(of: " from ", options: [.caseInsensitive, .backwards],
+                                  range: prefix.upperBound..<text.endIndex) {
+            to = clean(text[prefix.upperBound..<split.lowerBound])
+            from = clean(text[split.upperBound...])
+        } else if let prefix = ["take me from ", "go from ", "navigate from ", "from "].lazy
+                    .compactMap({ text.range(of: $0, options: [.anchored, .caseInsensitive]) }).first,
+                  let split = text.range(of: " to ", options: .caseInsensitive,
+                                         range: prefix.upperBound..<text.endIndex) {
+            from = clean(text[prefix.upperBound..<split.lowerBound])
+            to = clean(text[split.upperBound...])
+        } else {
+            return nil
+        }
+        guard !from.isEmpty, !to.isEmpty else { return nil }
+        if hereOrigins.contains(CampusPlaces.normalize(from)) { return destinationAction(to) }
+        return .routeFromTo(from: from, to: to)
+    }
+
+    /// Rule 14's destination: a gazetteer hit → `.startRoute` with the place's spoken `name`;
+    /// any other non-empty target → `.startRoute(target.capitalized)` (MapKit); empty → nil.
+    /// Callers: rule 14, and rule 13b for a "from here" origin.
+    static func destinationAction(_ target: String) -> ConversationAction? {
+        if let place = CampusPlaces.match(target) { return .startRoute(destination: place.name) }
+        return target.isEmpty ? nil : .startRoute(destination: target.capitalized)
     }
 
     /// Rule 0's mapping from a menu item to the action the coordinator performs. "where am I" and
