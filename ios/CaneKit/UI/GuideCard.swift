@@ -184,25 +184,30 @@ struct GuideCard: View {
                     }
                 }
                 // ⚠ test contract: "Start route to CIF" is the first thing every UI test waits for.
-                CKBigButton(title: "Start route to CIF", systemImage: "figure.walk",
+                CKBigButton(title: "Start route to CIF",
+                            subtitle: "Campus Demo · Townsend Hall to CIF",
+                            systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
                     .disabled(model.routeStartWaiting)
-                // Secondary navigation actions paired side by side:
-                // ⚠ test contract: "Navigate to CIF from here" (its label is its text).
-                HStack(spacing: CKSpacing.md) {
-                    CKBigButton(title: "Navigate to CIF from here", systemImage: "location.north.circle",
-                                role: .secondary,
-                                hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
-                                value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
-                        .disabled(model.isBuildingRoute || model.routeStartWaiting)
 
-                    CKBigButton(title: "Simulate walk", systemImage: "figure.walk.motion",
-                                role: .secondary,
-                                hint: "Simulates walking the demo route indoors step by step without moving") {
-                        model.startSimulatedWalk()
-                    }
-                    .disabled(model.routeStartWaiting || model.isBuildingRoute)
+                // Secondary navigation actions:
+                // ⚠ test contract: "Navigate to CIF from here" (its label is its text).
+                CKBigButton(title: "Navigate to CIF from here",
+                            subtitle: "Live GPS · Apple Maps walking route",
+                            systemImage: "location.north.circle.fill",
+                            role: .secondary,
+                            hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
+                            value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
+                    .disabled(model.isBuildingRoute || model.routeStartWaiting)
+
+                CKBigButton(title: "Simulate walk",
+                            subtitle: "Indoor demo mode · test route without moving",
+                            systemImage: "play.circle.fill",
+                            role: .secondary,
+                            hint: "Simulates walking the demo route indoors step by step without moving") {
+                    model.startSimulatedWalk()
                 }
+                .disabled(model.routeStartWaiting || model.isBuildingRoute)
                 // Why a route has not started yet (waiting for depth, or timed out); not an error,
                 // so primary text, spoken as written.
                 if let status = model.routeStartStatus {

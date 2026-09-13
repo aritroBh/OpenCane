@@ -2513,26 +2513,26 @@ Purpose: trip summary — distance, minutes, steps — shown while walking ("Thi
 
 ---
 
-### ios/CaneKit/UI/ProfilePage.swift (Step 43)
-
-### ios/CaneKit/UI/ProfilePage.swift (Step 44)
+### ios/CaneKit/UI/ProfilePage.swift (Step 44, Step 46)
 
 Purpose: The 4th root tab view (`RootTab.profile`) housing the user's Emergency Medical ID card and daily Mobility & Fitness tracking.
 
 - `struct ProfilePage: View` — `@Environment(AppModel.self) private var model`; `@State private var isEditingMedicalID = false`.
 - `medicalIDCard: some View` — `CKCard(title: "EMERGENCY MEDICAL ID")`:
-  - White cane blind user emergency callout banner with high-contrast alert styling (`laneUrgent`, `crossmark.circle.fill`).
-  - Identity & vitals grid: Name, DOB, Blood Type, Height, Weight, Allergies, Medications, Home Address, Primary Cane Specs, Organ Donor status.
-  - Emergency contact card with direct tap-to-call button (`tel:<phone>`).
+  - Profile header: 56x56 circular avatar loading `AritroProfile` image asset with accent border, full name, red emergency badge with `staroflife.fill`, and "Edit" sheet button.
+  - White cane blind user emergency callout banner with high-contrast alert styling (`laneUrgent`, `exclamationmark.shield.fill`).
+  - Identity & vitals grid: Name, DOB, Blood Type, Height, Weight, Allergies (`exclamationmark.triangle.fill`), Medications, Home Address, Primary Cane Specs, Organ Donor status.
+  - Emergency contact card with direct tap-to-call button (`tel:<phone>`) and explicit accessibility label.
   - `"Announce Medical ID"` button: reads the emergency identification summary aloud via `model.speech.say(summary, .obstacle)`.
 - `mobilityFitnessCard: some View` — `CKCard(title: "MOBILITY & FITNESS")`:
   - Daily cane mobility metrics: Today's Steps, Distance Walked Today (km), Completed Walks Count, Average Walking Pace (m/s), and active route telemetry.
+  - Metric tiles wrapped in `.accessibilityElement(children: .combine)` with glanceable labels.
   - Refresh button querying `CMPedometer` for today's steps and walking distance from midnight to now.
 - `struct EditMedicalIDSheet: View` — modal form allowing editing all identity, vitals, contact and cane fields with instant persistence to `UserDefaults`.
 
 ---
 
-### ios/CaneKit/Trip/MedicalProfileStore.swift (Step 44)
+### ios/CaneKit/Trip/MedicalProfileStore.swift (Step 44, Step 46)
 
 Purpose: persistence and telemetry bridge for emergency Medical ID card and mobility fitness metrics.
 
@@ -2542,17 +2542,17 @@ Purpose: persistence and telemetry bridge for emergency Medical ID card and mobi
 
 ---
 
-### ios/CaneKit/Trip/SupabaseClient.swift (Step 45)
+### ios/CaneKit/Trip/SupabaseClient.swift (Step 45, Step 46)
 
-Purpose: native URLSession PostgREST client for OpenCane's cloud backend (Supabase). Zero third-party SDKs.
+Purpose: native URLSession PostgREST client for OpenCane's cloud backend (Supabase). Zero third-party SDKs. Swift 6 concurrency safe.
 
-- `final class SupabaseClient: Sendable` — singleton `shared`. Reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_SECRET_KEY`) from `Secrets.plist`.
-  - `resolveWalkerID(displayName:caneID:) async -> String?` — resolves or registers the walker in `walkers` table with `UserDefaults` local caching under `"opencane_supabase_walker_id"`.
-  - `syncMedicalProfile(_ profile: CKMedicalProfile) async -> Bool` — upserts emergency medical details to `medical_profiles` via `Prefer: resolution=merge-duplicates`.
-  - `syncMobilityStats(_ stats: CKMobilityStats, date: Date) async -> Bool` — upserts daily steps and distance to `mobility_days` via `Prefer: resolution=merge-duplicates`.
+- `final class SupabaseClient: Sendable` — singleton `shared`. Reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from `Secrets.plist` (never embeds secret keys in client binaries).
+  - `resolveWalkerID(displayName:caneID:) async -> String?` — resolves or registers the walker in `walkers` table filtered strictly by device `install_id`, protected by `inFlightResolve` unfair lock to eliminate duplicate registration races.
+  - `syncMedicalProfile(_ profile: CKMedicalProfile) async -> Bool` — upserts emergency medical details to `medical_profiles` via `on_conflict=walker_id` merge-duplicates.
+  - `syncMobilityStats(_ stats: CKMobilityStats, date: Date) async -> Bool` — upserts daily steps and distance to `mobility_days` via `on_conflict=walker_id,day` merge-duplicates, keying dates with local `Calendar.current` date components.
   - `recordHazard(...) async -> Bool` — logs detected obstacles, curbs, and drop-offs to `hazards` for the web hazard map.
   - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:) async -> Bool` — mirrors dispatched family alerts to `family_alerts`.
-  - `recordDevice(hasLiDAR:watchPaired:airPodsPaired:) async -> Bool` — registers hardware capabilities in `devices`.
+  - `recordDevice(hasLiDAR:watchPaired:airPodsPaired:) async -> Bool` — registers hardware capabilities in `devices` with dynamic POSIX `utsname` model identifier and `on_conflict=vendor_id` upsert.
 
 ---
 

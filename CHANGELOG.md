@@ -2,6 +2,49 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
+
+**Why:** The user requested:
+1. "can u make th ebuttons and tsuff look better we still have the same thigns like satrt ruote to cif and naigate t cif form here and its now jsut good looking": GuideCard had two buttons mentioning "CIF" in awkward layouts — "Start route to CIF" as a giant white slab, and "Navigate to CIF from here" squeezed into a half-width square next to "Simulate walk", wrapping 27 characters across 3 cramped lines.
+2. "can u add a pfp to my thing as well /Users/aritro/Pictures/Photos Library... use this as my pciuture": Add the user's photo to the Emergency Medical ID card in the Profile tab.
+3. "alos how did u get all my health data form the health app right???": Clarify Apple CoreMotion/HealthKit local querying architecture.
+4. "pull all changes and then go crazy... give me the full handoff to my other agenet session": Integrate multi-agent audit recommendations from Muse and Codex, ensure 100% clean test passes (`make test`, `make sim`, `make uitest`), verify physical device installation on iPhone 17 Pro Max, update knowledge graph, and prepare complete session handoff.
+
+**What changed:**
+- `Theme.swift` (`CKBigButton`):
+  - Added optional `subtitle: String? = nil` to `CKBigButton` with responsive horizontal/vertical layout.
+  - Added subtle trailing chevron on primary action buttons.
+  - Kept accessibility labels strictly identical to `title` (preserving AGENTS.md Hard Rule 9).
+- `GuideCard.swift`:
+  - Replaced cramped half-width HStack layout with clean, full-width vertical hierarchy:
+    - Primary Hero: `Start route to CIF` with subtitle `"Campus Demo · Townsend Hall to CIF"` (`role: .primary`).
+    - Secondary: `Navigate to CIF from here` with subtitle `"Live GPS · Apple Maps walking route"` (`role: .secondary`, full width with ample room).
+    - Secondary: `Simulate walk` with subtitle `"Indoor demo mode · test route without moving"` (`role: .secondary`).
+- `Assets.xcassets` & `ProfilePage.swift`:
+  - Created `AritroProfile.imageset` in `ios/CaneKit/Resources/Assets.xcassets/` with the user's campus portrait.
+  - Replaced generic SF Symbol in `ProfilePage` header with a 56x56 circular avatar framed by an accent ring.
+  - Fixed SF Symbol for allergies (`"exclamationmark.triangle.fill"`).
+  - Added combined accessibility elements to `metricTile` and full descriptive label to the emergency call link.
+- `SupabaseClient.swift` (Audit Fixes):
+  - **Security (C1):** Removed `SUPABASE_SECRET_KEY` fallback; client uses `SUPABASE_PUBLISHABLE_KEY` exclusively.
+  - **Data Isolation (C2):** Filtered walker lookup strictly by device `install_id`.
+  - **Race Guard (C3):** Added `inFlightResolve` unfair lock task memoization to prevent duplicate walker registrations on launch.
+  - **Dynamic Hardware (C7):** Queried POSIX `utsname` for machine hardware model instead of hardcoded string.
+  - **PostgREST Upsert (M1):** Added explicit `on_conflict` parameters to `medical_profiles` (`walker_id`), `mobility_days` (`walker_id,day`), and `devices` (`vendor_id`).
+  - **Timezone Alignment (Codex Finding):** Keyed `mobility_days` date using `Calendar.current` local date components rather than UTC ISO8601, ensuring evening steps in Central Time match the local calendar day.
+- `AppModel.swift`:
+  - Extracted `lat`, `lon`, `accuracyM` primitive values before `Task` boundary in `recordHazard` to avoid capturing non-Sendable `CLLocation` (C5).
+  - Used `audioRoute.headphonesConnected` instead of instantiating `CMHeadphoneMotionManager`.
+- Verification:
+  - `make test`: all 538 unit tests pass in CaneKitLogic.
+  - `make sim`: clean build with 0 errors.
+  - `make uitest`: 11 / 11 tests passed with 0 failures on iPhone 17 Pro Max simulator.
+  - `make build install`: successfully installed and launched on Aritro's iPhone 17 Pro Max (PID 6563).
+  - Live Supabase verification: verified live sync of `mobility_days` (`2026-09-12`: 6,567 steps, 4,710 m).
+  - `graphify update .`: updated knowledge graph (4,020 nodes, 9,423 edges, 205 communities).
+
+test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab features full-width buttons with clear subtitles ("Campus Demo" vs "Live GPS"), open the Profile tab to view the custom circular profile avatar and verified emergency card details.
+
 ## Step 45 — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
 
 **Why:** The user provided Supabase project credentials (`https://ppmuqgswuyniwiwsdnto.supabase.co` with publishable and secret keys) to connect OpenCane to its dedicated cloud database backend.
