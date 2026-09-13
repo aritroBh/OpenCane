@@ -2,6 +2,37 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 45 — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
+
+**Why:** The user provided Supabase project credentials (`https://ppmuqgswuyniwiwsdnto.supabase.co` with publishable and secret keys) to connect OpenCane to its dedicated cloud database backend.
+
+**What changed:**
+- `Secrets.plist` (git-ignored) & `Secrets.example.plist`:
+  - Added `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SECRET_KEY`.
+  - Secrets stay strictly outside git per AGENTS.md Hard Rule 4.
+- `SupabaseClient.swift` (`ios/CaneKit/Trip/SupabaseClient.swift`):
+  - Created native Swift URLSession PostgREST client (zero 3rd party SDKs, AGENTS.md Hard Rule 2).
+  - `resolveWalkerID(displayName:caneID:)`: finds or creates walker record in `walkers` table, caching the UUID in `UserDefaults` (`"opencane_supabase_walker_id"`).
+  - `syncMedicalProfile(_ profile:)`: live cloud sync for the emergency Medical ID card to `medical_profiles` table via merge-duplicates upsert.
+  - `syncMobilityStats(_ stats:date:)`: live sync of daily steps, walking distance (m), active duration (s), and cadence to `mobility_days` table.
+  - `recordHazard(...)`: logs detected obstacles, curbs, drop-offs, and vision signs to `hazards` table in real time for the web hazard map view.
+  - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:)`: mirrors dispatched family alert records to `family_alerts` table.
+  - `recordDevice(...)`: registers hardware metadata (model, system version, app version, LiDAR, watch, AirPods) to `devices` table.
+- `MedicalProfileStore.swift`:
+  - Automatically triggers `SupabaseClient.shared.syncMedicalProfile(profile)` on profile init and save.
+  - Automatically triggers `SupabaseClient.shared.syncMobilityStats(mobilityStats)` on trip completion and CMPedometer refreshes.
+- `FamilyAlerts.swift`:
+  - Automatically mirrors all delivered alert events to `SupabaseClient.shared.recordFamilyAlert`.
+- `AppModel.swift`:
+  - On launch (`start()`), registers device hardware capabilities in `devices` table.
+  - In `recordHazard(...)`, mirrors every detected ground hazard, sign, and vision warning to `hazards` table in Supabase.
+- Verification:
+  - `make test`: all 538 unit tests passing in CaneKitLogic.
+  - `make sim`: full clean simulator compilation.
+  - Live REST verified: confirmed `HTTP 200/201` upsert on `medical_profiles`, `mobility_days`, `hazards`, `family_alerts`, and `walker_dashboard`.
+
+test on device: open OpenCane; verify profile edits in the Profile tab sync seamlessly, check that today's steps update the cloud dashboard, and confirm that family alert test events and hazards populate the Supabase tables in real-time.
+
 ## Step 44 — Medical ID Profile tab, mobility fitness tracking, streamlined Guide buttons, Dynamic Island indicator fix, and Grok Bot webhook integration (Sat Sep 12)
 
 **Why:** The user requested:

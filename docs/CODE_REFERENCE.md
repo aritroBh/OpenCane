@@ -2538,7 +2538,21 @@ Purpose: persistence and telemetry bridge for emergency Medical ID card and mobi
 
 - `struct CKMedicalProfile: Codable, Sendable, Equatable` — user identity, emergency notes, date of birth, blood type, height, weight, allergies, medications, home address, emergency contacts, cane specification, organ donor status. Defaulted to `CKMedicalProfile.standardDefault`.
 - `struct CKMobilityStats: Sendable, Equatable` — today's steps, distance in meters, active duration, completed trips count, average walking pace.
-- `final class MedicalProfileStore: @MainActor @Observable` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` in `UserDefaults.standard`. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
+- `final class MedicalProfileStore: @MainActor @Observable` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` in `UserDefaults.standard`. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`. Automatically syncs profiles and mobility stats to Supabase.
+
+---
+
+### ios/CaneKit/Trip/SupabaseClient.swift (Step 45)
+
+Purpose: native URLSession PostgREST client for OpenCane's cloud backend (Supabase). Zero third-party SDKs.
+
+- `final class SupabaseClient: Sendable` — singleton `shared`. Reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_SECRET_KEY`) from `Secrets.plist`.
+  - `resolveWalkerID(displayName:caneID:) async -> String?` — resolves or registers the walker in `walkers` table with `UserDefaults` local caching under `"opencane_supabase_walker_id"`.
+  - `syncMedicalProfile(_ profile: CKMedicalProfile) async -> Bool` — upserts emergency medical details to `medical_profiles` via `Prefer: resolution=merge-duplicates`.
+  - `syncMobilityStats(_ stats: CKMobilityStats, date: Date) async -> Bool` — upserts daily steps and distance to `mobility_days` via `Prefer: resolution=merge-duplicates`.
+  - `recordHazard(...) async -> Bool` — logs detected obstacles, curbs, and drop-offs to `hazards` for the web hazard map.
+  - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:) async -> Bool` — mirrors dispatched family alerts to `family_alerts`.
+  - `recordDevice(hasLiDAR:watchPaired:airPodsPaired:) async -> Bool` — registers hardware capabilities in `devices`.
 
 ---
 

@@ -692,13 +692,22 @@ for 60 s so a weak network can never stall a cue.
 - [x] Centered navigation bar titles with `ToolbarItem(placement: .principal)` and `.title2.weight(.bold)`
 - [x] Middle tab title updated to "Details"
 
-## Step 43 — Medical ID Profile tab, mobility fitness & streamlined Guide (Sat Sep 12)
+## Step 44 — Medical ID Profile tab, mobility fitness & streamlined Guide (Sat Sep 12)
 - [x] Fixed Dynamic Island idle location arrow by removing `CLBackgroundActivitySession` instantiation from `LocationService.init()`
 - [x] Streamlined GuideCard idle buttons: Where am I + Talk paired in HStack; Start route to CIF primary hero; Navigate to CIF + Simulate walk paired in HStack
 - [x] Added 4th root tab `.profile` (`ProfilePage.swift`, `RootTab.profile`, `pillWidth = 64`)
 - [x] Emergency Medical ID card: white cane / blind safety alert banner, vitals grid, tap-to-call emergency contact, announce medical ID button, edit sheet modal
 - [x] Mobility & fitness tracking in `MedicalProfileStore.swift`: daily steps, distance (km), trips completed, average pace via `CMPedometer`
 - [x] Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `_KEY` in `Secrets.plist`; verified HTTP 200 curl response
+
+## Step 45 — Supabase cloud backend integration (Sat Sep 12)
+- [x] Configured Supabase project credentials in Secrets.plist (URL, publishable and secret keys)
+- [x] Created `SupabaseClient.swift`: native URLSession PostgREST client for walkers, medical_profiles, mobility_days, hazards, family_alerts, devices
+- [x] Live cloud sync on `MedicalProfileStore.swift` for Medical ID card and daily mobility steps
+- [x] Real-time hazard mapping on `AppModel.recordHazard` syncing obstacles, curbs, and drop-offs to Supabase `hazards`
+- [x] Family alert mirroring on `FamilyAlerts.swift` syncing delivered alerts to `family_alerts`
+- [x] Hardware telemetry registration on `AppModel.start()` syncing device metadata to `devices`
+- [x] Verified PostgREST endpoints and views (`hazard_map`, `walker_dashboard`, `mobility_days`)
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab

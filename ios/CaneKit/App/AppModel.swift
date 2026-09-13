@@ -911,6 +911,13 @@ final class AppModel {
         observeLaunchHealth()
         logger.start()
         liveActivity.endAllOrphanedActivities()
+        Task { [watchPaired = watch.isPaired] in
+            await SupabaseClient.shared.recordDevice(
+                hasLiDAR: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
+                watchPaired: watchPaired,
+                airPodsPaired: CMHeadphoneMotionManager().isDeviceMotionAvailable
+            )
+        }
         speech.onSuppressed = { [weak self] text, load, reason in
             self?.logger.event("speech_suppressed", [
                 "text": text, "load": load.rawValue, "reason": reason.rawValue
@@ -1854,6 +1861,26 @@ final class AppModel {
         if let direction { eventFields["direction"] = direction }
         if let severity { eventFields["severity"] = severity }
         logger.event("hazard", eventFields)
+
+        Task { [kind, text, whatItSaw, fix, distanceM, heightM, direction, headingDeg, speedMps, routeName, instruction, source, severity] in
+            await SupabaseClient.shared.recordHazard(
+                kind: kind,
+                source: source.rawValue,
+                severity: severity ?? "warn",
+                spokenText: text,
+                whatItSaw: whatItSaw,
+                lat: fix?.coordinate.latitude,
+                lon: fix?.coordinate.longitude,
+                accuracyM: fix?.accuracy,
+                distanceM: distanceM,
+                heightM: heightM,
+                direction: direction,
+                headingDeg: headingDeg,
+                speedMps: speedMps,
+                routeName: routeName,
+                instruction: instruction
+            )
+        }
     }
 
     /// The LiDAR facts the on-device describer may use ("1.4 meters ahead, obstacle. Two
