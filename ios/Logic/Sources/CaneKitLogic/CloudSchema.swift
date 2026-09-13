@@ -90,6 +90,17 @@ public struct CloudBatchPolicy: Sendable, Equatable {
         return (Array(queued.prefix(maxBatchSize)), Array(queued.dropFirst(maxBatchSize)))
     }
 
+    /// Where a walk's lines begin, after `flushed` rows have been taken off the FRONT of the queue.
+    ///
+    /// The mark is an index into the live queue, so every flush shifts it down by exactly what it
+    /// removed — and a failed batch put back on the front shifts it up again. Getting this wrong is
+    /// silent: the walk's first lines simply keep a null `trip_id` and the walk looks shorter than
+    /// it was. Clamped at 0, because a mark that has been entirely flushed away means "the whole
+    /// remaining queue belongs to this walk".
+    public func shiftMark(_ mark: Int, flushed: Int) -> Int {
+        max(0, mark - flushed)
+    }
+
     /// `queued` trimmed to `maxQueuedRows` by dropping the OLDEST rows.
     /// Returns the kept rows and how many were dropped (the caller logs the number, because a
     /// silent drop would make a gap in the cloud walk look like a gap in the real one).

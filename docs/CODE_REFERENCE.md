@@ -546,7 +546,11 @@ Rows: `TripEventRow` (one JSONL line), `TripOpenRow` / `TripClosePatch`, `Hazard
 - `MobilityDayRow.dayKey` is the walker's *local* day, not UTC's.
 - Non-finite numbers are sanitised (JSON has no infinity), the same rule `TripLogger.num` follows.
 
-Tests: `CloudSchemaTests.swift` (17).
+`CloudBatchPolicy.shiftMark(_:flushed:)` keeps the trip mark true across a flush — the mark is an
+index into the live queue, so every batch taken off the front shifts it down and a failed batch put
+back shifts it up. Getting it wrong is silent: the walk's first lines simply keep a null `trip_id`.
+
+Tests: `CloudSchemaTests.swift` (18).
 
 ### `CueProfile.swift` — cue verbosity level × place (Step 36, cue design v2)
 
@@ -820,6 +824,17 @@ unzips the .ipa full write access to every walker's data.
   `trips`. The one-shot writers (hazard, post, alert, conversation turn) drop instead — they fire
   seconds into a launch at the earliest, and a stale replay is worse than a gap.
 - ⚠ The family email list goes through `save_family_contacts` **only**.
+- ⚠ **A walk is closed from three places**, and missing any one leaks an open row: `onArrived`
+  (`arrived`), `stopRoute` (`stopped`) and `endRouteQuietly` (`stopped`, the mid-walk restart — it
+  must close the old row *before* `startRouteNow` opens the next, because `openPendingTrip` refuses
+  to open one while another is open).
+- `closeAbandonedTrips` sweeps trips a killed process left open, on the next launch, as
+  `abandoned` — the schema's third outcome and the only thing that writes it. Scoped to rows that
+  started before this process did, so it can never close the walk this launch is about to open, and
+  scoped per walker.
+- ⚠ It takes `HazardLog.record`'s **return value**, never `records.last`: a detection refused by
+  the 3 s debounce returns nil, and `records.last` is then the previous hazard — uploading it again
+  duplicates a hazard that was announced once.
 - `recordConversationTurn` exists and is not called yet — `ConversationCoordinator` does not wire it.
 
 Tests: the decisions are in `CloudSchema` / `CloudBatchPolicy` (CaneKitLogic). This class is the

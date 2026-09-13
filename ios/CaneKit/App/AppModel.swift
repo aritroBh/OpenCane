@@ -2254,7 +2254,7 @@ final class AppModel {
         let routeName = activeRouteName ?? nav.route?.name
         let instruction = nav.isNavigating ? nav.instruction : nil
 
-        hazardLog.record(
+        let recorded = hazardLog.record(
             kind: kind,
             text: text,
             fix: fix,
@@ -2278,12 +2278,12 @@ final class AppModel {
         if let direction { eventFields["direction"] = direction }
         if let severity { eventFields["severity"] = severity }
         logger.event("hazard", eventFields)
-        // The same record the GeoJSON just got, plus the frame. `HazardLog` may have refused this
-        // one as jitter (its 3 s debounce), in which case `records.last` is the older hazard and
-        // re-sending it is harmless: the cloud row is an insert of what was announced, and the
-        // debounced duplicate was never announced twice either.
-        if let record = hazardLog.records.last {
-            cloud.recordHazard(record, jpeg: jpeg)
+        // Exactly the record the GeoJSON just got, plus the frame. ⚠ Use the RETURN value, never
+        // `records.last`: a detection refused by the 3 s debounce returns nil, and `records.last`
+        // would then be the previous hazard — uploading it again inserts a duplicate cloud row for
+        // a hazard that was only ever announced once.
+        if let recorded {
+            cloud.recordHazard(recorded, jpeg: jpeg)
         }
     }
 
@@ -2388,6 +2388,14 @@ final class AppModel {
         trip.cancel()                        // synchronous: the new trip.start() must not be no-op'd
         liveActivity.end(immediate: true)
         speech.stopAll()
+        // ⚠ Close the cloud walk here too, and BEFORE `startRouteNow` opens the next one. Without
+        // this the old `trips` row stayed open for ever (null `ended_at`, null `outcome`) and the
+        // new walk's lines were stamped with the old trip id — two walks merged into one row.
+        // `stopped`, not `arrived`: the walker restarted, they did not get there.
+        cloud.endTrip(outcome: "stopped", elapsed: trip.elapsed, distanceM: trip.distanceM,
+                      steps: trip.steps, stepSource: trip.stepSource,
+                      waypointsReached: nav.waypointIndex, batteryPct: batteryPercent,
+                      spokenSummary: nil, end: location.fix)
         logger.event("route", ["action": "restart"])
     }
 

@@ -314,3 +314,19 @@ private func wireArray<T: Encodable>(_ rows: [T]) throws -> [[String: Any]] {
 @Test func thePhotoCapMatchesTheLocalHazardLog() {
     #expect(CloudBatchPolicy().maxPhotoUploads == 200)
 }
+
+/// ⚠ The trip mark is an index into the live queue, so a flush must shift it. Found by audit on
+/// 2026-09-13: `tick()` removed rows from the front without moving the mark, so when the trip id
+/// landed the stamping loop started at the wrong offset and the walk's first lines kept a null
+/// `trip_id` — the walk looked shorter than it was, silently.
+@Test func theTripMarkFollowsTheQueueAcrossAFlush() {
+    let policy = CloudBatchPolicy()
+    // 50 lines logged before Start, then the walk's lines.
+    #expect(policy.shiftMark(50, flushed: 0) == 50)
+    // A flush takes 20 rows off the front: the walk now begins 20 slots earlier.
+    #expect(policy.shiftMark(50, flushed: 20) == 30)
+    // A flush that swallows the pre-trip rows entirely: everything left is the walk's.
+    #expect(policy.shiftMark(50, flushed: 50) == 0)
+    #expect(policy.shiftMark(50, flushed: 200) == 0)   // clamped, never negative
+    #expect(policy.shiftMark(0, flushed: 10) == 0)
+}

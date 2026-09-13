@@ -724,6 +724,16 @@ for 60 s so a weak network can never stall a cue.
 - [x] Mobility & fitness tracking in `MedicalProfileStore.swift`: daily steps, distance (km), trips completed, average pace via `CMPedometer`
 - [x] Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `_KEY` in `Secrets.plist`; verified HTTP 200 curl response
 
+## Step 46 — Audit of the Supabase mirror (Sun Sep 13)
+- [x] Route restart closes the cloud walk (`endRouteQuietly`) — it used to leave the old row open for ever and stamp the new walk's lines with the old trip id
+- [x] `CloudBatchPolicy.shiftMark` keeps the trip mark true across a flush, with a test
+- [x] `HazardLog.record` returns `HazardRecord?` — a debounced detection no longer re-uploads the previous hazard
+- [x] `closeAbandonedTrips` closes walks a killed process left open, as `abandoned` (verified against the live project with a probe row)
+- [x] `opencane_07`: a trigger maintains `family_contacts.alerts_sent` / `last_alerted_at`; the phone's PATCH removed
+- [ ] Open: `autoTorchInDark` (Steps 48–49) is persisted but has no `device_settings` column, so it never syncs
+- [ ] Open: `hazards`, `posts`, `family_contacts`, `family_alerts`, `family_alert_recipients`, `conversation_turns` have never held a real row
+- **test on device:** see CHANGELOG Step 46
+
 ## Step 45 — Supabase cloud mirror (Sat Sep 12)
 - [x] 16 tables + 4 demo views + 3 RPCs + `hazard-photos` bucket, migrations `opencane_01`…`_06`, every table commented
 - [x] PostGIS `geography` generated columns on `hazards` / `posts` / `route_waypoints`, GiST indexed; `hazards_near(lat, lon, radius)`

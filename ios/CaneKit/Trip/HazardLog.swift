@@ -76,12 +76,17 @@ final class HazardLog {
     ///   - source: "ground", "sign", "vision".
     ///   - whatItSaw: detailed classifier findings.
     ///   - severity: "info", "warn", "critical".
+    /// - Returns: the record that was appended, or **nil** when the 3 s debounce refused this
+    ///   detection as jitter. ⚠ Callers that mirror the hazard elsewhere must use the return value
+    ///   rather than reading `records.last`: after a refusal `records.last` is the *previous*
+    ///   hazard, and re-sending it inserts a duplicate row in the cloud.
+    @discardableResult
     func record(kind: String, text: String, fix: GeoFix?, jpeg: Data?,
                 distanceM: Double? = nil, heightM: Double? = nil,
                 direction: String? = nil, headingDeg: Double? = nil,
                 speedMps: Double? = nil, routeName: String? = nil,
                 instruction: String? = nil, source: String? = nil,
-                whatItSaw: String? = nil, severity: String? = nil) {
+                whatItSaw: String? = nil, severity: String? = nil) -> HazardRecord? {
         let now = Date().timeIntervalSince1970
         // Temporal/spatial debounce: suppress rapid sensor jitter (< 3.0s between records of the
         // same kind or same feature family at the same physical fix).
@@ -98,9 +103,13 @@ final class HazardLog {
 
             // Suppress if exact same kind/text within 3s, OR same feature family at the same GPS fix
             if sameKindOrText || (sameFamily && sameCoord) {
-                return
+                return nil
             }
         }
+        // ⚠ The record that was actually appended, so the return value can never be a *previous*
+        // hazard. `records.last` is not good enough: `createDirectory` throwing means nothing was
+        // appended at all, and returning the one before it would mirror a duplicate to the cloud.
+        var appended: HazardRecord?
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var photo: String?
@@ -109,26 +118,31 @@ final class HazardLog {
                 // A failed photo must not cost the hazard itself.
                 if (try? jpeg.write(to: directory.appendingPathComponent(name))) != nil { photo = name }
             }
-            records.append(HazardRecord(kind: kind, text: text,
-                                        latitude: fix?.coordinate.latitude ?? 0,
-                                        longitude: fix?.coordinate.longitude ?? 0,
-                                        accuracy: fix?.accuracy ?? -1,
-                                        time: now, photo: photo,
-                                        distanceM: distanceM,
-                                        heightM: heightM,
-                                        direction: direction,
-                                        headingDeg: headingDeg,
-                                        speedMps: speedMps,
-                                        routeName: routeName,
-                                        instruction: instruction,
-                                        source: source,
-                                        whatItSaw: whatItSaw,
-                                        severity: severity))
+            let record = HazardRecord(kind: kind, text: text,
+                                      latitude: fix?.coordinate.latitude ?? 0,
+                                      longitude: fix?.coordinate.longitude ?? 0,
+                                      accuracy: fix?.accuracy ?? -1,
+                                      time: now, photo: photo,
+                                      distanceM: distanceM,
+                                      heightM: heightM,
+                                      direction: direction,
+                                      headingDeg: headingDeg,
+                                      speedMps: speedMps,
+                                      routeName: routeName,
+                                      instruction: instruction,
+                                      source: source,
+                                      whatItSaw: whatItSaw,
+                                      severity: severity)
+            records.append(record)
+            appended = record        // set BEFORE the write, so a failed write still returns it
             try HazardGeoJSON.encode(records).write(to: fileURL, options: .atomic)
             fileWritten = true
             lastError = nil
         } catch {
             lastError = "Hazard log: \(error.localizedDescription)"
         }
+        // Returned even when the GeoJSON write failed: the hazard was announced to the walker and
+        // is in `records`, so the cloud copy should have it too.
+        return appended
     }
 }
