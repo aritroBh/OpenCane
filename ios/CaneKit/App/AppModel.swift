@@ -1414,7 +1414,16 @@ final class AppModel {
             // not so long that it plays after the walker has passed the sign: 8 s ≈ 10 m at walking
             // pace (Claude workflow wanted longer than 6 s; Muse + Antigravity: 20 s was too long).
             self?.speech.say(text, .obstacle, ttl: source == .sign ? 8 : 6)
-            self?.recordHazard(kind: source.rawValue, text: text, source: source, jpeg: jpeg)
+            let sev = (source == .sign) ? "info" : "warn"
+            self?.recordHazard(
+                kind: source.rawValue,
+                text: text,
+                source: source,
+                jpeg: jpeg,
+                direction: "center",
+                whatItSaw: text,
+                severity: sev
+            )
         }
         hazards.start()
     }
@@ -1733,9 +1742,25 @@ final class AppModel {
         }
         speech.say(g.spokenLine, .safety, ttl: 3)
         let processor = depth.processor
-        Task { [weak self] in
+        let dist = Double(g.distance)
+        let delta = Double(g.delta)
+        let kind = g.kind.rawValue
+        let text = g.spokenLine
+        let what = "\(g.kind.shortNoun) (delta \(String(format: "%.2f", g.delta)) m)"
+        let sev = (g.kind == .dropOff) ? "critical" : "warn"
+        Task { @MainActor [weak self] in
             let jpeg = await Self.frame(processor, maxDimension: 768)
-            self?.recordHazard(kind: g.kind.rawValue, text: g.spokenLine, source: .ground, jpeg: jpeg)
+            self?.recordHazard(
+                kind: kind,
+                text: text,
+                source: .ground,
+                jpeg: jpeg,
+                distanceM: dist,
+                heightM: delta,
+                direction: "center",
+                whatItSaw: what,
+                severity: sev
+            )
         }
     }
 
@@ -1752,13 +1777,41 @@ final class AppModel {
     ///   - source: `.ground`, `.sign` or `.vision` (the hazard watch).
     ///   - jpeg: the frame the hazard was seen in, or nil when none could be encoded.
     /// Callers: `groundHazardFound`, `hazards.onHazard` (wired in `wireHazards`).
-    private func recordHazard(kind: String, text: String, source: HazardSource, jpeg: Data?) {
+    private func recordHazard(kind: String, text: String, source: HazardSource, jpeg: Data?,
+                             distanceM: Double? = nil, heightM: Double? = nil,
+                             direction: String? = nil, whatItSaw: String? = nil,
+                             severity: String? = nil) {
         let now = Date().timeIntervalSinceReferenceDate
         let fix = [location.fix, nav.lastFix].compactMap { $0 }.first { now - $0.timestamp < 120 }
-        hazardLog.record(kind: kind, text: text, fix: fix, jpeg: jpeg)
+        let headingDeg = location.heading
+        let speedMps = (fix?.speed ?? -1) >= 0 ? fix?.speed : nil
+        let routeName = activeRouteName ?? nav.route?.name
+        let instruction = nav.isNavigating ? nav.instruction : nil
+
+        hazardLog.record(
+            kind: kind,
+            text: text,
+            fix: fix,
+            jpeg: jpeg,
+            distanceM: distanceM,
+            heightM: heightM,
+            direction: direction,
+            headingDeg: headingDeg,
+            speedMps: speedMps,
+            routeName: routeName,
+            instruction: instruction,
+            source: source.rawValue,
+            whatItSaw: whatItSaw,
+            severity: severity
+        )
         // Field "type", not "kind": a "kind" field used to replace the record's own kind
         // ("hazard" → "sign"), so e2e.py never saw a hazard record (phone trip log, 2026-09-11).
-        logger.event("hazard", ["type": kind, "text": text, "source": source.rawValue])
+        var eventFields: [String: Any] = ["type": kind, "text": text, "source": source.rawValue]
+        if let distanceM { eventFields["distance_m"] = distanceM }
+        if let heightM { eventFields["height_m"] = heightM }
+        if let direction { eventFields["direction"] = direction }
+        if let severity { eventFields["severity"] = severity }
+        logger.event("hazard", eventFields)
     }
 
     /// The LiDAR facts the on-device describer may use ("1.4 meters ahead, obstacle. Two

@@ -43,6 +43,15 @@ struct ContentView: View {
     /// Instant page swap when the user asked for less motion.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Distinct title for each top-level tab.
+    private var navigationTitleText: String {
+        switch tab {
+        case .guide: "OpenCane"
+        case .sense: "Sense"
+        case .settings: "Settings"
+        }
+    }
+
     /// Page (re-identified per tab so the transition runs) above the tab bar, on the ivory ground,
     /// titled "OpenCane", with the invisible Camera Control interaction behind everything.
     var body: some View {
@@ -60,7 +69,8 @@ struct ContentView: View {
                 CKTabBar(selection: $tab)
             }
             .background(CKColor.background)
-            .navigationTitle("OpenCane")
+            .navigationTitle(navigationTitleText)
+            .navigationBarTitleDisplayMode(.inline)
             .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
         }
         // Camera Control / volume-button spike: a press is logged (`describe {source:

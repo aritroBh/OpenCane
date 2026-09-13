@@ -89,6 +89,16 @@ public enum GroundHazardKind: String, Sendable, Codable, Equatable, CaseIterable
         case .lowObstacle: return "low obstacle"
         }
     }
+
+    /// True for ground depressions (drop-off, pothole).
+    public var isDepression: Bool { self == .dropOff || self == .pothole }
+    /// True for ground elevations (step-up, low obstacle).
+    public var isElevation: Bool { self == .stepUp || self == .lowObstacle }
+
+    /// Returns true if two kinds are the same feature family (prevents flapping between hole and drop-off).
+    public func isSameFamily(as other: GroundHazardKind) -> Bool {
+        self == other || (isDepression && other.isDepression) || (isElevation && other.isElevation)
+    }
 }
 
 /// One ground hazard: what, how far to its nearer edge, how big, and where along the walk.
@@ -349,7 +359,7 @@ public struct GroundHazardPolicy: Sendable, Equatable {
     ///   - now: seconds; the app passes `report.timestamp` (ARKit clock).
     /// Pinned by `groundHazardsAreAnnouncedSparingly`, `aSecondCurbOfTheSameKindIsAnnounced`.
     public mutating func shouldAnnounce(_ h: GroundHazard, now: TimeInterval) -> Bool {
-        if let l = last, l.kind == h.kind, abs(l.anchor - h.anchor) <= samePlace,
+        if let l = last, l.kind.isSameFamily(as: h.kind), abs(l.anchor - h.anchor) <= samePlace,
            l.distance - h.distance < closerBy, now - l.time < repeatInterval {
             return false
         }
@@ -674,9 +684,50 @@ public struct HazardRecord: Sendable, Equatable, Codable {
     /// Snapshot file name next to the GeoJSON, if one was saved.
     public var photo: String?
 
-    /// Memberwise; `photo` defaults to nil. Built by `HazardLog.record`.
+    // Enriched telemetry properties for sidewalk mapping and Grok Bot:
+    /// Distance in metres ahead to the hazard when detected.
+    public var distanceM: Double?
+    /// Vertical elevation delta (m): negative for drops/holes, positive for steps/obstacles.
+    public var heightM: Double?
+    /// Lateral lane or direction: "center", "left", "right", "head".
+    public var direction: String?
+    /// Compass course / heading in degrees (0–360).
+    public var headingDeg: Double?
+    /// Ground speed in m/s.
+    public var speedMps: Double?
+    /// Route or destination name if navigating.
+    public var routeName: String?
+    /// Current navigation instruction text.
+    public var instruction: String?
+    /// Source of detection: "ground" (LiDAR), "sign" (OCR), "vision" (hazard watch).
+    public var source: String?
+    /// Detailed description or classifier findings.
+    public var whatItSaw: String?
+    /// Urgency: "info", "warn", "critical".
+    public var severity: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, text, latitude, longitude, accuracy, time, photo
+        case distanceM = "distance_m"
+        case heightM = "height_m"
+        case direction
+        case headingDeg = "heading_deg"
+        case speedMps = "speed_mps"
+        case routeName = "route_name"
+        case instruction
+        case source
+        case whatItSaw = "what_it_saw"
+        case severity
+    }
+
+    /// Memberwise; defaults for all enriched fields so existing callers remain compatible.
     public init(kind: String, text: String, latitude: Double, longitude: Double, accuracy: Double,
-                time: TimeInterval, photo: String? = nil) {
+                time: TimeInterval, photo: String? = nil,
+                distanceM: Double? = nil, heightM: Double? = nil,
+                direction: String? = nil, headingDeg: Double? = nil,
+                speedMps: Double? = nil, routeName: String? = nil,
+                instruction: String? = nil, source: String? = nil,
+                whatItSaw: String? = nil, severity: String? = nil) {
         self.kind = kind
         self.text = text
         self.latitude = latitude
@@ -684,6 +735,55 @@ public struct HazardRecord: Sendable, Equatable, Codable {
         self.accuracy = accuracy
         self.time = time
         self.photo = photo
+        self.distanceM = distanceM
+        self.heightM = heightM
+        self.direction = direction
+        self.headingDeg = headingDeg
+        self.speedMps = speedMps
+        self.routeName = routeName
+        self.instruction = instruction
+        self.source = source
+        self.whatItSaw = whatItSaw
+        self.severity = severity
+    }
+
+    /// Converts this record directly to an `OpenCaneEvent` for Grok Bot webhook processing.
+    public func asGrokBotEvent(user: String? = nil, caneID: String? = nil) -> OpenCaneEvent {
+        let sev: OpenCaneSeverity?
+        switch severity {
+        case "critical": sev = .critical
+        case "warn": sev = .warn
+        case "info": sev = .info
+        default: sev = nil
+        }
+        let isoTime = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: time))
+        let obs = OpenCaneObstacle(kind: kind, distanceM: distanceM, direction: direction)
+        var extra: [String: OpenCaneJSON] = [:]
+        if let whatItSaw { extra["what_it_saw"] = .string(whatItSaw) }
+        if let photo { extra["photo"] = .string(photo) }
+        if let routeName { extra["route_name"] = .string(routeName) }
+        if let instruction { extra["instruction"] = .string(instruction) }
+        if let source { extra["source"] = .string(source) }
+        if let heightM, heightM.isFinite { extra["height_m"] = .number(heightM) }
+
+        let validHeading = (headingDeg != nil && headingDeg!.isFinite && headingDeg! >= 0) ? headingDeg : nil
+        let validSpeed = (speedMps != nil && speedMps!.isFinite && speedMps! >= 0) ? speedMps : nil
+
+        return OpenCaneEvent(
+            type: .obstacle,
+            severity: sev,
+            timestamp: isoTime,
+            lat: accuracy >= 0 ? latitude : nil,
+            lng: accuracy >= 0 ? longitude : nil,
+            accuracyM: accuracy >= 0 ? accuracy : nil,
+            heading: validHeading,
+            speedMps: validSpeed,
+            note: text,
+            user: user,
+            caneID: caneID,
+            obstacle: obs,
+            extra: extra.isEmpty ? nil : extra
+        )
     }
 }
 
@@ -703,6 +803,17 @@ public enum HazardGeoJSON {
                 "time": iso.string(from: Date(timeIntervalSince1970: r.time)),
             ]
             if let p = r.photo { props["photo"] = p }
+            if let d = r.distanceM, d.isFinite { props["distance_m"] = d }
+            if let h = r.heightM, h.isFinite { props["height_m"] = h }
+            if let dir = r.direction { props["direction"] = dir }
+            if let hd = r.headingDeg, hd.isFinite, hd >= 0 { props["heading_deg"] = hd }
+            if let s = r.speedMps, s.isFinite, s >= 0 { props["speed_mps"] = s }
+            if let rn = r.routeName { props["route_name"] = rn }
+            if let inst = r.instruction { props["instruction"] = inst }
+            if let src = r.source { props["source"] = src }
+            if let saw = r.whatItSaw { props["what_it_saw"] = saw }
+            if let sev = r.severity { props["severity"] = sev }
+
             let geometry: Any = r.accuracy < 0
                 ? NSNull()
                 : ["type": "Point", "coordinates": [r.longitude, r.latitude]] as [String: Any]
