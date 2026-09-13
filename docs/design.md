@@ -40,7 +40,7 @@ of it below says so.
 |---|---|---|
 | **The blind user** | Never looks. Phone is clamped to the cane; they use speech, the cane's buzz, the watch, or the Action button ("Where am I"). | Every state has words: speech via `SpeechQueue`, and a VoiceOver label / value on screen. VoiceOver order is the selected tab's cards, then the tab bar (Guide / Sense / Settings / Profile). Our own buttons are ≥ 60 pt (big buttons 72 pt). Nothing is colour-only. |
 | **The sighted judge / teammate** | Glances at the phone on the cane from ~1 m, in a dark room (demo) or in sunlight (walk). | The Guide instruction, the distance and the depth tiles must be readable at arm's length: tile numerals 28 pt bold, hero distance 64 pt, fills ≥ 6.5:1 against their `ink` text, no thin type, no mid-grey. Dark surfaces for the demo (a bright screen in a dark room blinds the room). |
-| **The developer** | Reads engine health, speech backend, watch link and the hazard detections while walking behind. | The debug cards on the **Sense** tab (Hazards) and the **Settings** tab (Haptics, Watch, This phone). There is no debug footer any more (removed): fps is not shown anywhere, and thermal and battery are only in the trip log's `lanes` records. |
+| **The developer** | Reads engine health, speech backend, watch link and the hazard detections while walking behind. | The debug cards on the **Sense** tab (Hazards) and the **Settings** tab (Haptics, Watch, Mount, This phone). There is no debug footer any more (removed): depth fps is shown on the Mount card's aim row, while thermal and battery remain in the trip log's `lanes` records. |
 
 **Brand voice.** A safety instrument, not a lifestyle app. Think avalanche beacon or aircraft
 standby gauge: calm, terse, trustworthy, legible in the dark. Everything on screen is either a
@@ -477,7 +477,7 @@ While a route runs                                  Idle (before a route / after
 - Distance row: only with a GPS-derived distance (never in the simulator without a fix): hero integer metres + "m", and the bearing pill when there is a heading and a target (hidden on a curved leg and while silent at a crossing).
 - **The two-up pair is a pair of tiles** (`CKBigButton(layout: .tile)`, Step 47): icon over a centred word over a caption ("Camera · what is ahead" / "Voice · ask or command"), both in one `HStack` that is `fixedSize` vertically so they are the same shape and height however their words wrap. Before Step 47 they were row buttons and `ViewThatFits` stacked the long one while the short one stayed a row — one pair, two shapes. While listening the Talk tile turns destructive red, reads "Listening…" with the caption "Tap again to send".
 - **Route buttons are full-width rows with a subtitle** (Step 46): Start route to CIF (primary, chevron), Navigate to CIF from here and Simulate walk (secondary). A subtitle wraps to a second line rather than forcing the stacked shape (Step 47: the row's text column is flexible width).
-- Button rows while navigating: Repeat (primary) + Next (secondary) share a row; Recenter (secondary) has its own row; the beacon / head pills sit between Recenter and Simulate walk / Stop simulation; **Stop route (destructive, last)**, so Stop is the furthest control from Repeat / Next. Stop has no confirmation — use Guided Access on the walk.
+- Button rows while navigating: Repeat (primary) + Next (secondary) share a row; Recenter (secondary) has its own row; the beacon / head pills sit between Recenter and Simulate walk / Stop simulation; **Stop route (destructive, last)**, so Stop is the furthest control from Repeat / Next. The phone button uses a two-tap, three-second confirmation gate; Watch/Siri stop commands remain hands-free direct actions.
 - Where am I and Talk to OpenCane are always present (idle and navigating), above the route controls.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
@@ -496,7 +496,7 @@ While a route runs                                  Idle (before a route / after
 | 11 | Beacon pill | "Beacon: Beacon N%" / "Beacon: Beacon paused" / "Beacon: Beacon off" / "Beacon: Beacon idle" | — | `.updatesFrequently` |
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
 | 12b | Simulate walk / Stop simulation (navigating, between the pills and Stop route) | "Simulate walk" / "Stop simulation" (`AppModel.isSimulatingWalk`) | hint "Simulates walking along the active route indoors" / "Pauses the walk simulation" | button; **no test uses either label** |
-| 13 | Stop route | "Stop route" | hint "Ends guidance" | button |
+| 13 | Stop route | "Stop route" | first tap: "Arms route stop; tap again within 3 seconds to end guidance"; armed state: "Confirms ending guidance when tapped again within 3 seconds" | two-tap confirmation button |
 | — | Cancel route start (idle, only while a route start waits for the depth interlock) | "Cancel route start" | hint "Stops waiting for obstacle detection and does not start guidance"; the status line under the route buttons says why the route has not started | button (destructive); **no test uses it** (§9) |
 | — | Start route to CIF (idle) | "Start route to CIF" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
 | — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
@@ -676,7 +676,7 @@ there — `AppModel` doc comments). Separately, after a launch that never report
 | Hazards (Sense) | "Detect drop-offs" | off (until validated on the phone), persisted | "LiDAR warns about curbs, holes and drop-offs 1.5 to 3.5 meters ahead" |
 | Hazards (Sense) | "Read signs" | on, persisted | "Reads signs like sidewalk closed or detour, on the phone, offline" |
 | Hazards (Sense) | "Hazard watch" | off (until validated on the phone), persisted | "While walking a route, checks the path for cones, barriers and scooters every 8 seconds" |
-| Hazards (Sense) | "Name people ahead" | on, persisted | "When you ask where am I, says how many people are ahead, which way and how far" |
+| Hazards (Sense) | "Name people ahead" | **off**, persisted; enabling it is explicitly experimental until cane validation | "Experimental — enabled, not validated on the cane. When you ask where am I, says how many people are ahead, which way and how far" |
 | Hazards (Sense) | "Listen for sirens and horns" | off, **not persisted**; disabled without the sound classifier | "Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default." |
 | Hazards (Sense) | "Nod to talk" | off, **not persisted**; disabled without headphone motion | "Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default." |
 | Hazards (Sense) | "Head tracking without AirPods" | off, **not persisted**; disabled when the front camera cannot run beside LiDAR | "Uses the front camera to follow your head direction, so the beacon works without AirPods. Cannot change while a route is guiding you." Refused while a route guides or starts (§5.4) |
@@ -722,7 +722,7 @@ Debug controls (sighted teammate / developer):
 - **Haptics card**: pills ENGINE OK / ENGINE DOWN (spoken "Haptic engine running" / "… not running") and the active cue (CLEAR / CENTER / LEFT / RIGHT / HEAD, spoken "Active cue: …"); the engine's error line in red; "Silence haptics"; the caption "Test patterns" and four test buttons "Test left haptic", "Test center haptic", "Test right haptic", "Test head haptic" (60 pt, icon + caption, bypass the decider; centre plays the loop for 2 s, hint "Plays the approach loop for two seconds", the others "Plays the pattern once"); "Speak obstacle names"; speech pills SPEAKING / QUIET and SYSTEM / ELEVENLABS (the voice pill follows what actually spoke, so a wrong key reads SYSTEM; spoken "Voice: …" or "System voice; add an ElevenLabs key for the natural voice"); a quiet grey voice-problem line when a natural-voice fetch or playback failed ("Voice problem: …"); a "Speech test" big button (hint "Speaks a scene line, then an obstacle line that interrupts it"; the scene line is cut and, per §5.1, resumes after the obstacle line — from the top here, because it is cut in its first clause); the audio-session error line in red.
 - **Hazards card**: two neutral pills, the hazard watch backend (the provider name, e.g. "ON-DEVICE"; spoken "Hazard watch uses …") and "N MAPPED" (spoken "N hazards on the map"); one detection row per source that has spoken, LIDAR / SIGN / WATCH / SOUND in the `pill` font and `textSecondary` followed by the last line in `body` (one VoiceOver element per row); an error line in red; "Share hazard map" (60 pt, secondary style, a `ShareLink` of this session's GeoJSON, shown once the file exists, hint "Shares a GeoJSON map of every hazard found on this walk"); the sound watch's status rows; under "Live camera view" ARKit's own frames on the GPU (`LiveCameraView`, 3:4, at the camera's frame rate — 30, or 60 with the Mount switch; hidden from VoiceOver; captions "Live view paused: phone is hot" / "Camera off"); the front-camera readout while head tracking without AirPods is on ("Front camera is detecting …. Head direction only; no front camera picture."); the two-camera picture and its red caption (§5.4); the grey captions that explain a refused mode, read by VoiceOver. "Both cameras self test" / "Front camera self test" appear only under the `--sensor-selftest` launch flag.
 - **Watch card**: link pill REACHABLE / ASLEEP / APP NOT INSTALLED / NOT PAIRED / UNSUPPORTED and the last watch command; the link error in red; "Mirror obstacle cues to the watch"; four buttons "Send left / right / cross / arrive cue to the watch" (disabled when unreachable).
-- **Mount card**: first row the live aim, e.g. "Camera tilt 5° down, good · 30 fps" (`MountTilt.status`; "Camera tilt: hold the cane still for a reading" before a trusted frame), then the five switches above.
+- **Mount card**: first row the live aim, e.g. "Camera tilt 5° down, good · 30 fps" (`MountTilt.status`; "Camera tilt: hold the cane still for a reading" before a trusted frame), then the six switches above (portrait, mirror, 60 fps, beacon, auto-torch and trip log).
 - **Family alerts card**: the four controls and the emails editor in the table above; no pills. Its captions are the only red text on Settings ("No webhook key…" and an Add refusal), and both are words, never a red border alone (§7).
 - **This phone**: "LiDAR depth", "Mesh classification (door / wall / seat)", "Logic package linked", each read as "<name>: available / not available".
 - **Debug footer**: removed (`DebugFooter.swift` is gone). Depth fps is only on the Mount card's aim row; thermal and battery are in the trip log's `lanes` records; the log file is found in the Files app.
@@ -855,16 +855,19 @@ Dynamic Island
 
 ### 6.8 Profile (Medical ID + Mobility)
 
-The fourth tab (`ProfilePage.swift`, Step 44; avatar Step 46; real emergency number and the `.scene`
+The fourth tab (`ProfilePage.swift`, Step 44; avatar Step 46; privacy-safe defaults and the `.scene`
 announce band Step 47). Navigation title "Profile". It is for a **first responder or a sighted helper**
 reading the phone on the cane, and for the walker hearing it: an Apple Health-style Medical ID plus
 today's mobility numbers. Two cards, both titled in **capitals** — the only upper-case card titles in
 the app, on purpose: they must read as an emergency document, not a settings group. Data is
-`MedicalProfileStore` (persisted on the phone and mirrored to Supabase when the keys are set, Step 45).
+`MedicalProfileStore` (persisted on the phone). The optional Supabase mirror is **off by default** and
+requires the Profile → Privacy consent toggle; turning it off stops future uploads and drops queued
+rows, while local data remains available. A fresh install contains no identity, address, date of birth
+or emergency phone number until the walker/helper enters it.
 
 ```
 ┌ EMERGENCY MEDICAL ID ──────────────────────┐
-│ (◯ 56 pt photo)  Aritro …          [ Edit ] │  photo: bundled `AritroProfile`, accent ring; else person.crop.circle.fill
+│ (◯ 56 pt photo)  <name or Not set> [ Edit ] │  photo: bundled `AritroProfile`, accent ring; else person.crop.circle.fill
 │                  ✚ EMERGENCY ID             │  `pill` font, danger red
 │ ┌ ⛨ WHITE CANE USER / BLIND ─────────────┐  │  banner: raised surface, danger glyph + `pill` word,
 │ │   <emergencyNotes>                      │  │  then the notes in `secondary`
@@ -892,8 +895,8 @@ the app, on purpose: they must read as an emergency document, not a settings gro
   (inline), sections Identity / Medical Vitals / Emergency Contact / Cane Equipment, one `TextField`
   per profile field, Cancel and a bold Save in the toolbar. Save writes the whole profile back to the
   store; Cancel discards.
-- **Call** is a `Link` to `tel:` with the digits (and a leading `+`) of the stored number; nothing else
-  in the app dials.
+- **Call** is a `Link` to `tel:` with the digits (and a leading `+`) of the stored number when one has
+  been entered; a fresh profile has no callable number. Nothing else in the app dials.
 - **Announce Medical ID** speaks one paragraph at **`.scene`, 20 s TTL** (§5.1): "<name>. White cane
   user, legally blind. Blood type <type>. Allergies: <list>. Emergency contact: <name>, <phone>." The
   Step 47 audit moved it down from `.obstacle`: a user-requested paragraph must be cut by an obstacle
@@ -902,7 +905,10 @@ the app, on purpose: they must read as an emergency document, not a settings gro
   live trip's `steps` / `distanceM` when today's totals are zero; average pace shows 1.2 m/s when
   nothing has been measured (a placeholder, not a measurement — do not quote it as one). The refresh
   glyph re-reads the pedometer.
-- No switch on this page persists a setting; the page reads the store and the model, nothing else.
+- **Privacy** is a reversible switch above the two cards: "Share data with OpenCane cloud" is off by
+  default and disabled when no cloud project is configured. Its caption names Medical ID, mobility,
+  route locations and trip logs. Turning it off drops queued uploads and detaches the mirror; it does
+  not silently delete already-uploaded rows.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
 |---|---|---|---|---|
@@ -920,10 +926,9 @@ the app, on purpose: they must read as an emergency document, not a settings gro
 | 12 | Active route block (navigating) | "ACTIVE ROUTE", the route name, "N min elapsed" | — | static text |
 | — | Edit sheet | "Edit Medical ID" title; fields by placeholder ("Full Name", "Blood Type", "Phone Number", …); "Cancel" / "Save" | — | text fields, buttons |
 
-**No XCUITest opens this tab** (§9): the "Profile" tab label and every label above are free to
-improve, but keep this table in step. Open design gaps: the photo is a bundled asset of one person,
-not a picked photo; the info rows are two VoiceOver elements each rather than one combined "Blood
-Type, A negative"; the tiles' 1.2 m/s placeholder is indistinguishable from a measurement.
+The XCUITest opens this tab and asserts the "Profile" label plus a combined "Steps Today:" metric
+tile. Remaining design gaps: the photo is a bundled asset of one person, not a picked photo; the
+tiles' 1.2 m/s placeholder is still indistinguishable from a measurement.
 
 ---
 
@@ -980,8 +985,8 @@ unless `make uitest-streetview` passes a frame folder. Set a simulator location 
 
 | Query | Exact string | Where it comes from | Used by |
 |---|---|---|---|
-| `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (all three); haptics, mount and cue picker tests open Settings; tour |
-| `buttons[…]` | "Profile" | `RootTab.title` / `CKTabBar` (the fourth tab, Step 44) | **no test uses it** (`testAccessibilityLabelsExist` asserts only the first three); a free label, listed so nobody assumes it is covered |
+| `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (the first three); haptics, mount and cue picker tests open Settings; tour |
+| `buttons[…]` | "Profile" | `RootTab.title` / `CKTabBar` (the fourth tab, Step 44) | `testAccessibilityLabelsExist` opens the tab and asserts the Profile label plus its privacy and Medical ID controls |
 | `buttons[…]` | "Start route to CIF" | `GuideCard`, idle | every test waits for it first; tour |
 | `buttons[…]` | "Navigate to CIF from here" | `GuideCard`, idle (its label is its text) | `testNavigateToCIFButtonIsOnTheIdleGuide`: exists and is enabled when idle, gone while a route runs, back after Stop (never tapped: it would request real Apple Maps directions) |
 | — | "Cancel route start" | `GuideCard`, only while a route start waits for the depth interlock | **no test uses it** (the simulator has no LiDAR, so a route starts at once); a free label, listed so nobody assumes it is covered |
@@ -1022,5 +1027,7 @@ free to improve, but keep them in step with §6.
 - The watch cuts a long instruction after two lines (≈ 70 % scale) — Repeat is the recovery.
 - ~~The Live Activity glyph's VoiceOver label is the raw kind string ("turnLeft", "straight").~~ Fixed in Step 47: every presentation reads one natural sentence (§6.7).
 - "GPS: Denied" is a neutral pill; a denied permission arguably deserves `danger`.
-- Stop route has no lock or confirmation (Guided Access is the mitigation; `docs/todo.md` open item).
+- Stop route on the phone has a two-tap, three-second confirmation gate; the first tap speaks/shows
+  the armed state and only the second tap ends guidance. Watch/Siri stop commands remain direct so
+  hands-free recovery is not slowed. Guided Access is still recommended for a mounted phone.
 - `.updatesFrequently` pills may be read repeatedly by VoiceOver while focused (`docs/todo.md` open item).

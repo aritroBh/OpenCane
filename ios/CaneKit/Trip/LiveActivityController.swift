@@ -18,8 +18,10 @@
 //  screen after a restart (Step 20), Dynamic Island shows the next instruction + distance.
 //
 //  Threading / isolation: `@MainActor @Observable`. `Activity.update` / `.end` are called from
-//  `Task.detached` through a `nonisolated(unsafe)` local, because `Activity` is not Sendable but
-//  its async API is safe from any task.
+//  one chained detached task at a time through a `nonisolated(unsafe)` local, because `Activity`
+//  is not Sendable but its async API is safe from any task. The chain is the ordering fence: an
+//  older update always completes before `end`, and a new route's first update waits for the old
+//  end instead of reviving stale lock-screen state.
 //
 //  Key invariants:
 //    · ⚠ Keep the ≥ 10 m / instruction-or-kind-change coalescing — ActivityKit rate-limits and
@@ -54,6 +56,9 @@ final class LiveActivityController {
     @ObservationIgnored private var coalescer = LiveActivityCoalescer()
     /// Last state actually sent; the coalescing baseline for `update`.
     @ObservationIgnored private var lastState: NavActivityAttributes.ContentState?
+    /// Serializes ActivityKit mutations. A task is never detached independently of its
+    /// predecessor, so update/end/start replacement cannot reorder on the system's executor.
+    @ObservationIgnored private var activityOperation: Task<Void, Never>?
 
     /// Idle until `start`.
     init() {}
@@ -160,7 +165,11 @@ final class LiveActivityController {
         lastState = state
         nonisolated(unsafe) let act = activity
         let stale = Self.staleDate()
-        Task.detached { await act.update(.init(state: state, staleDate: stale)) }
+        let predecessor = activityOperation
+        activityOperation = Task.detached(priority: .utility) {
+            _ = await predecessor?.value
+            await act.update(.init(state: state, staleDate: stale))
+        }
     }
 
     /// `LiveActivityCoalescer.staleAfter` from now: past it the widget dims the distance and says
@@ -214,7 +223,11 @@ final class LiveActivityController {
         )
         nonisolated(unsafe) let act = activity
         let policy: ActivityUIDismissalPolicy = immediate ? .immediate : .after(.now + 60)
-        Task.detached { await act.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }
+        let predecessor = activityOperation
+        activityOperation = Task.detached(priority: .utility) {
+            _ = await predecessor?.value
+            await act.end(.init(state: state, staleDate: nil), dismissalPolicy: policy)
+        }
         self.activity = nil
         isActive = false
     }

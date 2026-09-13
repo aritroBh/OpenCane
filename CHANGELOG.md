@@ -2,6 +2,46 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 51 — Adversarial safety hardening: stale sensors, lifecycle races, and explicit consent (Sun Sep 13)
+
+**Why.** A review of the live navigation path found ways for stale sensor state, out-of-order
+asynchronous work, or an unannounced capability failure to outlive the component that produced it.
+Those are safety failures for a blind walker even when the happy path is unchanged.
+
+**What changed.**
+- GPS fixes now have a five-second freshness gate. A terminated/revoked Core Location stream or a
+  stale/future fix withdraws the route target and speaks the existing GPS-weak line; permission
+  denial cancels a queued route start and uses the Settings guidance.
+- Terminal AR failure/interruption drops retained camera frames, stops the hazard scanner and face
+  yaw consumer, and generation-fences late Vision/VLM callbacks. Deferred face, frame-rate and mesh
+  configuration requests are all applied after a route ends; MultiCam teardown gets a background
+  execution budget before suspension.
+- Haptic runtime failures mark the engine unhealthy immediately, so the existing watch and speech
+  fallback is selected on the next cue. AirPods callbacks are lifecycle-generation fenced.
+- Push-to-talk and sound recognition clean up taps/engines before releasing the shared microphone
+  lease; route/interruption/permission failures, analyzer errors, MP3 decode errors and audio-session
+  startup errors surface through the existing speech/watch channels. Speech interruption retries and
+  Live Activity operations are generation/serialization fenced.
+- Arrival summaries and HealthKit step refreshes carry route/trip generations, preventing an old
+  asynchronous result from changing a replacement route. Stop route is now a two-tap confirmation
+  with a three-second window and an audible/visible armed state.
+- People detection defaults off and is labelled **Experimental — not validated on the cane** when
+  enabled. Profile data starts without seeded identity/medical/contact PII. Supabase mirroring is
+  off until the user explicitly opts in; turning it off drops queued uploads and leaves local data
+  intact (existing remote rows are not deleted automatically).
+- Profile metric tiles respect Dynamic Type and expose combined VoiceOver labels; unsupported hazard
+  controls explain why they are unavailable; simulator grant now fails on boot/privacy errors and
+  seeds a deterministic location.
+
+**Verification.** `cd ios && make test` → **654 tests in 12 suites passed** (exit 0). `make sim` →
+**BUILD SUCCEEDED** (exit 0; only the pre-existing `CLGeocoder` iOS 26 deprecation warning).
+
+test on device: during a route, background and resume the app and confirm guidance stays in GPS-weak
+state until a fresh fix and trusted AR frame arrive; interrupt ARKit and reconnect it, disconnect
+AirPods during sound recognition and push-to-talk, revoke microphone and location permission, trigger
+a haptic/audio failure, verify the People card says experimental, toggle cloud sharing off, and tap
+Stop route once then again to confirm the armed window and safe cancellation behavior.
+
 ## Step 50 — Typing a destination: the tab bar leaves with the keyboard, and no rows from Australia (Sat Sep 12, 23:21)
 
 **Why.** Owner's screenshot while typing "Oab": iOS 26 draws the keyboard's "Done" as a floating
@@ -41,28 +81,6 @@ in the gate below.
 
 test on device: type "Oab" — no Australia, no Michigan, no Rio; the tab bar is gone while typing
 and back after Done or Go; Done no longer overlaps anything.
-## Step 31 — Voice input fails safe for its full microphone lifetime (Sat Sep 12)
-
-Push-to-talk now uses a generation-fenced, route-aware lifecycle. `VoiceInputEngine` and the shared
-`SpeechQueue` observe route and interruption changes for the entire capture, poll permission and
-engine health, discard stale transcripts, and tear down cleanly on HFP/input loss, analyzer/engine
-failure, cancellation, or a permission race. Navigation and LiDAR continue while this optional
-voice feature degrades. `VoiceInputGuard` and its Logic tests cover the pure state transitions.
-
-test on device: start Talk to OpenCane, disconnect AirPods or trigger a phone-call interruption,
-revoke microphone permission while listening, and cancel during the permission prompt; each case
-must stop capture, explain the failure, restore playback and leave navigation running.
-
-## Step 29 — Refuse AR sensor-mode restarts during navigation (Sat Sep 12)
-
-Face-tracking and high-frame-rate changes now pass through the pure `SensorModeInterlock`: they are
-refused while a route is starting or active, while serialized camera teardown is pending, and are
-applied only after the route ends. Thermal mesh downgrades stop processor lookups immediately but
-defer the AR session restart until it is safe. Interruption/failure clears stale obstacle cues and
-announces the degraded channel until a trusted frame proves recovery.
-
-test on device: start a route, toggle face tracking and 60-fps mode, and confirm each request is
-refused without a depth gap; stop the route and confirm the deferred setting applies then.
 
 ## Step 49 — Low light: the app notices the dark for a walker who cannot (Sat Sep 12, late)
 
@@ -298,11 +316,11 @@ example, when the Muse is triggered." The app knew every one of those facts and 
   effect ("Detailed · Outdoors · names off"). Each row is one VoiceOver sentence; a 10 s
   `TimelineView` ticks the ages.
 
-### E. Medical ID — the real number
+### E. Medical ID — privacy-safe defaults
 
-The card showed the Step 44 placeholder `+1 (555) 234-5678`. Default is now `+1 (925) 791-8082`
-(owner: "my phone number is actually 925 791 8082"), and `MedicalProfileStore.init` migrates exactly
-that placeholder on phones that had already saved a profile; a number the owner typed is kept.
+The card showed the Step 44 placeholder `+1 (555) 234-5678`. Step 51 removes that seeded contact
+from the default and migrates it to a blank value on phones that had already saved the placeholder;
+a number the owner typed is kept locally and is never copied into a new binary.
 "Announce Medical ID" now speaks at `.scene` (20 s TTL), not `.obstacle`: the design audit caught a
 user-requested paragraph sitting in the hazard band of hard rule 8, where an obstacle name or a
 route line could not have cut it.
@@ -583,7 +601,7 @@ Turn a switch in Settings and watch `device_settings` change. Add a family email
 check `family_contacts`. Record a hazard with drop-offs on and confirm the row **and** its JPEG in
 the `hazard-photos` bucket.
 
-## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
+## Historical note — Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
 
 **Why:** The user requested:
 1. "can u make th ebuttons and tsuff look better we still have the same thigns like satrt ruote to cif and naigate t cif form here and its now jsut good looking": GuideCard had two buttons mentioning "CIF" in awkward layouts — "Start route to CIF" as a giant white slab, and "Navigate to CIF from here" squeezed into a half-width square next to "Simulate walk", wrapping 27 characters across 3 cramped lines.
@@ -626,7 +644,7 @@ the `hazard-photos` bucket.
 
 test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab features full-width buttons with clear subtitles ("Campus Demo" vs "Live GPS"), open the Profile tab to view the custom circular profile avatar and verified emergency card details.
 
-## Step 45 — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
+## Historical note — Step 45 (initial backend) — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
 
 **Why:** The user provided Supabase project credentials (`https://ppmuqgswuyniwiwsdnto.supabase.co` with publishable and secret keys) to connect OpenCane to its dedicated cloud database backend.
 
@@ -680,7 +698,7 @@ test on device: open OpenCane; verify profile edits in the Profile tab sync seam
   - Made `pageScroll` internal for shared use by `ProfilePage`.
 - `MedicalProfileStore.swift` (`ios/CaneKit/Trip/MedicalProfileStore.swift`):
   - Created `@MainActor @Observable` store with `CKMedicalProfile` and `CKMobilityStats`.
-  - Pre-seeded with complete default profile for Aritro Bhattacharjee, persisted to `UserDefaults.standard` under `"opencane_medical_profile"`.
+  - Pre-seeded with a complete profile for the original demo owner, persisted to `UserDefaults.standard` under `"opencane_medical_profile"` (historical; current defaults are privacy-safe).
   - Integrates `CMPedometer` querying from midnight to now for real-time daily steps, distance, and walking cadence.
 - `ProfilePage.swift` (`ios/CaneKit/UI/ProfilePage.swift`):
   - Emergency Medical ID Card: prominent `"WHITE CANE USER / BLIND"` emergency banner, medical vitals grid (DOB, blood type, height, weight, allergies, medications, residence, cane specs), tap-to-call emergency contact button, `"Announce Medical ID"` button via speech queue.
@@ -1721,7 +1739,7 @@ Nothing else changed — no code, no geometry, no parameter.
 
 test on device: nothing. Documentation only.
 
-## Step 25 — Camera interlock adversarial hardening and documentation sync (Sat Sep 12)
+## Historical note — Step 25 — Camera interlock adversarial hardening and documentation sync (Sat Sep 12)
 
 The full review after merging the voice-assistant work found and fixed the remaining safety/UI
 edges:
@@ -1787,7 +1805,7 @@ Hands-free voice assistant mode designed specifically for blind white-cane users
 test on device: trigger Action Button or tap the mic; say “set a post here named curb”, verify the
 confirmation, ask “how is my battery”, then say “take me to CIF”.
 
-## Step 22 — Gate route start on fresh trusted LiDAR depth (implementation precursor; superseded by Step 25 heading above) (Sat Sep 12)
+## Historical note — Step 22 — Gate route start on fresh trusted LiDAR depth (implementation precursor; superseded by Step 25 heading above) (Sat Sep 12)
 
 Added the camera-transition interlock for route guidance:
 
@@ -1946,7 +1964,7 @@ Clarity and usability enhancement for the Townsend Hall to CIF walk:
 
 test on device: open app, verify button reads 'Start route to CIF', tap to start route from Townsend Hall.
 
-## Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root to prevent full-screen SwiftUI re-renders (Sat Sep 12)
+## Historical note — Step 21 — Bolt: Decouple 30 Hz depth stream from ContentView root to prevent full-screen SwiftUI re-renders (Sat Sep 12)
 
 Performance optimization addressing root-level SwiftUI Observation invalidation:
 - **Observation root decoupling**: In iOS 26 / Swift 6 `@Observable`, referencing high-frequency sensor streams (`model.depth.report` at 15–30 Hz, `model.depth.fps`, and `cameraTiltDownDeg`) directly in `ContentView.body` caused the entire root scroll view and all 9 navigation/status/settings cards to invalidate and re-evaluate on every LiDAR depth frame.
@@ -2216,7 +2234,7 @@ too stiff to click or too thin to survive.
 
 test on device: n/a (no app change). On the printer: coupons `what="bore"` first, set `bore_clear`,
 then thread and dovetail coupons, then collar + ring, then arm + cradle.
-## Step 17 — App icon (Sat Sep 12, on phone and launched)
+## Historical note — Step 17 — App icon (Sat Sep 12, on phone and launched)
 
 Both `AppIcon` sets were empty — the app shipped with no icon. v1 ("Folded Signal", from
 `/tmp/icon.py`) was abstract bars; v2 ("White Cane") is a real mobility cane on the navy
@@ -2245,7 +2263,7 @@ Re-installed ~01:45 with the v3 icon (`AppIcon60x60@2x.png` emplaced in the buil
 **BUILD SUCCEEDED**, devicectl install green, and `device process launch` succeeded (phone
 unlocked). White Cane icon live on the Home Screen.
 
-## Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
+## Historical note — Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
 
 Both worktrees are now in the main checkout, hand-merged so nothing the renames and fixes
 built since is lost:
@@ -2301,7 +2319,7 @@ about the scene" answers the question asked, never a generic description.
    loud ("needs the cloud model... Describing instead.") and the original question is preserved
    in `lastQuestion` + the trip log. No silent substitution; the contract bans silent ones.
 
-## Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
+## Historical note — Step 15 — Front-inset tilt, second attempt (Sat Sep 12, compiled + installed)
 
 The front inset of the both-cameras view still came out tilted with the back feed fine, after the
 first fix (0f32282) asked `RotationCoordinator` for `videoRotationAngleForHorizonLevelPreview`.

@@ -108,6 +108,10 @@ final class BeaconEngine {
     @ObservationIgnored private var speaking = false
     /// Nodes are attached exactly once; a second `start()` (second route) only restarts the engine.
     @ObservationIgnored private var graphBuilt = false
+    /// Invalidates delayed interruption-restart retries when a route stops or a newer route starts.
+    /// Without this fence, a retry from an old route could restart the beacon on a replacement
+    /// route after its own recovery state had already been discarded.
+    @ObservationIgnored private var lifecycleGeneration: UInt64 = 0
 
     /// Silent inside this error; full volume at `fullVolumeError`.
     /// Degrees. Inside ±10° the user is on course, so silence *is* the "keep going" signal.
@@ -130,10 +134,18 @@ final class BeaconEngine {
     /// be configured already (`SpeechQueue.configureAudioSession`, at launch).
     func start() {
         guard !isRunning else { return }
+        lifecycleGeneration &+= 1
         do {
             let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+            if clickBuffer == nil {
+                guard let click = Self.makeClick(format: format) else {
+                    lastError = "Beacon: click buffer unavailable"
+                    isRunning = false
+                    return
+                }
+                clickBuffer = click
+            }
             if !graphBuilt {
-                clickBuffer = Self.makeClick(format: format)
                 engine.attach(player)
                 engine.attach(environment)
                 // Mono in → environment (spatialised) → main mixer.
@@ -152,8 +164,12 @@ final class BeaconEngine {
             }
 
             try engine.start()
-            restartLoop()
             isRunning = true
+            guard restartLoop() else {
+                engine.stop()
+                isRunning = false
+                return
+            }
             lastError = nil
             observeRouteChanges()
             render()
@@ -169,6 +185,7 @@ final class BeaconEngine {
     /// `isRunning` is false. Callers: `AppModel.stopRoute`, `endRouteQuietly` (a route replaced
     /// mid-walk) and the `nav.onArrived` handler.
     func stop() {
+        lifecycleGeneration &+= 1
         player.stop()
         engine.stop()
         isRunning = false
@@ -177,13 +194,17 @@ final class BeaconEngine {
     /// One looping click, never two: stop first (drops any scheduled buffer), then schedule + play.
     /// Starts at the last `renderedVolume`, so a restart does not blip at full volume before
     /// the next `render()`.
-    private func restartLoop() {
-        player.stop()
-        if let clickBuffer {
-            player.scheduleBuffer(clickBuffer, at: nil, options: [.loops])
+    @discardableResult
+    private func restartLoop() -> Bool {
+        guard clickBuffer != nil else {
+            lastError = "Beacon: click buffer unavailable"
+            return false
         }
+        player.stop()
+        player.scheduleBuffer(clickBuffer!, at: nil, options: [.loops])
         player.volume = renderedVolume
         player.play()
+        return true
     }
 
     /// AirPods connect/disconnect re-configures the engine, and a phone call / Siri interrupts
@@ -227,20 +248,34 @@ final class BeaconEngine {
     /// Re-activates the shared session (never re-categorises it), starts the engine if the
     /// system stopped it, reschedules the loop and re-renders. `attempt` counts retries (0…3).
     /// Main actor; retries run in a main-actor `Task`.
-    private func restartEngine(attempt: Int = 0) {
-        guard isRunning else { return }
+    private func restartEngine(attempt: Int = 0, generation: UInt64? = nil) {
+        let generation = generation ?? lifecycleGeneration
+        guard isRunning, generation == lifecycleGeneration else { return }
         do {
             try AVAudioSession.sharedInstance().setActive(true)
             if !engine.isRunning { try engine.start() }
-            restartLoop()
+            guard restartLoop() else {
+                engine.stop()
+                isRunning = false
+                return
+            }
             render()
             lastError = nil
         } catch {
             lastError = "Beacon restart: \(error.localizedDescription)"
-            guard attempt < 3 else { return }
-            Task { [weak self] in
+            guard attempt < 3 else {
+                // Do not leave the published beacon state looking alive after all recovery attempts
+                // failed. The route's speech/watch channels remain available, and the card exposes
+                // this error so a later route can retry cleanly.
+                engine.stop()
+                isRunning = false
+                silence()
+                return
+            }
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1))
-                self?.restartEngine(attempt: attempt + 1)
+                guard let self, !Task.isCancelled, self.lifecycleGeneration == generation else { return }
+                self.restartEngine(attempt: attempt + 1, generation: generation)
             }
         }
     }

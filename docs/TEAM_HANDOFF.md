@@ -1,27 +1,27 @@
 # Team handoff: read this first after you pull
 
-State of OpenCane / CaneKit at **Step 47** (Sat 2026-09-12 evening; Step 46 is commit `891f558`,
-followed by the profile-data fix `ba28e40` and the Codex-audit fix `0c7372b`, with Step 47 in the
-working tree on top): Steps 26–47 plus the per-camera rotation fix are on `main`. Written for Aritro,
+State of OpenCane / CaneKit at **Step 51** (Sun 2026-09-13): the Step 51 adversarial safety
+hardening is in the working tree on top of the last committed main. Written for Aritro,
 Aarav, Tejas, Sagar and Tommy, and for AI agents picking the work up. It says what exists, what is
 proven, what is not, what is open, and which decisions are already made so nobody re-litigates them
 at 2 a.m. Every sentence marked **historical** was true when it was written and is kept for context;
-everything else was re-checked against the code, `git log` and `CHANGELOG.md` at Step 47 (the
-first version of this file was written at `076fcaa` / Step 37, and the trip-log evidence in §2.3
+everything else was re-checked against the code and `CHANGELOG.md` at Step 51 (the first version of
+this file was written at `076fcaa` / Step 37, and the trip-log evidence in §2.3
 still dates from then).
 
-The current merged tree additionally carries the route-time `SensorModeInterlock` and the
-generation-fenced `VoiceInputGuard` safety work (see `CHANGELOG.md` Steps 29 and 31). Re-run the
-Logic/build gates after resolving any merge; do not treat the historical counts below as current.
+The current working tree additionally carries GPS freshness fencing, AR terminal cleanup, audio and
+HealthKit/Live Activity generation fences, explicit people-detection validation state, Stop-route
+confirmation, and consent-gated cloud mirroring (see `CHANGELOG.md` Step 51). Re-run the Logic/build
+gates after every merge; the device-only checks below remain open until a physical walk.
 
 > **The 2-minute version: [`TEAM_BRIEF.md`](TEAM_BRIEF.md). Open work: [`todo.md`](todo.md) →
-> "Cue design v2 — items cue-v2 #35–#45" (plan numbers, not CHANGELOG steps — §3) and its "## Step 47"
+> "Cue design v2 — items cue-v2 #35–#45" (plan numbers, not CHANGELOG steps — §3) and its "## Step 51"
 > block.** AI agents: read §10 ("How an agent resumes") before touching anything. The code wins over
 > every doc, this one included; fix the doc when they disagree.
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (575 `@Test` annotations in 44 files at Step 47, Swift 6 / Xcode 27). Check the exit
+1. `git pull`, then `cd ios && make test` (654 `@Test` annotations in 53 files at Step 51, Swift 6 / Xcode 27). Check the exit
    code of `make test` itself, never through `| tail` (§10.4).
 2. Read the "Still needs the phone" list in §2.4. Most of the last day's work is built and
    simulator-green but not yet checked on the phone.
@@ -56,15 +56,15 @@ the root [`README.md`](../README.md).
 
 ### 2.1 Automated gates (Mac, simulator)
 
-The last fully recorded run is `CHANGELOG.md` Step 46 (`891f558`); Step 47 added tests and a third
-XCUITest suite, so rerun them yourself before claiming anything (AGENTS.md "How we engineer" 1) and
-read the Step 47 entry for its own run.
+The latest run for this working tree is recorded in `CHANGELOG.md` Step 51: Logic 654/654 and the
+simulator build are green. UI, e2e and physical-device checks still need to be rerun before a release
+claim (AGENTS.md "How we engineer" 1).
 
 | Check | Last recorded result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | **538/538** at Step 46; the target now holds **575 `@Test` annotations in 44 files** (Step 47: `SceneEngineSummaryTests`, `TorsoHapticPolicyTests`, more coalescer tests) — recount with `grep -rc '@Test' ios/Logic/Tests`, never copy a number from a doc | `make test` |
+| Logic tests (every rule with a number in it) | **654/654** at Step 51 in 53 test files (Swift Testing); recount with `rg -c '^\\s*@Test' ios/Logic/Tests/CaneKitLogicTests`, never copy a number from a doc | `make test` |
 | App + watch + widget build, Swift 6 strict | green at Step 46 | `make sim` |
-| XCUITests on the iPhone 17 Pro Max / iOS 27 simulator | **11/11** at Step 46. Since Step 47 the `CaneKitUITests` target holds **12** test functions and `make uitest` runs the whole target: the 10 in `CaneKitUITests.swift` (including Step 36's `testCuePickersChangeAndRestore`), `CaneKitVisualTour.testTour` and `CaneKitIslandTour.testDynamicIsland` (the Dynamic Island pictures, also alone as `make island`). One skips: `testWhereAmIDescribesAStreetViewFrame` — its `XCTSkip` fires when `CANEKIT_FRAME_DIR` is unset, so it only runs under `make uitest-streetview` with the local Street View frames | `make uitest` (set a simulator location first, §10.4) |
+| XCUITests on the iPhone 17 Pro Max / iOS 27 simulator | **Not rerun after Step 51**. The target holds 12 test functions (10 in `CaneKitUITests.swift`, `CaneKitVisualTour.testTour`, and `CaneKitIslandTour.testDynamicIsland`); the Street View test skips unless `CANEKIT_FRAME_DIR` is set. Step 46's 11/11 result is historical. | `make uitest` (set a simulator location first, §10.4) |
 | GPS replay through the real app | **historical:** PASS (266 s) at `076fcaa` / Step 37 | `make e2e` (silent: the app mutes itself) |
 | Cue audit script fixtures | `cue_audit.py --selftest` ok | `python3 scripts/cue_audit.py --selftest` |
 
@@ -74,7 +74,7 @@ retried on Step 36. Step 46 was reviewed by Muse and Codex; Step 47 by three rea
 on the docs and by Muse, Codex, OpenCode and Antigravity on the diff. The findings, fixes
 and rejections with evidence are in each CHANGELOG entry. A review is not a device test.
 
-### 2.2 What landed on the app line, Steps 26–47
+### 2.2 What landed on the app line, Steps 26–51
 
 One line per step; the CHANGELOG entry is the full account. ⚠ Commit subjects for Steps 39–44 lag
 the CHANGELOG numbering by one in places (a subject reading "Step 39 — Dynamic Island" is CHANGELOG
@@ -83,6 +83,7 @@ Step 40; "Step 43 — Medical ID Profile tab" is Step 44): read the CHANGELOG he
 | Step | What exists now | Commit |
 |---|---|---|
 | 47 | The Dynamic Island redesigned from its first pictures (`CaneKitIslandTour` + `make island`, manoeuvre glyphs, stale state, one VoiceOver sentence per presentation, `LiveActivityCoalescer.staleAfter`); torso haptics by cue level (`TorsoHapticPolicy`, cue-v2 #41); the Details tab's Scene engine card says which model answered (`SceneEngineSummary`); the Guide two-up tile pair (`CKBigButton.Layout.tile`); "Announce Medical ID" moved to `.scene`; the real emergency phone number | working tree at the time of writing (Sat evening), not yet committed |
+| 51 | Adversarial safety hardening: stale GPS state, terminal AR cleanup/recovery, audio and haptic fail-safe handling, async generation fences, People Detection opt-in/unverified gate, Stop-route confirmation, privacy-safe Medical ID/cloud consent, Profile accessibility coverage, and simulator GPS/privacy setup | working tree (not committed) |
 | 46 | Muse / Codex review fixes (secret key out of the client bundle, `install_id` isolation, `resolveWalkerID` mutex, `mobility_days` on the local calendar day), `CKBigButton` subtitle + chevron route rows, the profile avatar | `891f558` (+ `ba28e40` profile data, `0c7372b` Codex follow-ups) |
 | 45 | Supabase cloud backend (`SupabaseClient`: walkers, medical_profiles, mobility_days, hazards, family_alerts, devices) for the Medical ID, mobility stats, hazard map and family-alert feeds; the `CMPedometer` `@Sendable` crash fix | `2917895` (+ docs / graph refresh `252152d`) |
 | 44 | The fourth root tab **Profile** (`ProfilePage`, `MedicalProfileStore`): Emergency Medical ID card, mobility fitness from `CMPedometer`; streamlined Guide buttons; Dynamic Island indicator fix; webhook keys configured | `d0c7964` |
@@ -109,8 +110,9 @@ Step 40; "Step 43 — Medical ID Profile tab" is Step 44): read the CHANGELOG he
 Hardware line on the same day (Sagar's machine): Step 25 (screwless mount simulated, redesigned
 and re-sliced, `scripts/verify_mount.ps1`; the Step 25 entry says 30 checks, the script now prints
 32 PASS/FAIL lines on a full run) and the committed G-code / STLs (`0c425de`).
-Step numbers 15, 16, 17, 21, 22 and 25 each appear twice in `CHANGELOG.md` on purpose; read the
-date and subject, not the number.
+Older hardware/app notes are preserved under `Historical note — Step …` headings in `CHANGELOG.md`.
+Only numbered headings are current build steps; do not treat a historical note as a second
+implementation or as a newer verification result.
 
 ### 2.3 Device evidence from trip logs (Sat 2026-09-12)
 
@@ -203,7 +205,7 @@ still stand; the "Tonight" column is from before Steps 26–37.
 | **Sagar**, **Tommy** (hardware) | Render and print the mount (`hardware/README.md` quick start). Bench tests D1–D5 and D16 with the clamp. Set the tilt by reading the phone (§5). | Spotter on every walk. Power bank, sun shade, heat checks. |
 | **Aarav** (software, walker) | Feel the haptic patterns (D2), wear the watch (D11). | Survey walk W1, reference walk W2, blindfolded rehearsal W4. |
 
-**Open work at Step 47** (source: `todo.md`; tick it there, not here):
+**Open work at Step 51** (source: `todo.md`; tick it there, not here):
 
 - **Device checks** in §2.4, the mounted `make audit` walk first, then the Step 39–47 "test on
   device" lines in `CHANGELOG.md` (family alerts end to end, the fall thresholds, the Profile tab's
@@ -252,7 +254,7 @@ still stand; the "Tonight" column is from before Steps 26–37.
 ```sh
 git pull
 cd ios
-make test          # Logic tests (575 @Test annotations at Step 47); requires the Swift 6 toolchain
+make test          # Logic tests (654 @Test annotations in 53 files at Step 51); requires the Swift 6 toolchain
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build

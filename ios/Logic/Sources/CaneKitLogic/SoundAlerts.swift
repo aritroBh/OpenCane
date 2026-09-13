@@ -425,6 +425,25 @@ public struct SoundAlertPolicy: Sendable, Equatable {
     }
 }
 
+/// Bounded retries for returning a microphone lease to the app's playback session after a transient
+/// audio-route failure. The app keeps the owner while these retries run so another input feature
+/// cannot start against an unknown session state.
+public enum MicrophoneSessionRecovery {
+
+    /// Number of delayed recovery attempts after the owner's immediate restore attempts fail.
+    public static let retryAttempts = 3
+    /// Seconds between delayed recovery attempts while the route settles.
+    public static let retryDelay: Double = 1.0
+}
+
+/// Limits the amount of microphone PCM that may wait for SoundAnalysis. Dropping newest windows
+/// under load keeps classification latency bounded instead of retaining an ever-growing backlog.
+public enum MicrophoneAnalysisLimits {
+
+    /// At the 4096-frame tap size this is a short sub-second queue on the supported input rates.
+    public static let maxPendingBuffers = 8
+}
+
 /// When the microphone's input format may be trusted, and how long to wait for it if it is not.
 ///
 /// Why this exists: `SoundWatcher` asks `AVAudioEngine.inputNode` for its format immediately after

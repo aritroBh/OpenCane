@@ -45,6 +45,9 @@ struct GuideCard: View {
     /// Hero distance size: 64 pt at default text size, scaled with `.largeTitle`, clamped to 80
     /// at the call site so the buttons are never pushed off-screen (design.md §1, §8).
     @ScaledMetric(relativeTo: .largeTitle) private var hero = 64
+    /// Two-step gate for the destructive Stop route action; reset after its short confirmation
+    /// window or whenever the route stops through another path.
+    @State private var stopConfirmation = StopRouteConfirmation()
     /// The root scroll view's proxy, handed on to `DestinationField` so that focusing the search
     /// box scrolls the Guide card above the keyboard. nil in previews (then nothing scrolls).
     var scroller: ScrollViewProxy? = nil
@@ -184,8 +187,7 @@ struct GuideCard: View {
                     CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
                                 hint: "Simulates walking along the active route indoors") { model.startSimulatedWalk() }
                 }
-                CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive,
-                            hint: "Ends guidance") { model.stopRoute() }
+                stopRouteButton
             } else {
                 if model.nav.arrived {
                     // The arrival line + trip summary are the longest of the walk: keep Repeat.
@@ -260,6 +262,49 @@ struct GuideCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+        .onChange(of: model.nav.isNavigating) { _, navigating in
+            if !navigating { stopConfirmation.reset() }
+        }
+    }
+
+    /// Stop route is deliberately a two-tap confirmation. The first tap gives a spoken and
+    /// visible status; only a second tap inside `StopRouteConfirmation.window` ends guidance.
+    /// The button's VoiceOver label remains exactly "Stop route" (the XCUITest contract).
+    private var stopRouteButton: some View {
+        VStack(alignment: .leading, spacing: CKSpacing.xs) {
+            CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive,
+                        hint: stopConfirmation.isArmed
+                            ? "Confirms ending guidance when tapped again within 3 seconds"
+                            : "Arms route stop; tap again within 3 seconds to end guidance",
+                        value: stopConfirmation.isArmed ? "confirmation needed" : nil) {
+                stopRoutePressed()
+            }
+            if stopConfirmation.isArmed {
+                Text("Tap Stop route again within 3 seconds to end guidance.")
+                    .font(CKFont.secondary)
+                    .foregroundStyle(CKColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Stop route is armed. Tap Stop route again within 3 seconds to end guidance.")
+            }
+        }
+        .task(id: stopConfirmation.isArmed) {
+            guard stopConfirmation.isArmed else { return }
+            try? await Task.sleep(for: .seconds(StopRouteConfirmation.window))
+            guard !Task.isCancelled else { return }
+            stopConfirmation.reset()
+        }
+    }
+
+    /// Handles one press of the two-step Stop route gate.
+    private func stopRoutePressed() {
+        switch stopConfirmation.press(at: ProcessInfo.processInfo.systemUptime) {
+        case .armed:
+            model.logger.event("route", ["action": "stop_armed"])
+            model.speech.say(AppModel.stopRouteConfirmationLine, .nav, ttl: 4)
+        case .confirmed:
+            stopConfirmation.reset()
+            model.stopRoute()
         }
     }
 

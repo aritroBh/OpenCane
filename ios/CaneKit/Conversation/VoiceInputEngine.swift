@@ -578,14 +578,15 @@ final class VoiceInputEngine {
     }
 
     /// Cancels listening without submitting; also voids a permission prompt still on screen.
-    /// Speaks nothing; logs `voice_end` with reason "cancel" only if it was listening. No caller
-    /// today (AppModel's background path does not cancel a press) — kept for that teardown.
+    /// Speaks nothing; logs `voice_end` with reason "cancel" only if it was listening. Called by
+    /// the AppModel background and route-stop paths as well as a second Guide-button press while a
+    /// permission prompt is pending.
     func cancel() {
         let wasListening = isListening
         generation += 1
         nextGeneration &+= 1
         pendingPermissionGeneration = nil
-        if isListening || isStarting || formatRetry != nil {
+        if isListening || isStarting || formatRetry != nil || microphoneLeaseAcquired {
             cleanupAudioPipeline()
             if wasListening { logEnd(reason: "cancel", transcriptLength: latestTranscript.count) }
         }
@@ -693,12 +694,6 @@ final class VoiceInputEngine {
             NotificationCenter.default.removeObserver(engineConfigurationObserver)
             self.engineConfigurationObserver = nil
         }
-        // Release the speech hold first. The failure line / "I did not catch that." / answer
-        // spoken right after this still plays before anything older: the release drains the
-        // queue's head first (a still-valid held line is higher-priority guidance, correctly
-        // first), then the fresh line. Nothing is ever stuck behind the hold itself.
-        // Idempotent: safe on paths where the hold was never set (permission wait, teardown).
-        speech.setVoiceHold(false)
         endTicker?.cancel()
         endTicker = nil
         endDetector = nil
@@ -715,19 +710,21 @@ final class VoiceInputEngine {
         recognitionTask = nil
         resultsRelay = nil
 
-        // Restore `.playback` only when this run acquired the shared microphone lease. A route
-        // callback may already have restored it, in which case the snapshot is nil and another
-        // category transition would create a new route event.
+        // Stop every input consumer before releasing the speech hold. Releasing the hold drains
+        // queued guidance immediately, so doing it first could make the recognizer hear OpenCane's
+        // own line while the `.playAndRecord` engine is still live.
         if microphoneLeaseAcquired {
-            if speech.microphoneRouteSnapshot != nil {
-                if let shouldRestore = shouldRestorePlaybackSession, shouldRestore() {
-                    _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
-                } else if shouldRestorePlaybackSession == nil {
-                    _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
-                }
+            let mayRestore = shouldRestorePlaybackSession.map { $0() } ?? true
+            if mayRestore {
+                // SpeechQueue keeps the owner and schedules bounded retries if this restore fails,
+                // including the route-callback case where its snapshot is already nil.
+                _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
             }
             microphoneLeaseAcquired = false
         }
+
+        // Idempotent: safe on paths where the hold was never set (permission wait, teardown).
+        speech.setVoiceHold(false)
 
         // Restore beacon state to previous setting
         beacon.enabled = previousBeaconEnabled

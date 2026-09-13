@@ -632,9 +632,9 @@ final class DepthEngine {
 
     /// `code` is the `ARError.Code` raw value (e.g. 103 = camera unauthorized) so the UI can tell
     /// a permissions problem from a sensor failure.
-    /// Sets `isRunning = false` so a later `start()`/`resume()` can re-run the session; does not
-    /// stop the gyro, and invalidates any route-start run. Reached from `SessionObserver` via a
-    /// main-actor hop.
+    /// Sets `isRunning = false`, stops the gyro and drops the retained image/report so a later
+    /// `start()`/`resume()` must earn fresh depth. Also invalidates any route-start run. Reached
+    /// from `SessionObserver` via a main-actor hop.
     fileprivate func sessionFailed(code: Int, message: String) {
         let hint: String
         switch ARError.Code(rawValue: code) {
@@ -644,6 +644,16 @@ final class DepthEngine {
         default: hint = message
         }
         status = "AR error: \(hint)"
+        // A terminal failure has the same stale-frame hazard as an explicit pause, but unlike
+        // `pause()` it used to leave the gyro and the latest report alive. Drain the delegate tail
+        // first, then make every camera-derived consumer start from an empty state.
+        processor.synchronize()
+        processor.stopMotion()
+        processor.dropLatestImage()
+        report = LaneReport()
+        fps = 0
+        fpsWindow.removeAll(keepingCapacity: true)
+        faceAnchorSeen = false
         isRunning = false
         invalidateReadiness(at: ProcessInfo.processInfo.systemUptime)
         onSessionFailure?(hint)

@@ -19,7 +19,7 @@
 //
 //  Covers the screens of docs/design.md §6 for visual review (`make tour` → ios/build/shots).
 //  It reaches every control through the same VoiceOver labels as CaneKitUITests, so the ⚠ test
-//  contract strings there apply here too: "Guide" / "Sense" / "Settings" tabs, "Start route to CIF",
+//  contract strings there apply here too: "Guide" / "Sense" / "Settings" / "Profile" tabs, "Start route to CIF",
 //  "Stop route", "Repeat", "Next", "Recenter", "Test left/center/right/head haptic",
 //  "Silence haptics", "Where am I", "Go".
 //
@@ -99,6 +99,7 @@ final class CaneKitVisualTour: XCTestCase {
         openTab("Guide")
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
         app.buttons["Stop route"].tap()
+        app.buttons["Stop route"].tap()
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5))
         pause(0.5); snap("stopped")
 
@@ -109,7 +110,7 @@ final class CaneKitVisualTour: XCTestCase {
     /// Selects a root tab by its VoiceOver label (icon-only on screen). Unlike the
     /// `CaneKitUITests` copy it does not assert: a missing tab skips the tap and the tour goes on.
     ///
-    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
+    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings", "Profile" (`RootTab.title`).
     private func openTab(_ name: String) {
         let tab = app.buttons[name]
         if tab.waitForExistence(timeout: 5) { tab.tap() }

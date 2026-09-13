@@ -72,6 +72,8 @@ final class TripTracker {
     @ObservationIgnored private var ticker: Task<Void, Never>?
     /// Currently unused (reserved for a live HealthKit observer query; never assigned).
     @ObservationIgnored private var stepQuery: HKObserverQuery?
+    /// Fences HealthKit reads that can finish after a route is replaced or cancelled.
+    @ObservationIgnored private var refreshGeneration = TripRefreshGeneration()
 
     /// Idle until `start()`; asks for no permission.
     init() {}
@@ -84,6 +86,7 @@ final class TripTracker {
     /// start by design, so they do not pile onto the launch-time Location prompt.
     func start() {
         guard !isTracking else { return }
+        let generation = refreshGeneration.begin()
         isTracking = true
         let now = Date()
         startedAt = now
@@ -91,7 +94,7 @@ final class TripTracker {
         distanceM = 0
         steps = nil
         lastFix = nil
-        startSteps(from: now)
+        startSteps(from: now, generation: generation)
         ticker = Task { [weak self] in
             var tick = 0
             while !Task.isCancelled {
@@ -99,7 +102,7 @@ final class TripTracker {
                 guard let self, let s = self.startedAt else { return }
                 self.elapsed = Date().timeIntervalSince(s)
                 tick += 1
-                if tick % 10 == 0 { self.refreshHealthKitSteps() }   // HealthKit is not a live feed
+                if tick % 10 == 0 { self.refreshHealthKitSteps(generation: generation) }   // HealthKit is not a live feed
             }
         }
     }
@@ -115,7 +118,7 @@ final class TripTracker {
         ticker = nil
         pedometer.stopUpdates()
         if let s = startedAt { elapsed = Date().timeIntervalSince(s) }
-        await refreshHealthKitStepsNow()
+        await refreshHealthKitStepsNow(generation: refreshGeneration.current)
     }
 
     /// Stop immediately without the final HealthKit refresh (a route restarted mid-walk: the old
@@ -127,6 +130,7 @@ final class TripTracker {
         ticker?.cancel()
         ticker = nil
         pedometer.stopUpdates()
+        refreshGeneration.invalidate()
     }
 
     /// Integrate distance along good fixes while actually moving (a stationary fix wanders a
@@ -166,32 +170,33 @@ final class TripTracker {
     /// so the pedometer always runs too; HealthKit wins whenever it reports a count.
     /// Requests read access to `.stepCount` (prompts once) and refreshes when the request returns.
     /// - Parameter start: the route start; both sources count from here.
-    private func startSteps(from start: Date) {
-        startPedometer(from: start)
+    private func startSteps(from start: Date, generation: UInt64) {
+        startPedometer(from: start, generation: generation)
         guard HKHealthStore.isHealthDataAvailable() else { return }
         let type = HKQuantityType(.stepCount)
         health.requestAuthorization(toShare: [], read: [type]) { [weak self] _, error in
             let message = error?.localizedDescription
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.refreshGeneration.accepts(generation) else { return }
                 if let message { self.lastError = message }
-                self.refreshHealthKitSteps()
+                self.refreshHealthKitSteps(generation: generation)
             }
         }
     }
 
-    /// Fire-and-forget wrapper around `refreshHealthKitStepsNow()` (ticker, auth callback). May
-    /// land after `stop()`; it can then still update `steps`, so the card may show a newer count
-    /// than the summary spoke.
-    private func refreshHealthKitSteps() {
-        Task { [weak self] in await self?.refreshHealthKitStepsNow() }
+    /// Fire-and-forget wrapper around `refreshHealthKitStepsNow()` (ticker, auth callback). The
+    /// generation token is captured before the query and checked after it returns, so a result
+    /// from a replaced/cancelled trip cannot write into the current card.
+    private func refreshHealthKitSteps(generation: UInt64? = nil) {
+        let token = generation ?? refreshGeneration.current
+        Task { [weak self] in await self?.refreshHealthKitStepsNow(generation: token) }
     }
 
     /// Cumulative step sum from `startedAt` (strict start) to now. Only a count > 0 replaces
     /// `steps` (a denied read returns nothing, which must not overwrite the pedometer's count).
     /// Query errors are ignored (nil count). HealthKit is not a live feed (hence the ticker's 10 s
     /// re-query); `stop()` awaits one last query so the arrival line has the freshest sum.
-    private func refreshHealthKitStepsNow() async {
+    private func refreshHealthKitStepsNow(generation: UInt64) async {
         guard HKHealthStore.isHealthDataAvailable(), let start = startedAt else { return }
         let type = HKQuantityType(.stepCount)
         let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
@@ -202,6 +207,7 @@ final class TripTracker {
             }
             health.execute(query)
         }
+        guard refreshGeneration.accepts(generation) else { return }
         if let count, count > 0 {
             steps = Int(count)
             stepSource = "HealthKit"
@@ -214,13 +220,13 @@ final class TripTracker {
     /// default isolation and the runtime traps (`swift_task_isCurrentExecutor` →
     /// `_dispatch_assert_queue_fail`) when CoreMotion calls it on `CMPedometerUpdateQueue`
     /// (crash 2026-09-11 21:50). The body only extracts Sendable values before hopping to main.
-    private func startPedometer(from start: Date) {
+    private func startPedometer(from start: Date, generation: UInt64) {
         guard CMPedometer.isStepCountingAvailable() else { return }
         pedometer.startUpdates(from: start) { @Sendable [weak self] data, error in
             let count = data?.numberOfSteps.intValue
             let message = error?.localizedDescription
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.refreshGeneration.accepts(generation) else { return }
                 if let count, self.stepSource != "HealthKit" {
                     self.steps = count
                     self.stepSource = "Pedometer"

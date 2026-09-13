@@ -269,6 +269,9 @@ final class SpeechQueue {
     /// True once the system voice has reported a word of the line playing — only then has the word at
     /// `currentSpokenUTF16` actually started (and a word-boundary stop will finish it).
     @ObservationIgnored private var currentWordHeard = false
+    /// True after a safety line has used its one watchdog system-voice fallback. A permanently
+    /// stalled backend must not make the safety line loop forever.
+    @ObservationIgnored private var watchdogFallbackUsed = false
     /// True during the short pause `lineEnded` leaves before a line of a different band
     /// (`SpeechResume.gapSeconds`, 0.35 s). `isSpeaking` stays true (the beacon stays ducked) and
     /// nothing is current; `say` queues everything except `.safety`, or a line that needs no pause
@@ -293,6 +296,11 @@ final class SpeechQueue {
     /// 15 s timer armed on `.began` that drains the queue if `.ended` never arrives (the
     /// interrupting app is not obliged to deactivate its session). Cancelled on `.ended`.
     @ObservationIgnored private var interruptionFallback: Task<Void, Never>?
+    /// Generation of the current interruption episode. A retry from an older `.ended` must not
+    /// clear a newer `.began` episode or drain speech into a call / Siri session.
+    @ObservationIgnored private var interruptionGeneration: UInt64 = 0
+    /// Delayed activation retry for the current interruption episode.
+    @ObservationIgnored private var interruptionRetryTask: Task<Void, Never>?
     /// Last time an ElevenLabs fetch failed or missed its 2.5 s deadline (reference-date seconds;
     /// −∞ = never). Circuit breaker for weak networks: for 60 s after it, `speakNow` uses the system
     /// voice at once and only retries the natural voice in the background (Muse M1).
@@ -321,6 +329,11 @@ final class SpeechQueue {
     @ObservationIgnored private var voice: AVSpeechSynthesisVoice?
     /// Token for the `AVAudioSession.interruptionNotification` observer (main queue).
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
+    /// Generation of the microphone lease. A delayed restore from an old lease must not put a new
+    /// lease back on `.playback` underneath it.
+    @ObservationIgnored private var microphoneLeaseGeneration: UInt64 = 0
+    /// Bounded retry for returning a failed microphone lease to `.playback`.
+    @ObservationIgnored private var microphoneRestoreTask: Task<Void, Never>?
 
     /// System-voice rate (AVSpeech units, 0…1): 5 % above the default — brisk but clear while
     /// walking. Ignored by the ElevenLabs backend (the mp3 has its own pace).
@@ -366,8 +379,8 @@ final class SpeechQueue {
     /// the decoded `InterruptionType` (Sendable) crosses into the isolated call.
     /// Called by `AppModel.start()` right after the trip-log hooks (`onSuppressed`, `onDispatch`,
     /// `onLineEnd`) are installed and before `wireAudioRoute()`, `haptics.start()` and
-    /// `depth.start()`. Calling it twice would add a second observer (the token is overwritten, not
-    /// removed). A success also clears `microphoneRestoreError`.
+    /// `depth.start()`. Calling it twice replaces the prior observer so interruption delivery stays
+    /// single-shot. A success also clears `microphoneRestoreError`.
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
@@ -377,6 +390,12 @@ final class SpeechQueue {
             microphoneRestoreError = nil
         } catch {
             audioSessionError = "Audio session: \(error.localizedDescription)"
+        }
+        // Keep this method idempotent even for test / recovery callers. Replacing the token
+        // without removing it leaves an old observer alive and duplicates every interruption.
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
         }
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: session, queue: .main
@@ -471,8 +490,10 @@ final class SpeechQueue {
     @ObservationIgnored var microphoneRestoreError: String?
 
     /// The owner of the temporary `.playAndRecord` lease, or nil in the normal `.playback` state.
-    /// Cleared only when a restore to `.playback` succeeds: after a failed restore the lease stays
-    /// with its owner, so the other feature cannot grab a session in an unknown state.
+    /// Cleared when a restore to `.playback` succeeds, or after the bounded recovery window is
+    /// exhausted. During that window the lease stays with its owner, so the other feature cannot
+    /// grab a session in an unknown state; after exhaustion, clearing the stale owner lets a later
+    /// explicit start attempt re-establish the session rather than leaking a permanently dead lease.
     @ObservationIgnored private var microphoneOwner: MicrophoneOwner?
 
     /// Token for the `AVAudioSession.routeChangeNotification` observer. Non-nil **only** while the
@@ -561,8 +582,16 @@ final class SpeechQueue {
                 return .failed("Microphone is owned by another OpenCane feature.")
             }
             stopWatchingOutputRoute()
+            let leaseGeneration = microphoneLeaseGeneration
             let result = restorePlaybackSession()
-            if result == nil { microphoneOwner = nil }
+            if result == nil {
+                microphoneOwner = nil
+                microphoneLeaseGeneration &+= 1
+                microphoneRestoreTask?.cancel()
+                microphoneRestoreTask = nil
+            } else {
+                scheduleMicrophoneRestore(owner: owner, generation: leaseGeneration)
+            }
             return result ?? .granted(route: Self.outputRoute(session))
         }
         if let microphoneOwner, microphoneOwner != owner {
@@ -571,6 +600,11 @@ final class SpeechQueue {
         if microphoneOwner == owner, let route = microphoneRoute {
             return .granted(route: route.output)
         }
+        // A previous restore may still be retrying after a transient failure. A fresh grant from
+        // the same owner supersedes that old lease and fences its delayed task.
+        microphoneRestoreTask?.cancel()
+        microphoneRestoreTask = nil
+        microphoneLeaseGeneration &+= 1
         let before = Self.outputRoute(session)
         do {
             try session.setCategory(.playAndRecord, mode: .default,
@@ -578,12 +612,34 @@ final class SpeechQueue {
             try session.setActive(true)
         } catch {
             audioSessionError = "Microphone session: \(error.localizedDescription)"
-            _ = restorePlaybackSession()
+            // `setCategory` may have changed the session before `setActive` failed. Claim the
+            // lease for the recovery window so a second input feature cannot race the playback
+            // restore; the bounded task clears this temporary owner if recovery never succeeds.
+            microphoneOwner = owner
+            if restorePlaybackSession() == nil {
+                microphoneOwner = nil
+                microphoneLeaseGeneration &+= 1
+                microphoneRestoreTask?.cancel()
+                microphoneRestoreTask = nil
+            } else {
+                scheduleMicrophoneRestore(owner: owner, generation: microphoneLeaseGeneration)
+            }
             return .failed(error.localizedDescription)
         }
         let after = Self.outputRoute(session)
         guard after == before else {
-            _ = restorePlaybackSession()
+            // This was a refused grant, but the category may already have moved. Keep ownership
+            // while the failed playback restore retries, otherwise a different microphone user
+            // could start against the unknown route state.
+            microphoneOwner = owner
+            if restorePlaybackSession() == nil {
+                microphoneOwner = nil
+                microphoneLeaseGeneration &+= 1
+                microphoneRestoreTask?.cancel()
+                microphoneRestoreTask = nil
+            } else {
+                scheduleMicrophoneRestore(owner: owner, generation: microphoneLeaseGeneration)
+            }
             return .revertedRouteChanged(before: before, after: after)
         }
         audioSessionError = nil
@@ -675,7 +731,14 @@ final class SpeechQueue {
         // posts another route change straight back into this method.
         stopWatchingOutputRoute()
         let restoreResult = restorePlaybackSession()
-        if restoreResult == nil { microphoneOwner = nil }
+        if restoreResult == nil {
+            microphoneOwner = nil
+            microphoneLeaseGeneration &+= 1
+            microphoneRestoreTask?.cancel()
+            microphoneRestoreTask = nil
+        } else if let owner {
+            scheduleMicrophoneRestore(owner: owner, generation: microphoneLeaseGeneration)
+        }
         switch owner {
         case .soundRecognition:
             onMicrophoneRouteChanged?(held, now)
@@ -703,6 +766,37 @@ final class SpeechQueue {
             audioSessionError = "Audio restore: \(error.localizedDescription)"
             microphoneRestoreError = audioSessionError
             return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Retry a failed microphone-to-playback transition without clearing the owner early. Keeping
+    /// the owner blocks a competing input feature while the audio category is unknown; the lease
+    /// generation prevents this recovery from racing a fresh grant by the same owner. If the
+    /// bounded window is exhausted, clear the stale lease so a future explicit start can recover
+    /// instead of leaving all microphone features permanently refused.
+    private func scheduleMicrophoneRestore(owner: MicrophoneOwner, generation leaseGeneration: UInt64) {
+        microphoneRestoreTask?.cancel()
+        microphoneRestoreTask = Task { @MainActor [weak self] in
+            for _ in 0..<MicrophoneSessionRecovery.retryAttempts {
+                try? await Task.sleep(for: .seconds(MicrophoneSessionRecovery.retryDelay))
+                guard let self, !Task.isCancelled,
+                      self.microphoneOwner == owner,
+                      self.microphoneLeaseGeneration == leaseGeneration,
+                      self.microphoneRoute == nil else { return }
+                if self.restorePlaybackSession() == nil {
+                    self.microphoneOwner = nil
+                    self.microphoneLeaseGeneration &+= 1
+                    self.microphoneRestoreTask = nil
+                    return
+                }
+            }
+            guard let self, !Task.isCancelled,
+                  self.microphoneOwner == owner,
+                  self.microphoneLeaseGeneration == leaseGeneration,
+                  self.microphoneRoute == nil else { return }
+            self.microphoneOwner = nil
+            self.microphoneLeaseGeneration &+= 1
+            self.microphoneRestoreTask = nil
         }
     }
 
@@ -768,8 +862,6 @@ final class SpeechQueue {
     /// `BeaconEngine` observes the same notification independently and restarts its own graph;
     /// `SoundWatcher` observes it too and stops on `.began`.
     /// Main actor (called from the main-queue observer via `assumeIsolated`).
-    /// ⚠ Known gap (Step 37 review, deferred to docs/todo.md): a retry task already scheduled by
-    /// `resumeAfterInterruption` is not cancelled by a new `.began`.
     private func interruption(_ type: AVAudioSession.InterruptionType) {
         let microphoneWasOwned = microphoneOwner != nil
         // The voice callback is installed immediately before activation, while the lease owner is
@@ -778,6 +870,9 @@ final class SpeechQueue {
         let voiceInputWasActive = onVoiceInputInterruption != nil
         switch type {
         case .began:
+            interruptionGeneration &+= 1
+            interruptionRetryTask?.cancel()
+            interruptionRetryTask = nil
             // Mark the queue interrupted before the owner surfaces a failure. Its spoken cue must
             // wait for the call/Siri session to end rather than trying to speak into it.
             interrupted = true
@@ -789,15 +884,21 @@ final class SpeechQueue {
             currentText = ""
             // `.ended` is not guaranteed (the interrupting app may never deactivate): drain anyway.
             interruptionFallback?.cancel()
-            interruptionFallback = Task { [weak self] in
+            let episode = interruptionGeneration
+            interruptionFallback = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(15))
-                guard let self, !Task.isCancelled, self.interrupted else { return }
-                self.resumeAfterInterruption(attempt: 0, fromEnded: false)
+                guard let self, !Task.isCancelled, self.interrupted,
+                      self.interruptionGeneration == episode else { return }
+                self.interruptionFallback = nil
+                self.resumeAfterInterruption(attempt: 0, fromEnded: false, generation: episode)
             }
         case .ended:
             if microphoneWasOwned || voiceInputWasActive { onVoiceInputInterruption?(.ended) }
             interruptionFallback?.cancel()
-            resumeAfterInterruption(attempt: 0, fromEnded: true)
+            interruptionFallback = nil
+            interruptionRetryTask?.cancel()
+            interruptionRetryTask = nil
+            resumeAfterInterruption(attempt: 0, fromEnded: true, generation: interruptionGeneration)
         @unknown default:
             break
         }
@@ -807,8 +908,8 @@ final class SpeechQueue {
     /// down — retry twice, a second apart), then drain whatever queued up meanwhile.
     ///
     /// - Parameter attempt: 0 on the first try; retries at 1 and 2. After the last failure the
-    ///   queue is drained anyway (better to try than to hold guidance forever), with the error
-    ///   left in `audioSessionError`.
+    ///   queue stays interrupted and retries from the fallback rather than consuming guidance
+    ///   while the session is still unavailable; the error remains in `audioSessionError`.
     /// Draining goes through `lineEnded(gen: generation)` — the current generation, so the guard
     /// passes — which purges expired lines and starts the head of the queue (no cross-band pause:
     /// nothing current means no previous band).
@@ -816,27 +917,42 @@ final class SpeechQueue {
     /// - Parameter fromEnded: true when the system posted `.ended`; false for our own 15 s
     ///   fallback. Without `.ended`, a failed re-activation means the call is probably still on:
     ///   keep waiting (re-arm the fallback) instead of draining lines over it (Muse M3).
-    private func resumeAfterInterruption(attempt: Int, fromEnded: Bool) {
+    private func resumeAfterInterruption(attempt: Int, fromEnded: Bool, generation episode: UInt64) {
+        guard interruptionGeneration == episode, interrupted else { return }
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             audioSessionError = "Audio resume: \(error.localizedDescription)"
             if attempt < 2 {
-                Task { [weak self] in
+                interruptionRetryTask?.cancel()
+                interruptionRetryTask = Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(1))
-                    self?.resumeAfterInterruption(attempt: attempt + 1, fromEnded: fromEnded)
+                    guard let self, !Task.isCancelled,
+                          self.interruptionGeneration == episode, self.interrupted else { return }
+                    self.interruptionRetryTask = nil
+                    self.resumeAfterInterruption(attempt: attempt + 1, fromEnded: fromEnded,
+                                                 generation: episode)
                 }
                 return
             }
-            if !fromEnded {
-                interruptionFallback = Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(15))
-                    guard let self, !Task.isCancelled, self.interrupted else { return }
-                    self.resumeAfterInterruption(attempt: 0, fromEnded: false)
-                }
-                return
+            // Keep the episode interrupted after a failed final activation. Draining here would
+            // consume safety/nav lines while the session is still unavailable. The fallback retries
+            // both the `.ended` and missing-`.ended` cases until a later activation succeeds.
+            let retryEpisode = interruptionGeneration
+            interruptionFallback?.cancel()
+            interruptionFallback = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard let self, !Task.isCancelled, self.interrupted,
+                      self.interruptionGeneration == retryEpisode else { return }
+                self.interruptionFallback = nil
+                self.resumeAfterInterruption(attempt: 0, fromEnded: false,
+                                             generation: retryEpisode)
             }
+            _ = fromEnded
+            return
         }
+        interruptionRetryTask?.cancel()
+        interruptionRetryTask = nil
         interrupted = false
         if !isSpeaking { lineEnded(gen: generation) }
     }
@@ -1177,7 +1293,8 @@ final class SpeechQueue {
     ///     text is novel every time, so a fetch would stall *every* answer on the network.
     private func speakNow(_ text: String, _ priority: SpeechPriority, expires: TimeInterval = .infinity,
                           replays: Int = 0, immediate: Bool = false,
-                          resumeFrom: Int = 0, lastResumeOffset: Int? = nil) {
+                          resumeFrom: Int = 0, lastResumeOffset: Int? = nil,
+                          watchdogFallback: Bool = false) {
         generation += 1
         let gen = generation
         inGap = false
@@ -1190,6 +1307,7 @@ final class SpeechQueue {
         currentLastResumeOffset = lastResumeOffset
         currentSpokenUTF16 = resumeFrom
         currentWordHeard = false
+        watchdogFallbackUsed = watchdogFallback
         isSpeaking = true
         lastSpoken = text
         // What the system voice says: the remainder from the resume clause. An mp3 clip plays the
@@ -1299,9 +1417,16 @@ final class SpeechQueue {
         voiceError = nil
         do {
             let p = try AVAudioPlayer(contentsOf: url)
-            let relay = PlayerRelay { [weak self] in
-                Task { @MainActor [weak self] in self?.lineEnded(gen: gen) }
-            }
+            let relay = PlayerRelay(
+                onEnd: { [weak self] in
+                    Task { @MainActor [weak self] in self?.lineEnded(gen: gen) }
+                },
+                onDecodeError: { [weak self] message in
+                    Task { @MainActor [weak self] in
+                        self?.playFileDecodeFallback(message: message, gen: gen)
+                    }
+                }
+            )
             p.delegate = relay
             playerRelay = relay
             player = p
@@ -1321,6 +1446,24 @@ final class SpeechQueue {
         }
     }
 
+    /// A cached file can open successfully and still fail once AVAudioPlayer decodes it. Keep the
+    /// safety line alive by switching that line to the system voice under the same generation;
+    /// stale decode callbacks cannot replace a newer line.
+    private func playFileDecodeFallback(message: String?, gen: Int) {
+        guard gen == generation, isSpeaking, player != nil else { return }
+        player?.stop()
+        player = nil
+        playerRelay = nil
+        voiceError = message.map { "Playback decode: \($0)" } ?? "Playback decode failed"
+        // Invalidate a possible finish callback from the failed player before starting AVSpeech;
+        // both delegate methods can be delivered for one failed AVAudioPlayer instance.
+        generation += 1
+        let fallbackGen = generation
+        let remainder = SpeechResume.remainder(of: currentText, from: currentResumeFrom)
+        speakSystem(remainder, gen: fallbackGen)
+        armWatchdog(gen: fallbackGen, text: remainder)
+    }
+
     /// Last-resort unstick: if no end callback arrives well after the line should be over
     /// (interruption edge cases, a stalled player), treat it as ended so the queue keeps moving.
     ///
@@ -1328,10 +1471,10 @@ final class SpeechQueue {
     /// remainder for a cut line) — ≈ a slow speaking rate plus fetch headroom. The timer
     /// also covers a slow ElevenLabs fetch, since it is armed before the backend is chosen.
     /// A watchdog end is a natural end for `onLineEnd` (the priority is still current).
-    /// Fires only if the same generation is still speaking; it then records
-    /// "Speech watchdog reset" in `voiceError`, stops the backends (bumping `generation`) and
-    /// ends the line with the *new* generation so the next queued line starts. The dropped line
-    /// is not re-queued. The task inherits the main actor. Called from `speakNow` only.
+    /// Fires only if the same generation is still speaking. Safety gets one immediate system-voice
+    /// fallback; lower-priority lines retain the old queue-unblocking behavior. A second failure is
+    /// ended so a permanently stalled backend cannot loop forever. The task inherits the main actor.
+    /// Called from `speakNow` only.
     private func armWatchdog(gen: Int, text: String) {
         watchdog?.cancel()
         let limit = 6.0 + Double(text.count) / 6.0          // ~25 s for a long crossing line
@@ -1339,8 +1482,21 @@ final class SpeechQueue {
             try? await Task.sleep(for: .seconds(limit))
             guard let self, !Task.isCancelled, self.generation == gen, self.isSpeaking else { return }
             self.voiceError = "Speech watchdog reset"
+            let priority = self.currentPriority
+            let wholeText = self.currentText
+            let expires = self.currentExpires
+            let replays = self.currentReplays
+            let resumeFrom = self.currentResumeFrom
+            let lastResumeOffset = self.currentLastResumeOffset
+            let useSafetyFallback = priority == .safety && !self.watchdogFallbackUsed && !wholeText.isEmpty
             self.stopCurrent()                              // bumps generation: in-flight work stays stale
-            self.lineEnded(gen: self.generation)
+            if useSafetyFallback, let priority {
+                self.speakNow(wholeText, priority, expires: expires, replays: replays,
+                              immediate: true, resumeFrom: resumeFrom,
+                              lastResumeOffset: lastResumeOffset, watchdogFallback: true)
+            } else {
+                self.lineEnded(gen: self.generation)
+            }
         }
     }
 
@@ -1530,13 +1686,23 @@ nonisolated private final class PlayerRelay: NSObject, AVAudioPlayerDelegate, @u
     /// Ends this relay's line: `SpeechQueue.playFile`'s closure, which captured that line's
     /// generation and hops to the main actor. Immutable, so sharing it across threads is safe.
     private let onEnd: @Sendable () -> Void
+    /// Called when a cached clip cannot be decoded; the current line must use AVSpeech instead.
+    private let onDecodeError: @Sendable (String?) -> Void
     /// - Parameter onEnd: called on an AVFoundation thread when the clip finishes or fails to decode.
-    init(onEnd: @escaping @Sendable () -> Void) { self.onEnd = onEnd }
+    init(onEnd: @escaping @Sendable () -> Void,
+         onDecodeError: @escaping @Sendable (String?) -> Void) {
+        self.onEnd = onEnd
+        self.onDecodeError = onDecodeError
+    }
 
     /// Playback reached the end (successfully or not) → the line is over.
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) { onEnd() }
-    /// A corrupt cached mp3 → treat as ended so the queue moves on (no system-voice retry here).
-    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) { onEnd() }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if flag { onEnd() } else { onDecodeError(nil) }
+    }
+    /// A corrupt cached mp3 → fall back to the system voice for this line.
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        onDecodeError(error?.localizedDescription)
+    }
 }
 
 /// Async counterpart of `Result(catching:)`, so `speakNow` can await the ElevenLabs fetch and

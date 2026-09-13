@@ -264,7 +264,7 @@ enum HandsFreeOption: String, AppEnum {
     // is written to the trip log as `option_set.option`:
     //   `dropOffs` → `groundHazardsEnabled` (persisted, default off) · `signs` → `signsEnabled`
     //   (persisted, default on) · `hazardWatch` → `hazardWatchEnabled` (persisted, default off) ·
-    //   `namePeople` → `namePeopleEnabled` (persisted, default on) · `obstacleNames` →
+    //   `namePeople` → `namePeopleEnabled` (persisted, default off; experimental) · `obstacleNames` →
     //   `obstacleNamesEnabled` (persisted, default off since Step 36) · `beacon` → `beaconEnabled`
     //   (persisted, default on) · `sirens` → `dangerSoundsEnabled` (not persisted, can refuse
     //   itself) · `nodToTalk` → `nodToTalkEnabled` (not persisted, untuned).

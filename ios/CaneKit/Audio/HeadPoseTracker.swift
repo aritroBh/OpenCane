@@ -89,6 +89,9 @@ final class HeadPoseTracker {
     /// sample's own `timestamp` (seconds since boot, monotonic — the detector only needs one
     /// consistent clock). Reset in `start()` and `stop()`.
     @ObservationIgnored private var nod = HeadNodDetector()
+    /// Invalidates connection and motion callbacks queued by Core Motion before `stop()`.
+    /// Without this, a late `didConnect` task can mark a newly stopped tracker connected again.
+    @ObservationIgnored private var lifecycleGeneration: UInt64 = 0
 
     /// Starts with no data and no reference; nothing runs until `start()`.
     init() {}
@@ -101,13 +104,16 @@ final class HeadPoseTracker {
     /// that headphones are connected (`AudioRouteMonitor.headphonesConnected`).
     func start() {
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
         active = true
         referenceYaw = nil
         nod.reset()                 // a half-made nod from before the route must not pair up
         relay.onConnect = { [weak self] connected in
             Task { @MainActor [weak self] in
-                self?.isConnected = connected
-                if !connected { self?.headYawDeg = nil; self?.rawYaw = nil }
+                guard let self, self.active, self.lifecycleGeneration == generation else { return }
+                self.isConnected = connected
+                if !connected { self.headYawDeg = nil; self.rawYaw = nil }
             }
         }
         manager.delegate = relay
@@ -119,7 +125,7 @@ final class HeadPoseTracker {
             let timestamp = motion?.timestamp
             let message = error?.localizedDescription
             MainActor.assumeIsolated {
-                guard let self, self.active else { return }
+                guard let self, self.active, self.lifecycleGeneration == generation else { return }
                 if let message { self.lastError = message }
                 guard let yaw else { return }
                 self.isConnected = true
@@ -139,6 +145,7 @@ final class HeadPoseTracker {
     /// UI never shows stale head tracking. Callers: `AppModel.stopRoute`, `endRouteQuietly`, the
     /// `nav.onArrived` handler and `wireAudioRoute` when headphones disconnect.
     func stop() {
+        lifecycleGeneration &+= 1
         active = false
         isConnected = false             // the pill must not say "Head tracked" with no data
         manager.stopDeviceMotionUpdates()

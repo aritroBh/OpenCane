@@ -18,14 +18,40 @@ struct ProfilePage: View {
     @Environment(AppModel.self) private var model
     @State private var showingEditor = false
     @State private var showingShareSheet = false
+    /// Metric values stay glanceable at the default size while respecting the user's Dynamic Type
+    /// setting; a fixed 28-point font made the Profile tiles the one page that ignored it.
+    @ScaledMetric(relativeTo: .title2) private var metricValueSize: CGFloat = 28
 
     var body: some View {
+        @Bindable var model = model
         pageScroll {
+            privacyCard(model: $model)
             medicalIDCard
             mobilityFitnessCard
         }
         .sheet(isPresented: $showingEditor) {
             EditMedicalIDSheet(store: model.medicalProfile)
+        }
+    }
+
+    /// Privacy control for the optional Supabase mirror. The default is off; the copy names the
+    /// categories that include location and Medical ID data so consent is informed and reversible.
+    private func privacyCard(model: Bindable<AppModel>) -> some View {
+        CKCard(title: "Privacy") {
+            Toggle("Share data with OpenCane cloud", isOn: model.cloudSharingEnabled)
+                .accessibilityHint("When on, uploads Medical ID, mobility, route locations and trip logs to the configured cloud. Off stops future uploads and clears queued data.")
+                .disabled(!self.model.cloud.isConfigured)
+            Text(self.model.cloud.isConfigured
+                 ? (self.model.cloudSharingEnabled
+                    ? "Cloud sharing is on. Turn it off any time to stop future uploads."
+                    : "Cloud sharing is off. Your Medical ID and route history stay on this phone.")
+                 : "No cloud project is configured; your data stays on this phone.")
+                .font(CKFont.secondary)
+                .foregroundStyle(CKColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(self.model.cloud.isConfigured
+                                    ? (self.model.cloudSharingEnabled ? "Cloud sharing is on" : "Cloud sharing is off")
+                                    : "Cloud sharing is unavailable because no cloud project is configured")
         }
     }
 
@@ -49,11 +75,13 @@ struct ProfilePage: View {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 52))
                         .foregroundStyle(CKColor.accent)
+                        .accessibilityHidden(true)
                 }
                 #else
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 52))
                     .foregroundStyle(CKColor.accent)
+                    .accessibilityHidden(true)
                 #endif
 
                 VStack(alignment: .leading, spacing: CKSpacing.xs) {
@@ -65,6 +93,7 @@ struct ProfilePage: View {
                         Image(systemName: "staroflife.fill")
                             .font(.subheadline)
                             .foregroundStyle(CKColor.danger)
+                            .accessibilityHidden(true)
                         Text("EMERGENCY ID")
                             .font(CKFont.pill)
                             .foregroundStyle(CKColor.danger)
@@ -91,6 +120,7 @@ struct ProfilePage: View {
                 Image(systemName: "exclamationmark.shield.fill")
                     .font(.title2)
                     .foregroundStyle(CKColor.danger)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: CKSpacing.xs) {
                     Text("WHITE CANE USER / BLIND")
@@ -255,6 +285,7 @@ struct ProfilePage: View {
                 .font(.body)
                 .foregroundStyle(CKColor.textSecondary)
                 .frame(width: 24)
+                .accessibilityHidden(true)
 
             Text(label)
                 .font(CKFont.body)
@@ -268,6 +299,8 @@ struct ProfilePage: View {
                 .multilineTextAlignment(.trailing)
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 
     private func metricTile(title: String, value: String, icon: String) -> some View {
@@ -276,14 +309,16 @@ struct ProfilePage: View {
                 Image(systemName: icon)
                     .font(.caption)
                     .foregroundStyle(CKColor.textSecondary)
+                    .accessibilityHidden(true)
                 Text(title)
                     .font(CKFont.pill)
                     .foregroundStyle(CKColor.textSecondary)
             }
 
             Text(value)
-                .font(CKFont.hero(28))
+                .font(CKFont.hero(metricValueSize))
                 .foregroundStyle(CKColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(CKSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)

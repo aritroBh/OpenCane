@@ -14,7 +14,7 @@
 //  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
 //  Mount toggle labels are XCUITest `app.switches[...]` keys: "Mirror left / right" and
 //  "Write trip log" are ⚠ test contract (AGENTS.md rule 9). Tab buttons are ⚠ "Guide",
-//  "Sense", "Settings", "Profile" (`RootTab.title`; the tests drive the first three). Cues picker segments are ⚠ "Standard", "Detailed",
+//  "Sense", "Settings", "Profile" (`RootTab.title`; accessibility tests cover all four). Cues picker segments are ⚠ "Standard", "Detailed",
 //  "Indoors", "Outdoors" (`CueLevel.title` / `CuePlace.title`).
 //
 //  Owner / caller: `CaneKitApp` (the app entry) shows it with `AppModel` in the environment.

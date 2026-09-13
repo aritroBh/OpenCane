@@ -102,9 +102,11 @@ sim:
 SIM ?= iPhone 17 Pro Max
 # Pre-answer the permission prompts so no system alert races the first tap (fresh simulator / CI).
 sim-grant:
-	-xcrun simctl boot "$(SIM)" 2>/dev/null
-	-xcrun simctl privacy "$(SIM)" grant location $(BUNDLE)
-	-xcrun simctl privacy "$(SIM)" grant motion $(BUNDLE)
+	@xcrun simctl boot "$(SIM)" 2>/dev/null || true
+	@xcrun simctl bootstatus "$(SIM)" -b
+	@xcrun simctl privacy "$(SIM)" grant location $(BUNDLE)
+	@xcrun simctl privacy "$(SIM)" grant motion $(BUNDLE)
+	@xcrun simctl location "$(SIM)" set 40.1140,-88.2249
 
 # Every XCUITest in CaneKitUITests (the Street View test skips itself without CANEKIT_FRAME_DIR).
 # ⚠ Set a simulator location first (`xcrun simctl location <udid> set 40.1140,-88.2249`) or the route
