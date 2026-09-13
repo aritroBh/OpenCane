@@ -566,9 +566,15 @@ Rows: `TripEventRow` (one JSONL line), `TripOpenRow` / `TripClosePatch`, `Hazard
 - `MobilityDayRow.dayKey` is the walker's *local* day, not UTC's.
 - Non-finite numbers are sanitised (JSON has no infinity), the same rule `TripLogger.num` follows.
 
-`CloudBatchPolicy.shiftMark(_:flushed:)` keeps the trip mark true across a flush — the mark is an
-index into the live queue, so every batch taken off the front shifts it down and a failed batch put
-back shifts it up. Getting it wrong is silent: the walk's first lines simply keep a null `trip_id`.
+⚠ **Step 60: most of this file is now a contract without a caller.** `CloudBatchPolicy.shiftMark`
+is *gone* (it existed to keep an index into the trip-event queue true across a flush; the queue went
+with the MVP reduction, so the bug it fixed cannot happen). Of the policy only `flushInterval` and
+`maxPhotoUploads` are read by the app. `TripEventRow`, `DeviceSettingsRow`, `PostRow`,
+`ConversationTurnRow`, `MobilityDayRow`, `AppLaunchRow`, `RouteRow` and `RouteWaypointRow` are **not
+written by the shipped app** — each says so in its own doc comment. They stay because the wire shape
+is the contract with the migrations and the reduction is reversible; do not read a row type here as
+evidence that something is uploaded. `TripEventRow.walkToken` is set by nobody: it is the shape a
+returning mirror must use (a token that travels with the row) instead of an index into a live queue.
 
 Tests: `CloudSchemaTests.swift` (18).
 
@@ -868,11 +874,11 @@ Why: the owner asked how the app copes with low light. LiDAR depth, the gyro gat
 
 ## Module: cloud — `ios/CaneKit/Cloud/`
 
-The optional Supabase mirror (Step 45). Local state is mirrored only after the user explicitly
-enables Profile → Privacy → **Share data with OpenCane cloud**; **the phone stays the source of
-truth** and works unchanged with no project configured or with sharing disabled. Turning sharing
-off cancels future flushes, drops queued rows and detaches callbacks; existing remote rows are not
-implicitly deleted.
+The consent-gated Supabase MVP mirror. Cloud sharing requires Profile → Privacy → **Share data
+with OpenCane cloud**; the phone remains the source of truth. Turning sharing off cancels future
+writes and drops deferred work; existing remote rows are not implicitly deleted. The cloud retains
+only cane/device identity, Medical ID, family contacts, completed-trip summaries, announced
+hazards (and capped photos), and family-alert history.
 
 ### `SupabaseClient.swift` — PostgREST + Storage over URLSession (no SDK)
 
@@ -888,29 +894,35 @@ unzips the .ipa full write access to every walker's data.
 
 ### `CloudSync.swift` — the consent-gated mirror
 
-`@MainActor @Observable`, owned by `AppModel.cloud`. `sharingEnabled` starts false even when keys exist. While enabled, queues trip-log lines and flushes them on a
-5 s loop; a failed batch goes back on the **front** of the queue so a walk replays in order.
-`setSharingEnabled(false)` cancels the loop, drops queued/pending rows and clears registration ids;
-existing remote rows are not implicitly deleted.
+`@MainActor @Observable`, owned by `AppModel.cloud`. `sharingEnabled` starts false even when
+keys exist. While consent is on, it retries registration and a deferred `trips` summary on a 5 s
+loop. `setSharingEnabled(false)` cancels the loop, drops deferred work and clears registration
+ids; existing remote rows are not implicitly deleted.
 
 | Local store | Cloud table | Fed from |
 |---|---|---|
-| `UserDefaults` settings | `device_settings` | `Settings.onChange` (0.4 s debounce) |
 | `familyContactEmails` | `family_contacts` | `AppModel.saveFamilyContacts()` |
-| `MedicalProfileStore` | `medical_profiles`, `mobility_days` | `onProfileSaved` / `onMobilityRefreshed` |
-| `canekit-*.jsonl` | `trips`, `trip_events` | `TripLogger.onRecord`, `beginTrip` / `endTrip` |
+| `MedicalProfileStore` | `medical_profiles` | `onProfileSaved` |
+| guided walk | `trips` | `beginTrip` / `endTrip` |
 | `hazards/*.geojson` + JPEGs | `hazards` + `hazard-photos` | `AppModel.recordHazard` |
-| `posts.json` | `posts` | `ConversationCoordinator.dropPost` |
-| `OpenCaneEvent`s | `family_alerts`, `family_alert_recipients` | `FamilyAlerts.onDelivered` (consent on) |
-| `LaunchRecovery` outcome | `app_launches` | `AppModel.startCloudMirror()` |
+| `OpenCaneEvent`s | `family_alerts` | `FamilyAlerts.onDelivered` (consent on) |
 
-- ⚠ **Nothing here may `await` on the cue path.** The writers are synchronous queue appends.
+- Settings, detailed JSONL, route geometry, mobility, posts, conversations and launch recovery
+  deliberately remain on the phone. They are not cloud MVP data.
+- ⚠ **Their writers still exist as documented no-op seams** — `logEvent`, `recordPost`,
+  `recordConversationTurn`, `saveSettings`, `saveMobility`, `recordLaunch`, `uploadRoute`. That is
+  deliberate: the call sites (`TripLogger.onRecord`, `dropPost`, `Settings.onChange`, …) stay wired,
+  so no old call site can quietly recreate a removed cloud write path, and a returning mirror needs
+  no new code on the cue path. `queuedRows` is therefore always 0 and the status line never says
+  "queued". Their row types stay in `CloudSchema` **with their tests** (the wire shape is the
+  contract with the migrations); each one's doc comment says it is not written today.
+- ⚠ The Privacy toggle's `accessibilityHint` in `ProfilePage` names exactly these seven tables' worth
+  of data and no more. It is a consent line read aloud to a blind walker: when a seam stops being a
+  no-op, that sentence changes in the same commit.
+- ⚠ **Nothing here may `await` on the cue path.** The retained writers schedule their own effects.
 - ⚠ **Deferred, not dropped.** A route can start well inside the `register_cane` round trip on a
-  cold launch. `beginTrip` and `uploadRoute` hold their work (with the real start time) and send it
-  the moment ids arrive, retrying on every tick; lines queued in between are stamped with the trip
-  id when it lands. Before this, a measured e2e walk produced 899 `trip_events` and **zero**
-  `trips`. The one-shot writers (hazard, post, alert, conversation turn) drop instead — they fire
-  seconds into a launch at the earliest, and a stale replay is worse than a gap.
+  cold launch. `beginTrip` retains the real start time and opens the summary row as soon as its
+  walker id lands. Hazards and alerts are one-shot: a stale replay is worse than a gap.
 - ⚠ The family email list goes through `save_family_contacts` **only**.
 - ⚠ **A walk is closed from three places**, and missing any one leaks an open row: `onArrived`
   (`arrived`), `stopRoute` (`stopped`) and `endRouteQuietly` (`stopped`, the mid-walk restart — it
@@ -923,10 +935,8 @@ existing remote rows are not implicitly deleted.
 - ⚠ It takes `HazardLog.record`'s **return value**, never `records.last`: a detection refused by
   the 3 s debounce returns nil, and `records.last` is then the previous hazard — uploading it again
   duplicates a hazard that was announced once.
-- `recordConversationTurn` exists and is not called yet — `ConversationCoordinator` does not wire it.
-
-Tests: the decisions are in `CloudSchema` / `CloudBatchPolicy` (CaneKitLogic). This class is the
-effectful shell; verify it by walking and watching `trip_summary` fill in.
+Tests: the retained wire records are in `CloudSchema` (CaneKitLogic). This class is the effectful
+shell; verify it by walking and checking the resulting `trips` row.
 
 ### `ios/scripts/test.sh` — runs the package tests (`make test`)
 - `cd ios/Logic`; if `xcode-select -p` points at `Xcode.app` → `exec swift test --disable-xctest "$@"` (Step 47: every suite is Swift Testing; on a fresh `Logic/.build` under Xcode 27 the empty XCTest pass fails "No test bundle found" and would turn a green run red — AGENTS.md trap; remove the flag only when an XCTest test is added).
@@ -2970,21 +2980,20 @@ Purpose: persistence and telemetry bridge for emergency Medical ID card and mobi
 
 - `public struct CKMedicalProfile: Codable, Sendable, Equatable` — user identity, emergency notes, date of birth, blood type, height, weight, allergies, medications, home address, a **single** emergency contact (`emergencyContactName` / `emergencyContactPhone` / `emergencyContactRelation`), cane specification, organ donor status. Defaulted to `CKMedicalProfile.standardDefault`.
 - `struct CKMobilityStats: Sendable, Equatable` — today's steps, distance in meters, active duration, completed trips count, average walking pace.
-- `@MainActor @Observable public final class MedicalProfileStore` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` and the completed-trip count under `"opencane_completed_trips_count"` in `UserDefaults.standard`; `public private(set) var isFetchingPedometer` is true while a `CMPedometer` query is in flight; `save()`, `recordCompletedTrip()`, `refreshMobilityStats()`, private `triggerSync()`. Fresh defaults are privacy-safe (`Not set`, blank contact, no DOB/address/phone); initialization only preserves a profile the user saved and clears the old seeded 555 placeholder. Cloud mirroring occurs only after the explicit Profile privacy switch is enabled; disabling it cancels future flushes and drops queued local uploads (existing remote rows are not implicitly deleted). Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
+- `@MainActor @Observable public final class MedicalProfileStore` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` and the completed-trip count under `"opencane_completed_trips_count"` in `UserDefaults.standard`; `public private(set) var isFetchingPedometer` is true while a `CMPedometer` query is in flight; `save()`, `recordCompletedTrip()`, `refreshMobilityStats()`, private `triggerSync()`. Fresh defaults are privacy-safe (`Not set`, blank contact, no DOB/address/phone); initialization only preserves a profile the user saved and clears the old seeded 555 placeholder. The saved profile is mirrored to `medical_profiles` only after the explicit Profile privacy switch is enabled; disabling it cancels future writes (existing remote rows are not implicitly deleted). ⚠ The **mobility** numbers are local-only since Step 60 — `CloudSync.saveMobility` is a no-op seam and `mobility_days` is gone from the live project. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
 
 ---
 
-### ios/CaneKit/Trip/SupabaseClient.swift (Step 45, Step 46)
+### ~~ios/CaneKit/Trip/SupabaseClient.swift~~ — **this file does not exist**
 
-Purpose: native URLSession PostgREST client for OpenCane's cloud backend (Supabase). Zero third-party SDKs. Swift 6 concurrency safe.
-
-- `final class SupabaseClient: Sendable` — singleton `shared`. Reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from `Secrets.plist` (never embeds secret keys in client binaries).
-  - `resolveWalkerID(displayName:caneID:) async -> String?` — resolves or registers the walker in `walkers` table filtered strictly by device `install_id`, protected by `inFlightResolve` unfair lock to eliminate duplicate registration races.
-  - `syncMedicalProfile(_ profile: CKMedicalProfile) async -> Bool` — upserts emergency medical details to `medical_profiles` via `on_conflict=walker_id` merge-duplicates.
-  - `syncMobilityStats(_ stats: CKMobilityStats, date: Date) async -> Bool` — upserts daily steps and distance to `mobility_days` via `on_conflict=walker_id,day` merge-duplicates, keying dates with local `Calendar.current` date components.
-  - `recordHazard(...) async -> Bool` — logs detected obstacles, curbs, and drop-offs to `hazards` for the web hazard map.
-  - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:) async -> Bool` — mirrors dispatched family alerts to `family_alerts`.
-  - `recordDevice(hasLiDAR:watchPaired:airPodsPaired:) async -> Bool` — registers hardware capabilities in `devices` with dynamic POSIX `utsname` model identifier and `on_conflict=vendor_id` upsert.
+⚠ Removed from this reference on 2026-09-13 (Step 60). Step 44/45 drafted a `SupabaseClient`
+singleton under `Trip/` with `resolveWalkerID`, `syncMedicalProfile`, `syncMobilityStats`,
+`recordHazard`, `recordFamilyAlert` and `recordDevice`; the shipped client is
+**`ios/CaneKit/Cloud/SupabaseClient.swift`** (see *Module: cloud* above) and none of those methods
+exist anywhere in the tree — `grep -rn 'syncMobilityStats\|resolveWalkerID' ios/CaneKit` is empty.
+Registration is `register_cane` via `CloudSync`, and the Medical ID goes through
+`CloudSync.saveMedicalProfile`. Kept as a tombstone because the old names appear in CHANGELOG
+Steps 44–46 and an agent grepping for them needs to know they are history, not code.
 
 ---
 

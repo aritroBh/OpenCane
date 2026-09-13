@@ -70,11 +70,16 @@ final class TripLogger {
     /// Logger creation time (`AppModel` init, i.e. app launch); every record's `t` is seconds since this.
     @ObservationIgnored private let t0 = Date()
 
-    /// Called for every record that reaches the file, so the cloud copy holds the same lines as
-    /// the JSONL (`CloudSync.logEvent`). Set once by `AppModel.init`; nil means no mirror.
+    /// Called for every record that reaches the file (`CloudSync.logEvent`). Set once by
+    /// `AppModel.init`; nil means no mirror.
+    ///
+    /// ⚠ Since Step 60 the far end is a **no-op seam**: `trip_events` is gone from the cloud and the
+    /// JSONL on this phone is the only copy of a walk's detail. The hook stays wired so a returning
+    /// mirror needs no change on the cue path, and so this stays the one place records are handed
+    /// over from.
     ///
     /// ⚠ Must stay a cheap, synchronous append — it runs inside `event(_:_:)`, which runs on the
-    /// cue path. `CloudSync` queues and flushes on its own 5 s loop for exactly that reason.
+    /// cue path. Whatever is on the other end may never await.
     /// A record dropped by the `enabled` guard or by invalid JSON is not handed over either: the
     /// hook sees what the file sees.
     @ObservationIgnored var onRecord: ((_ kind: String, _ t: Double, _ fields: [String: Any]) -> Void)?
@@ -180,8 +185,8 @@ final class TripLogger {
               let line = String(data: data, encoding: .utf8) else { return }
         buffer += line + "\n"
         linesWritten += 1
-        // The cloud mirror sees exactly the records the file does — after the `enabled` guard and
-        // after the JSON validity check, never before.
+        // The `onRecord` hook sees exactly the records the file does — after the `enabled` guard
+        // and after the JSON validity check, never before.
         onRecord?(kind, t, fields)
         if buffer.count > 16_384 { flush() }
     }

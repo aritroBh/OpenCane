@@ -2,40 +2,32 @@
 //  CloudSync.swift
 //  CaneKit
 //
-//  The mirror: everything OpenCane keeps on the phone, kept in Supabase too only after an
-//  explicit privacy opt-in. Cloud keys alone never authorize uploading identity, medical data or
-//  route locations.
+//  The consent-gated MVP mirror: only durable safety records leave the phone after explicit
+//  privacy opt-in. Cloud keys alone never authorize uploading identity, medical data or location.
 //
 //  What moved (Step 45). Before this, each kind of state lived in exactly one place on one phone:
 //
-//    | On the phone                                  | Now also in Postgres        |
-//    |-----------------------------------------------|-----------------------------|
-//    | `UserDefaults` settings keys                   | `device_settings`           |
-//    | `familyContactEmails` + `familyContactsRegistered` | `family_contacts`       |
-//    | `MedicalProfileStore`'s profile blob           | `medical_profiles`          |
-//    | `Documents/canekit-*.jsonl` (TripLogger)       | `trips` + `trip_events`     |
-//    | `Documents/hazards/*.geojson` + JPEGs          | `hazards` + a storage bucket|
-//    | `Documents/posts/posts.json` (PostStore)       | `posts`                     |
-//    | `OpenCaneEvent`s POSTed to the alert bot       | `family_alerts`             |
-//    | `ConversationHistory` (memory only)            | `conversation_turns`        |
-//    | `MedicalProfileStore.mobilityStats`            | `mobility_days`            |
-//    | `LaunchRecovery`'s marker outcome              | `app_launches`              |
+//    | On the phone                                  | Also in Postgres             |
+//    |-----------------------------------------------|------------------------------|
+//    | cane / device identity                         | `walkers`, `devices`         |
+//    | `familyContactEmails`                          | `family_contacts`            |
+//    | `MedicalProfileStore`'s profile blob           | `medical_profiles`           |
+//    | one completed guided walk                      | `trips`                      |
+//    | `Documents/hazards/*.geojson` + JPEGs          | `hazards` + `hazard-photos`  |
+//    | `OpenCaneEvent`s sent to the alert bot         | `family_alerts`              |
 //
 //  ⚠ **The phone is still the source of truth.** Every local writer writes exactly what it wrote
 //  before; this class is fed from the same call sites and never stands between a detection and a
-//  cue. Uploads are queued and flushed on a 5 s loop, a failed batch goes back on the queue, and a
-//  walk with no signal is still a complete walk on disk. Turning sharing off restores the exact
-//  pre-Step-45 behaviour for future writes; queued rows are discarded. Existing remote rows are
-//  not deleted implicitly and must be removed in the Supabase project.
+//  cue. The maintenance loop retries only registration and deferred trip summaries, and a walk
+//  with no signal is still a complete walk on disk. Turning sharing off cancels future writes and
+//  drops deferred work; existing remote rows are not implicitly deleted.
 //
-//  ⚠ **Nothing here may `await` on the cue path.** `logEvent`, `recordHazard`, `recordPost` and
-//  `recordAlert` are synchronous appends to an in-memory queue. The only `async` work happens in
-//  the flush loop and in `start()`.
+//  ⚠ **Nothing here may `await` on the cue path.** Effects run in detached tasks. Detailed logs,
+//  posts, settings, mobility, conversations and launch recovery remain local-only in the MVP.
 //
 //  Owner: `AppModel.cloud` (one instance). `start()` once from `AppModel.start()`; the writers are
-//  called from `TripLogger`'s `onRecord` hook, `AppModel.recordHazard`,
-//  `ConversationCoordinator.dropPost`, `FamilyAlerts.send`, the settings `didSet`s and
-//  `saveFamilyContacts()`. Module `cloud` in docs/CODE_REFERENCE.md.
+//  called from route start/end, `AppModel.recordHazard`, `FamilyAlerts.send`, Medical ID saves
+//  and `saveFamilyContacts()`. Module `cloud` in docs/CODE_REFERENCE.md.
 //
 //  Threading / isolation: `@MainActor @Observable`. `SupabaseClient` is `nonisolated` and every
 //  request runs off the main actor inside a detached-by-isolation `async` call.
@@ -43,19 +35,15 @@
 //  Key invariants:
 //    · Every table is keyed on `walkers.id`, so nothing can be written before `register_cane`
 //      returns. Registration is idempotent and retried on the flush loop. What happens meanwhile
-//      differs by writer, deliberately: trip-log lines **queue** and a walk's `trips` row is
-//      **deferred** and opened the moment ids arrive (a route can start well inside the
-//      registration round trip — measured 2026-09-13, an e2e walk produced 899 `trip_events` and
-//      zero `trips` before this was fixed). The one-shot writers (hazard, post, alert,
-//      conversation turn) drop instead, because they fire seconds into a launch at the earliest
-//      and a stale replay is worse than a gap.
+//      differs by writer, deliberately: a walk's `trips` row is **deferred** and opened the
+//      moment ids arrive, while a stale hazard or alert is dropped rather than replayed.
 //    · The family email list goes through `save_family_contacts` ONLY. It is never put in a
-//      `trip_events` payload, never in a `family_alerts` row, and never shown to the summarizer
+//      alert payload, never in a `family_alerts` row, and never shown to the summarizer
 //      model (`FamilyContacts`, `AlertSummarizer`). It is the most personal thing this app holds.
 //    · Photo uploads are capped at `CloudBatchPolicy.maxPhotoUploads`, matching `HazardLog`.
-//  Tests: the decisions live in `CloudBatchPolicy` / `CloudSchema` (CaneKitLogic,
-//  `CloudSchemaTests`). This class is the effectful shell; verify it by walking with the phone and
-//  watching `trip_summary` fill in.
+//  Tests: the retained wire rows live in `CloudSchema` / `CloudSchemaTests` (CaneKitLogic).
+//  This class is the effectful shell; verify it by walking with the phone and checking a `trips`
+//  row.
 //
 
 import CaneKitLogic
@@ -74,27 +62,27 @@ final class CloudSync {
     var isConfigured: Bool { client != nil }
     /// The project host, or nil. Never contains the key.
     var host: String? { client?.host }
-    /// One line for the Settings row: "Synced 412 rows", "Offline — 88 queued", "Not configured".
+    /// One line for the Settings row: "Synced 12 rows" or "Not configured".
     private(set) var status = "Not configured"
-    /// Rows waiting to go. Shown so a demo can point at it draining.
+    /// Always zero in the MVP: detailed event uploads remain on the phone.
     private(set) var queuedRows = 0
     /// Rows accepted by Postgres this session.
     private(set) var rowsUploaded = 0
     /// Last failure, one line. Cleared by the next success.
     private(set) var lastError: String?
-    /// True once `register_cane` has returned ids — until then nothing but trip events can queue.
+    /// True once `register_cane` has returned ids.
     var isRegistered: Bool { walkerID != nil }
     /// Explicit privacy consent. False on a fresh install, even when cloud keys are present.
     private(set) var sharingEnabled = false
 
-    /// The walk currently open in `trips`, or nil. Every queued row is stamped with it.
+    /// The walk currently open in `trips`, or nil.
     private(set) var tripID: String?
 
     // MARK: Identity
 
     /// `walkers.id`, from `register_cane`. Every table is keyed on it.
     private(set) var walkerID: String?
-    /// `devices.id`, from `register_cane`. Keys `device_settings`.
+    /// `devices.id`, from `register_cane`.
     private(set) var deviceID: String?
 
     /// The per-install UUID that survives relaunches (and is what `register_cane` upserts on), so
@@ -114,14 +102,8 @@ final class CloudSync {
 
     @ObservationIgnored private let client: SupabaseClient?
     @ObservationIgnored private let policy = CloudBatchPolicy()
-    /// Trip-log lines waiting for a batch. Oldest first.
-    @ObservationIgnored private var queue: [TripEventRow] = []
     /// The 5 s flush loop; cancelled by `stop()`.
     @ObservationIgnored private var flushTask: Task<Void, Never>?
-    /// True while a flush is in flight, so the loop never overlaps itself.
-    @ObservationIgnored private var isFlushing = false
-    /// Consecutive failed flushes, for the backoff.
-    @ObservationIgnored private var failedAttempts = 0
     /// Photos uploaded this session (capped at `policy.maxPhotoUploads`).
     @ObservationIgnored private var photosUploaded = 0
     /// Set once the app has asked to register and the RPC is in flight or done, so the flush loop
@@ -135,8 +117,8 @@ final class CloudSync {
         if client != nil { status = "Cloud sharing is off" }
     }
 
-    /// Enables or disables all cloud mirroring. Disabling cancels future flushes and drops local
-    /// queued rows so withdrawing consent cannot be followed by a delayed upload.
+    /// Enables or disables the MVP cloud mirror. Disabling cancels future writes and clears
+    /// deferred registration/trip work so withdrawn consent cannot cause a delayed upload.
     func setSharingEnabled(_ enabled: Bool) {
         sharingEnabled = enabled
         guard !enabled else {
@@ -145,18 +127,14 @@ final class CloudSync {
         }
         flushTask?.cancel()
         flushTask = nil
-        queue.removeAll(keepingCapacity: false)
         pendingTrip = nil
-        pendingRoute = nil
         pendingClose = nil
-        pendingSettings = nil
         pendingRegistration = nil
         tripID = nil
         walkerID = nil
         deviceID = nil
         registering = false
         openingTrip = false
-        uploadingRoute = false
         queuedRows = 0
         status = client == nil ? "Not configured" : "Cloud sharing is off"
     }
@@ -172,7 +150,7 @@ final class CloudSync {
         var airPodsPaired: Bool
     }
 
-    /// Register the cane, push the current settings and start the flush loop.
+    /// Register the cane and start the maintenance loop.
     /// Idempotent — `register_cane` upserts, so calling it every launch is the design. Safe to
     /// call with no network: the registration is retried by the flush loop.
     /// Caller: `AppModel.start()`.
@@ -181,15 +159,18 @@ final class CloudSync {
         pendingRegistration = facts
         registerIfNeeded()
         guard flushTask == nil else { return }
+        // ⚠ The interval comes from `CloudBatchPolicy`, never a literal here: it is a number that
+        // decides when a row leaves the phone, so it lives in CaneKitLogic with a test (hard rule 3).
+        let interval = policy.flushInterval
         flushTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(interval))
                 await self?.tick()
             }
         }
     }
 
-    /// Flush what is queued and stop the loop. Called from
+    /// Prompt registration or a deferred trip-summary write. Called from
     /// `AppModel.scenePhaseChanged(.background)` so a backgrounded walk still lands.
     func flushNow() {
         Task { [weak self] in await self?.tick() }
@@ -204,32 +185,22 @@ final class CloudSync {
 
     // MARK: Writers — called from the app, never awaited
 
-    /// Mirror one trip-log line. Called from `TripLogger.onRecord` for every record the logger
-    /// writes, so the cloud copy and the JSONL file hold the same lines.
-    /// Queues even before registration: the rows are stamped with the walker id at flush time.
+    /// The phone keeps its detailed JSONL log locally. The MVP cloud stores only the completed
+    /// trip summary, never the high-volume `trip_events` stream.
+    ///
+    /// Caller: `TripLogger.onRecord`. Kept as a no-op compatibility seam so logging remains
+    /// strictly local without adding a branch to the cue path.
     func logEvent(kind: String, tSeconds: Double, fields: [String: Any]) {
-        guard client != nil, sharingEnabled else { return }
-        let payload = Self.json(fields)
-        queue.append(TripEventRow.from(walkerID: walkerID ?? "", tripID: tripID,
-                                       tSeconds: tSeconds, kind: kind, fields: payload))
-        let (kept, dropped) = policy.trim(queue)
-        if dropped > 0 {
-            queue = kept
-            // Said out loud in the status rather than swallowed: a gap in the cloud walk that
-            // nobody knows about looks like a gap in the real one.
-            lastError = "Dropped \(dropped) queued rows (offline too long)"
-        }
-        queuedRows = queue.count
+        _ = (kind, tSeconds, fields)
     }
 
-    /// Open a `trips` row. Everything queued afterwards is stamped with it.
+    /// Open a `trips` summary row.
     /// Caller: `AppModel.startRouteNow`, after the route is built.
     ///
     /// ⚠ A route can start before `register_cane` has returned — on a cold launch the walker can
     /// press Start in well under the round trip, and the e2e scenarios do it every run. Measured
-    /// 2026-09-13: an e2e walk wrote 899 `trip_events` and **zero** `trips`, because this method
-    /// used to `guard let walkerID` and give up, so a whole walk arrived as loose lines with a
-    /// null `trip_id`. The open is therefore *deferred*, not dropped: it is held until
+    /// 2026-09-13: an e2e walk wrote zero `trips`, because this method used to `guard let
+    /// walkerID` and give up. The open is therefore *deferred*, not dropped: it is held until
     /// registration lands and then sent with the start time it actually had.
     func beginTrip(destination: String?, cueLevel: String, cuePlace: String, batteryPct: Int,
                    logFileName: String?, start: GeoFix?) {
@@ -245,14 +216,8 @@ final class CloudSync {
         // row this one is not. (It is only ever set for a walk whose row never opened.)
         pendingClose = nil
         pendingTrip = pending
-        // Where this walk's lines begin. Rows queued before Start belong to no trip and must stay
-        // null; rows from here on are this walk's and get stamped when the row id arrives.
-        tripQueueMark = queue.count
         openPendingTrip()
     }
-
-    /// Index in `queue` at which the current walk's lines begin (see `beginTrip`).
-    @ObservationIgnored private var tripQueueMark = 0
 
     /// A walk that began before the cane had ids. Held with its real start time.
     private struct PendingTrip: Sendable {
@@ -295,13 +260,6 @@ final class CloudSync {
                     self.tripID = id
                     self.pendingTrip = nil
                     self.openingTrip = false
-                    // Lines logged while the row was being created are this walk's lines.
-                    if let id, self.tripQueueMark < self.queue.count {
-                        for i in self.tripQueueMark..<self.queue.count
-                        where self.queue[i].tripID == nil {
-                            self.queue[i].tripID = id
-                        }
-                    }
                     // A walk short enough to have ended already: close it now.
                     if let close = self.pendingClose {
                         self.pendingClose = nil
@@ -332,7 +290,7 @@ final class CloudSync {
                                    spokenSummary: spokenSummary,
                                    endLat: end?.coordinate.latitude,
                                    endLon: end?.coordinate.longitude)
-        // Flush the walk's remaining lines first so the log is complete before the row closes.
+        // Prompt any deferred trip open before closing it.
         flushNow()
         guard tripID != nil else {
             // The row is still being opened (see `beginTrip`); `openPendingTrip` applies this the
@@ -388,20 +346,10 @@ final class CloudSync {
         }
     }
 
-    /// Mirror one named place. The phone's marker UUID is the primary key, so a retry after an
-    /// outage updates rather than duplicating.
+    /// Posts remain on the phone (`PostStore`); the MVP has no cloud `posts` table.
     /// Caller: `ConversationCoordinator.dropPost(name:)` via `AppModel`.
     func recordPost(_ marker: WalkMarker) {
-        guard let client, sharingEnabled, let walkerID else { return }
-        let row = PostRow(marker: marker, walkerID: walkerID, tripID: tripID)
-        Task { [weak self] in
-            do {
-                try await client.upsert(into: "posts", row: row, onConflict: "id")
-                await MainActor.run { self?.count(1) }
-            } catch {
-                await MainActor.run { self?.note(error) }
-            }
-        }
+        _ = marker
     }
 
     /// Mirror a family alert and how its POST to the bot turned out.
@@ -421,79 +369,26 @@ final class CloudSync {
         else { return }
         Task { [weak self] in
             do {
-                let data = try await client.insert(into: "family_alerts", row: row, returning: true)
+                try await client.insert(into: "family_alerts", row: row)
                 await MainActor.run { self?.count(1) }
-                // Record who the alert was addressed to, so the feed reads "Mom and Sagar were
-                // told" rather than "an alert fired".
-                if let alertID = Self.firstID(in: data) {
-                    await self?.linkRecipients(alertID: alertID, client: client, walkerID: walkerID)
-                }
             } catch {
                 await MainActor.run { self?.note(error) }
             }
         }
     }
 
-    /// Mirror one spoken question and its answer.
+    /// Conversation transcripts stay on the phone only; the MVP has no cloud history table.
     /// Caller: `ConversationCoordinator`, after an answer is spoken.
     func recordConversationTurn(question: String?, answer: String?, route: String?,
                                 tool: String?, latencyMs: Int?, fix: GeoFix?) {
-        guard let client, sharingEnabled, let walkerID else { return }
-        let row = ConversationTurnRow(walkerID: walkerID, tripID: tripID,
-                                      askedAt: OpenCaneEvent.iso8601(Date()),
-                                      question: question, answer: answer, route: route,
-                                      toolUsed: tool, latencyMs: latencyMs,
-                                      lat: fix?.coordinate.latitude,
-                                      lon: fix?.coordinate.longitude)
-        Task { [weak self] in
-            do {
-                try await client.insert(into: "conversation_turns", row: row)
-                await MainActor.run { self?.count(1) }
-            } catch {
-                await MainActor.run { self?.note(error) }
-            }
-        }
+        _ = (question, answer, route, tool, latencyMs, fix)
     }
 
     // MARK: Writers — configuration
 
-    /// Push the full settings snapshot.
-    ///
-    /// Called from `Settings.onChange`, so it fires once per persisted write — and one user action
-    /// can be several writes (changing the cue level writes `cueLevel` *and* `cuePlace`; a launch
-    /// recovery clears a handful). Coalesced on a 0.4 s trailing debounce so a burst becomes one
-    /// PATCH of the final state, which is the only state that was ever true.
+    /// Settings remain local (`UserDefaults`); the MVP has no cloud settings snapshot.
     func saveSettings(_ row: DeviceSettingsRow) {
-        guard client != nil, sharingEnabled else { return }
-        pendingSettings = row
-        settingsTask?.cancel()
-        settingsTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            await self?.pushSettings()
-        }
-    }
-
-    /// The last settings snapshot handed to `saveSettings`, waiting for the debounce.
-    @ObservationIgnored private var pendingSettings: DeviceSettingsRow?
-    /// The trailing-debounce task; cancelled and replaced by each new write.
-    @ObservationIgnored private var settingsTask: Task<Void, Never>?
-
-    /// Send whatever `saveSettings` last staged. A snapshot that arrives before registration is
-    /// kept, not dropped: the next write (or the post-registration push in
-    /// `AppModel.startCloudMirror`) carries it.
-    private func pushSettings() async {
-        guard let client, sharingEnabled, let deviceID, let row = pendingSettings else { return }
-        pendingSettings = nil
-        do {
-            try await client.patch("device_settings",
-                                   filter: [URLQueryItem(name: "device_id",
-                                                         value: "eq.\(deviceID)")],
-                                   row: row)
-            count(1)
-        } catch {
-            note(error)
-        }
+        _ = row
     }
 
     /// Replace the family alert list with exactly these addresses.
@@ -552,157 +447,30 @@ final class CloudSync {
         }
     }
 
-    /// Push today's mobility numbers. Upserted on (`walker_id`, `day`), so calling it repeatedly
-    /// through the day just refreshes the row.
+    /// Mobility statistics remain local; the MVP has no cloud day-by-day activity table.
     func saveMobility(_ stats: CKMobilityStats) {
-        guard let client, sharingEnabled, let walkerID else { return }
-        let row = MobilityDayRow(walkerID: walkerID,
-                                 day: MobilityDayRow.dayKey(Date()),
-                                 steps: stats.todaySteps,
-                                 distanceM: stats.todayDistanceMeters,
-                                 activeSeconds: stats.todayActiveSeconds,
-                                 completedTrips: stats.completedTrips,
-                                 averagePaceMps: stats.averagePaceMps > 0 ? stats.averagePaceMps : nil)
-        Task { [weak self] in
-            do {
-                try await client.upsert(into: "mobility_days", row: row,
-                                        onConflict: "walker_id,day")
-                await MainActor.run { self?.count(1) }
-            } catch {
-                await MainActor.run { self?.note(error) }
-            }
-        }
+        _ = stats
     }
 
-    /// Record how this launch went — `recovered` means the previous one died before it was healthy
-    /// and OpenCane cleared the optional features that could have been holding it hostage
-    /// (`LaunchRecovery`). Evidence that the guard fired, kept where it can be looked at later.
+    /// Launch recovery stays on the phone; the MVP has no cloud launch telemetry.
     func recordLaunch(mode: LaunchMode, clearedKeys: [String]) {
-        guard let client, sharingEnabled, let walkerID else { return }
-        let row = AppLaunchRow(walkerID: walkerID, deviceID: deviceID,
-                               launchMode: mode == .recovered ? "recovered" : "normal",
-                               clearedKeys: mode == .recovered ? clearedKeys : [],
-                               appVersion: Self.appVersion,
-                               systemVersion: UIDevice.current.systemVersion,
-                               reachedHealthy: false)
-        Task { [weak self] in
-            do {
-                try await client.insert(into: "app_launches", row: row)
-                await MainActor.run { self?.count(1) }
-            } catch {
-                await MainActor.run { self?.note(error) }
-            }
-        }
+        _ = (mode, clearedKeys)
     }
 
-    /// Upload the route being walked and its waypoints, then attach it to the open trip.
+    /// Route geometry remains in the bundled JSON or MapKit; the MVP cloud keeps only a trip's
+    /// destination and summary.
     /// Caller: `AppModel.startRouteNow`, after `beginTrip`.
-    /// - Parameter source: `bundled` (the recorded campus route) or `mapkit`.
     func uploadRoute(_ route: Route, source: String) {
-        guard client != nil, sharingEnabled else { return }
-        // ⚠ Deferred for the same reason as `beginTrip`: a route is built and started well inside
-        // the `register_cane` round trip on a cold launch, and giving up here left every walk with
-        // no `routes` row and a null `trips.route_id` (measured 2026-09-13).
-        pendingRoute = PendingRoute(route: route, source: source)
-        uploadPendingRoute()
-    }
-
-    /// A route walked before the cane had ids.
-    private struct PendingRoute: Sendable {
-        var route: Route
-        var source: String
-    }
-
-    /// The route waiting to be uploaded, or nil.
-    @ObservationIgnored private var pendingRoute: PendingRoute?
-    /// True while the upload is in flight, so `tick()` cannot start a second one.
-    @ObservationIgnored private var uploadingRoute = false
-
-    /// Upload the held route and link it to the walk, once there is a walker to attach it to.
-    /// Called from `uploadRoute` and from every `tick()`.
-    private func uploadPendingRoute() {
-        guard let client, sharingEnabled, let walkerID, let pending = pendingRoute, !uploadingRoute else { return }
-        uploadingRoute = true
-        let route = pending.route
-        let source = pending.source
-        let header = RouteRow(walkerID: walkerID, name: route.name, source: source,
-                              destinationName: route.waypoints.last?.placeName,
-                              waypointCount: route.waypoints.count,
-                              totalDistanceM: Self.routeLength(route))
-        let waypoints = route.waypoints
-        Task { [weak self] in
-            do {
-                let data = try await client.insert(into: "routes", row: header, returning: true)
-                guard let routeID = Self.firstID(in: data) else { return }
-                let rows = waypoints.map { RouteWaypointRow(routeID: routeID, waypoint: $0) }
-                try await client.bulkInsert(into: "route_waypoints", rows: rows)
-                // ⚠ Read the trip id HERE, not at call time: on a cold launch the `trips` row is
-                // still being created when the route is uploaded, and capturing nil up front left
-                // every walk unlinked from the route it walked.
-                let trip = await MainActor.run { self?.tripID }
-                if let trip {
-                    struct Link: Encodable { let route_id: String }
-                    try await client.patch("trips",
-                                           filter: [URLQueryItem(name: "id", value: "eq.\(trip)")],
-                                           row: Link(route_id: routeID))
-                }
-                await MainActor.run {
-                    self?.pendingRoute = nil
-                    self?.uploadingRoute = false
-                    self?.count(rows.count + 1)
-                }
-            } catch {
-                await MainActor.run {
-                    self?.uploadingRoute = false      // let the next tick try again
-                    self?.note(error)
-                }
-            }
-        }
+        _ = (route, source)
     }
 
     // MARK: Flush loop
 
-    /// One pass: register if we still have not, then send a batch.
+    /// One pass: register if needed and open a deferred trip summary.
     private func tick() async {
-        guard let client, sharingEnabled else { return }
+        guard client != nil, sharingEnabled else { return }
         registerIfNeeded()
-        openPendingTrip()          // a walk that began before the cane had ids
-        uploadPendingRoute()       // and the route it is walking
-        guard walkerID != nil, !isFlushing, !queue.isEmpty else {
-            updateStatus()
-            return
-        }
-        isFlushing = true
-        defer { isFlushing = false }
-
-        let (send, keep) = policy.split(queue)
-        queue = keep
-        // ⚠ `tripQueueMark` is an index INTO `queue`, and this just removed rows from its front.
-        // Without shifting it by the same amount it points at the wrong rows, and the walk's first
-        // lines never get stamped with the trip id when it lands (they stay `trip_id` null).
-        tripQueueMark = policy.shiftMark(tripQueueMark, flushed: send.count)
-        // Rows queued before registration carry an empty walker id; stamp them now.
-        let stamped = send.map { row -> TripEventRow in
-            guard row.walkerID.isEmpty else { return row }
-            var copy = row
-            copy.walkerID = walkerID ?? ""
-            return copy
-        }
-        do {
-            try await client.bulkInsert(into: "trip_events", rows: stamped)
-            failedAttempts = 0
-            count(stamped.count)
-        } catch {
-            // Back on the front of the queue, in order, and try again next tick.
-            queue = stamped + queue
-            tripQueueMark += stamped.count          // the rows came back; so does the mark
-            failedAttempts += 1
-            note(error)
-            if failedAttempts >= policy.maxAttempts {
-                try? await Task.sleep(for: .seconds(policy.backoff(attempt: failedAttempts)))
-            }
-        }
-        queuedRows = queue.count
+        openPendingTrip()
         updateStatus()
     }
 
@@ -822,41 +590,6 @@ final class CloudSync {
         let device_id: String
     }
 
-    /// Attach an alert to every registered family address, so `family_alert_feed` can say who was
-    /// told rather than only that something fired.
-    ///
-    /// Best effort in both directions: an alert with no recipients recorded is still an alert, and
-    /// a contact whose `last_alerted_at` stamp fails to land has still been told. Only
-    /// **registered** contacts are linked — an address the bot has not accepted yet is not on the
-    /// list it delivers to, so claiming it was notified would be a lie in the demo's own table.
-    private func linkRecipients(alertID: String, client: SupabaseClient, walkerID: String) async {
-        struct Contact: Decodable { let id: String }
-        struct Link: Encodable {
-            let alert_id: String
-            let contact_id: String
-        }
-        do {
-            let data = try await client.select("family_contacts", query: [
-                URLQueryItem(name: "select", value: "id"),
-                URLQueryItem(name: "walker_id", value: "eq.\(walkerID)"),
-                URLQueryItem(name: "is_registered", value: "is.true"),
-            ])
-            let contacts = (try? JSONDecoder().decode([Contact].self, from: data)) ?? []
-            guard !contacts.isEmpty else { return }
-
-            // `alerts_sent` and `last_alerted_at` on each contact are maintained by the
-            // `family_alert_recipients_bump` trigger (migration `opencane_07`), from this insert.
-            // The phone deliberately does not PATCH them: a counter the client maintains can
-            // disagree with the join table that is the actual evidence.
-            try await client.bulkInsert(into: "family_alert_recipients",
-                                        rows: contacts.map {
-                                            Link(alert_id: alertID, contact_id: $0.id)
-                                        })
-        } catch {
-            await MainActor.run { self.note(error) }
-        }
-    }
-
     // MARK: Small helpers
 
     /// A successful write: count it and clear the error line.
@@ -877,31 +610,8 @@ final class CloudSync {
         guard isConfigured else { status = "Not configured"; return }
         if walkerID == nil {
             status = lastError == nil ? "Registering…" : "Offline — will register when back"
-        } else if !queue.isEmpty {
-            status = "\(rowsUploaded) synced · \(queue.count) queued"
         } else {
             status = "\(rowsUploaded) rows synced"
-        }
-    }
-
-    /// `[String: Any]` from `TripLogger` into the Sendable JSON the row type takes.
-    /// Anything unrepresentable (an `NSNull`, an object `JSONSerialization` would reject) becomes
-    /// `.null` rather than being dropped, so a line's shape survives the trip.
-    private static func json(_ fields: [String: Any]) -> [String: OpenCaneJSON] {
-        fields.reduce(into: [:]) { out, pair in out[pair.key] = value(pair.value) }
-    }
-
-    /// One `Any` from a log record as a JSON value.
-    private static func value(_ any: Any) -> OpenCaneJSON {
-        switch any {
-        case let v as String: return .string(v)
-        case let v as Bool: return .bool(v)
-        case let v as Int: return .number(Double(v))
-        case let v as Double: return v.isFinite ? .number(v) : .null
-        case let v as Float: return v.isFinite ? .number(Double(v)) : .null
-        case let v as [Any]: return .array(v.map(value))
-        case let v as [String: Any]: return .object(json(v))
-        default: return .null                       // NSNull and anything else
         }
     }
 
@@ -910,14 +620,6 @@ final class CloudSync {
         struct Row: Decodable { let id: String }
         if let rows = try? JSONDecoder().decode([Row].self, from: data) { return rows.first?.id }
         return (try? JSONDecoder().decode(Row.self, from: data))?.id
-    }
-
-    /// Straight-line length of a route, metres — enough for "how long is this walk" without
-    /// asking MapKit again.
-    private static func routeLength(_ route: Route) -> Double? {
-        let points = route.waypoints.map(\.coordinate)
-        guard points.count > 1 else { return nil }
-        return zip(points, points.dropFirst()).reduce(0) { $0 + GeoMath.distanceMeters($1.0, $1.1) }
     }
 
     /// "0.1 (1)".
