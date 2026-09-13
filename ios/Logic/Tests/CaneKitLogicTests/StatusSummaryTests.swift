@@ -251,3 +251,10 @@ private func healthy(
     #expect(checked > 20)
     #expect(StatusSummary.fixedLines.count == Set(StatusSummary.fixedLines).count)
 }
+
+/// An account out of credit says so, and is never "ready".
+@Test func voiceClauseSaysWhenTheAccountRefusedTheKey() {
+    let refused = VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: false, cachedShare: 1, unavailable: true)
+    #expect(StatusSummary.voiceLine(refused) == "System voice. The natural voice account is out of credit or refused the key.")
+    #expect(!StatusSummary.voiceReady(refused))
+}
