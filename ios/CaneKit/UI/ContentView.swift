@@ -39,6 +39,8 @@ struct ContentView: View {
     /// reads its own copy from the environment (Settings makes it `@Bindable` for the toggles).
     @Environment(AppModel.self) private var model
     /// Which of the four pages is showing. Starts on Guide so the idle walk controls are first.
+    /// True between keyboardWillShow and keyboardWillHide; hides the tab bar (Step 50).
+    @State private var keyboardUp = false
     @State private var tab: RootTab = .guide
     /// Instant page swap when the user asked for less motion.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -67,8 +69,19 @@ struct ContentView: View {
                     // frames on device. Pages still never slide: a horizontal slide read as
                     // "going forward" even when moving left, and direction is not information.
                     .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                // The tab bar collapses while the keyboard is up (Step 50): iOS 26 draws the
+                // keyboard's "Done" as a floating glass capsule that sat on the Profile icon, and
+                // nobody switches tabs mid-typing. It stays MOUNTED (height 0, invisible, hidden
+                // from VoiceOver) rather than removed, so the accessibility tree keeps its
+                // landmarks and focus does not jump when it comes back (Muse review).
                 CKTabBar(selection: $tab)
+                    .frame(height: keyboardUp ? 0 : nil)
+                    .opacity(keyboardUp ? 0 : 1)
+                    .clipped()
+                    .accessibilityHidden(keyboardUp)
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
             .background(CKColor.background)
             .navigationTitle(navigationTitleText)
             .navigationBarTitleDisplayMode(.inline)

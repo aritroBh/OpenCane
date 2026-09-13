@@ -356,7 +356,12 @@ bench has *disproved* must never sit in the file as though it were settled — m
   above MapKit's rows and badged CAMPUS, because `MKLocalSearchCompleter` answers "Grainger" with an
   industrial supply store and the walker cannot see that. Campus rows match partial text; the
   gazetteer's own `CampusPlaces.match` stays whole-alias only on purpose (a partial name must reach
-  MapKit). Completer rows never show a distance — a completion carries no coordinate, so there is
+  MapKit). Completer rows whose subtitle ends in another **country** are dropped before ranking
+  (`Locality.plausiblyNearby`, Step 50 — "Oab" on campus returned Australia and Rio despite a 6 km
+  `.required` region); another US state is deliberately NOT dropped (a state line is not a
+  distance — Vancouver WA → Portland OR); the walker's country comes from a reverse geocode of the
+  fix, the campus until then. The tab bar collapses (stays mounted) while the keyboard is up (iOS
+  26's floating Done capsule sat on the Profile icon). Completer rows never show a distance — a completion carries no coordinate, so there is
   nothing to measure. Tapping a row does not open a new code path: it calls the same
   `AppModel.navigate(to:)` / `navigate(to place:)` Siri uses, so "Walking to <place>, N meters." is
   still spoken before guidance. The row count is the app's only VoiceOver announcement (design.md §5.5).

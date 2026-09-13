@@ -739,6 +739,14 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Open: conversation turns are wired but `ConversationCoordinator` does not call `recordConversationTurn` yet; review the publishable-key family-contact policy
 - **test on device:** see CHANGELOG Step 45
 
+## Step 50 — Typing a destination: tab bar collapses with the keyboard, no rows from other countries, torch probe (Sat Sep 12, 23:21)
+- [x] Owner's screenshot: iOS 26's floating keyboard "Done" sat on the Profile tab icon; "Oab" listed Australia, Michigan, Rio
+- [x] Tab bar collapses (height 0, VoiceOver-hidden, still mounted) while the keyboard is up
+- [x] `Locality.plausiblyNearby`: completer rows ending in another country's name dropped (Foundation ISO region names); other US states kept on purpose; walker's country from a reverse geocode, request-stamped, no re-announce
+- [x] Torch dead-zone probe (Muse on Step 49): 1 s off once a minute after the minimum on-time; real light ends the episode, otherwise straight back on, confirmations muted
+- [x] Muse compact review: 8 findings, 5 taken, rest moot after the rework; 630 / 630 tests
+- [ ] On the phone: type "Oab" — no Australia / Rio; tab bar gone while typing, back after Done / Go; walk a torch-lit route into a lit lobby — the torch goes off within a minute; in a dark hallway it blinks off for 1 s once a minute and comes back
+
 ## Step 49 — Low light: notice the dark for the walker, say what still works (Sat Sep 12, late)
 - [x] Owner's question 22:50 ("we have the flashlight and LiDAR doesn't need light — what else?"). Honest answer: LiDAR, gyro gate, GPS, compass, haptics unaffected; ARKit tracking, signs, scene words, people, "Where am I", hazard watch degrade silently — and a blind walker cannot tell it is dark
 - [x] `LowLightPolicy` (CaneKitLogic, 11 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity` (`LaneReport.ambientLux`), dark after 3 s under 40 lux, lit after 5 s over 120, unknown before the first estimate, 60 s minimum on-time for an app-lit torch (the torch raises the reading), 60 s backoff after a thermal cut-out, no auto-torch at ≤ 20 % battery (`FamilyAlertLimits.lowBatteryPct`) — **all [H]**

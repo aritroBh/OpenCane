@@ -503,7 +503,7 @@ While a route runs                                  Idle (before a route / after
 | — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
 | — | Suggestion row (0–6, campus places first) | "&lt;place>, campus place, 400 meters away, &lt;address>" | hint "Starts walking guidance to this place" | button |
 | — | Go (idle) | "Go" | hint "Builds a walking route with Apple Maps to what you typed"; disabled while building | button |
-| — | Done (bar above the keyboard) | "Done" | hint "Hides the keyboard" | button |
+| — | Done (iOS 26 draws it as a floating capsule above the keyboard; the tab bar is hidden while the keyboard is up so the capsule never covers it — Step 50) | "Done" | hint "Hides the keyboard" | button |
 | — | Error line | the error text ("Type a destination first", "No GPS fix yet", route / location errors); a warning glyph sits beside it, hidden from VoiceOver | — | static text |
 
 Focus order is the visual order. Nothing uses `accessibilitySortPriority`.

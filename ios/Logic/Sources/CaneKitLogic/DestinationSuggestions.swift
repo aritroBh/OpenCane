@@ -131,6 +131,48 @@ public struct CompletionLine: Sendable, Equatable {
 /// `theListNeverGrowsPastSixRows`, `voiceOverLabelNamesTheKindAndTheDistance`,
 /// `announcementCountsTheRows`, `atMostThreeCampusRows`, `emptyAndRepeatedMapRowsAreDropped`,
 /// `detailLineShowsTheAddressOrTheCampusDistance`, `shortDistanceSwitchesToKilometresAt950Metres`.
+/// Where the walker is, for filtering completer rows that MapKit returns from the other side of
+/// the world (Step 50: "Oab" produced Osborne Park WA, Lake Isabella MI and Rio despite a 6 km
+/// `.required` region — the completer still matches famous names anywhere). A completion has no
+/// coordinate (AGENTS.md), so the only evidence is its subtitle, and the only safe cut is the
+/// **country**: a row whose subtitle ends in another country's name is dropped; anything else —
+/// another US state included — is kept, because a state line is not a distance (Vancouver WA →
+/// Portland OR, Urbana IL → Indiana; Muse review). Country names come from Foundation's ISO
+/// region table in US English, the spelling MapKit uses in subtitles, never a hand list.
+/// `DestinationSearch` fills it from a reverse geocode of the fix (`isoCountryCode`); the default
+/// is the campus. Pinned by `foreignCompletionsAreDropped`, `localAndUnmarkedCompletionsAreKept`.
+public struct Locality: Sendable, Equatable {
+    /// ISO 3166 region code of the walker's country ("US").
+    public var countryCode: String
+    /// The demo campus: Urbana, Illinois, United States.
+    public static let campus = Locality(countryCode: "US")
+    public init(countryCode: String) { self.countryCode = countryCode.uppercased() }
+
+    /// Every ISO region's US-English name → code, built once (Foundation; no MapKit here).
+    static let countryByName: [String: String] = {
+        let en = Locale(identifier: "en_US")
+        var out: [String: String] = [:]
+        for region in Locale.Region.isoRegions {
+            if let name = en.localizedString(forRegionCode: region.identifier) { out[name] = region.identifier }
+        }
+        return out
+    }()
+
+    /// The walker's country as MapKit spells it ("United States"), or nil for an unknown code.
+    public var countryName: String? {
+        Locale(identifier: "en_US").localizedString(forRegionCode: countryCode)
+    }
+
+    /// Could this completer row be near the walker? False only when the subtitle's last
+    /// comma-separated part is the English name of a country other than the walker's. A bare
+    /// street, a city, a state, a zip — all kept (no evidence of distance).
+    public func plausiblyNearby(subtitle: String) -> Bool {
+        guard let last = subtitle.split(separator: ",").last?.trimmingCharacters(in: .whitespaces),
+              let code = Locality.countryByName[last] else { return true }
+        return code == countryCode
+    }
+}
+
 public enum DestinationSuggestions {
 
     // MARK: Numbers
@@ -167,13 +209,17 @@ public enum DestinationSuggestions {
     ///     reply, or when the app has no network).
     ///   - origin: the current GPS fix, or nil when there is none — then no row shows a distance.
     /// - Returns: 0…`maxSuggestions` rows; empty for a query under `minimumQueryLength`.
+    ///   - locality: where the walker is; completer rows that name another state or country are
+    ///     dropped (Step 50). Default: the campus.
     public static func suggestions(query: String,
                                    completions: [CompletionLine],
-                                   from origin: Coordinate?) -> [DestinationSuggestion] {
+                                   from origin: Coordinate?,
+                                   locality: Locality = .campus) -> [DestinationSuggestion] {
         let key = CampusPlaces.normalize(query)
         guard key.count >= minimumQueryLength else { return [] }
         let campus = campusMatches(key, from: origin)
-        let map = mapRows(completions, excluding: campus)
+        let local = completions.filter { locality.plausiblyNearby(subtitle: $0.subtitle) }
+        let map = mapRows(local, excluding: campus)
         return Array((campus + map).prefix(maxSuggestions))
     }
 

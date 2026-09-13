@@ -204,6 +204,7 @@ struct LowLightTests {
         #expect(bad.minTorchOnSeconds == 0 && bad.torchBackoffSeconds == 60)
         #expect(c.litWithTorchLux == 400)
         #expect(c.litWithTorchLux > c.litLux)
+        #expect(c.probeIntervalSeconds == 60 && c.probeSeconds == 1.0)
     }
 
     @Test("an app-lit torch: even real light (800 lux) does not end the episode inside the 60 s minimum on-time")
@@ -248,6 +249,30 @@ struct LowLightTests {
         var exited = false
         while t < 131 { if p.update(lux: 800, now: t, torchByApp: true).didExitDark { exited = true }; t += 1.0 / 30 }
         #expect(exited && p.state == .lit)
+    }
+
+    @Test("dead zone: a probe is due after the minimum on-time; it ends the episode only on real light")
+    func deadZoneProbeEndsEpisodeOnlyOnRealLight() {
+        var p = LowLightPolicy()
+        var t: Double = 0
+        while t < 4 { _ = p.update(lux: 10, now: t); t += 1.0 / 30 }
+        #expect(p.state == .dark)
+        // Torch on, the room reads 250 lux (dead zone). No probe inside the minimum on-time.
+        while t < 30 { _ = p.update(lux: 250, now: t, torchByApp: true); t += 1.0 / 30 }
+        #expect(!p.probeDue(now: t))
+        while t < 66 { _ = p.update(lux: 250, now: t, torchByApp: true); t += 1.0 / 30 }
+        #expect(p.probeDue(now: t))
+        // Probe 1: torch off, the room is really dark (15 lux) → not lit, the episode continues.
+        p.beginProbe(now: t)
+        while t < 67.2 { _ = p.update(lux: 15, now: t, torchByApp: false); t += 1.0 / 30 }
+        #expect(p.endProbe(now: t) == false && p.state == .dark)
+        #expect(!p.probeDue(now: t))                                // not again for 60 s
+        while t < 130 { _ = p.update(lux: 250, now: t, torchByApp: true); t += 1.0 / 30 }
+        #expect(p.probeDue(now: t))
+        // Probe 2: torch off, the room reads 200 lux on its own → lit, the episode ends.
+        p.beginProbe(now: t)
+        while t < 131.2 { _ = p.update(lux: 200, now: t, torchByApp: false); t += 1.0 / 30 }
+        #expect(p.endProbe(now: t) == true && p.state == .lit)
     }
 
     @Test("a device cut-out backs the auto-torch off for 60 s; the state stays dark")
