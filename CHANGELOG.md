@@ -2,6 +2,21 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 63 — Audit of Step 61: the refused key survives a restart, and a lock drops "Where am I" (Sun Sep 13)
+
+**Why.** Step 61 latched the session into Apple's voice after a fatal ElevenLabs status, but a warm mp3 cache never calls the API (`ElevenLabsVoice.prefetch`), so the latch only armed after the first miss. The owner's restart (`canekit-2026-09-13T08-51-14Z`) still mixed cached ElevenLabs lines with new Apple ones. A later prefetch also wiped the HTTP 401 off the Haptics card. Separately, `scenePhaseChanged(.background)` cancelled the conversation turn but not `SceneDescriber`, so a JPEG captured before a lock could still speak the pre-lock scene.
+
+**What changed (main only; the voice-first surface stays on `ux/voice-first`).**
+- `NaturalVoiceLatch` (`settingsKey`, `shouldClearVoiceError`, `persistedError`): the latch is written to `UserDefaults` and restored in `AppModel.start()` before the first `say`. Not in `LaunchRecovery.optionalFeatureKeys` — a crash recovery must not restore two-voice mixing. `voice_backend {by: persisted}`. `retryNaturalVoice()` still clears it. `aLaterPrefetchKeepsTheRefusedKeyLine`, `recoveryNeverClearsTheRefusedVoiceLatch`, `thePersistedErrorMatchesTheSpokenStatusClause`.
+- `SpeechQueue.prefetch` no longer clears `voiceError` while latched.
+- `SceneDescribePolicy.maySpeak` + `SceneDescriber.cancelForBackground()`: generation bump + cancel; a cancelled run is silent (CancellationError is not "Scene description failed."). Caller: `scenePhaseChanged(.background)`, next to `conversation.cancelForBackground()`. `aLockGenerationDropsThePreLockScene`.
+
+**Rejected / not this commit.** A launch GET `/v1/user/subscription` probe before "OpenCane ready." would catch a *first* dead-key session with a warm cache, at the cost of delaying the first line and a new network path. Persist covers the restart the owner reported. First session after quota dies still mixes until the first miss, then persists.
+
+**Verification.** `make test` 770 / 770; `make sim` green.
+
+test on device: with the empty account, quit and relaunch — every line including "OpenCane ready." is Apple's, `voice_backend {by: persisted}` in the trip log, Haptics card still shows the refused-key line; lock mid "Where am I" — no pre-lock sentence after unlock. Settings → Voice → System → Natural still retries after a top-up.
+
 ## Step 61 — First launch in Apple's voice: the ElevenLabs account is out of credit; a refused key is now one voice, not two (Sun Sep 13)
 
 **Why.** Owner: "when I restarted and started up for the first time it's still using the Apple voice."

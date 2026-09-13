@@ -144,8 +144,9 @@ nonisolated struct ElevenLabsVoice: Sendable {
     ///   launch, so this is how a wrong key ("HTTP 401") reaches the Haptics card before anyone
     ///   has spoken a word — silently swallowing it left the demo looking merely voice-less.
     ///   ⚠ With every line already cached nothing is requested, so a key that went bad since the
-    ///   last run stays unreported until the next miss. Prefetch reports failures; it does not
-    ///   validate the key.
+    ///   last run stays unreported until the next miss. `SpeechQueue.applyPersistedNaturalVoiceLatch`
+    ///   is what keeps the next launch in one voice without a probe. Prefetch reports failures; it
+    ///   does not validate the key.
     func prefetch(_ lines: [String]) async -> Failure? {
         let missing = VoicePrefetch.queue(lines) { cached($0) != nil }
         // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based

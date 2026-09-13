@@ -880,6 +880,13 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
 - [ ] **cue-v2 #45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
 - Deferred (not scheduled): ~~gravity-corrected metric head band~~ (shipped, Step 51); speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).
 
+## Step 63 — Audit of Step 61 (Sun Sep 13)
+
+- [x] Persist the refused-key latch (`NaturalVoiceLatch`) so a restart with a warm cache is one voice
+- [x] A later prefetch must not wipe the Haptics-card 401
+- [x] Lock cancels `SceneDescriber` (same reason as `conversation.cancelForBackground`)
+- [ ] Device: quit + relaunch on the empty account — every line Apple's; lock mid "Where am I"
+
 ## Voice-first cane — Steps 51–61 (plan `glittery-floating-tiger`, 2026-09-13)
 
 - [x] **Step 56** IVR grammar on the phone: `VoiceMenu` (8 words + digits, whole utterance, help / menu lines, yes / no, next / standard / detailed), classifier rule 0, `ConversationAction` voice-shell cases, rule 12 before rule 8, `SpokenPhrases.shellLines` + completeness test, `StatusSummary.fixedLines`

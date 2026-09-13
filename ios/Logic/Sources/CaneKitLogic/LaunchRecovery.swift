@@ -40,7 +40,7 @@
 //  `Settings.markLaunchHealthy()` after `healthySeconds` or when the walker backgrounds the app);
 //  `AppModel.announceLaunchRecovery()` (speaks `spokenLine` and logs `launch_recovery`). The `start`
 //  trip-log record carries `launch` (the mode's raw value).
-//  Tests: LaunchRecoveryTests.swift (6).
+//  Tests: LaunchRecoveryTests.swift (7).
 //
 
 import Foundation
@@ -110,6 +110,9 @@ public enum LaunchRecovery {
         // Cane-fall detection: an always-on CoreMotion stream with thresholds that have never been
         // measured against a real cane. Exactly the kind of thing a crash loop should clear.
         "fallDetectionEnabled",
+        // Deliberately absent: `NaturalVoiceLatch.settingsKey` ("naturalVoiceUnavailable").
+        // A refused ElevenLabs key is not a crash-causing feature; clearing it would restore
+        // two-voice mixing after quota death (`recoveryNeverClearsTheRefusedVoiceLatch`).
     ]
 
     /// How to run this launch.
