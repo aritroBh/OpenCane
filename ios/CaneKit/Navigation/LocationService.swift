@@ -122,8 +122,12 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         manager.requestWhenInUseAuthorization()
     }
 
+    /// True while actively guiding along a route. Gates `.otherNavigation` and `CLBackgroundActivitySession`.
+    @ObservationIgnored private var isNavigating = false
+
     /// Requests when-in-use authorization (first call prompts) and starts fixes + heading.
-    /// Idempotent. Uses the `.otherNavigation` live-update configuration (non-automotive guidance).
+    /// Idempotent. Uses default live-updates when idle, switching to `.otherNavigation` only when
+    /// actively navigating a route (`setNavigating(true)`).
     /// Called by `AppModel.start()` (launch), `scenePhaseChanged(.active)`, `buildRoute` and
     /// `startRouteNow` — see the file header's lifecycle. A thrown sequence error lands in
     /// `lastError` and ends the loop while `isRunning` stays true (so a later `start()` is a no-op
@@ -133,12 +137,37 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         isRunning = true
         manager.requestWhenInUseAuthorization()
         if CLLocationManager.headingAvailable() { manager.startUpdatingHeading() }
-        // Note: backgroundSession is NOT created here at launch. It is armed strictly while
-        // navigating a route via `setNavigating(true)` so the persistent blue navigation arrow
-        // is not held in the Dynamic Island / status bar while idle in the foreground.
+        startUpdatesLoop()
+    }
+
+    /// Arms or invalidates the CoreLocation background activity session and switches between
+    /// `.otherNavigation` (during an active route) and default liveUpdates (while idle).
+    /// Scoped strictly to active navigation so the system does not display the persistent
+    /// blue navigation pill in the Dynamic Island / status bar while idle in the foreground.
+    /// Idempotent. Calls invalidate() before nil to avoid leaking the session assertion.
+    func setNavigating(_ navigating: Bool) {
+        guard navigating != isNavigating else { return }
+        isNavigating = navigating
+        if isNavigating {
+            if backgroundSession == nil {
+                backgroundSession = CLBackgroundActivitySession()
+            }
+        } else {
+            backgroundSession?.invalidate()
+            backgroundSession = nil
+        }
+        if isRunning {
+            startUpdatesLoop()
+        }
+    }
+
+    private func startUpdatesLoop() {
+        updatesTask?.cancel()
+        let navigating = isNavigating
         updatesTask = Task { [weak self] in
             do {
-                for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
+                let stream = navigating ? CLLocationUpdate.liveUpdates(.otherNavigation) : CLLocationUpdate.liveUpdates()
+                for try await update in stream {
                     guard let self, !Task.isCancelled else { return }
                     if update.authorizationDenied {
                         self.denied = true
@@ -153,21 +182,6 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
             } catch {
                 self?.lastError = "Location: \(error.localizedDescription)"
             }
-        }
-    }
-
-    /// Arms or invalidates the CoreLocation background activity session.
-    /// Scoped strictly to active navigation so the system does not display the persistent
-    /// blue navigation pill in the Dynamic Island / status bar while idle in the foreground.
-    /// Idempotent. Calls invalidate() before nil to avoid leaking the session assertion.
-    func setNavigating(_ isNavigating: Bool) {
-        if isNavigating {
-            if backgroundSession == nil {
-                backgroundSession = CLBackgroundActivitySession()
-            }
-        } else {
-            backgroundSession?.invalidate()
-            backgroundSession = nil
         }
     }
 

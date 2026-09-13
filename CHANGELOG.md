@@ -10,14 +10,16 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 3. Sighted spotters and blind users needed a richer Dynamic Island: glanceable obstacle clearance, sunlight-legible badges, and clear VoiceOver sentences.
 
 **Root cause:**
-- `LocationService.swift`: `LocationService.start()` unconditionally instantiated `CLBackgroundActivitySession()`, which runs at app launch (`AppModel.start()`). In iOS 17+, this permanently anchors the blue location navigation pill in the Dynamic Island 24/7.
-- `NavActivityAttributes.swift` / `NavLiveActivity.swift`: Only transmitted `(instruction, distanceM, kind)`. Dynamic Island compact layout had no obstacle awareness.
+- `LocationService.swift`: `LocationService.start()` was running `CLLocationUpdate.liveUpdates(.otherNavigation)` and instantiating `CLBackgroundActivitySession()` at app launch. In iOS 17+, `.otherNavigation` tells the OS the app is an active turn-by-turn navigation session, permanently anchoring the blue navigation arrow in the Dynamic Island / status bar even while idle.
+- `LiveActivityController.swift`: Request failures or missing Live Activity permissions were not surfaced on-screen.
 
 **What changed:**
 - `LocationService.swift`:
-  - Removed unconditional `CLBackgroundActivitySession()` creation from `start()`.
-  - Added `@MainActor func setNavigating(_ isNavigating: Bool)`: idempotently creates `CLBackgroundActivitySession` when `isNavigating == true`, and calls `invalidate()` before nil when false.
+  - Scoped `.otherNavigation` and `CLBackgroundActivitySession` strictly to active route navigation via `setNavigating(_:)`.
+  - When idle, `start()` uses default `CLLocationUpdate.liveUpdates()`, providing accurate foreground GPS fixes without triggering the system navigation indicator.
   - Teardown hooked into all exits: `startRouteNow()`, `stopRoute()`, `endRouteQuietly()`, `onArrived`, `cancelPendingRouteStart()`, and `authorizationDenied`.
+- `GuideCard.swift`:
+  - Surfaced `model.liveActivity.lastError` directly in the Guide card error row alongside route and location errors.
 - `LiveActivityCoalescer.swift` (new pure logic in `CaneKitLogic`):
   - Enforces non-linear distance thresholds (2m near turns <30m, 5m at <100m, 10m at range).
   - Immediate emission for emergency hazard transitions (`clear <-> warning/head/dropOff`), guarded by a 0.2s flap-guard against sensor oscillation.

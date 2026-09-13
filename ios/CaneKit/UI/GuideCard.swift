@@ -205,7 +205,7 @@ struct GuideCard: View {
             // label is its content ("Type a destination first"); the warning glyph beside it is
             // hidden from VoiceOver. Only shown after something actually failed — every keystroke
             // in the destination field clears `routeError`.
-            if let err = model.routeError ?? model.location.lastError {
+            if let err = model.routeError ?? model.location.lastError ?? model.liveActivity.lastError {
                 HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.bold))
