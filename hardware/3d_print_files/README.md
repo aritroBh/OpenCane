@@ -1,9 +1,23 @@
 # 3D print files — the screwless phone mount
 
-Everything a person at a printer needs is in this folder. `gcode/` is sliced for the
-**Creality SPARKX i7** (0.4 nozzle, 0.2 mm layers) and ready to copy onto a USB stick.
-`stl/` is the same parts for any other slicer. The design, the reasoning and the runbook are in
-[`../mount_screwless/`](../mount_screwless/); this page is only *what to print*.
+**G-code and STLs are not in git.** They are build artifacts (~85 MB of sliced jobs). Generate
+them locally on a Windows machine with OpenSCAD and Creality Print, then copy the output here
+for the printer room. The `.scad` sources in [`../mount_screwless/`](../mount_screwless/) are
+the source of truth.
+
+```powershell
+# From the repo root on Windows (OpenSCAD + Creality Print installed):
+.\scripts\verify_mount.ps1          # clearance / mechanism checks — all green before slicing
+.\scripts\build_stl.ps1             # → hardware/mount_screwless/stl/
+.\scripts\slice_gcode.ps1           # → hardware/mount_screwless/gcode/
+# Copy what you need into this folder for the USB stick:
+Copy-Item hardware\mount_screwless\gcode\*.gcode hardware\3d_print_files\gcode\
+Copy-Item hardware\mount_screwless\stl\*.stl hardware\3d_print_files\stl\
+```
+
+After a `git pull`, run those three commands (or copy from whoever last sliced). The design,
+the reasoning and the full operator runbook are in [`../mount_screwless/PRINTING.md`](../mount_screwless/PRINTING.md);
+this page is only *what to print* once the files exist locally.
 
 **The G-code carries its own temperatures.** The filament slot you pick on the touchscreen only
 decides which plastic gets fed to them. Check the Filament Selection screen before every job.
@@ -18,15 +32,15 @@ If it shows `PETG -> [blank]`, that machine has no PETG — do not map it onto a
 
 Do not skip step 1 — three clearances in it are printer-specific and every part depends on
 them. The bore rings are **already done** (`pole_d` = 27.65 mm, measured 2026-09-12); their
-files are here only for completeness.
+files are generated for completeness only.
 
-| # | File in `gcode/` | Slot | Time | Then |
+| # | Job (in local `gcode/`) | Slot | ≈ Time | Then |
 |---|---|---|---|---|
-| 1 | `PETG_slot2__next_3h33m17s.gcode` | PETG | 3 h 33 | Thread row + dovetail row in one job. Read it — below. On two machines: `PETG_slot2__thread_2h23m36s` (2 h 24) + `PLA_slot3or4__dovetail_41m57s` (42 min) |
-| 2 | `PETG_slot2__arm_38m55s.gcode` | PETG | 39 min | Needs no coupon. Any free machine, any time |
-| 3 | `PETG_slot2__collar_1h43m27s.gcode` | PETG | 1 h 43 | After step 1 is read |
-| 4 | `PETG_slot2__ring_54m38s.gcode` | PETG | 55 min | Same |
-| 5 | `PETG_slot2__cradle_1h34m24s.gcode` | PETG | 1 h 34 | Prints with support under the back plate. Peel it off; nothing touches that face |
+| 1 | `PETG_slot2__next_*` | PETG | 3 h 33 | Thread row + dovetail row in one job. Read it — below. On two machines: `PETG_slot2__thread_*` (2 h 24) + `PLA_slot3or4__dovetail_*` (42 min) |
+| 2 | `PETG_slot2__arm_*` | PETG | 39 min | Needs no coupon. Any free machine, any time |
+| 3 | `PETG_slot2__collar_*` | PETG | 1 h 43 | After step 1 is read |
+| 4 | `PETG_slot2__ring_*` | PETG | 55 min | Same |
+| 5 | `PETG_slot2__cradle_*` | PETG | 1 h 34 | Prints with support under the back plate. Peel it off; nothing touches that face |
 
 Flat on the bed as sliced. Rotate nothing.
 
@@ -40,7 +54,7 @@ nut rocks about 1 mm at the top — normal, not a fault.
 |---|---|---|---|
 | 1 | 0.45 | 0.25 | |
 | 2 | 0.35 | 0.45 | |
-| 3 | 0.45 | 0.45 | **the collar and ring in this folder are cut to this one** |
+| 3 | 0.45 | 0.45 | **the collar and ring are cut to this one** |
 | 4 | 0.55 | 0.65 | if only this one works, something else is wrong — say so |
 
 **Dovetail row — three tenons, three sockets, notched 1 / 2 / 3.** Notched base face **down**,
@@ -50,7 +64,7 @@ pressure and stays put when shaken.
 | Notches | `dt_clear` | |
 |---|---|---|
 | 1 | 0.15 | |
-| 2 | 0.25 | **the parts in this folder are cut to this one** |
+| 2 | 0.25 | **the parts are cut to this one** |
 | 3 | 0.35 | |
 
 If the winners are **nut 3 and dovetail 2, print steps 3–5 as they are.** If not, write the
@@ -77,7 +91,7 @@ with the cane in, the bore is too big for that shaft.
 
 ## Not settled yet
 
-- The three coupon numbers — step 1 decides. The parts here are cut to the expected winners.
+- The three coupon numbers — step 1 decides. The parts are cut to the expected winners.
 - The camera plateau height (`plateau_h` = 49 mm) is scaled off Apple's drawing. Measure it with
   calipers while the phone is out; if it is under 47 mm, say so before the cradle is printed.
 - The prototype shaft is a **broom handle** (27.65 mm). A real long cane is 9.5–13 mm at the tip
@@ -85,22 +99,23 @@ with the cane in, the bore is too big for that shaft.
 - Nothing from this geometry has been printed yet. The model checks are all green
   (`scripts\verify_mount.ps1`); the printer has the last word.
 
-## Files
+## Expected local files
 
-| `gcode/` | material, slot | what |
+After `build_stl.ps1` + `slice_gcode.ps1`, `gcode/` should contain jobs like:
+
+| pattern | material, slot | what |
 |---|---|---|
-| `PETG_slot2__next_3h33m17s.gcode` | PETG, 2 | fit coupons: thread stub + 4 nuts, 3 dovetail pairs |
-| `PETG_slot2__thread_2h23m36s.gcode` | PETG, 2 | the thread row alone |
-| `PLA_slot3or4__dovetail_41m57s.gcode` | PLA, 3/4 | the dovetail row alone |
-| `PETG_slot2__arm_38m55s.gcode` | PETG, 2 | arm |
-| `PETG_slot2__collar_1h43m27s.gcode` | PETG, 2 | collar (the cane clamp body) |
-| `PETG_slot2__ring_54m38s.gcode` | PETG, 2 | ring (the clamp nut) |
-| `PETG_slot2__cradle_1h34m24s.gcode` | PETG, 2 | cradle (the phone holder), support on |
+| `PETG_slot2__next_*` | PETG, 2 | fit coupons: thread stub + 4 nuts, 3 dovetail pairs |
+| `PETG_slot2__thread_*` | PETG, 2 | the thread row alone |
+| `PLA_slot3or4__dovetail_*` | PLA, 3/4 | the dovetail row alone |
+| `PETG_slot2__arm_*` | PETG, 2 | arm |
+| `PETG_slot2__collar_*` | PETG, 2 | collar (the cane clamp body) |
+| `PETG_slot2__ring_*` | PETG, 2 | ring (the clamp nut) |
+| `PETG_slot2__cradle_*` | PETG, 2 | cradle (the phone holder), support on |
 
 `stl/` has the same parts plus `coupons_bore.stl` (done, not needed again), already in print
 orientation — do not rotate them in a slicer. The cradle needs support on build plate only,
 with bridges left unsupported so its dovetail socket stays empty. Nothing else needs support.
 
-These are a snapshot of `hardware/mount_screwless/` at the commit that added them. If the
-`.scad` changes, regenerate and copy them back here — the file names carry the print time, so
-a stale file is easy to spot.
+File names carry the print time (`_1h43m27s`), so a stale slice is easy to spot after a
+`.scad` change.

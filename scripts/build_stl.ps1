@@ -10,9 +10,8 @@
     STLs land in hardware/mount_screwless/stl/, which is gitignored.
     Never commit an STL - the .scad file is the source of truth and the
     STL is a build artifact that goes stale the moment a parameter moves.
-    The one exception is hardware/3d_print_files/stl/ (un-ignored in
-    .gitignore): a hand-copied, committed snapshot of this output for
-    people at a printer. Copy it again after every rebuild you ship.
+    Copy output into hardware/3d_print_files/stl/ for the printer room;
+    that folder is gitignored too.
 
     WHICH OPENSCAD
     The 2021.01 release that winget installs has no Manifold backend and

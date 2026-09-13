@@ -5,8 +5,8 @@ VL53L1X sensor pod, coin motors), which the phone-only CaneKit app replaced. The
 12.7 mm aluminum/graphite shaft; the prototype stick is **27.65 mm, non-metal** (a broom handle,
 measured by the bore rings on 2026-09-12; the earlier 28.75 mm reading was wrong), so none of the
 clamps below fit it. The phone-to-cane mount now lives in [`hardware/`](../hardware/README.md): the
-live design is [`hardware/mount_screwless/`](../hardware/mount_screwless/) (print files in
-[`hardware/3d_print_files/`](../hardware/3d_print_files/)); [`hardware/mount/`](../hardware/mount/)
+live design is [`hardware/mount_screwless/`](../hardware/mount_screwless/) (slice locally — see
+[`hardware/3d_print_files/README.md`](../hardware/3d_print_files/README.md)); [`hardware/mount/`](../hardware/mount/)
 is the screwed alternative. The firmware these housings were for is [`firmware/`](../firmware/README.md),
 also stretch only. No script renders these files (`scripts/build_stl.ps1` covers `hardware/` only).
 
