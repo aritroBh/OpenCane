@@ -3,7 +3,7 @@
 //  CaneKitLogicTests
 //
 //  Purpose: pins VoiceShellPolicy.swift (when the shell may open the microphone on its own —
-//  at launch after the menu, and for a follow-up after an answer) and `ScenePhaseReason`
+//  at launch after "OpenCane ready.", and for a follow-up after an answer) and `ScenePhaseReason`
 //  (the one word the `scene_phase` trip-log record uses for why the app left the foreground).
 //
 //  Why these are the tests: every unasked-for microphone open flips the audio session (hard
@@ -12,7 +12,8 @@
 //  lines. Each refusal reason is pinned so a log reader can trust it.
 //
 //  Source pinned: `ios/Logic/Sources/CaneKitLogic/VoiceShellPolicy.swift` (`followUpSeconds` 5,
-//  `followUpSecondsNavigating` 3, `menuWaitCap` 15, `launchListen(...)`, `followUp(...)`,
+//  `followUpSecondsNavigating` 3, `speechDrainCap` 15, `readyLine`, `noLidarLine`, `launchLine(lidarSupported:)`,
+//  `launchListen(...)`, `followUp(...)`,
 //  `ScenePhaseReason.classify`). Callers: `AppModel` (`VoiceShell.swift`, C2's wiring) and
 //  `AppModel.scenePhaseChanged`.
 //
@@ -23,13 +24,31 @@ import Testing
 @Suite("Voice shell policy")
 struct VoiceShellPolicyTests {
 
+    /// Step 67: the launch says "OpenCane ready." and nothing else — no menu, no instructions (phone
+    /// log `canekit-2026-09-13T15-48-34Z.jsonl`: "OpenCane ready." then the 76-character eight-word
+    /// menu before the microphone opened; owner: "It should just be 'OpenCane ready' and then boom").
+    /// A phone without LiDAR says that instead, because obstacle warnings cannot work. The listening
+    /// tone follows (`launchListen`).
+    @Test func launchSaysOnlyOpenCaneReady() {
+        #expect(VoiceShellPolicy.readyLine == "OpenCane ready.")
+        #expect(VoiceShellPolicy.launchLine(lidarSupported: true) == "OpenCane ready.")
+        #expect(VoiceShellPolicy.noLidarLine == "OpenCane. This phone has no LiDAR.")
+        #expect(VoiceShellPolicy.launchLine(lidarSupported: false) == VoiceShellPolicy.noLidarLine)
+        for line in [VoiceShellPolicy.launchLine(lidarSupported: true), VoiceShellPolicy.launchLine(lidarSupported: false)] {
+            let lower = line.lowercased()
+            for menuWord in ["say ", "route", "where am i", "help", "emergency"] {
+                #expect(!lower.contains(menuWord), "\(line) contains \(menuWord)")
+            }
+        }
+    }
+
     /// Everything granted, nothing else owns the mic: listen.
     @Test func launchListensWhenEverythingIsGranted() {
         let v = VoiceShellPolicy.launchListen(enabled: true, muted: false, speechAuthorized: true,
                                               micGranted: true, micOwnedElsewhere: false,
                                               recoveredLaunch: false, cameraDenied: false)
         #expect(v == .listen)
-        #expect(VoiceShellPolicy.menuWaitCap == 15)
+        #expect(VoiceShellPolicy.speechDrainCap == 15)
     }
 
     /// A first launch has no speech / microphone grant yet: the menu is spoken, the mic is not

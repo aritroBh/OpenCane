@@ -1,104 +1,104 @@
 {
   "firmware/canekit_grip/tof.cpp": {
     "mtime": 1789255241.5478005,
-    "seen": 1789310514.5702279,
+    "seen": 1789315905.926089,
     "ast_hash": "9f5b19677ef2ebe0d5367d92e371cf2c",
     "semantic_hash": ""
   },
   "firmware/canekit_grip/tof.h": {
     "mtime": 1789255241.5476649,
-    "seen": 1789310514.570229,
+    "seen": 1789315905.926091,
     "ast_hash": "9d0e427a0912646ede070bea9af64ab0",
     "semantic_hash": ""
   },
   "ios/CaneKit/App/AppIntents.swift": {
     "mtime": 1789271366.4611533,
-    "seen": 1789310514.570233,
+    "seen": 1789315905.926094,
     "ast_hash": "6ef8b7011d97fdbfdbb386f52d09b6dc",
     "semantic_hash": ""
   },
   "ios/CaneKit/App/AppModel.swift": {
-    "mtime": 1789310302.665481,
-    "seen": 1789310514.570234,
-    "ast_hash": "9e60a26f6e6b3cd440dd9f042c62dbd3",
+    "mtime": 1789315639.7033768,
+    "seen": 1789315905.926095,
+    "ast_hash": "ae9e9e5ef506412d8b6e2cb77db67737",
     "semantic_hash": ""
   },
   "ios/CaneKit/App/CaneKitApp.swift": {
     "mtime": 1789294785.1102324,
-    "seen": 1789310514.5702348,
+    "seen": 1789315905.926096,
     "ast_hash": "38253efa0eb0553f52db5220d5fc4246",
     "semantic_hash": ""
   },
   "ios/CaneKit/Audio/AudioRouteMonitor.swift": {
     "mtime": 1789255298.8492386,
-    "seen": 1789310514.5702348,
+    "seen": 1789315905.926096,
     "ast_hash": "cafb3424e8c0ee4be448c0cc27bf3e1a",
     "semantic_hash": ""
   },
   "ios/CaneKit/Audio/BeaconEngine.swift": {
     "mtime": 1789284651.2399116,
-    "seen": 1789310514.570236,
+    "seen": 1789315905.926097,
     "ast_hash": "7f1559694e4bde801d3097e8611b0535",
     "semantic_hash": ""
   },
   "ios/CaneKit/Audio/HeadPoseTracker.swift": {
     "mtime": 1789284651.2400694,
-    "seen": 1789310514.570236,
+    "seen": 1789315905.9260979,
     "ast_hash": "c7d15dfbd101c68d1c2573c59075e1db",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/DepthEngine.swift": {
     "mtime": 1789284651.2411723,
-    "seen": 1789310514.570239,
+    "seen": 1789315905.9261,
     "ast_hash": "33053f467efa70a7767463ebd1c16ad2",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/DepthFrameProcessor.swift": {
     "mtime": 1789287245.5159433,
-    "seen": 1789310514.570239,
+    "seen": 1789315905.926101,
     "ast_hash": "fa7afea69e22884a04fdb58403747573",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/FrameReplay.swift": {
     "mtime": 1789255253.355914,
-    "seen": 1789310514.57024,
+    "seen": 1789315905.926101,
     "ast_hash": "23c0ac8991e0d0f7a4d4e13371ff6080",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/GroundSampler.swift": {
     "mtime": 1789255274.504677,
-    "seen": 1789310514.57024,
+    "seen": 1789315905.926102,
     "ast_hash": "a9e6d4c5cfedb4d12424709120fd8a91",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/MeshClassifier.swift": {
     "mtime": 1789255286.8455253,
-    "seen": 1789310514.57024,
+    "seen": 1789315905.926102,
     "ast_hash": "c05e424f6fc5db91b82b3b9747bf728d",
     "semantic_hash": ""
   },
   "ios/CaneKit/Haptics/HapticPlayer.swift": {
     "mtime": 1789284651.308794,
-    "seen": 1789310514.570241,
+    "seen": 1789315905.926103,
     "ast_hash": "89b48122447ad093e814db55c9de15e8",
     "semantic_hash": ""
   },
   "ios/CaneKit/Navigation/LocationService.swift": {
     "mtime": 1789284651.2422352,
-    "seen": 1789310514.5702422,
+    "seen": 1789315905.926104,
     "ast_hash": "e81caf546ed8c5bc3003e9e3a84eecc5",
     "semantic_hash": ""
   },
   "ios/CaneKit/Navigation/NavigationEngine.swift": {
-    "mtime": 1789284651.3090215,
-    "seen": 1789310514.5702422,
-    "ast_hash": "2576fe64193eaf2a13428ee7fa598946",
+    "mtime": 1789315639.7029636,
+    "seen": 1789315905.926105,
+    "ast_hash": "a251696970de4e9b45bb807e3bfa927f",
     "semantic_hash": ""
   },
   "ios/CaneKit/Navigation/RouteSource.swift": {
-    "mtime": 1789255238.9198585,
-    "seen": 1789310514.5702431,
-    "ast_hash": "37f2c1d93c13a4ed7bde59a40752343a",
+    "mtime": 1789311192.5209064,
+    "seen": 1789315905.926105,
+    "ast_hash": "479e116a25b5d7f9cd852e0279e3276e",
     "semantic_hash": ""
   },
   "ios/CaneKit/Resources/Assets.xcassets/AccentColor.colorset/Contents.json": {
@@ -126,146 +126,146 @@
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/CameraControlInteraction.swift": {
-    "mtime": 1789271366.4672453,
-    "seen": 1789310514.5702431,
-    "ast_hash": "d32c288578f4584e1e07535c9f3b5026",
+    "mtime": 1789315324.265449,
+    "seen": 1789315905.926105,
+    "ast_hash": "a106a5a4f1dfd1de9d1da403fc6bdaaf",
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/HazardScanner.swift": {
     "mtime": 1789284651.2426057,
-    "seen": 1789310514.5702431,
+    "seen": 1789315905.9261062,
     "ast_hash": "edb024f42cbdeb94861b461cdff42dc7",
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/OnDeviceVision.swift": {
     "mtime": 1789255159.8854177,
-    "seen": 1789310514.5702431,
+    "seen": 1789315905.9261062,
     "ast_hash": "28cb9dd4f625db0ff158335fc46eb728",
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/SceneDescriber.swift": {
     "mtime": 1789310302.6693692,
-    "seen": 1789310514.570244,
+    "seen": 1789315905.9261062,
     "ast_hash": "de52457c7f02e93f1b50a67aed51c3ab",
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/Secrets.swift": {
-    "mtime": 1789255241.7228763,
-    "seen": 1789310514.570244,
-    "ast_hash": "f20a72f61e87a46f4707b9c913cdb6db",
+    "mtime": 1789315575.847646,
+    "seen": 1789315905.9261062,
+    "ast_hash": "f979617e27035a50ac0455ed31b6569a",
     "semantic_hash": ""
   },
   "ios/CaneKit/Scene/VLMClient.swift": {
     "mtime": 1789271366.4684265,
-    "seen": 1789310514.570244,
+    "seen": 1789315905.926107,
     "ast_hash": "c53a84bd6bb35eea6b4b74a0fe0fe75e",
     "semantic_hash": ""
   },
   "ios/CaneKit/Speech/ElevenLabsVoice.swift": {
     "mtime": 1789293431.6632924,
-    "seen": 1789310514.570245,
+    "seen": 1789315905.926108,
     "ast_hash": "a5a08b82d26dfd4267c780c41d17c9dc",
     "semantic_hash": ""
   },
   "ios/CaneKit/Speech/ObstacleNamer.swift": {
     "mtime": 1789255251.842393,
-    "seen": 1789310514.570245,
+    "seen": 1789315905.926108,
     "ast_hash": "8cce1ad1b3d5c18ea29d88b96ce0def4",
     "semantic_hash": ""
   },
   "ios/CaneKit/Speech/SpeechQueue.swift": {
     "mtime": 1789310302.6622586,
-    "seen": 1789310514.570245,
+    "seen": 1789315905.926108,
     "ast_hash": "66429486f1705b987993effd9da415f5",
     "semantic_hash": ""
   },
   "ios/CaneKit/Trip/HazardLog.swift": {
     "mtime": 1789282299.4055505,
-    "seen": 1789310514.570246,
+    "seen": 1789315905.926108,
     "ast_hash": "2b5c5eea4e3061afbe31244baceaad8d",
     "semantic_hash": ""
   },
   "ios/CaneKit/Trip/LiveActivityController.swift": {
     "mtime": 1789294785.1110735,
-    "seen": 1789310514.570246,
+    "seen": 1789315905.9261088,
     "ast_hash": "8c51a3078c83cd4b13cfb40ad1d835e9",
     "semantic_hash": ""
   },
   "ios/CaneKit/Trip/TripLogger.swift": {
     "mtime": 1789287245.4749248,
-    "seen": 1789310514.570247,
+    "seen": 1789315905.9261088,
     "ast_hash": "2bee0452a38b46b3d2d25f9665fab679",
     "semantic_hash": ""
   },
   "ios/CaneKit/Trip/TripTracker.swift": {
     "mtime": 1789284651.243643,
-    "seen": 1789310514.570247,
+    "seen": 1789315905.92611,
     "ast_hash": "ab4a2c2edd707e581c63d5ef07ec74dc",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/ArrivalCardView.swift": {
     "mtime": 1789255321.8428938,
-    "seen": 1789310514.570247,
+    "seen": 1789315905.92611,
     "ast_hash": "fce6388614912b087d945a711a7f3cce",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/ContentView.swift": {
-    "mtime": 1789294785.1112716,
-    "seen": 1789310514.570248,
-    "ast_hash": "b4cce9cef3984f89b14b3bb5e0194258",
+    "mtime": 1789315277.8823674,
+    "seen": 1789315905.926111,
+    "ast_hash": "9277a721e6519d095f7ca5daaba1eed3",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/GuideCard.swift": {
     "mtime": 1789294785.1114178,
-    "seen": 1789310514.570248,
+    "seen": 1789315905.926111,
     "ast_hash": "3355345cbcfab8f04a8976eb028245bf",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/HapticsCard.swift": {
     "mtime": 1789289782.897323,
-    "seen": 1789310514.5702488,
+    "seen": 1789315905.926112,
     "ast_hash": "424fe6252148d380bc0ad569ca12b494",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/HazardsCard.swift": {
     "mtime": 1789284651.2444594,
-    "seen": 1789310514.5702488,
+    "seen": 1789315905.926112,
     "ast_hash": "ce169a0f5c2037ef2bf3baaa82e68b57",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/LaneGridView.swift": {
     "mtime": 1789284651.312537,
-    "seen": 1789310514.5702488,
+    "seen": 1789315905.926112,
     "ast_hash": "d19061091aaace7064d0ed876d9d1d85",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/Theme.swift": {
     "mtime": 1789271366.4701793,
-    "seen": 1789310514.570251,
+    "seen": 1789315905.926114,
     "ast_hash": "d256f7eab0e853b289067eb1d68a37bd",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/WatchCard.swift": {
     "mtime": 1789255368.9486687,
-    "seen": 1789310514.570251,
+    "seen": 1789315905.926115,
     "ast_hash": "301eb2d898398699d389b992fee1f69f",
     "semantic_hash": ""
   },
   "ios/CaneKit/Watch/PhoneWatchLink.swift": {
     "mtime": 1789264322.1185932,
-    "seen": 1789310514.570251,
+    "seen": 1789315905.926115,
     "ast_hash": "b11978ddf7bcdfe486d07ca42da36659",
     "semantic_hash": ""
   },
   "ios/CaneKitUITests/CaneKitUITests.swift": {
     "mtime": 1789284732.1756883,
-    "seen": 1789310514.570252,
+    "seen": 1789315905.926116,
     "ast_hash": "af58af5a2279ba7273663d0c56d73929",
     "semantic_hash": ""
   },
   "ios/CaneKitUITests/CaneKitVisualTour.swift": {
     "mtime": 1789284732.1755688,
-    "seen": 1789310514.5702531,
+    "seen": 1789315905.926116,
     "ast_hash": "22fd002b9f1c7c23d257058d358da6a3",
     "semantic_hash": ""
   },
@@ -289,25 +289,25 @@
   },
   "ios/CaneKitWatch/WatchApp.swift": {
     "mtime": 1789254865.8407767,
-    "seen": 1789310514.5702531,
+    "seen": 1789315905.926116,
     "ast_hash": "d6a9945474d0e154ff787e8b3b5b2635",
     "semantic_hash": ""
   },
   "ios/CaneKitWatch/WatchContentView.swift": {
     "mtime": 1789254895.785974,
-    "seen": 1789310514.5702531,
+    "seen": 1789315905.9261172,
     "ast_hash": "69182b9880691455ff11766258a6ee8b",
     "semantic_hash": ""
   },
   "ios/CaneKitWatch/WatchModel.swift": {
     "mtime": 1789255077.3362749,
-    "seen": 1789310514.5702531,
+    "seen": 1789315905.9261172,
     "ast_hash": "87b2a40b230acb4db1be72c88c16297c",
     "semantic_hash": ""
   },
   "ios/CaneKitWatch/WatchTheme.swift": {
     "mtime": 1789254932.4704967,
-    "seen": 1789310514.570254,
+    "seen": 1789315905.9261172,
     "ast_hash": "2ef2a13969d299c7801ee721218823d3",
     "semantic_hash": ""
   },
@@ -319,1358 +319,1418 @@
   },
   "ios/CaneKitWidget/CaneKitWidgetBundle.swift": {
     "mtime": 1789294785.1118007,
-    "seen": 1789310514.570254,
+    "seen": 1789315905.926118,
     "ast_hash": "7ea96693e8b70343e6f4f2eb615ffe8b",
     "semantic_hash": ""
   },
   "ios/CaneKitWidget/NavLiveActivity.swift": {
     "mtime": 1789294785.1119661,
-    "seen": 1789310514.570254,
+    "seen": 1789315905.926118,
     "ast_hash": "1d88334a7b570b3d6d1236aa9aa7b74c",
     "semantic_hash": ""
   },
   "ios/Logic/Package.swift": {
     "mtime": 1789255296.806615,
-    "seen": 1789310514.570255,
+    "seen": 1789315905.9261189,
     "ast_hash": "fb9f37fd33e56445dd87b98e1dc5a620",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CourseSmoother.swift": {
     "mtime": 1789255520.695491,
-    "seen": 1789310514.570258,
+    "seen": 1789315905.926123,
     "ast_hash": "8b05c38d3dc74537c093c51b9ad7a39a",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CueDecider.swift": {
-    "mtime": 1789287245.5164144,
-    "seen": 1789310514.570258,
-    "ast_hash": "781ac91b4326a890e2716d717b4f802b",
+    "mtime": 1789314549.8535223,
+    "seen": 1789315905.926123,
+    "ast_hash": "da290535d7bdfa5143b0873b781aeb75",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/GeoMath.swift": {
     "mtime": 1789255798.2344444,
-    "seen": 1789310514.570262,
+    "seen": 1789315905.9261272,
     "ast_hash": "1c9e08a3d72047da160ce949b721cd0f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/Hazards.swift": {
     "mtime": 1789272553.508024,
-    "seen": 1789310514.570262,
+    "seen": 1789315905.9261281,
     "ast_hash": "d8a19b088eb70b27fe6d6fcec1aeb399",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LaneMath.swift": {
     "mtime": 1789284651.3150797,
-    "seen": 1789310514.570264,
+    "seen": 1789315905.9261298,
     "ast_hash": "d9216762737a0fb985ecad92abb281fa",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LaneReport.swift": {
     "mtime": 1789284651.3152535,
-    "seen": 1789310514.570265,
+    "seen": 1789315905.9261298,
     "ast_hash": "0c13e3dd18d90cfb94acefb6ca90a48c",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/NavSupport.swift": {
-    "mtime": 1789284651.315424,
-    "seen": 1789310514.570267,
-    "ast_hash": "3574176f98b0b5e411d717e24289234e",
+    "mtime": 1789315454.0555482,
+    "seen": 1789315905.926133,
+    "ast_hash": "77f6ce128f7ca56f3840dd101922f521",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VLMCodec.swift": {
     "mtime": 1789272550.6433315,
-    "seen": 1789310514.570275,
+    "seen": 1789315905.926141,
     "ast_hash": "0cfc166f8c0927763a6012384ac3b932",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/WatchMessage.swift": {
     "mtime": 1789255422.2293859,
-    "seen": 1789310514.5702772,
+    "seen": 1789315905.926143,
     "ast_hash": "f2816717f69454214488bd2736437ba5",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/Waypoint.swift": {
     "mtime": 1789255456.3520079,
-    "seen": 1789310514.570278,
+    "seen": 1789315905.926144,
     "ast_hash": "a2a8e337a5991c02ad06f38f12b96792",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CourseSmootherTests.swift": {
     "mtime": 1789255006.9612513,
-    "seen": 1789310514.5702798,
+    "seen": 1789315905.926146,
     "ast_hash": "9d38b7c0652b03f96971e27884ce3867",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CueDeciderTests.swift": {
     "mtime": 1789287245.5171397,
-    "seen": 1789310514.5702798,
+    "seen": 1789315905.926147,
     "ast_hash": "0b53ea7e2776fc5487f0ed3419fcdc46",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/GeoMathTests.swift": {
     "mtime": 1789255159.1486092,
-    "seen": 1789310514.570283,
+    "seen": 1789315905.9261508,
     "ast_hash": "e8cc7c27c4506d327a6aa57021f530d1",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/HazardTests.swift": {
     "mtime": 1789259837.0640295,
-    "seen": 1789310514.5702841,
+    "seen": 1789315905.9261508,
     "ast_hash": "322e6ab3e577fc9b692f4b8b18487ee5",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LaneMathTests.swift": {
     "mtime": 1789284651.3185887,
-    "seen": 1789310514.570286,
+    "seen": 1789315905.926153,
     "ast_hash": "8ccc6d6b7f7865bd4006e52faef8dcce",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/NavSupportTests.swift": {
-    "mtime": 1789284651.3187544,
-    "seen": 1789310514.5702882,
-    "ast_hash": "5a28babb772a6b2c5108ae1657c07727",
+    "mtime": 1789315454.0557153,
+    "seen": 1789315905.926156,
+    "ast_hash": "e49f9868223efd1c3cbab38bc5677197",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/RouteTests.swift": {
     "mtime": 1789255392.3957503,
-    "seen": 1789310514.570291,
+    "seen": 1789315905.9261582,
     "ast_hash": "3a46e100343a7a37f269f276df213376",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VLMCodecTests.swift": {
     "mtime": 1789255510.603789,
-    "seen": 1789310514.570296,
+    "seen": 1789315905.926164,
     "ast_hash": "f3e4684add2b56b43d4db42864c9d968",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/WatchMessageTests.swift": {
     "mtime": 1789255514.0311747,
-    "seen": 1789310514.5702982,
+    "seen": 1789315905.926167,
     "ast_hash": "3aaa2440fc2bf5d4076abe1fdf4079a8",
     "semantic_hash": ""
   },
   "ios/Shared/LiveActivity/NavActivityAttributes.swift": {
     "mtime": 1789294785.1140888,
-    "seen": 1789310514.570299,
+    "seen": 1789315905.926167,
     "ast_hash": "f2d729078ec87184e12a330616915321",
     "semantic_hash": ""
   },
   "ios/drafts/CaneKitApp.swift": {
     "mtime": 1789255605.3739204,
-    "seen": 1789310514.5702999,
+    "seen": 1789315905.926168,
     "ast_hash": "4ec2b1f6141d5b13e7f6a18d87123cf7",
     "semantic_hash": ""
   },
   "ios/drafts/DepthEngine.swift": {
     "mtime": 1789255605.374358,
-    "seen": 1789310514.5702999,
+    "seen": 1789315905.926168,
     "ast_hash": "8fc2c539177553447730b47e5a60730e",
     "semantic_hash": ""
   },
   "ios/drafts/HapticLogic.swift": {
     "mtime": 1789255605.374583,
-    "seen": 1789310514.5702999,
+    "seen": 1789315905.926168,
     "ast_hash": "2024d08e0b58e4ce399fc7f77b08a8ca",
     "semantic_hash": ""
   },
   "ios/drafts/SceneDescriber.swift": {
     "mtime": 1789255605.3750653,
-    "seen": 1789310514.5703008,
+    "seen": 1789315905.9261692,
     "ast_hash": "7ebea2d099bf7c13dc6ec5426c2767fd",
     "semantic_hash": ""
   },
   "ios/scripts/e2e.py": {
-    "mtime": 1789255050.114113,
-    "seen": 1789310514.570302,
-    "ast_hash": "9a51bbcaa33d916f3a95708597e74ac3",
+    "mtime": 1789314847.004875,
+    "seen": 1789315905.92617,
+    "ast_hash": "7937870209215c15b2a7af0076c85c05",
     "semantic_hash": ""
   },
   "ios/scripts/gen.sh": {
     "mtime": 1789255111.5535424,
-    "seen": 1789310514.570302,
+    "seen": 1789315905.92617,
     "ast_hash": "97a964c8733ec3cc684e8f6e2a3566a3",
     "semantic_hash": ""
   },
   "ios/scripts/test.sh": {
     "mtime": 1789284651.2548795,
-    "seen": 1789310514.570303,
+    "seen": 1789315905.926172,
     "ast_hash": "49dbc5d8a307fa68743a6f8634e169cd",
     "semantic_hash": ""
   },
   "ios/scripts/vision_probe.swift": {
     "mtime": 1789150826.1871088,
-    "seen": 1789310514.570303,
+    "seen": 1789315905.926172,
     "ast_hash": "4ea1daa82ecd47a2ccf2a162ee1a0926",
     "semantic_hash": ""
   },
   "ios/stretch/CaneBLE.swift": {
     "mtime": 1789255562.9635837,
-    "seen": 1789310514.570304,
+    "seen": 1789315905.926172,
     "ast_hash": "1100d49066b49d4006e1157b077d5688",
     "semantic_hash": ""
   },
   ".github/workflows/ci.yml": {
     "mtime": 1789141107.8106208,
-    "seen": 1789310514.570305,
+    "seen": 1789315905.926174,
     "ast_hash": "fd3ed120425c468afab9019157147e86",
     "semantic_hash": "fd3ed120425c468afab9019157147e86"
   },
   "AGENTS.md": {
-    "mtime": 1789310496.9504464,
-    "seen": 1789310514.570306,
-    "ast_hash": "6afff090624c020784f71b8ed84025b5",
+    "mtime": 1789315871.3748484,
+    "seen": 1789315905.9261749,
+    "ast_hash": "65bb49073a4fda913c13048909f1eaf6",
     "semantic_hash": ""
   },
   "CHANGELOG.md": {
-    "mtime": 1789310496.9533632,
-    "seen": 1789310514.570306,
-    "ast_hash": "36928f6da5cbff8d572860ec6e929150",
+    "mtime": 1789315898.4443605,
+    "seen": 1789315905.9261749,
+    "ast_hash": "9dfbd0fb26811a6daabab4908be39312",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
     "mtime": 1789287245.5131755,
-    "seen": 1789310514.570306,
+    "seen": 1789315905.9261749,
     "ast_hash": "743cc7de67b56daa31a7eb2a23282b6e",
     "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1789277149.900148,
-    "seen": 1789310514.570307,
+    "seen": 1789315905.926176,
     "ast_hash": "c1d9cfd850c92ccfb45a9033ab333bc1",
     "semantic_hash": ""
   },
   "cad/README.md": {
     "mtime": 1789255497.1398184,
-    "seen": 1789310514.570307,
+    "seen": 1789315905.926176,
     "ast_hash": "a3ba68e963e6e290e65806fd1dd7d4d9",
     "semantic_hash": ""
   },
   "docs/CODE_REFERENCE.md": {
-    "mtime": 1789310496.9524095,
-    "seen": 1789310514.570307,
-    "ast_hash": "2d9bfe747fc1304ace8a0318819f51d0",
+    "mtime": 1789315833.6781726,
+    "seen": 1789315905.926177,
+    "ast_hash": "540fa38d21c7f4d582c8c5e3ea920ec8",
     "semantic_hash": ""
   },
   "docs/README.md": {
     "mtime": 1789287245.4711115,
-    "seen": 1789310514.5703082,
+    "seen": 1789315905.926177,
     "ast_hash": "ae4607723edf406073720d44ea20d788",
     "semantic_hash": ""
   },
   "docs/design.md": {
-    "mtime": 1789310496.950034,
-    "seen": 1789310514.5703092,
-    "ast_hash": "4248ced07bb38d70941aaa0575733246",
+    "mtime": 1789315871.3740876,
+    "seen": 1789315905.9261792,
+    "ast_hash": "177f05f5ace3d8b50300fb4e419a139b",
     "semantic_hash": ""
   },
   "docs/devices_setup.md": {
     "mtime": 1789271366.4476502,
-    "seen": 1789310514.5703099,
+    "seen": 1789315905.9261792,
     "ast_hash": "937bcdb40a4318a4c5ee5e8deac73581",
     "semantic_hash": ""
   },
   "docs/ideas.md": {
     "mtime": 1789255252.324875,
-    "seen": 1789310514.5703099,
+    "seen": 1789315905.9261801,
     "ast_hash": "fc9598425ad5d49f2ec10621b5fd5f8b",
     "semantic_hash": ""
   },
   "docs/route_isr_cif.md": {
-    "mtime": 1789310496.9502652,
-    "seen": 1789310514.5703108,
-    "ast_hash": "368cf6607ca7017d2c9fa27e9bf2a24b",
+    "mtime": 1789315871.374577,
+    "seen": 1789315905.9261801,
+    "ast_hash": "1153f5d5ef821af93060fa8449fedc6a",
     "semantic_hash": ""
   },
   "docs/stress_test_plan.md": {
     "mtime": 1789284651.2384882,
-    "seen": 1789310514.5703108,
+    "seen": 1789315905.9261801,
     "ast_hash": "c54cfd811b3665647f66db2482b36d82",
     "semantic_hash": ""
   },
   "docs/todo.md": {
-    "mtime": 1789310496.9526927,
-    "seen": 1789310514.570312,
-    "ast_hash": "f87756f0f451dd32ec3f5795d3e4a4e0",
+    "mtime": 1789315898.4446392,
+    "seen": 1789315905.9261818,
+    "ast_hash": "5142f42103bf5638f45e0d58e5feee45",
     "semantic_hash": ""
   },
   "firmware/README.md": {
     "mtime": 1789255519.5718606,
-    "seen": 1789310514.570312,
+    "seen": 1789315905.9261818,
     "ast_hash": "54c140dff6a3e93e95f77d5db0fcecbb",
     "semantic_hash": ""
   },
   "ios/README.md": {
     "mtime": 1789294785.0510113,
-    "seen": 1789310514.570314,
+    "seen": 1789315905.926185,
     "ast_hash": "8ff378c644fa02bc47ce1197422044e9",
     "semantic_hash": ""
   },
   "ios/drafts/README.md": {
     "mtime": 1789148642.50889,
-    "seen": 1789310514.5703151,
+    "seen": 1789315905.926185,
     "ast_hash": "1b53488946a1b6bffd126e931b22be82",
     "semantic_hash": ""
   },
   "ios/project.yml": {
     "mtime": 1789294785.1142213,
-    "seen": 1789310514.5703151,
+    "seen": 1789315905.926185,
     "ast_hash": "95420ab045109167cd9010757f5c7c3f",
     "semantic_hash": ""
   },
   "hardware/mount/pitch_model.py": {
     "mtime": 1789148597.7087471,
-    "seen": 1789310514.57023,
+    "seen": 1789315905.9260921,
     "ast_hash": "5f3440d563a888a31f216bb9f774a7f1",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SceneVocabulary.swift": {
     "mtime": 1789255144.341028,
-    "seen": 1789310514.57027,
+    "seen": 1789315905.926136,
     "ast_hash": "d38385f2933c1f508677a1885d704bf4",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SceneVocabularyTests.swift": {
     "mtime": 1789255414.2640982,
-    "seen": 1789310514.570292,
+    "seen": 1789315905.9261591,
     "ast_hash": "dedef4445aa15f886c2cc3f22bafcd26",
     "semantic_hash": ""
   },
   "ios/scripts/sign_probe.swift": {
     "mtime": 1789154920.038154,
-    "seen": 1789310514.570302,
+    "seen": 1789315905.9261708,
     "ast_hash": "c40dc2d642fd00282ba19c3fc58e3f5d",
     "semantic_hash": ""
   },
   "docs/TEAM_HANDOFF.md": {
     "mtime": 1789284651.2374568,
-    "seen": 1789310514.5703082,
+    "seen": 1789315905.926178,
     "ast_hash": "59f79329c722c4c03950d236c506c298",
     "semantic_hash": ""
   },
   "hardware/README.md": {
     "mtime": 1789255497.1402357,
-    "seen": 1789310514.570313,
+    "seen": 1789315905.926183,
     "ast_hash": "ae210381e42d6b1b9a66e23ee8a64ba1",
     "semantic_hash": ""
   },
   "hardware/mount/DESIGN.md": {
     "mtime": 1789284651.3069477,
-    "seen": 1789310514.570313,
+    "seen": 1789315905.926184,
     "ast_hash": "364b23de1d9c510d340e824f5893a78b",
     "semantic_hash": ""
   },
   "ios/scripts/streetview/README.md": {
     "mtime": 1789150983.33697,
-    "seen": 1789310514.5703151,
+    "seen": 1789315905.926186,
     "ast_hash": "f13f4101e6f9577f1e16f5a519de004f",
     "semantic_hash": ""
   },
   "docs/TEAM_BRIEF.md": {
     "mtime": 1789277149.9018269,
-    "seen": 1789310514.5703082,
+    "seen": 1789315905.926177,
     "ast_hash": "ea156e9baf106c6e29976dddc668d5f6",
     "semantic_hash": ""
   },
   "ios/CaneKit/Navigation/DestinationSearch.swift": {
     "mtime": 1789277149.938679,
-    "seen": 1789310514.570241,
+    "seen": 1789315905.926104,
     "ast_hash": "f8f49f6d70763dced4e21e7a6025f957",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/DestinationField.swift": {
     "mtime": 1789255548.7322156,
-    "seen": 1789310514.570248,
+    "seen": 1789315905.926111,
     "ast_hash": "c1edaf8a22e8a864faf47a2be0017c43",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/LiveCameraView.swift": {
     "mtime": 1789255354.0632863,
-    "seen": 1789310514.5702488,
+    "seen": 1789315905.9261131,
     "ast_hash": "04ea726fa745f54e7ced3edd76965d3b",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CampusPlaces.swift": {
-    "mtime": 1789294785.1122067,
-    "seen": 1789310514.5702558,
-    "ast_hash": "d84e55a8434fc2b0c06bf19ba3af679f",
+    "mtime": 1789315477.9344547,
+    "seen": 1789315905.926121,
+    "ast_hash": "04e7cc6d449e1fb4b8fbb6102ed0aa1f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/DestinationSuggestions.swift": {
     "mtime": 1789277149.9388967,
-    "seen": 1789310514.57026,
+    "seen": 1789315905.926124,
     "ast_hash": "3dac9daac8021b593e82ef015a0a95b8",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LiveView.swift": {
     "mtime": 1789256124.6009297,
-    "seen": 1789310514.570266,
+    "seen": 1789315905.926131,
     "ast_hash": "3f7d81f7d00c0acd3c0f713080694c8e",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/TripLogRecord.swift": {
     "mtime": 1789255355.6301558,
-    "seen": 1789310514.570274,
+    "seen": 1789315905.9261398,
     "ast_hash": "be0a8780e3b2f8f4f4fe1c95f778186c",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CampusPlacesTests.swift": {
-    "mtime": 1789294785.1132085,
-    "seen": 1789310514.570278,
-    "ast_hash": "8555f01a752ba1e7ec6977b28004bbde",
+    "mtime": 1789315477.9346216,
+    "seen": 1789315905.926145,
+    "ast_hash": "64bafbd030e0b54dc0f50749987d122f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/DestinationSuggestionsTests.swift": {
     "mtime": 1789277149.9391737,
-    "seen": 1789310514.570282,
+    "seen": 1789315905.9261482,
     "ast_hash": "29652f268003e2af52f3503a2505def3",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LiveViewTests.swift": {
     "mtime": 1789255240.3121722,
-    "seen": 1789310514.570287,
+    "seen": 1789315905.926154,
     "ast_hash": "45d60400b1a246ee1a4cf8ccefa537d8",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/TripLogRecordTests.swift": {
     "mtime": 1789255481.0503623,
-    "seen": 1789310514.570296,
+    "seen": 1789315905.926163,
     "ast_hash": "7c71177bdc24c5cf5b89802d8679df7a",
     "semantic_hash": ""
   },
   "ios/CaneKit/App/HandsFreeIntents.swift": {
     "mtime": 1789310302.6697166,
-    "seen": 1789310514.5702348,
+    "seen": 1789315905.926096,
     "ast_hash": "991cdb0233eece075fa566d772a2ec94",
     "semantic_hash": ""
   },
   "ios/CaneKit/Audio/FaceHeadPose.swift": {
     "mtime": 1789255391.0667353,
-    "seen": 1789310514.570236,
+    "seen": 1789315905.926097,
     "ast_hash": "c69e4845ca0bc0925b36c962d114e329",
     "semantic_hash": ""
   },
   "ios/CaneKit/Audio/SoundWatcher.swift": {
     "mtime": 1789284651.2402806,
-    "seen": 1789310514.570236,
+    "seen": 1789315905.9260979,
     "ast_hash": "c9744a9379ffbee955768a841e37741c",
     "semantic_hash": ""
   },
   "ios/CaneKit/Conversation/ConversationCoordinator.swift": {
-    "mtime": 1789310302.6688395,
-    "seen": 1789310514.5702379,
-    "ast_hash": "e963b7a75fa9f6d481ea8a0ad03b9c07",
+    "mtime": 1789315324.2650716,
+    "seen": 1789315905.926099,
+    "ast_hash": "f0170d333c8c41151073c3951859d1ee",
     "semantic_hash": ""
   },
   "ios/CaneKit/Conversation/PostStore.swift": {
     "mtime": 1789255490.7103012,
-    "seen": 1789310514.5702379,
+    "seen": 1789315905.9261,
     "ast_hash": "c4efa647717fb225f1c538e57bea940a",
     "semantic_hash": ""
   },
   "ios/CaneKit/Conversation/VoiceInputEngine.swift": {
     "mtime": 1789310302.6676729,
-    "seen": 1789310514.5702379,
+    "seen": 1789315905.9261,
     "ast_hash": "4c9f81c69734ed8d79df56ba035df985",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/DualCameraSession.swift": {
     "mtime": 1789255215.4112957,
-    "seen": 1789310514.570239,
+    "seen": 1789315905.926101,
     "ast_hash": "c338c3fd8c9f786869e8a6187faaf7b0",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/MultiCamDepthProbe.swift": {
     "mtime": 1789255373.6854808,
-    "seen": 1789310514.57024,
+    "seen": 1789315905.926103,
     "ast_hash": "2fee51ba319ff0242cb46b08d6144d9a",
     "semantic_hash": ""
   },
   "ios/CaneKit/Depth/SensorProbe.swift": {
     "mtime": 1789255190.3268554,
-    "seen": 1789310514.570241,
+    "seen": 1789315905.926103,
     "ast_hash": "61faa6110bd14181bc59e5d52807a9ca",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/BothCamerasView.swift": {
     "mtime": 1789255329.4116304,
-    "seen": 1789310514.570247,
+    "seen": 1789315905.92611,
     "ast_hash": "606d1c95c084dbdbed90870387685298",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/TabBar.swift": {
     "mtime": 1789271366.469891,
-    "seen": 1789310514.57025,
+    "seen": 1789315905.9261131,
     "ast_hash": "693e87011feab91f3b25b755d63721cb",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CloudSceneGate.swift": {
     "mtime": 1789272564.2486286,
-    "seen": 1789310514.5702558,
+    "seen": 1789315905.926121,
     "ast_hash": "4cb78a90bfd1db8be135efc057e90320",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/ConversationModels.swift": {
     "mtime": 1789294785.1123555,
-    "seen": 1789310514.570257,
+    "seen": 1789315905.926122,
     "ast_hash": "b5842ea199371b29d93399502edb7422",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/ConversationPrompt.swift": {
     "mtime": 1789255336.758835,
-    "seen": 1789310514.570258,
+    "seen": 1789315905.926122,
     "ast_hash": "c122010743abefe10f97c7963ef35220",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/DepthReadiness.swift": {
     "mtime": 1789272531.3204734,
-    "seen": 1789310514.5702589,
+    "seen": 1789315905.926124,
     "ast_hash": "38e093bc35bd45cd3b1c6316bf804a8e",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/DepthSnapshot.swift": {
     "mtime": 1789255683.3266914,
-    "seen": 1789310514.5702589,
+    "seen": 1789315905.926124,
     "ast_hash": "33d8a4f07f61b58248d0e67e6f5f040f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/FastPathIntentClassifier.swift": {
-    "mtime": 1789294785.1125007,
-    "seen": 1789310514.570262,
-    "ast_hash": "c12c3809a0b55630d88d79e8a0bbf486",
+    "mtime": 1789315815.7576947,
+    "seen": 1789315905.9261272,
+    "ast_hash": "5f6b8423fe255709af235cb7ae231409",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/HeadNodDetector.swift": {
     "mtime": 1789255952.4155364,
-    "seen": 1789310514.5702631,
+    "seen": 1789315905.9261289,
     "ast_hash": "9884c3fcf3ee8ee287a8092ad747d062",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/HeadYawSources.swift": {
     "mtime": 1789255998.8920062,
-    "seen": 1789310514.5702631,
+    "seen": 1789315905.9261289,
     "ast_hash": "4090c0da16b8b9adaf51d2655d06af5c",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LaunchRecovery.swift": {
-    "mtime": 1789293431.666788,
-    "seen": 1789310514.570265,
-    "ast_hash": "a621e6301b0bb4e7262d2d286deb6fd3",
+    "mtime": 1789315183.7755854,
+    "seen": 1789315905.926131,
+    "ast_hash": "76229eb4c31a323ca835a018e3137dd3",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/MultiCamDepth.swift": {
     "mtime": 1789254947.115241,
-    "seen": 1789310514.570266,
+    "seen": 1789315905.926132,
     "ast_hash": "78c2692d15230473503d8d454007cdd2",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/PeopleAhead.swift": {
     "mtime": 1789255065.7698998,
-    "seen": 1789310514.570268,
+    "seen": 1789315905.926133,
     "ast_hash": "52e1e0b473107b3fe7ff40666579a932",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/QuestionPrompt.swift": {
     "mtime": 1789255088.644889,
-    "seen": 1789310514.5702689,
+    "seen": 1789315905.926134,
     "ast_hash": "2fca3f5dd83ec39ac7a6f4c505dc6990",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SoundAlerts.swift": {
     "mtime": 1789284651.2474961,
-    "seen": 1789310514.570271,
+    "seen": 1789315905.926136,
     "ast_hash": "b76cfc204a91483a6ffa7c403d73af9d",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SoundRecognitionGuard.swift": {
     "mtime": 1789255229.4682422,
-    "seen": 1789310514.570271,
+    "seen": 1789315905.926137,
     "ast_hash": "a13ff827d59f147880cbef01d819a31f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SpeechLoadPolicy.swift": {
     "mtime": 1789255263.3265033,
-    "seen": 1789310514.570271,
+    "seen": 1789315905.926137,
     "ast_hash": "a165d4b885fad3ea23ee6c4396ede255",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SpokenPhrases.swift": {
-    "mtime": 1789310154.0011778,
-    "seen": 1789310514.570272,
-    "ast_hash": "13a65d3f066067536261cd97ee8d9c99",
+    "mtime": 1789315183.7750793,
+    "seen": 1789315905.9261382,
+    "ast_hash": "f69c153eae03dae83d6e83b623c24e0d",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/StatusSummary.swift": {
     "mtime": 1789294785.1130438,
-    "seen": 1789310514.570272,
+    "seen": 1789315905.9261382,
     "ast_hash": "df324493088a60da1ed850ab795b38eb",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/TorchSwitch.swift": {
     "mtime": 1789255542.9617512,
-    "seen": 1789310514.570273,
+    "seen": 1789315905.9261389,
     "ast_hash": "88fad3e4e1634d50d145114ee06aa1f1",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/UtteranceEnd.swift": {
     "mtime": 1789284651.316615,
-    "seen": 1789310514.570274,
+    "seen": 1789315905.926141,
     "ast_hash": "80165e7317831c87c362b8b45caf8717",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoicePrefetch.swift": {
     "mtime": 1789284651.3171415,
-    "seen": 1789310514.5702772,
+    "seen": 1789315905.926143,
     "ast_hash": "f0296785a299461a62da9ec77cc4fcc1",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CloudSceneGateTests.swift": {
     "mtime": 1789272574.163258,
-    "seen": 1789310514.570279,
+    "seen": 1789315905.926145,
     "ast_hash": "2a9fbfcab216531eac91f691bb12a02e",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/ConversationLogicTests.swift": {
-    "mtime": 1789294785.1133373,
-    "seen": 1789310514.5702798,
-    "ast_hash": "f8c1fb35994813a91604346a50f86ea6",
+    "mtime": 1789315701.5608175,
+    "seen": 1789315905.926146,
+    "ast_hash": "621987ea307d4ff4da895ec024893a5f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/DepthReadinessTests.swift": {
     "mtime": 1789272543.5373204,
-    "seen": 1789310514.570281,
+    "seen": 1789315905.926147,
     "ast_hash": "8fa6d5cf176afe8287f5be5d80acf3f9",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/DepthSnapshotTests.swift": {
     "mtime": 1789255116.2107692,
-    "seen": 1789310514.570281,
+    "seen": 1789315905.9261482,
     "ast_hash": "6b35cb2d629473f8718421725083202a",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/HeadNodDetectorTests.swift": {
     "mtime": 1789255190.6850991,
-    "seen": 1789310514.5702841,
+    "seen": 1789315905.926152,
     "ast_hash": "65e3dda415013499832752dc5e28f744",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/HeadYawSourcesTests.swift": {
     "mtime": 1789255196.301315,
-    "seen": 1789310514.570285,
+    "seen": 1789315905.926152,
     "ast_hash": "34987207220581b42964c0112bc090c0",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LaunchRecoveryTests.swift": {
-    "mtime": 1789293431.668096,
-    "seen": 1789310514.570286,
-    "ast_hash": "5f9c59dfe8018914defd142ad88ab484",
+    "mtime": 1789315050.9638684,
+    "seen": 1789315905.926154,
+    "ast_hash": "af80b181961e1a749ddeed8e68c58468",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/MultiCamDepthTests.swift": {
     "mtime": 1789255252.5016248,
-    "seen": 1789310514.5702882,
+    "seen": 1789315905.926155,
     "ast_hash": "6dc471aa15c4dc34480af68a7ce48cdf",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/NodToTalkFastPathTests.swift": {
     "mtime": 1789255273.940945,
-    "seen": 1789310514.5702899,
+    "seen": 1789315905.926156,
     "ast_hash": "2b4eacdabb79051157a5cfab12d911c7",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/PeopleAheadTests.swift": {
     "mtime": 1789255332.5447881,
-    "seen": 1789310514.5702899,
+    "seen": 1789315905.926157,
     "ast_hash": "cb5ec1e7afdd92ad5e7a3c2e23742a6f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/QuestionPromptTests.swift": {
     "mtime": 1789255383.253762,
-    "seen": 1789310514.5702899,
+    "seen": 1789315905.926157,
     "ast_hash": "30b6e7cc480bf9bd7230076f8f0a6ca5",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SoundAlertsTests.swift": {
     "mtime": 1789284651.251383,
-    "seen": 1789310514.570292,
+    "seen": 1789315905.9261599,
     "ast_hash": "b803397e72ad5896acd3490f48e31583",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SpeechLoadPolicyTests.swift": {
     "mtime": 1789255432.9170582,
-    "seen": 1789310514.570293,
+    "seen": 1789315905.9261599,
     "ast_hash": "268938fd4fb6e3ff5d69d9de1ab5c877",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SpokenPhrasesTests.swift": {
-    "mtime": 1789304086.6393375,
-    "seen": 1789310514.570293,
-    "ast_hash": "4f5572dbd9dbf2ec4ee1e1237704bac5",
+    "mtime": 1789315050.9636347,
+    "seen": 1789315905.9261608,
+    "ast_hash": "d53d33505d7046eaf42d211dcf1ad06d",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/StatusSummaryTests.swift": {
     "mtime": 1789289832.474243,
-    "seen": 1789310514.570294,
+    "seen": 1789315905.9261608,
     "ast_hash": "6fadb2165109ee6e642ce9e16871a574",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/TorchSwitchTests.swift": {
     "mtime": 1789255477.6868656,
-    "seen": 1789310514.570295,
+    "seen": 1789315905.926163,
     "ast_hash": "1ba7f86b8ce787d67dd84871987d1071",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/UtteranceEndTests.swift": {
     "mtime": 1789284651.319821,
-    "seen": 1789310514.570296,
+    "seen": 1789315905.926164,
     "ast_hash": "76cc1eb19ea8317e5ed49532c3b04d90",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VoicePrefetchTests.swift": {
     "mtime": 1789284651.3202515,
-    "seen": 1789310514.5702982,
+    "seen": 1789315905.926166,
     "ast_hash": "5a0964070e6d68bbe621bed93e4f2f97",
     "semantic_hash": ""
   },
   "ios/scripts/appicon.py": {
     "mtime": 1789255077.0288765,
-    "seen": 1789310514.5703008,
+    "seen": 1789315905.9261692,
     "ast_hash": "94d76122c699c53b4e528e4695bca518",
     "semantic_hash": ""
   },
   "scripts/build_stl.ps1": {
     "mtime": 1789255315.9450393,
-    "seen": 1789310514.570304,
+    "seen": 1789315905.926173,
     "ast_hash": "3a07b53a6df7449ff58eaa046fa735be",
     "semantic_hash": ""
   },
   "scripts/slice_gcode.ps1": {
     "mtime": 1789255315.9452577,
-    "seen": 1789310514.570304,
+    "seen": 1789315905.926173,
     "ast_hash": "88dfd6d274f5163dd6e251465876a540",
     "semantic_hash": ""
   },
   "scripts/stl_tools.js": {
     "mtime": 1789255377.922157,
-    "seen": 1789310514.570305,
+    "seen": 1789315905.926173,
     "ast_hash": "b38424eca65e98a93f5ad0a20ff729bc",
     "semantic_hash": ""
   },
   "scripts/verify_mount.ps1": {
     "mtime": 1789255364.600081,
-    "seen": 1789310514.570305,
+    "seen": 1789315905.926174,
     "ast_hash": "a8e4a5f1669ea1e15b2b9dce7a039e51",
     "semantic_hash": ""
   },
   ".jules/bolt.md": {
     "mtime": 1789229645.313163,
-    "seen": 1789310514.570306,
+    "seen": 1789315905.926174,
     "ast_hash": "9cec2afe2381ddbd1ce26c0ff59b0f22",
     "semantic_hash": ""
   },
   "docs/auditory-load.md": {
     "mtime": 1789255217.526011,
-    "seen": 1789310514.5703092,
+    "seen": 1789315905.926178,
     "ast_hash": "11f32b3115c21118ea6a01cd9dd9625f",
     "semantic_hash": ""
   },
   "docs/handsfree.md": {
-    "mtime": 1789310496.9488847,
-    "seen": 1789310514.5703099,
-    "ast_hash": "75540f1e8e620b66f5255c35ab39fcdf",
+    "mtime": 1789315871.374342,
+    "seen": 1789315905.9261792,
+    "ast_hash": "6eac0dd992d015b66b7df921f56440c8",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-09-12-speech-load.md": {
     "mtime": 1789245656.554887,
-    "seen": 1789310514.5703108,
+    "seen": 1789315905.926181,
     "ast_hash": "c03717185cf3f0a168f61a0536a7c882",
     "semantic_hash": ""
   },
   "docs/superpowers/specs/2026-09-12-speech-load-design.md": {
     "mtime": 1789245656.5550177,
-    "seen": 1789310514.5703108,
+    "seen": 1789315905.926181,
     "ast_hash": "7f442c36ce6794f004700700419d800a",
     "semantic_hash": ""
   },
   "hardware/3d_print_files/README.md": {
     "mtime": 1789245409.8245382,
-    "seen": 1789310514.570313,
+    "seen": 1789315905.926183,
     "ast_hash": "382dcd412d48e47f23895451224d82c7",
     "semantic_hash": ""
   },
   "hardware/mount_screwless/PRINTING.md": {
     "mtime": 1789245409.9423342,
-    "seen": 1789310514.570314,
+    "seen": 1789315905.926184,
     "ast_hash": "8777707f1ea20c870ba3ba97d0e0dae5",
     "semantic_hash": ""
   },
   "hardware/mount_screwless/README.md": {
     "mtime": 1789245409.9424894,
-    "seen": 1789310514.570314,
+    "seen": 1789315905.926184,
     "ast_hash": "1ef80320e8d6cc4dbb9d1981014bac06",
     "semantic_hash": ""
   },
   "opencane-hardware-brief.html": {
     "mtime": 1789229645.2983613,
-    "seen": 1789310514.570316,
+    "seen": 1789315905.926186,
     "ast_hash": "e55c9b742515e5a2e2ca2db4c3142075",
     "semantic_hash": ""
   },
   "ios/CaneKit/Resources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png": {
     "mtime": 1789196032.3111396,
-    "seen": 1789310514.570316,
+    "seen": 1789315905.926187,
     "ast_hash": "9232f02c1ce4d8e79aa5076dca64ebba",
     "semantic_hash": ""
   },
   "ios/CaneKitWatch/Assets.xcassets/AppIcon.appiconset/Icon-1024.png": {
     "mtime": 1789196032.3220005,
-    "seen": 1789310514.570317,
+    "seen": 1789315905.926187,
     "ast_hash": "9232f02c1ce4d8e79aa5076dca64ebba",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CueProfile.swift": {
     "mtime": 1789284651.314517,
-    "seen": 1789310514.570258,
+    "seen": 1789315905.926124,
     "ast_hash": "ea543306caa6c709ec94b6c96888a8de",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SpeechResume.swift": {
     "mtime": 1789255551.3555262,
-    "seen": 1789310514.570272,
+    "seen": 1789315905.9261382,
     "ast_hash": "a5bafbe49775891b087a306e3a01ca00",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CueProfileTests.swift": {
     "mtime": 1789284651.3181965,
-    "seen": 1789310514.5702798,
+    "seen": 1789315905.926147,
     "ast_hash": "08df473ba72229e435ee26651bc1223d",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SpeechResumeTests.swift": {
     "mtime": 1789255438.7476401,
-    "seen": 1789310514.570293,
+    "seen": 1789315905.9261608,
     "ast_hash": "4d82f9a7222cb532fa1b79abefa6de7c",
     "semantic_hash": ""
   },
   "ios/scripts/cue_audit.py": {
-    "mtime": 1789287245.5176015,
-    "seen": 1789310514.5703008,
-    "ast_hash": "06c919060e762dce45b117ef4fd7d045",
+    "mtime": 1789315699.1694188,
+    "seen": 1789315905.9261692,
+    "ast_hash": "97d86d745d2b76f486df3800c8da39cd",
     "semantic_hash": ""
   },
   "docs/cue_design_v2.md": {
     "mtime": 1789287245.5144265,
-    "seen": 1789310514.5703092,
+    "seen": 1789315905.926178,
     "ast_hash": "bacd3e575d85fd6a81f8854a1ec3c7ab",
     "semantic_hash": ""
   },
   "ios/CaneKit/Alerts/AlertSummarizer.swift": {
     "mtime": 1789257892.0465996,
-    "seen": 1789310514.5702322,
+    "seen": 1789315905.926093,
     "ast_hash": "48076750c6fadc52a5c00f8642691a93",
     "semantic_hash": ""
   },
   "ios/CaneKit/Alerts/FallWatcher.swift": {
     "mtime": 1789262459.307269,
-    "seen": 1789310514.5702322,
+    "seen": 1789315905.926094,
     "ast_hash": "fb54f7de0a384891e1bedd7b25e2f128",
     "semantic_hash": ""
   },
   "ios/CaneKit/Alerts/FamilyAlerts.swift": {
     "mtime": 1789271366.3836646,
-    "seen": 1789310514.570233,
+    "seen": 1789315905.926094,
     "ast_hash": "39aea47321760a9c423fc5ea13b3277a",
     "semantic_hash": ""
   },
   "ios/CaneKit/Alerts/GrokBotClient.swift": {
     "mtime": 1789257892.046779,
-    "seen": 1789310514.570233,
+    "seen": 1789315905.926094,
     "ast_hash": "143141be6384c17e2c960a9328315bd6",
     "semantic_hash": ""
   },
   "ios/CaneKit/Trip/MedicalProfileStore.swift": {
-    "mtime": 1789287245.474712,
-    "seen": 1789310514.570246,
-    "ast_hash": "11b85537b28a87ac96744a448fe8673f",
+    "mtime": 1789315575.847212,
+    "seen": 1789315905.9261088,
+    "ast_hash": "782b348188fbb0c688fdcfd1bb2e3d5f",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/ProfilePage.swift": {
     "mtime": 1789294785.048948,
-    "seen": 1789310514.57025,
+    "seen": 1789315905.9261131,
     "ast_hash": "2eb9af7f76052f3391221e70bd94f09f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/ActionRateLimit.swift": {
     "mtime": 1789262459.3089147,
-    "seen": 1789310514.570255,
+    "seen": 1789315905.9261189,
     "ast_hash": "5d8e9e39eea33fc8a9dce137e0b5c971",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/AlertContext.swift": {
     "mtime": 1789257892.047802,
-    "seen": 1789310514.570255,
+    "seen": 1789315905.92612,
     "ast_hash": "913c5fa72670198d2d1f8e0f97907394",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/FallDetector.swift": {
     "mtime": 1789262459.309014,
-    "seen": 1789310514.570261,
+    "seen": 1789315905.926126,
     "ast_hash": "6daf7abb79b021a809be75506cd9fc32",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/FamilyAlertPolicy.swift": {
     "mtime": 1789262459.3091686,
-    "seen": 1789310514.570261,
+    "seen": 1789315905.926126,
     "ast_hash": "d451ffbc48a2b3a04771aefb991f0097",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/FamilyContacts.swift": {
     "mtime": 1789257892.0479486,
-    "seen": 1789310514.570261,
+    "seen": 1789315905.9261272,
     "ast_hash": "c8fd5769e1881aa3ce6d139f49a6cd17",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/GrokBotEvent.swift": {
     "mtime": 1789262459.3093169,
-    "seen": 1789310514.570262,
+    "seen": 1789315905.9261281,
     "ast_hash": "7f9164de942b19748108c2818eb29fb5",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LiveActivityCoalescer.swift": {
     "mtime": 1789294785.1129098,
-    "seen": 1789310514.570265,
+    "seen": 1789315905.926131,
     "ast_hash": "d8ee7f491420c0e1de5d82526010e66b",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/ThreatWatch.swift": {
     "mtime": 1789262459.3095498,
-    "seen": 1789310514.570273,
+    "seen": 1789315905.9261389,
     "ast_hash": "6226766cfc01cd6b7487f936f2e686a2",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/ActionRateLimitTests.swift": {
     "mtime": 1789262459.3096478,
-    "seen": 1789310514.570278,
+    "seen": 1789315905.926144,
     "ast_hash": "0550bcfcb65138a20ca675673133984c",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/AlertContextTests.swift": {
     "mtime": 1789257892.0482202,
-    "seen": 1789310514.570278,
+    "seen": 1789315905.926144,
     "ast_hash": "6b319415f77a1b89a5d7aa986d51564a",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/FallDetectorTests.swift": {
     "mtime": 1789262459.3097548,
-    "seen": 1789310514.570283,
+    "seen": 1789315905.9261491,
     "ast_hash": "d3347b4bfb444b1e59e09d52efeeb74f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/FamilyAlertPolicyTests.swift": {
     "mtime": 1789257892.0482872,
-    "seen": 1789310514.570283,
+    "seen": 1789315905.9261498,
     "ast_hash": "36551b019926b3a057708d400b89ecce",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/FamilyContactsTests.swift": {
     "mtime": 1789257892.0483606,
-    "seen": 1789310514.570283,
+    "seen": 1789315905.9261498,
     "ast_hash": "9afa5f484cad864674770464e19b51fd",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/GrokBotEventTests.swift": {
     "mtime": 1789257892.048425,
-    "seen": 1789310514.5702841,
+    "seen": 1789315905.9261508,
     "ast_hash": "68a92fdbb8d50eb9ab2ecbb2c2dd7fe1",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LiveActivityCoalescerTests.swift": {
     "mtime": 1789294785.1137278,
-    "seen": 1789310514.570287,
+    "seen": 1789315905.926154,
     "ast_hash": "6b03e0c97183603a7cdea22f9d3fb121",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/ThreatWatchTests.swift": {
     "mtime": 1789262459.3098676,
-    "seen": 1789310514.570295,
+    "seen": 1789315905.926162,
     "ast_hash": "900c253e95b7b1b15b01e2f485f9e23f",
     "semantic_hash": ""
   },
   "ios/scripts/streetview_stim.py": {
     "mtime": 1789255978.5392087,
-    "seen": 1789310514.570303,
+    "seen": 1789315905.9261708,
     "ast_hash": "6ec676413dc8ce6bbcb18c9585776b92",
     "semantic_hash": ""
   },
   "ios/CaneKit/Resources/Assets.xcassets/AritroProfile.imageset/aritro.jpg": {
     "mtime": 1789264048.602047,
-    "seen": 1789310514.570316,
+    "seen": 1789315905.926187,
     "ast_hash": "382c83d27e9ee6778def66aa772db446",
     "semantic_hash": ""
   },
   "ios/CaneKitUITests/CaneKitIslandTour.swift": {
     "mtime": 1789294785.1116903,
-    "seen": 1789310514.570252,
+    "seen": 1789315905.926115,
     "ast_hash": "24f49266e7c802ac8bef3cebab2807a2",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SceneEngineSummary.swift": {
     "mtime": 1789284651.3158417,
-    "seen": 1789310514.5702689,
+    "seen": 1789315905.926135,
     "ast_hash": "be9d5cbc9878309d4802f2690527b72c",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/TorsoHapticPolicy.swift": {
     "mtime": 1789284651.3164666,
-    "seen": 1789310514.570274,
+    "seen": 1789315905.9261398,
     "ast_hash": "051950b4bf8ca967644e055cfff004ee",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SceneEngineSummaryTests.swift": {
     "mtime": 1789272098.0298223,
-    "seen": 1789310514.570291,
+    "seen": 1789315905.9261591,
     "ast_hash": "a874c8896583cbe2741cfbe712ae2963",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/TorsoHapticPolicyTests.swift": {
     "mtime": 1789284651.3196328,
-    "seen": 1789310514.570295,
+    "seen": 1789315905.926163,
     "ast_hash": "bff94b74dd67461a0e6bb085dc7eb53b",
     "semantic_hash": ""
   },
   ".mcp.json": {
     "mtime": 1789271366.3639545,
-    "seen": 1789310514.570226,
+    "seen": 1789315905.926087,
     "ast_hash": "4fe5b17c64475f025e37aae48ae9db31",
     "semantic_hash": ""
   },
   "ios/.mcp.json": {
     "mtime": 1789271366.383493,
-    "seen": 1789310514.570231,
+    "seen": 1789315905.9260921,
     "ast_hash": "4fe5b17c64475f025e37aae48ae9db31",
     "semantic_hash": ""
   },
   "ios/CaneKit/Cloud/CloudSync.swift": {
     "mtime": 1789287245.4730139,
-    "seen": 1789310514.570237,
+    "seen": 1789315905.9260979,
     "ast_hash": "abaa6b7a9c012916abcb1506c8fbed67",
     "semantic_hash": ""
   },
   "ios/CaneKit/Cloud/SupabaseClient.swift": {
     "mtime": 1789271366.38446,
-    "seen": 1789310514.570237,
+    "seen": 1789315905.926099,
     "ast_hash": "fba9c3e4fecfb3c47cc9640c48cde5d5",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/CloudSchema.swift": {
     "mtime": 1789287245.4753282,
-    "seen": 1789310514.570257,
+    "seen": 1789315905.926121,
     "ast_hash": "352c2010433e599322d68700a3ce7119",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/LowLight.swift": {
     "mtime": 1789277149.939,
-    "seen": 1789310514.570266,
+    "seen": 1789315905.926131,
     "ast_hash": "9ac8d6a035ed98b0eb3871683afef465",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/NearHold.swift": {
     "mtime": 1789284651.3156955,
-    "seen": 1789310514.570268,
+    "seen": 1789315905.926133,
     "ast_hash": "38cb15f0e7dc6797406e1f53638c1511",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/CloudSchemaTests.swift": {
     "mtime": 1789287245.476512,
-    "seen": 1789310514.570279,
+    "seen": 1789315905.926146,
     "ast_hash": "73cff10c0b4e8f8b0f8b16608a6ffef0",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LowLightTests.swift": {
     "mtime": 1789277149.939284,
-    "seen": 1789310514.5702882,
+    "seen": 1789315905.926155,
     "ast_hash": "86483cae90b9f320716dbd790137f76d",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/NearHoldTests.swift": {
     "mtime": 1789284651.3188941,
-    "seen": 1789310514.570289,
+    "seen": 1789315905.926156,
     "ast_hash": "bf524b0408483083e816f8f96027d757",
     "semantic_hash": ""
   },
   "ios/CaneKit/UI/VoiceTile.swift": {
     "mtime": 1789294785.1115665,
-    "seen": 1789310514.570251,
+    "seen": 1789315905.926114,
     "ast_hash": "0a48a68b74f40cd6f4f960ab28722d89",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/ConversationBudget.swift": {
-    "mtime": 1789310154.00074,
-    "seen": 1789310514.570257,
-    "ast_hash": "c8d34a5a5ac85aa63cf7933d368989ed",
+    "mtime": 1789315183.7754097,
+    "seen": 1789315905.926122,
+    "ast_hash": "5b91f113682fcb8b5a03b22f88be0e4d",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/EmergencyConfirm.swift": {
     "mtime": 1789287245.5165691,
-    "seen": 1789310514.57026,
+    "seen": 1789315905.926125,
     "ast_hash": "5424ac023d04ac4006a1563a20d4e74b",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/HeadGate.swift": {
     "mtime": 1789284651.3149195,
-    "seen": 1789310514.5702631,
+    "seen": 1789315905.9261281,
     "ast_hash": "53887ab9e624557e833cfd750896a628",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/NavigationHealth.swift": {
     "mtime": 1789284651.246804,
-    "seen": 1789310514.570267,
+    "seen": 1789315905.926133,
     "ast_hash": "c08766c62894ef18b703760ef8730065",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/PeopleDetection.swift": {
     "mtime": 1789284651.2469797,
-    "seen": 1789310514.570268,
+    "seen": 1789315905.926134,
     "ast_hash": "dcb2cb6a6d5a0c55d3c1d345deb918e7",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SelfHearFilter.swift": {
-    "mtime": 1789284651.3159482,
-    "seen": 1789310514.57027,
-    "ast_hash": "53c084f7caab01c5808acae9f2b2fbf3",
+    "mtime": 1789315183.775947,
+    "seen": 1789315905.926136,
+    "ast_hash": "ea0a0c47c9f2283b994840ddaae2c05c",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SensorModeInterlock.swift": {
     "mtime": 1789277149.9052548,
-    "seen": 1789310514.57027,
+    "seen": 1789315905.926136,
     "ast_hash": "d710efda648f3b8a8ea5acfd883c2631",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/StopRouteConfirmation.swift": {
     "mtime": 1789284651.2478077,
-    "seen": 1789310514.570273,
+    "seen": 1789315905.9261389,
     "ast_hash": "f30b67bc09ada515c857a6538dbcd8e8",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/TripRefreshGeneration.swift": {
     "mtime": 1789284651.2480009,
-    "seen": 1789310514.570274,
+    "seen": 1789315905.9261398,
     "ast_hash": "c5ecc16b0eeebf836f05cf2b8a2cf396",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoiceBreaker.swift": {
     "mtime": 1789284651.3167355,
-    "seen": 1789310514.570275,
+    "seen": 1789315905.926141,
     "ast_hash": "179aaeada62a76aa3b3f8baa01fb7184",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoiceEngineChoice.swift": {
     "mtime": 1789289782.88996,
-    "seen": 1789310514.570276,
+    "seen": 1789315905.926142,
     "ast_hash": "26d1848fbd6382986bf485849c0f7a1c",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoiceInputGuard.swift": {
     "mtime": 1789277149.9054687,
-    "seen": 1789310514.570276,
+    "seen": 1789315905.926142,
     "ast_hash": "456839b9fa61238f214996e9f15ca56d",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoiceMenu.swift": {
-    "mtime": 1789310153.9998524,
-    "seen": 1789310514.570276,
-    "ast_hash": "c6f3ab77b4b7a9ae1bb35050284dfe54",
+    "mtime": 1789315183.7741442,
+    "seen": 1789315905.926142,
+    "ast_hash": "812a716077f409310a861789a607a40f",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/VoiceShellPolicy.swift": {
-    "mtime": 1789287245.516851,
-    "seen": 1789310514.5702772,
-    "ast_hash": "0a4501df1f3798e2a01256b93654cd40",
+    "mtime": 1789315183.7748725,
+    "seen": 1789315905.926143,
+    "ast_hash": "c8b93b8625e29149f4b0c99f6f625555",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/ConversationBudgetTests.swift": {
-    "mtime": 1789304086.6390007,
-    "seen": 1789310514.570279,
-    "ast_hash": "a2f97f7141359e3543e4ccb6c3c8d9e7",
+    "mtime": 1789315050.9637625,
+    "seen": 1789315905.926146,
+    "ast_hash": "a39b9ffe1337a64166d2da04d05a2df3",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/EmergencyConfirmTests.swift": {
     "mtime": 1789287245.517274,
-    "seen": 1789310514.570282,
+    "seen": 1789315905.9261491,
     "ast_hash": "6214b1963405bd89f48309779a3db966",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/LaneGeometryTests.swift": {
     "mtime": 1789284651.3184268,
-    "seen": 1789310514.570286,
+    "seen": 1789315905.926153,
     "ast_hash": "d3d54ca812c6d9906839a9b57d321239",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/NavigationHealthTests.swift": {
     "mtime": 1789284651.249084,
-    "seen": 1789310514.570289,
+    "seen": 1789315905.926156,
     "ast_hash": "b53e8db0479a272ff0932f7dfad117a4",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/PeopleDetectionTests.swift": {
     "mtime": 1789284651.251001,
-    "seen": 1789310514.5702899,
+    "seen": 1789315905.926157,
     "ast_hash": "4191bf530a11016d6ebde5ad13448998",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SelfHearFilterTests.swift": {
     "mtime": 1789284651.319,
-    "seen": 1789310514.570292,
+    "seen": 1789315905.9261591,
     "ast_hash": "a2e0574f851732644ca6d4e3c256a36b",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SensorModeInterlockTests.swift": {
     "mtime": 1789277149.905918,
-    "seen": 1789310514.570292,
+    "seen": 1789315905.9261599,
     "ast_hash": "45845014c415b8f6fe265a84263c3f0f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/StopRouteConfirmationTests.swift": {
     "mtime": 1789284651.2517185,
-    "seen": 1789310514.570294,
+    "seen": 1789315905.926162,
     "ast_hash": "a0f2ac3ee518c59488e80191dbd6f28f",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/TripRefreshGenerationTests.swift": {
     "mtime": 1789284651.2519066,
-    "seen": 1789310514.570296,
+    "seen": 1789315905.926164,
     "ast_hash": "f87a03124270b4b9da22bf29b9e96924",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VoiceEngineChoiceTests.swift": {
     "mtime": 1789293431.6686053,
-    "seen": 1789310514.570297,
+    "seen": 1789315905.926165,
     "ast_hash": "61e9459dcb4ba1b8bebe44cc813cab10",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VoiceInputGuardTests.swift": {
     "mtime": 1789277149.9060032,
-    "seen": 1789310514.570297,
+    "seen": 1789315905.926165,
     "ast_hash": "43fa0a7f326977933651831692cd7d59",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VoiceMenuTests.swift": {
-    "mtime": 1789304086.6391428,
-    "seen": 1789310514.570297,
-    "ast_hash": "b698e95d15e9d201e129751e8ef4edad",
+    "mtime": 1789315050.9631872,
+    "seen": 1789315905.926165,
+    "ast_hash": "3fce76fb86403a9f866c958d4cdcbc67",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/VoiceShellPolicyTests.swift": {
-    "mtime": 1789284651.320379,
-    "seen": 1789310514.5702982,
-    "ast_hash": "b15f5400407d02f56d921666716cb07a",
+    "mtime": 1789315050.9634905,
+    "seen": 1789315905.926166,
+    "ast_hash": "d4be257bfa784f608574b495318f5a70",
     "semantic_hash": ""
   },
   "docs/UX.md": {
     "mtime": 1789287245.471232,
-    "seen": 1789310514.5703092,
+    "seen": 1789315905.926178,
     "ast_hash": "4d099a6dfce5814efbebaa7ef69e6e33",
     "semantic_hash": ""
   },
   "ios/CaneKit/App/AppModel+Indoor.swift": {
     "mtime": 1789294785.1095498,
-    "seen": 1789310514.570234,
+    "seen": 1789315905.926095,
     "ast_hash": "024091e814bb261051f9711647404bac",
     "semantic_hash": ""
   },
   "ios/CaneKit/Navigation/IndoorGuide.swift": {
     "mtime": 1789294785.1108196,
-    "seen": 1789310514.5702422,
+    "seen": 1789315905.926104,
     "ast_hash": "b0f1ade97ce473831cb2e0edd70d4c95",
     "semantic_hash": ""
   },
   "ios/CaneKitWidget/OpenCaneControls.swift": {
     "mtime": 1789294785.1120682,
-    "seen": 1789310514.570254,
+    "seen": 1789315905.926118,
     "ast_hash": "16680be6df6d4e80d0ebfed26a002763",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/IndoorRoute.swift": {
     "mtime": 1789310154.0014713,
-    "seen": 1789310514.570264,
+    "seen": 1789315905.9261289,
     "ast_hash": "bbaea8b1a7558a191e26c045f8f5aa1b",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/IslandPolicy.swift": {
     "mtime": 1789294785.1127913,
-    "seen": 1789310514.570264,
+    "seen": 1789315905.9261298,
     "ast_hash": "939bcc52a17c225d404cc87418c3aa60",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/IndoorRouteTests.swift": {
     "mtime": 1789304086.639581,
-    "seen": 1789310514.570285,
+    "seen": 1789315905.926152,
     "ast_hash": "1911ca745e2e79e96c4ab500fc0d7895",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/IslandPolicyTests.swift": {
     "mtime": 1789294785.1135926,
-    "seen": 1789310514.570286,
+    "seen": 1789315905.926153,
     "ast_hash": "8c571805af457b2eb7fd2bc4b6b50f7f",
     "semantic_hash": ""
   },
   "ios/Shared/Brand/ContourRingGeometry.swift": {
     "mtime": 1789294785.113853,
-    "seen": 1789310514.570299,
+    "seen": 1789315905.926167,
     "ast_hash": "0f088521d12af7fae7cd9e48fea5957e",
     "semantic_hash": ""
   },
   "ios/Shared/Intents/TalkControlIntent.swift": {
     "mtime": 1789294785.11396,
-    "seen": 1789310514.570299,
+    "seen": 1789315905.926167,
     "ast_hash": "c539c989683708c2d25a876f7782f095",
     "semantic_hash": ""
   },
   "docs/test_checklist.md": {
-    "mtime": 1789310496.9483526,
-    "seen": 1789310514.570312,
-    "ast_hash": "2ea38600dc4c61cd7420aad839fa43fd",
+    "mtime": 1789315871.3749576,
+    "seen": 1789315905.9261818,
+    "ast_hash": "245f76767bde64aa4de9831b2306574b",
     "semantic_hash": ""
   },
   "ios/CaneKit/Speech/EarconPlayer.swift": {
     "mtime": 1789310234.8851018,
-    "seen": 1789310514.570245,
+    "seen": 1789315905.926107,
     "ast_hash": "467d98e1e88785a622da87f3192af3db",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/Earcon.swift": {
-    "mtime": 1789304034.7790115,
-    "seen": 1789310514.57026,
-    "ast_hash": "707ed9c48f39c43c6b1682ba79cbda4a",
+    "mtime": 1789315183.7756817,
+    "seen": 1789315905.926125,
+    "ast_hash": "100450258a93bf9fa4543f339f09a28d",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/NaturalVoiceLatch.swift": {
     "mtime": 1789293431.667104,
-    "seen": 1789310514.570267,
+    "seen": 1789315905.926132,
     "ast_hash": "99d660534e4e431524ed4843db3bddae",
     "semantic_hash": ""
   },
   "ios/Logic/Sources/CaneKitLogic/SceneDescribePolicy.swift": {
     "mtime": 1789293431.6672149,
-    "seen": 1789310514.5702689,
+    "seen": 1789315905.926135,
     "ast_hash": "8d52fd7b3babba6b9da5c0e6f3885f74",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/EarconTests.swift": {
     "mtime": 1789303971.8317475,
-    "seen": 1789310514.570282,
+    "seen": 1789315905.9261482,
     "ast_hash": "a9f3b26f585d03c3dfb3b3d3634f1cdf",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/NaturalVoiceLatchTests.swift": {
     "mtime": 1789293431.6683254,
-    "seen": 1789310514.5702882,
+    "seen": 1789315905.926155,
     "ast_hash": "d7b25c76803dadfc1be3e57737027fac",
     "semantic_hash": ""
   },
   "ios/Logic/Tests/CaneKitLogicTests/SceneDescribePolicyTests.swift": {
     "mtime": 1789293431.6684318,
-    "seen": 1789310514.570291,
+    "seen": 1789315905.9261582,
     "ast_hash": "bdd1dcb1995b0d8ea57b937cf31198bc",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Sources/CaneKitLogic/CameraControlGate.swift": {
+    "mtime": 1789315092.4109519,
+    "seen": 1789315905.92612,
+    "ast_hash": "5349ac9e3a85f52357372e338cf3606b",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Sources/CaneKitLogic/EmergencyContactSeed.swift": {
+    "mtime": 1789315415.3715494,
+    "seen": 1789315905.926126,
+    "ast_hash": "fb1ba995b064d93ae4f94155092f9973",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Sources/CaneKitLogic/QuietRouteSpeech.swift": {
+    "mtime": 1789315383.0002382,
+    "seen": 1789315905.926134,
+    "ast_hash": "c7e3300714f488e6ef743770aae0ec9c",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Tests/CaneKitLogicTests/CameraControlGateTests.swift": {
+    "mtime": 1789314997.0019596,
+    "seen": 1789315905.926145,
+    "ast_hash": "5bf9e4e5804e3cc332d8c18fb5a55904",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Tests/CaneKitLogicTests/EmergencyContactSeedTests.swift": {
+    "mtime": 1789315415.369338,
+    "seen": 1789315905.9261491,
+    "ast_hash": "0fa6c03414fc49aba0ffacb038d617bf",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Tests/CaneKitLogicTests/QuietRouteSpeechTests.swift": {
+    "mtime": 1789315382.9978786,
+    "seen": 1789315905.9261582,
+    "ast_hash": "46a9aa3afa948e1bd88eeb189f908629",
+    "semantic_hash": ""
+  },
+  "ios/Logic/Tests/CaneKitLogicTests/StressTests.swift": {
+    "mtime": 1789311187.8356183,
+    "seen": 1789315905.926162,
+    "ast_hash": "f293c8f52585c7fe7367a4b4419a66e7",
+    "semantic_hash": ""
+  },
+  "ios/scripts/stress/build_routes.py": {
+    "mtime": 1789311245.517703,
+    "seen": 1789315905.9261708,
+    "ast_hash": "0d5ea63ec346a1cd2cc9dfe4c686785f",
+    "semantic_hash": ""
+  },
+  "ios/scripts/stress/campaign.py": {
+    "mtime": 1789311517.5051315,
+    "seen": 1789315905.9261708,
+    "ast_hash": "0f2869070a5ddd892abb339ab0701db9",
+    "semantic_hash": ""
+  },
+  "ios/scripts/stress/README.md": {
+    "mtime": 1789314451.3225307,
+    "seen": 1789315905.926186,
+    "ast_hash": "9c60503b1e9f5762c955f347437ee3d9",
     "semantic_hash": ""
   }
 }

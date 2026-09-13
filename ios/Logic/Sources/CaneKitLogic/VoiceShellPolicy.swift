@@ -5,8 +5,10 @@
 //  When the voice shell may open the microphone without being asked (Step 58), and the one word
 //  the `scene_phase` record uses for why the app left the foreground (Step 60).
 //
-//  Why this exists: owner decision 2026-09-13 — at launch the app speaks the menu by itself and
-//  then listens by itself; after an answer it may listen again for a follow-up. Every one of
+//  Why this exists: owner decision 2026-09-13 — at launch the app speaks by itself and then listens
+//  by itself; after an answer it may listen again for a follow-up. Step 67 (owner, on
+//  `canekit-2026-09-13T15-48-34Z.jsonl`: "It should just be 'OpenCane ready' and then boom"): what
+//  launch speaks is `launchLine` alone — no menu — then the listening tone. Every one of
 //  those unasked-for microphone opens flips the audio session to `.playAndRecord` (hard rule 7),
 //  lights the orange dot, and can raise a permission prompt nobody can see. The rules for when
 //  that is allowed have numbers in them, so they live here with tests, and the app only applies
@@ -21,10 +23,11 @@
 //      emergency prompt) always gets its window.
 //    · Pure and nonisolated.
 //
-//  Owner / callers: `AppModel` (`VoiceShell.swift`, C2's wiring: `launchListen` after the menu
-//  drains, `followUp` at the end of every answer), `AppModel.scenePhaseChanged`
-//  (`ScenePhaseReason.classify`).
-//  Tests: VoiceShellPolicyTests.swift (7) and ScenePhaseReasonTests (3).
+//  Owner / callers: `AppModel.start()` (`launchLine`), `AppModel.listenAfterLaunchLine`
+//  (`launchListen` once the launch line drains), `AppModel.openFollowUpListenIfWanted` (`followUp`
+//  at the end of every answer), `AppModel.waitForSpeechToDrain` (`speechDrainCap`),
+//  `AppModel.scenePhaseChanged` (`ScenePhaseReason.classify`).
+//  Tests: VoiceShellPolicyTests.swift (8) and ScenePhaseReasonTests (3).
 //
 
 import Foundation
@@ -40,27 +43,46 @@ public enum VoiceShellPolicy {
     /// few seconds; a longer window catches one.
     public static let followUpSecondsNavigating: Double = 3
 
-    /// Longest the launch sequence waits for the speech queue to drain before it gives up on the
-    /// auto-listen, seconds. [H] 15 s: "OpenCane ready." + the menu + a warning or two.
-    public static let menuWaitCap: Double = 15
+    /// Longest a launch or follow-up listen waits for the speech queue to drain before it gives up,
+    /// seconds. [H] 15 s: "OpenCane ready." (or an answer) + a warning or two. Named `menuWaitCap`
+    /// until Step 67 removed the launch menu.
+    public static let speechDrainCap: Double = 15
+
+    /// The whole launch announcement on a phone with LiDAR (Step 67: nothing follows it but the
+    /// listening tone). ⚠ Byte-identical to the entry in `AppModel.commonLines`, which references
+    /// this constant so the natural-voice cache hits. Pinned by `launchSaysOnlyOpenCaneReady`.
+    public static let readyLine = "OpenCane ready."
+
+    /// The launch announcement on a phone without LiDAR: obstacle warnings cannot work, and the
+    /// walker must know at once. Pinned by `launchSaysOnlyOpenCaneReady`.
+    public static let noLidarLine = "OpenCane. This phone has no LiDAR."
+
+    /// What launch says before the listening tone — one line, never a menu.
+    /// - Parameter lidarSupported: `ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)`.
+    /// - Returns: `readyLine`, or `noLidarLine`.
+    /// Caller: `AppModel.start()` (not spoken when the camera is denied: that warning replaces it).
+    public static func launchLine(lidarSupported: Bool) -> String {
+        lidarSupported ? readyLine : noLidarLine
+    }
 
     /// Verdict for the launch listen.
     public enum LaunchListen: Sendable, Equatable {
         /// Open the microphone once (`VoiceListenMode.launch`).
         case listen
-        /// Do not; the reason is written to `voice_menu {action: skipped, reason}`.
+        /// Do not; the reason is written to `voice_launch {action: skipped, reason}` (`voice_menu`
+        /// until Step 67).
         case skip(reason: String)
     }
 
-    /// Whether to open the microphone once after the launch menu has been spoken.
+    /// Whether to open the microphone once after the launch line has been spoken.
     /// First refusal wins, in this order: disabled, muted, permission_prompt, mic_owned,
     /// recovered_launch, camera_denied.
     /// - Parameters:
     ///   - enabled: the "Listen on launch" setting.
     ///   - muted: `SpeechQueue.muted` (automation).
-    ///   - speechAuthorized: whether speech recognition may be used. ⚠ `AppModel.speakMenuThenListen`
+    ///   - speechAuthorized: whether speech recognition may be used. ⚠ `AppModel.listenAfterLaunchLine`
     ///     passes "not denied / restricted" (owner decision 2026-09-13): on a first launch the
-    ///     permission prompts appear right after the menu, because the voice shell is the app.
+    ///     permission prompts appear right after "OpenCane ready.", because the voice shell is the app.
     ///   - micGranted: likewise "not denied" from the app.
     ///   - micOwnedElsewhere: `SoundWatcher` owns the microphone session.
     ///   - recoveredLaunch: `LaunchRecovery` disabled optional features this launch.

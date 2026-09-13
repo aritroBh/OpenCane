@@ -20,6 +20,7 @@
 //  Keys read by the app: ELEVENLABS_API_KEY / _VOICE_ID / _MODEL (ElevenLabsVoice),
 //  VLM_PROVIDER, CUSTOM_BASE_URL / _API_KEY / _MODEL / _REASONING_EFFORT, OPENAI_API_KEY / _MODEL,
 //  ANTHROPIC_API_KEY / _MODEL, GEMINI_API_KEY / _MODEL (VLMClientFactory).
+//  EMERGENCY_CONTACT_NAME / _PHONE (Step 68; read on every access by `MedicalProfileStore.effectiveEmergencyContact`, never saved into the profile — review round Steps 67–68).
 //  ⚠ Because empty counts as missing, a key cannot be set to "" to mean "send nothing":
 //  `CUSTOM_REASONING_EFFORT` = "" falls back to "low", it does not omit the field.
 //  CUSTOM_REASONING_EFFORT is not in ios/Secrets.example.plist.

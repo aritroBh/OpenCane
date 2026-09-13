@@ -26,6 +26,8 @@
 //      fields are the ARKit clock — a different clock; correlate lane/cue records via `ar_t` and
 //      nav records via `t`.
 //    · JSON has no NaN/infinity: numbers go through `num`, and invalid objects are dropped.
+//    · No phone number in a record: `text` / `response` / `matched_line` / `transcript` fields pass
+//      through `EmergencyConfirm.logSafe` (review round Steps 67–68).
 //    · `lanes` records stay throttled (`laneRate`); the depth pipeline reports at ~30 Hz normal / up to 60 Hz high-rate.
 //  Tests: ⚠ only the record assembly is unit-tested (`TripLogRecordTests`,
 //  `fieldsNeverOverwriteTheRecordTimeOrKind`). Do not rename `kind` values or fields without
@@ -178,6 +180,8 @@ final class TripLogger {
     ///     dictionaries of those); never name one `t` or `kind` on purpose.
     func event(_ kind: String, _ fields: [String: Any] = [:]) {
         guard enabled else { return }
+        // Review round Steps 67–68 (Muse #7): no phone number in a record (file or `onRecord` mirror).
+        let fields = Self.maskingNumbers(fields)
         let t = Self.num(Date().timeIntervalSince(t0))
         let obj = TripLogRecord.make(t: t, kind: kind, fields: fields)
         guard JSONSerialization.isValidJSONObject(obj),
@@ -189,6 +193,26 @@ final class TripLogger {
         // and after the JSON validity check, never before.
         onRecord?(kind, t, fields)
         if buffer.count > 16_384 { flush() }
+    }
+
+    /// Fields whose text can carry a spoken line or a transcript: `speech` / `speech_dispatch` /
+    /// `speech_engine` `text`, `conv_turn` `response`, `voice_self_hear` `matched_line` / `transcript`.
+    private static let numberMaskedKeys = ["text", "response", "matched_line", "transcript"]
+
+    /// `fields` with every phone-like run (≥ 7 digits) in `numberMaskedKeys` replaced by "[number]"
+    /// (`EmergencyConfirm.logSafe`, pinned by `logRecordsMaskThePhoneNumber`). Review round Steps
+    /// 67–68 (Muse #7): the emergency prompt reads the contact's number back aloud before dialing,
+    /// and that line reached `speech_dispatch` / `speech_engine` / `conv_turn` records — and, through
+    /// `onRecord`, the cloud mirror. The spoken line is unchanged; only the record is masked.
+    /// Caller: `event`.
+    /// - Parameter fields: the record's fields as passed to `event`.
+    /// - Returns: the same fields, those keys masked.
+    private static func maskingNumbers(_ fields: [String: Any]) -> [String: Any] {
+        var out = fields
+        for key in numberMaskedKeys {
+            if let text = out[key] as? String { out[key] = EmergencyConfirm.logSafe(text) }
+        }
+        return out
     }
 
     /// Write buffered lines now (called on background/suspend so nothing is lost).

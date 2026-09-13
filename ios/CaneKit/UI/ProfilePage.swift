@@ -66,6 +66,9 @@ struct ProfilePage: View {
 
     private var medicalIDCard: some View {
         let p = model.medicalProfile.profile
+        // Typed contact, else the one from this phone's Secrets.plist (review round Steps 67–68):
+        // shown and dialled, never saved — the editor below still edits only the stored profile.
+        let contact = model.medicalProfile.effectiveEmergencyContact
         return CKCard(title: "EMERGENCY MEDICAL ID") {
             // Profile Header
             HStack(spacing: CKSpacing.md) {
@@ -161,18 +164,23 @@ struct ProfilePage: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(p.emergencyContactName)
+                        Text(contact.name)
                             .font(CKFont.label)
                             .foregroundStyle(CKColor.textPrimary)
-                        Text("\(p.emergencyContactRelation) · \(p.emergencyContactPhone)")
+                        Text("\(p.emergencyContactRelation) · \(contact.phone)")
                             .font(CKFont.secondary)
                             .foregroundStyle(CKColor.textSecondary)
+                        if contact.fromSetup {
+                            Text("From this phone's setup")
+                                .font(CKFont.secondary)
+                                .foregroundStyle(CKColor.textSecondary)
+                        }
                     }
 
                     Spacer()
 
                     // Same digits the voice call dials (`EmergencyConfirm.telDigits`, Step 59).
-                    if let phoneURL = URL(string: "tel:\(EmergencyConfirm.telDigits(p.emergencyContactPhone))") {
+                    if let phoneURL = URL(string: "tel:\(EmergencyConfirm.telDigits(contact.phone))") {
                         Link(destination: phoneURL) {
                             HStack(spacing: CKSpacing.xs) {
                                 Image(systemName: "phone.fill")
@@ -184,7 +192,7 @@ struct ProfilePage: View {
                             .background(CKColor.accent, in: Capsule())
                             .foregroundStyle(CKColor.ink)
                         }
-                        .accessibilityLabel("Call emergency contact \(p.emergencyContactName)")
+                        .accessibilityLabel("Call emergency contact \(contact.name)")
                     }
                 }
                 .padding(CKSpacing.md)
@@ -198,7 +206,7 @@ struct ProfilePage: View {
                 role: .secondary,
                 hint: "Reads emergency medical identification aloud"
             ) {
-                let summary = "\(p.name). White cane user, legally blind. Blood type \(p.bloodType). Allergies: \(p.allergies). Emergency contact: \(p.emergencyContactName), \(p.emergencyContactPhone)."
+                let summary = "\(p.name). White cane user, legally blind. Blood type \(p.bloodType). Allergies: \(p.allergies). Emergency contact: \(contact.name), \(contact.phone)."
                 // `.scene`, not `.obstacle` (Step 47 audit): this is a user-requested paragraph,
                 // and `.obstacle` is the hazard band of AGENTS.md hard rule 8 / design.md §5.1 —
                 // an obstacle name or a route line must be able to cut it, never the reverse.

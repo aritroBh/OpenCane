@@ -27,6 +27,17 @@ Scenarios (see SCENARIOS below):
                   every corner gets a described sentence; the report lists per-corner descriptions,
                   sign-scan text and hazard-watch replies. Not in "all" (needs the git-ignored
                   JPEGs); run with --scenario streetview.
+    indoor_isr    (Step 66) CANEKIT_INDOOR_ROUTE=1 + CANEKIT_INDOOR_SIM_STEPS_PER_S=3 with the GPS
+                  parked at the ISR door → indoor `advanced` in order, one `exit`, one `handover`, then
+                  `route start` (the app's own walk simulator takes over there; the run stops).
+    stress_<walk> (Step 66) a trace from scripts/stress/traces/<walk>.json (OpenStreetMap foot routing,
+                  scripts/stress/build_routes.py), densified to one simulator tick per vertex, AR(1)
+                  jitter (--jitter-m, --seed) and --dropouts GPS gaps of --gap-s seconds; a
+                  non-bundled route is loaded through CANEKIT_ROUTE_FILE. Asserts: route start with the
+                  route's waypoint count, arrival, waypoint indices strictly ascending, the arrival fix
+                  ≤ 25 m from the last waypoint, ≤ --max-lines-per-min spoken lines, no identical
+                  consecutive lines, no field_kind. stress_all = every trace. Not in "all".
+    --trace FILE  the stress checks for any trace JSON (or a GPX track, walked on the bundled route).
 
 Exit status 0 only if every requested scenario passes. Reports + copied logs: build/e2e/.
 Requires a simulator build first (`make sim`); the Makefile's e2e target does that.
@@ -45,7 +56,10 @@ on the same device starves the app and the assertions then describe a walk that 
 # App contracts it depends on (renaming any of these breaks it, usually as a false FAIL):
 #   env hooks  CANEKIT_DEMO_ROUTE (AppModel.start → startDemoRoute), CANEKIT_MUTE (SpeechQueue.muted),
 #              CANEKIT_FRAME_DIR (FrameReplay), CANEKIT_DESCRIBE_EVERY_WAYPOINT
-#              (AppModel.describeEveryWaypoint), CANEKIT_HAZARD_WATCH (AppModel.wireHazards)
+#              (AppModel.describeEveryWaypoint), CANEKIT_HAZARD_WATCH (AppModel.wireHazards),
+#              CANEKIT_ROUTE_FILE (RouteSource.bundled, Step 66), CANEKIT_INDOOR_ROUTE +
+#              CANEKIT_INDOOR_SIM_STEPS_PER_S (IndoorGuide.attach / simulate)
+#   indoor     indoor{action: start | advanced | exit | handover, index} (IndoorGuide.log)
 #   log kinds  route{action}, waypoint{index}, navcue{cue}, arrived, speech{text}, gps, cue{cue},
 #              hazard{type,text,source}, describe_result{frame,text,error,ms,labels,vision_error},
 #              scan{frame,texts}, hazard_watch{frame,reply,said,dropped,error}; and TripLogRecord's
@@ -78,6 +92,10 @@ OUT = IOS / "build/e2e"
 BUNDLE = "com.aritro.canekit"
 # frames.json (committed) + the git-ignored Street View JPEGs; handed to the app as CANEKIT_FRAME_DIR.
 STREETVIEW = IOS / "scripts/streetview"
+# Step 66 stress campaign: traces/*.json + routes/*.json from scripts/stress/build_routes.py.
+STRESS = IOS / "scripts/stress"
+# The bundled ISR indoor draft that CANEKIT_INDOOR_ROUTE=1 starts (its step count and exit are read).
+INDOOR_ISR = IOS / "CaneKit/Resources/indoor_isr.json"
 # Mean Earth radius in metres (same spherical model as CaneKitLogic's GeoMath haversine).
 EARTH = 6_371_000.0
 
@@ -155,6 +173,66 @@ def scenario_paths(wps: list[dict], seed: int) -> dict[str, list[tuple[float, fl
 
     return {"clean": clean, "missed_fence": missed, "gps_jitter": jitter, "wrong_turn": wrong,
             "streetview": list(P)}
+
+
+# MARK: - stress traces (Step 66)
+
+# Walk names with a trace file (scripts/stress/traces/<walk>.json), sorted — the `stress_<walk>` choices.
+def stress_names() -> list[str]:
+    return sorted(p.stem for p in (STRESS / "traces").glob("*.json"))
+
+
+# A trace: JSON {name, route, points: [[lat, lon], …]} (route = "bundled" or a path relative to ios/),
+# or a GPX track (every <trkpt>, walked on the bundled route).
+def load_trace(path: Path) -> dict:
+    if path.suffix.lower() == ".gpx":
+        import re
+        pts = []
+        for tag in re.findall(r"<trkpt\b[^>]*>", path.read_text()):
+            lat = re.search(r'lat="([-0-9.]+)"', tag)
+            lon = re.search(r'lon="([-0-9.]+)"', tag)
+            if lat and lon:
+                pts.append((float(lat.group(1)), float(lon.group(1))))
+        return {"name": path.stem, "route": "bundled", "points": pts}
+    doc = json.loads(path.read_text())
+    doc["points"] = [tuple(p) for p in doc["points"]]
+    return doc
+
+
+# The waypoint dicts of a trace's route ("bundled" = route_isr_cif.json).
+def route_waypoints(route: str) -> list[dict]:
+    return json.loads((ROUTE if route == "bundled" else IOS / route).read_text())["waypoints"]
+
+
+# Seconds `simctl location start --interval=1` spends on a path: at least one tick per segment.
+def ticks(points: list[tuple[float, float]], speed: float) -> int:
+    return sum(max(1, math.ceil(dist(a, b) / speed)) for a, b in zip(points, points[1:]))
+
+
+def perturb(points: list[tuple[float, float]], seed: int, jitter_m: float, speed: float,
+            dropouts: int) -> tuple[list[list[tuple[float, float]]], dict]:
+    """A replayable, seeded version of a trace: densified to `speed` metres per vertex (one simulator
+    tick each, so the walk keeps its speed), AR(1) Gaussian jitter (ρ 0.7, σ `jitter_m`, first and last
+    point pinned) and `dropouts` cut points between 15 % and 85 % of the walk. Returns the segments
+    (consecutive segments share their cut vertex) and a summary for the report. Same arguments →
+    identical output (`random.Random(seed)`, no clock)."""
+    rng = random.Random(seed)
+    dense = densify(points, max(1.0, speed))
+    rho, n, e, out = 0.7, 0.0, 0.0, []
+    for i, (lat, lon) in enumerate(dense):
+        n = rho * n + math.sqrt(1 - rho * rho) * rng.gauss(0, jitter_m)
+        e = rho * e + math.sqrt(1 - rho * rho) * rng.gauss(0, jitter_m)
+        out.append((lat, lon) if i in (0, len(dense) - 1) else offset(lat, lon, n, e))
+    cuts = sorted({rng.randint(int(len(out) * 0.15), int(len(out) * 0.85)) for _ in range(dropouts)}) \
+        if dropouts > 0 and len(out) > 20 else []
+    segments, start = [], 0
+    for c in cuts:
+        if c - start >= 2:
+            segments.append(out[start:c + 1])
+            start = c
+    segments.append(out[start:])
+    return segments, {"seed": seed, "jitter_m": jitter_m, "vertices": len(out), "cuts": cuts,
+                      "max_offset_m": round(max(dist(a, b) for a, b in zip(dense, out)), 1)}
 
 
 # MARK: - simulator plumbing
@@ -245,7 +323,12 @@ def launch_and_wait_for_route(udid: str, attempts: int = 3, extra_env: dict[str,
 # and copy the log into OUT. Returns `events` (possibly empty), `seconds` (wall clock from launch,
 # including the post-arrival wait), `log` (container path or None) and `path_m`. It never asserts;
 # `check` does. Raises (via `sh` / launch) on install or launch failure.
-def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed: float) -> dict:
+def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed: float,
+                 route_file: str | None = None, segments: list[list[tuple[float, float]]] | None = None,
+                 gap_s: float = 0.0, log_name: str | None = None) -> dict:
+    # Step 66: `route_file` → CANEKIT_ROUTE_FILE (a non-bundled route through the demo hook);
+    # `segments` replays the path in pieces with `gap_s` seconds of no GPS between them (a dropout:
+    # simctl stops sending fixes when a path ends); `log_name` names the copied log.
     sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
     sh("xcrun", "simctl", "location", udid, "clear", check=False)
     sh("xcrun", "simctl", "install", udid, str(APP))
@@ -255,13 +338,19 @@ def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed:
         extra["SIMCTL_CHILD_CANEKIT_FRAME_DIR"] = str(STREETVIEW)
         extra["SIMCTL_CHILD_CANEKIT_DESCRIBE_EVERY_WAYPOINT"] = "1"
         extra["SIMCTL_CHILD_CANEKIT_HAZARD_WATCH"] = "1"
+    if route_file:
+        extra["SIMCTL_CHILD_CANEKIT_ROUTE_FILE"] = route_file
     started = launch_and_wait_for_route(udid, extra_env=extra)
-    coords = [f"{lat:.7f},{lon:.7f}" for lat, lon in points]
-    sh("xcrun", "simctl", "location", udid, "start", f"--speed={speed}", "--interval=1", *coords)
+    segs = segments or [points]
+    for i, seg in enumerate(segs):
+        coords = [f"{lat:.7f},{lon:.7f}" for lat, lon in seg]
+        sh("xcrun", "simctl", "location", udid, "start", f"--speed={speed}", "--interval=1", *coords)
+        if i < len(segs) - 1:
+            time.sleep(ticks(seg, speed) + gap_s)
 
     # simctl spends at least one --interval tick on every vertex, so a densified path (gps_jitter:
     # ~5 m segments) takes far longer than length / speed (review round 5: it could never arrive).
-    budget = sum(max(1, math.ceil(dist(a, b) / speed)) for a, b in zip(points, points[1:])) + 75
+    budget = ticks(segs[-1], speed) + 75
     deadline = time.time() + budget
     log: Path | None = None
     events: list[dict] = []
@@ -279,9 +368,52 @@ def run_scenario(udid: str, name: str, points: list[tuple[float, float]], speed:
 
     OUT.mkdir(parents=True, exist_ok=True)
     if log:
-        shutil.copy(log, OUT / f"{name}.jsonl")
+        shutil.copy(log, OUT / f"{log_name or name}.jsonl")
     return {"events": events, "seconds": round(time.time() - started), "log": str(log) if log else None,
             "path_m": round(path_length(points))}
+
+
+def run_indoor(udid: str, log_name: str = "indoor_isr") -> dict:
+    """Step 66 `indoor_isr`: GPS parked at the ISR door, launch with CANEKIT_INDOOR_ROUTE=1 and
+    CANEKIT_INDOOR_SIM_STEPS_PER_S=3 (no demo-route hook), wait for the handover's `route start`
+    (IndoorGuide feeds 5 m fixes at the exit itself), 6 s more, stop. One relaunch when no indoor walk
+    started within 25 s (the same dropped-launch race as launch_and_wait_for_route)."""
+    ex = json.loads(INDOOR_ISR.read_text())["exit"]
+    sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
+    sh("xcrun", "simctl", "location", udid, "clear", check=False)
+    sh("xcrun", "simctl", "install", udid, str(APP))
+    sh("xcrun", "simctl", "location", udid, "set", f"{ex['lat']},{ex['lon']}")
+    env = {**os.environ, "SIMCTL_CHILD_CANEKIT_INDOOR_ROUTE": "1", "SIMCTL_CHILD_CANEKIT_INDOOR_SIM_STEPS_PER_S": "3",
+           "SIMCTL_CHILD_CANEKIT_MUTE": "1"}
+    events: list[dict] = []
+    log: Path | None = None
+    started = time.time()
+    for attempt in (1, 2):
+        started = time.time()
+        subprocess.run(["xcrun", "simctl", "launch", "--terminate-running-process", udid, BUNDLE],
+                       env=env, capture_output=True, text=True, check=True)
+        deadline, begun = time.time() + 180, False
+        while time.time() < deadline:
+            time.sleep(2)
+            log = newest_log(udid, started)
+            events = read_events(log) if log else []
+            begun = begun or any(e.get("kind") == "indoor" and e.get("action") == "start" for e in events)
+            if not begun and time.time() - started > 25:
+                break
+            handed = [e["t"] for e in events if e.get("kind") == "indoor" and e.get("action") == "handover"]
+            if handed and any(e.get("kind") == "route" and e.get("action") == "start" and e["t"] >= handed[0]
+                              for e in events):
+                time.sleep(6)
+                events = read_events(log)
+                break
+        if begun:
+            break
+        print(f"  (launch {attempt}: indoor walk did not start, retrying)", flush=True)
+    sh("xcrun", "simctl", "terminate", udid, BUNDLE, check=False)
+    OUT.mkdir(parents=True, exist_ok=True)
+    if log:
+        shutil.copy(log, OUT / f"{log_name}.jsonl")
+    return {"events": events, "seconds": round(time.time() - started), "log": str(log) if log else None, "path_m": 0}
 
 
 # MARK: - assertions
@@ -446,6 +578,85 @@ def check(name: str, events: list[dict], seconds: float = 0.0) -> list[str]:
     return fails
 
 
+def check_stress(events: list[dict], wps: list[dict], max_lpm: float) -> tuple[list[str], dict]:
+    """Step 66 invariants for a trace replay, on top of `check`. Returns (failures, metrics)."""
+    fails: list[str] = []
+    starts = [e for e in events if e.get("kind") == "route" and e.get("action") == "start"]
+    arrived = [e for e in events if e.get("kind") == "arrived"]
+    idx = [e.get("index") for e in events if e.get("kind") == "waypoint"]
+    if starts and starts[0].get("waypoints") != len(wps):
+        fails.append(f"route start has {starts[0].get('waypoints')} waypoints, the route file {len(wps)} "
+                     "(CANEKIT_ROUTE_FILE not honoured?)")
+    if any(b <= a for a, b in zip(idx, idx[1:])):
+        fails.append(f"waypoint indices not strictly ascending: {idx}")
+    arrival_m = None
+    if arrived:
+        fixes = [e for e in events if e.get("kind") == "gps" and e.get("t", 0) <= arrived[0]["t"]]
+        if fixes:
+            arrival_m = round(dist((fixes[-1]["lat"], fixes[-1]["lon"]), (wps[-1]["lat"], wps[-1]["lon"])), 1)
+            if arrival_m > 25:
+                fails.append(f"arrived {arrival_m} m from the last waypoint (max 25)")
+    lines = [e for e in events if e.get("kind") == "speech" and not e.get("repeat")]
+    t0 = starts[0]["t"] if starts else 0.0
+    t1 = arrived[0]["t"] if arrived else (events[-1].get("t", t0) if events else t0)
+    walk = [e for e in lines if t0 <= e.get("t", 0) <= t1]
+    lpm = round(len(walk) / max(1.0, (t1 - t0) / 60), 2)
+    if lpm > max_lpm:
+        fails.append(f"{lpm} spoken lines per minute on the walk (max {max_lpm})")
+    # Identical consecutive lines with no waypoint advance between them (two different waypoints may
+    # legitimately share a line: unnamed OSM footpaths all read "Turn left onto the path.").
+    exempt_consecutive = {"Head height.", "Close.", "Veer left.", "Veer right."}
+    dups, last, advanced = [], None, False
+    for e in events:
+        if e.get("kind") == "waypoint":
+            advanced = True
+        elif e.get("kind") == "speech" and not e.get("repeat"):
+            txt = e.get("text")
+            if txt == last and not advanced and txt not in exempt_consecutive:
+                dups.append(last)
+            last, advanced = txt, False
+    if dups:
+        fails.append(f"identical consecutive lines: {dups[:3]}")
+    said = [e.get("text", "") for e in lines]
+    metrics = {"walk_s": round(t1 - t0, 1), "lines": len(walk), "lines_per_min": lpm, "arrival_m": arrival_m,
+               "veers": sum(s.startswith("Veer") for s in said), "passed": sum(s.startswith("Passed") for s in said),
+               "gps_weak": sum("GPS" in s for s in said), "duplicates": len(dups)}
+    return fails, metrics
+
+
+def check_indoor(events: list[dict]) -> tuple[list[str], dict]:
+    """Step 66 `indoor_isr`: indoor start, `advanced` never backwards and ending on the last step, exactly
+    one `exit` and one `handover` in that order, then `route start`; no field_kind. (IndoorGuide logs the
+    mirrored step index, so two advances in one pedometer update log the same index twice — allowed.)"""
+    fails: list[str] = []
+    steps = len(json.loads(INDOOR_ISR.read_text())["steps"])
+    ind = [e for e in events if e.get("kind") == "indoor"]
+    first = lambda action: next((e["t"] for e in ind if e.get("action") == action), None)
+    adv = [e.get("index") for e in ind if e.get("action") == "advanced"]
+    t_start, t_exit, t_hand = first("start"), first("exit"), first("handover")
+    route_after = [e["t"] for e in events if e.get("kind") == "route" and e.get("action") == "start"
+                   and t_hand is not None and e["t"] >= t_hand]
+    if t_start is None:
+        fails.append("no indoor start (CANEKIT_INDOOR_ROUTE hook?)")
+    if any(b < a for a, b in zip(adv, adv[1:])) or (adv and adv[-1] != steps - 1) or any(not 1 <= i < steps for i in adv):
+        fails.append(f"indoor steps out of order: advanced {adv} for {steps} steps")
+    for action in ("exit", "handover"):
+        n = sum(e.get("action") == action for e in ind)
+        if n != 1:
+            fails.append(f"{n} indoor {action} records (want 1)")
+    if None not in (t_start, t_exit, t_hand) and not t_start <= t_exit <= t_hand:
+        fails.append(f"indoor order wrong: start {t_start}, exit {t_exit}, handover {t_hand}")
+    if not route_after:
+        fails.append("no route start after the handover")
+    collisions = reserved_collisions(events)
+    if collisions:
+        fails.append(f"{len(collisions)} log records had a field named 't' or 'kind'")
+    metrics = {"advanced": adv, "t_start": t_start, "t_exit": t_exit, "t_handover": t_hand,
+               "t_route_start": route_after[0] if route_after else None,
+               "handover_by": next((e.get("by") for e in ind if e.get("action") == "handover"), None)}
+    return fails, metrics
+
+
 # MARK: - main
 
 # CLI entry; returns the process exit status (0 only if every requested scenario passed). Refuses to
@@ -456,34 +667,72 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sim", default="iPhone 17 Pro Max")
     ap.add_argument("--scenario", default="all",
-                    choices=["all", "clean", "missed_fence", "gps_jitter", "wrong_turn", "streetview"])
+                    choices=["all", "clean", "missed_fence", "gps_jitter", "wrong_turn", "streetview", "indoor_isr",
+                             "stress_all"] + [f"stress_{n}" for n in stress_names()])
+    ap.add_argument("--trace", type=Path, help="Step 66: replay this trace JSON / GPX with the stress checks")
     ap.add_argument("--speed", type=float, default=4.0, help="m/s (4 keeps each run ~4 min)")
-    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--seed", type=int, default=7, help="gps_jitter noise; stress jitter and dropout positions")
+    ap.add_argument("--jitter-m", type=float, default=3.0, help="stress: AR(1) jitter σ, metres (0 = none)")
+    ap.add_argument("--dropouts", type=int, default=2, help="stress: GPS gaps inserted into the replay")
+    ap.add_argument("--gap-s", type=float, default=20.0, help="stress: seconds of each GPS gap")
+    ap.add_argument("--max-lines-per-min", type=float, default=15.0, help="stress: spoken-line cap on the walk")
+    ap.add_argument("--report", type=Path, default=OUT / "report.json", help="where report.json is written")
     args = ap.parse_args()
 
     if not APP.exists():
         raise SystemExit(f"{APP} missing — run `make sim` first")
     paths = scenario_paths(load_waypoints(), args.seed)
-    # "all" = the four GPS scenarios; streetview needs local-only frames, so it is opt-in.
-    names = [n for n in paths if n != "streetview"] if args.scenario == "all" else [args.scenario]
+    # "all" = the four GPS scenarios; streetview needs local-only frames, indoor_isr and the stress
+    # traces are Step 66's campaign — all three are opt-in.
+    if args.trace:
+        names = [f"trace_{args.trace.stem}"]
+    elif args.scenario == "all":
+        names = [n for n in paths if n != "streetview"]
+    elif args.scenario == "stress_all":
+        names = [f"stress_{n}" for n in stress_names()]
+    else:
+        names = [args.scenario]
     if "streetview" in names and not (STREETVIEW / "frames.json").exists():
         raise SystemExit(f"{STREETVIEW}/frames.json missing — capture frames per scripts/streetview/README.md")
     udid = udid_for(args.sim)
     prepare(udid)
 
     OUT.mkdir(parents=True, exist_ok=True)
-    report_path = OUT / "report.json"
+    report_path = args.report
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.unlink(missing_ok=True)          # never leave a stale PASS behind a crashed run
-    report = {"sim": args.sim, "udid": udid, "speed": args.speed, "scenarios": {}}
+    report = {"sim": args.sim, "udid": udid, "speed": args.speed, "seed": args.seed, "scenarios": {}}
     ok = True
     for name in names:
-        print(f"▶ {name}: {path_length(paths[name]):.0f} m at {args.speed} m/s …", flush=True)
+        extra: dict = {}
+        trace = None
+        if name.startswith("stress_") or name.startswith("trace_"):
+            trace = load_trace(args.trace if args.trace else STRESS / "traces" / f"{name[len('stress_'):]}.json")
+            segments, extra["perturbation"] = perturb(trace["points"], args.seed, args.jitter_m, args.speed, args.dropouts)
+            extra["route"] = trace["route"]
+            flat = [p for i, s in enumerate(segments) for p in (s if i == 0 else s[1:])]
+            path_m = path_length(flat)
+        else:
+            path_m = path_length(paths[name]) if name in paths else 0
+        print(f"▶ {name}: {path_m:.0f} m at {args.speed} m/s (seed {args.seed}) …", flush=True)
         try:
-            res = run_scenario(udid, name, paths[name], args.speed)
             warnings.clear()
-            fails = check(name, res["events"], res["seconds"])
+            if name == "indoor_isr":
+                res = run_indoor(udid)
+                fails, extra["indoor"] = check_indoor(res["events"])
+            elif trace is not None:
+                wps = route_waypoints(trace["route"])
+                route_file = None if trace["route"] == "bundled" else str(IOS / trace["route"])
+                res = run_scenario(udid, name, flat, args.speed, route_file=route_file, segments=segments,
+                                   gap_s=args.gap_s, log_name=f"{name}-s{args.seed}")
+                fails = check(name, res["events"], res["seconds"] - args.gap_s * (len(segments) - 1))
+                more, extra["stress"] = check_stress(res["events"], wps, args.max_lines_per_min)
+                fails += more
+            else:
+                res = run_scenario(udid, name, paths[name], args.speed)
+                fails = check(name, res["events"], res["seconds"])
         except Exception as e:                   # one bad launch must not abort the other scenarios
-            res = {"events": [], "seconds": 0, "path_m": round(path_length(paths[name]))}
+            res = {"events": [], "seconds": 0, "path_m": round(path_m)}
             fails = [f"harness error: {e}"]
         finally:
             sh("xcrun", "simctl", "location", udid, "clear", check=False)
@@ -509,6 +758,7 @@ def main() -> int:
             "hazard_watch": [{"frame": e.get("frame"), "reply": e.get("reply"), "said": e.get("said"),
                        "dropped": e.get("dropped"), "error": e.get("error")}
                       for e in res["events"] if e.get("kind") == "hazard_watch"],
+            **extra,
         }
         report_path.write_text(json.dumps(report, indent=2))   # after every scenario
         print(("  ✔ PASS" if not fails else "  ✘ FAIL") + f"  ({res['seconds']} s)", flush=True)

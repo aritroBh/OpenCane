@@ -242,22 +242,23 @@ public enum SpokenPhrases {
     /// instead, so this is deliberately not in `shellLines` (`replacedWaitingLinesAreNotPrefetched`).
     public static let describerBusyText = "Still describing the previous scene."
 
-    /// Every fixed line the voice shell can speak, deduplicated, in the order it is heard: the short
-    /// launch menu, the first-launch menu and help, then each item's confirmation, the cue-level
+    /// Every fixed line the voice shell can speak, deduplicated, in the order it is heard: help (the
+    /// launch menus are gone, Step 67 — not prefetched, `replacedWaitingLinesAreNotPrefetched`), then
+    /// each item's confirmation, the cue-level
     /// lines, the timeout ("No answer."), the emergency flow, the number-free status clauses, and the
-    /// shell's odd ones (the second empty press, "Starting.", the head-cover notice). Step 65 removed
+    /// shell's odd ones (the second empty press and "Starting."). Step 65 removed
     /// "One moment." and "Still describing the previous scene." (now `Earcon.thinking` / `.busy`). `AppModel.commonLines` appends it, so every one is prefetched in the
     /// natural voice. Built from the production constants, never retyped; the per-profile
     /// emergency prompt is prefetched separately (it has a name and number in it).
     /// Pinned by `everyLineTheShellCanSpeakIsPrefetched`, `shellLinesStayInsideTheirBudget`.
     public static let shellLines: [String] = {
-        var lines = [VoiceMenu.shortMenuLine, VoiceMenu.menuLine, VoiceMenu.helpLine]
+        var lines = [VoiceMenu.helpLine]
         lines += VoiceMenu.Item.allCases.map(\.confirmationLine)
         lines += CueLevel.allCases.map(\.spokenLine)
         lines += [ConversationBudget.timeoutLine]
         lines += EmergencyConfirm.fixedLines
         lines += StatusSummary.fixedLines
-        lines += [notHeardLine, EarconPolicy.routeReadyLine, HeadCoverNotice.line]
+        lines += [notHeardLine, EarconPolicy.routeReadyLine]
         var seen = Set<String>()
         return lines.filter { seen.insert($0).inserted }
     }()

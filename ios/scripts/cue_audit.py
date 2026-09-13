@@ -25,6 +25,10 @@ It answers, from the log alone:
      head episode (onset; re-fire on 1.0 / 0.6 m ≥ 1.5 s apart; end after 2 s of trusted clear;
      "Head height." on the onset under a 4 s limiter and once more under 0.6 m) over the 2 Hz
      `lanes` records, beside the log's own head cues and lines.
+  7. Speech load (Step 68, `--speech-load`): lines and characters per minute of one route, by text,
+     from `speech_dispatch` first dispatches; and the same route replayed through the Step 68 rules
+     (`step68_replay`: GPSAnnouncer hysteresis, no headphone / watch / head-cover line at start, the
+     short intro and screen-lock line, an estimate of "Close." from the 2 Hz `lanes`).
   6. One voice? (Step 53) Which engine actually spoke each line — `speech_dispatch.engine`, a `race`
      settled by its `speech_engine` record — and how often the voice flipped: per minute over the
      whole walk, and separately inside route speech (consecutive `nav` lines while a route runs),
@@ -35,6 +39,7 @@ Run from ios/:
     scripts/cue_audit.py --pull              # copy the newest log off the phone in local.mk first
     scripts/cue_audit.py --json log.jsonl    # machine-readable
     scripts/cue_audit.py --selftest          # the fixture checks below (no device, no simulator)
+    scripts/cue_audit.py --speech-load log.jsonl   # Step 68: route speech load, before vs the new rules
 
 The numbers it compares against (1.5 m head, 0.5 m signature gap, 3–8° tilt) are the app's current
 constants and the research hypotheses; if those move in CaneKitLogic, move them here too.
@@ -717,6 +722,7 @@ def selftest() -> None:
     no_routes = [r for r in voice if r["kind"] != "route"]
     assert engine_flips_inside_route_speech(no_routes) == "no route records", no_routes
     selftest_head()                                   # Step 51 / 52 (agent A)
+    selftest_speech_load()                            # Step 68
     print("cue_audit selftest: ok")
 
 
@@ -761,6 +767,238 @@ def selftest_head() -> None:
     assert head_gate_replay(sweep)["onsets"] == 2, head_gate_replay(sweep)
 
 
+# ---- Step 68: speech load and the "half the words" replay (pure; pinned by `selftest_speech_load`) ----
+
+# Mirrors of the Step 68 constants (CaneKitLogic `GPSAnnouncer`, `NavigationHealth`, `TileLevel`,
+# `CueSpeechPolicy.close`). ⚠ Keep in step with the Swift.
+# Review round Steps 67–68 retuned the announcer: weak 10 s after the bad onset, again after 60 s,
+# back at most once per 120 s (pending meanwhile), a fix older than 12 s is bad (dated from the 5 s
+# guidance pause), no fix is bad from 10 s after the route start.
+GPS_WEAK_AFTER_S = 10.0       # GPSAnnouncer.weakAfter
+GPS_BACK_AFTER_S = 10.0       # GPSAnnouncer.backAfter
+GPS_WEAK_REPEAT_S = 60.0      # GPSAnnouncer.weakRepeatInterval
+GPS_BACK_INTERVAL_S = 120.0   # GPSAnnouncer.backInterval
+GPS_ANNOUNCER_MAX_FIX_AGE_S = 12.0  # GPSAnnouncer.maxFixAge
+GPS_NO_FIX_GRACE_S = 10.0     # GPSAnnouncer.noFixGrace
+GPS_MAX_FIX_AGE_S = 5.0       # NavigationHealth.maxFixAge (the engine's guidance pause)
+GPS_MAX_ACCURACY_M = 20.0     # GPSAnnouncer.maxAccuracyM = NavigationEngine.veerMaxAccuracy
+CLOSE_RED_BELOW_M = 0.7       # TileLevel.urgent
+CLOSE_CLEAR_S = 3.0           # CueSpeechPolicy.closeClearSeconds
+CLOSE_INTERVAL_S = 4.0        # CueSpeechPolicy.closeInterval
+# Lines Step 68 no longer speaks at route start, and the two replaced wordings.
+STEP68_DROPPED = {"GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
+                  "No headphones. Beacon paused until AirPods connect.",
+                  "Watch not reachable. Open OpenCane on the watch.",
+                  "Camera too steep for head-height cover. Torso obstacles only."}
+STEP68_REWORDED = {"Screen locked. Obstacle warnings are paused until you unlock.":
+                   "Screen locked. Obstacle warnings off."}
+
+
+# The route window of a log: from the first route-start sign (`route_readiness` / `sensor_mode`
+# route_start_reserved / `route` start — so "Starting." is inside) to the route's stop / arrival,
+# else the last record. None when the log has no route. Caller: `speech_load`, `step68_replay`.
+def route_window(records: list[dict]) -> tuple[float, float] | None:
+    ts = lambda pred: [r["t"] for r in records if isinstance(r.get("t"), (int, float)) and pred(r)]
+    starts = ts(lambda r: r.get("kind") == "route" and r.get("action") == "start")
+    if not starts:
+        return None
+    pre = ts(lambda r: (r.get("kind") == "route_readiness" or
+                        (r.get("kind") == "sensor_mode" and r.get("action") == "route_start_reserved"))
+             and r["t"] <= starts[0])
+    t0 = min(pre + [starts[0]])
+    ends = ts(lambda r: r["t"] > starts[0] and (r.get("kind") == "arrived" or
+                                                (r.get("kind") == "route" and r.get("action") in ("stop", "restart"))))
+    t1 = ends[0] if ends else max(ts(lambda r: True))
+    return t0, t1
+
+
+# What was said in [t0, t1]: first dispatches only (a resumed replay is the same line). Caller: both below.
+def dispatched(records: list[dict], t0: float, t1: float) -> list[tuple[float, str]]:
+    return sorted((r["t"], r.get("text", "")) for r in records
+                  if r.get("kind") == "speech_dispatch" and isinstance(r.get("t"), (int, float))
+                  and t0 <= r["t"] <= t1 and not r.get("replays"))
+
+
+# Lines / characters per minute and a by-text table (count, characters), largest first.
+def load_of(lines: list[tuple[float, str]], minutes: float) -> dict:
+    by: dict[str, list[int]] = {}
+    for _, text in lines:
+        by.setdefault(text, [0, 0])
+        by[text][0] += 1
+        by[text][1] += len(text)
+    chars = sum(len(text) for _, text in lines)
+    return {"lines": len(lines), "chars": chars, "minutes": round(minutes, 2),
+            "lines_per_min": round(len(lines) / minutes, 1), "chars_per_min": round(chars / minutes, 1),
+            "by_text": sorted(([t, n, c] for t, (n, c) in by.items()), key=lambda x: -x[2])}
+
+
+def speech_load(records: list[dict]) -> dict | str:
+    """Step 68: the route's speech load as dispatched (lines, characters, per minute, by text)."""
+    w = route_window(records)
+    if not w:
+        return "no route start in this log"
+    minutes = max((w[1] - w[0]) / 60.0, 1e-9)
+    return {"window_s": [round(w[0], 1), round(w[1], 1)], **load_of(dispatched(records, *w), minutes)}
+
+
+# Python `WalkingIntro.destinationName` + `routeStarted`: "Route started. <name>. First: <say>" →
+# "Route to <destination>. <say>". Other text is returned unchanged.
+def step68_intro(text: str) -> str:
+    m = re.match(r"^Route started\. (.*?)\. First: ?(.*)$", text)
+    if not m:
+        return text
+    name, first = m.group(1).strip(), m.group(2).strip()
+    if name.startswith("To "):
+        dest = name[3:]
+    elif " to " in name:
+        dest = name.rsplit(" to ", 1)[1]
+    else:
+        dest = name
+    dest = dest.strip().rstrip(".") or name
+    return f"Route to {dest}." + (f" {first}" if first else "")
+
+
+# Python `GPSAnnouncer` fed like `NavigationEngine.announceGPS` at the 10 Hz ticker over [t0, t1]
+# (outdoors assumed; t0 = the route start). ⚠ Mirrors `GPSAnnouncer.badOnset` / `update(badOnset:…)`.
+def gps_bad_onset(last: tuple[float, float] | None, t0: float, now: float) -> float | None:
+    if last is None:
+        return t0 + GPS_NO_FIX_GRACE_S if now >= t0 + GPS_NO_FIX_GRACE_S else None
+    age = now - last[0]
+    if age < 0:
+        return now
+    if age > GPS_ANNOUNCER_MAX_FIX_AGE_S:
+        return last[0] + GPS_MAX_FIX_AGE_S
+    if not 0 <= last[1] <= GPS_MAX_ACCURACY_M:
+        return now
+    return None
+
+
+def gps_announcer_replay(records: list[dict], t0: float, t1: float) -> list[tuple[float, str]]:
+    fixes = sorted((r["t"], r.get("acc", -1)) for r in records
+                   if r.get("kind") == "gps" and isinstance(r.get("t"), (int, float)) and r["t"] >= t0)
+    out, i, last = [], 0, None
+    bad_since = good_since = last_weak = last_back = None
+    weak = False
+    step = 0
+    while True:
+        now = round(t0 + step * 0.1, 3)
+        if now > t1:
+            break
+        while i < len(fixes) and fixes[i][0] <= now:
+            last = fixes[i]
+            i += 1
+        onset = gps_bad_onset(last, t0, now)
+        if onset is not None:
+            good_since = None
+            bad_since = onset if bad_since is None else min(bad_since, onset)
+            if (not weak and now - bad_since >= GPS_WEAK_AFTER_S
+                    and (last_weak is None or now - last_weak >= GPS_WEAK_REPEAT_S)):
+                weak, last_weak = True, now
+                out.append((now, "GPS weak."))
+        else:
+            bad_since = None
+            good_since = now if good_since is None else good_since
+            if (weak and now - good_since >= GPS_BACK_AFTER_S
+                    and (last_back is None or now - last_back >= GPS_BACK_INTERVAL_S)):
+                weak, last_back = False, now
+                out.append((now, "GPS back."))
+        step += 1
+    return out
+
+
+# Estimate of the Step 68 "Close." lines from the 2 Hz `lanes` records (the app sees every 30 Hz
+# frame, so this can miss a red moment shorter than 0.5 s): centre torso < 0.7 m, trusted, covered;
+# a frame with any `held` cell may continue an episode but not start one (the log does not say which
+# cell was held).
+def close_replay(records: list[dict], t0: float, t1: float) -> list[tuple[float, str]]:
+    out, episode, clear_since, last = [], False, None, None
+    for r in sorted((r for r in records if r.get("kind") == "lanes" and isinstance(r.get("t"), (int, float))
+                     and t0 <= r["t"] <= t1), key=lambda r: r["t"]):
+        torso, cover = r.get("torso") or [], r.get("torso_cover") or [True, True, True]
+        if not r.get("trusted") or len(torso) < 2 or not cover[1]:
+            continue
+        d = torso[1]
+        red = isinstance(d, (int, float)) and 0 <= d < CLOSE_RED_BELOW_M
+        if red:
+            clear_since = None
+            if episode or r.get("held"):
+                continue
+            if last is not None and r["t"] - last < CLOSE_INTERVAL_S:
+                continue
+            episode, last = True, r["t"]
+            out.append((r["t"], "Close."))
+        elif episode:
+            clear_since = r["t"] if clear_since is None else clear_since
+            if r["t"] - clear_since >= CLOSE_CLEAR_S:
+                episode, clear_since = False, None
+    return out
+
+
+def step68_replay(records: list[dict]) -> dict | str:
+    """Step 68: the route as dispatched vs replayed through the new rules; `chars_per_min_change_pct`."""
+    w = route_window(records)
+    if not w:
+        return "no route start in this log"
+    minutes = max((w[1] - w[0]) / 60.0, 1e-9)
+    before = dispatched(records, *w)
+    kept = [(t, STEP68_REWORDED.get(x, step68_intro(x))) for t, x in before if x not in STEP68_DROPPED]
+    gps = gps_announcer_replay(records, *w)
+    close = close_replay(records, *w)
+    after = sorted(kept + gps + close)
+    b, a = load_of(before, minutes), load_of(after, minutes)
+    pct = lambda x, y: round(100.0 * (y - x) / x, 1) if x else None
+    return {"window_s": [round(w[0], 1), round(w[1], 1)], "before": b, "after": a,
+            "gps_lines_after": len(gps), "close_lines_estimated": len(close),
+            "chars_per_min_change_pct": pct(b["chars_per_min"], a["chars_per_min"]),
+            "lines_per_min_change_pct": pct(b["lines_per_min"], a["lines_per_min"])}
+
+
+# Plain-text rendering of `step68_replay` for `--speech-load`.
+def human_speech_load(rep: dict | str) -> str:
+    if isinstance(rep, str):
+        return rep
+    rows = [f"route window {rep['window_s'][0]}–{rep['window_s'][1]} s ({rep['before']['minutes']} min)"]
+    for label in ("before", "after"):
+        x = rep[label]
+        rows.append(f"{label}: {x['lines']} lines, {x['chars']} characters; "
+                    f"{x['lines_per_min']} lines/min, {x['chars_per_min']} characters/min")
+        rows += [f"    {n:>3} × {c:>5} ch  {t}" for t, n, c in x["by_text"]]
+    rows.append(f"characters/min {rep['chars_per_min_change_pct']} %, lines/min {rep['lines_per_min_change_pct']} %; "
+                f"GPS lines after {rep['gps_lines_after']}, \"Close.\" estimated {rep['close_lines_estimated']}")
+    return "\n".join(rows)
+
+
+# Fixture for the Step 68 section: a 120 s route whose GPS goes stale every 6 s (flap), the old start
+# chatter, a red approach; asserts the replay drops the chatter, keeps one "Close." and no GPS line.
+def selftest_speech_load() -> None:
+    recs = [{"t": 0.0, "kind": "sensor_mode", "action": "route_start_reserved"},
+            {"t": 0.5, "kind": "speech_dispatch", "text": "Starting.", "priority": "nav"},
+            {"t": 1.0, "kind": "route", "action": "start"},
+            {"t": 1.5, "kind": "speech_dispatch", "priority": "nav",
+             "text": "Route started. ISR Townsend Hall to CIF. First: Leave Townsend Hall."},
+            {"t": 3.0, "kind": "speech_dispatch", "priority": "nav", "text": "No headphones. Beacon paused until AirPods connect."},
+            {"t": 3.5, "kind": "speech_dispatch", "priority": "nav", "text": "Screen locked. Obstacle warnings are paused until you unlock."},
+            {"t": 3.6, "kind": "speech_dispatch", "priority": "nav", "text": "Screen locked. Obstacle warnings are paused until you unlock.", "replays": 1}]
+    for k in range(20):
+        recs.append({"t": 1.0 + 6 * k, "kind": "gps", "acc": 7.0})
+        recs.append({"t": 7.0 + 6 * k, "kind": "speech_dispatch", "priority": "nav",
+                     "text": "GPS weak. Waypoint cues paused until it recovers." if k % 2 == 0 else "GPS back."})
+    for k, d in enumerate([1.5, 1.0, 0.6, 0.5, 0.4, 0.9, 0.6]):     # one red episode (0.9 for 0.5 s only)
+        recs.append({"t": 50.0 + 0.5 * k, "kind": "lanes", "trusted": True, "torso": [-1, d, -1], "held": 0})
+    recs.append({"t": 121.0, "kind": "route", "action": "stop"})
+    load = speech_load(recs)
+    assert load["lines"] == 24 and load["window_s"] == [0.0, 121.0], load     # the replay is not a line
+    rep = step68_replay(recs)
+    texts = [t for t, _, _ in rep["after"]["by_text"]]
+    assert rep["gps_lines_after"] == 0 and rep["close_lines_estimated"] == 1, rep
+    assert "Route to CIF. Leave Townsend Hall." in texts and "Screen locked. Obstacle warnings off." in texts, rep
+    assert not any(t.startswith(("GPS", "No headphones")) for t in texts), rep
+    assert rep["chars_per_min_change_pct"] < -50, rep
+    assert step68_intro("Route started. To Grainger Engineering Library. First: Go.") == \
+        "Route to Grainger Engineering Library. Go."
+    assert speech_load([{"t": 0, "kind": "session"}]) == "no route start in this log"
+
+
 # CLI entry: `log` path, `--pull`, `--json`, `--selftest` (selftest wins and ignores the rest).
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -768,6 +1006,8 @@ def main() -> None:
     ap.add_argument("--pull", action="store_true", help="copy the newest log off the phone first")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--speech-load", action="store_true",
+                    help="Step 68: route speech load, as dispatched and replayed through the new rules")
     a = ap.parse_args()
     if a.selftest:
         selftest()
@@ -775,6 +1015,10 @@ def main() -> None:
     path = pull_latest() if a.pull else a.log
     if not path:
         ap.error("give a log path, --pull or --selftest")
+    if a.speech_load:
+        rep = step68_replay(load(path))
+        print(json.dumps(rep, indent=2) if a.json else human_speech_load(rep))
+        return
     rep = audit(load(path))
     print(json.dumps(rep, indent=2) if a.json else human(rep))
 

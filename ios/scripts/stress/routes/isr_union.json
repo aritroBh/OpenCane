@@ -1,0 +1,131 @@
+{
+ "name": "To the Illini Union",
+ "source": "OSRM foot routing over OpenStreetMap (ODbL), routing.openstreetmap.de; built by ios/scripts/stress/build_routes.py (RouteBuilder mirror); not walked",
+ "waypoints": [
+  {
+   "id": 1,
+   "lat": 40.109294,
+   "lon": -88.221354,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 269.3
+  },
+  {
+   "id": 2,
+   "lat": 40.109287,
+   "lon": -88.222071,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 187.7
+  },
+  {
+   "id": 3,
+   "lat": 40.109128,
+   "lon": -88.222099,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 269.4
+  },
+  {
+   "id": 4,
+   "lat": 40.109113,
+   "lon": -88.22403,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 179.2
+  },
+  {
+   "id": 5,
+   "lat": 40.109056,
+   "lon": -88.224029,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 246.7
+  },
+  {
+   "id": 6,
+   "lat": 40.108955,
+   "lon": -88.224335,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 269.2
+  },
+  {
+   "id": 7,
+   "lat": 40.108941,
+   "lon": -88.225673,
+   "radius_m": 15,
+   "say": "Turn slight right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 280.9
+  },
+  {
+   "id": 8,
+   "lat": 40.109034,
+   "lon": -88.226307,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 359.6
+  },
+  {
+   "id": 9,
+   "lat": 40.109454,
+   "lon": -88.226311,
+   "radius_m": 15,
+   "say": "Turn sharp left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 247.8
+  },
+  {
+   "id": 10,
+   "lat": 40.109397,
+   "lon": -88.226494,
+   "radius_m": 15,
+   "say": "Turn slight right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 270.0
+  },
+  {
+   "id": 11,
+   "lat": 40.109397,
+   "lon": -88.226637,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 344.9
+  },
+  {
+   "id": 12,
+   "lat": 40.109988,
+   "lon": -88.226846,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 247.7
+  },
+  {
+   "id": 13,
+   "lat": 40.109867,
+   "lon": -88.227232,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 177.1
+  },
+  {
+   "id": 14,
+   "lat": 40.109852,
+   "lon": -88.227231,
+   "radius_m": 20,
+   "say": "Arrived at the Illini Union.",
+   "crossing": false
+  }
+ ]
+}
