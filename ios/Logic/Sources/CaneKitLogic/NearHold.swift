@@ -88,18 +88,22 @@ public struct NearHold: Sendable, Equatable {
             lastMeasured = Array(repeating: nil, count: 6)
             return out
         }
-        // Cold start: no cell has history and most of the frame is blind → caution, not silence.
+        // Cold start: no cell has history and most of the covered frame is blind → caution, not silence.
         let noHistory = lastMeasured.allSatisfy { $0 == nil }
         if noHistory {
             var blindCells: [(Int, Int)] = []
             for band in 0..<2 {
                 for lane in 0..<3 {
+                    let covered = band == 0 ? grid.headCoverage[lane] : grid.torsoCoverage[lane]
+                    guard covered else { continue }
                     let value = band == 0 ? grid.head[lane] : grid.torso[lane]
                     let blind = band == 0 ? grid.headBlind[lane] : grid.torsoBlind[lane]
                     if !value.isFinite, blind >= config.coldStartBlindFraction { blindCells.append((band, lane)) }
                 }
             }
-            if blindCells.count >= config.coldStartMinCells {
+            let coveredCells = grid.headCoverage.filter { $0 }.count + grid.torsoCoverage.filter { $0 }.count
+            let needed = min(config.coldStartMinCells, coveredCells)
+            if needed > 0, blindCells.count >= needed {
                 for (band, lane) in blindCells {
                     if band == 0 { out.head[lane] = config.coldStartM; out.headHeld[lane] = true }
                     else { out.torso[lane] = config.coldStartM; out.torsoHeld[lane] = true }
@@ -109,6 +113,8 @@ public struct NearHold: Sendable, Equatable {
         }
         for band in 0..<2 {
             for lane in 0..<3 {
+                let covered = band == 0 ? grid.headCoverage[lane] : grid.torsoCoverage[lane]
+                guard covered else { continue }
                 let i = band * 3 + lane
                 let value = band == 0 ? grid.head[lane] : grid.torso[lane]
                 let blind = band == 0 ? grid.headBlind[lane] : grid.torsoBlind[lane]

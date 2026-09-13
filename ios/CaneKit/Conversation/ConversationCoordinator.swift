@@ -17,16 +17,32 @@
 //    4. Cloud model: `ConversationPrompt` + a camera frame → `ConversationResponseParser` → at most
 //       one tool call (`executeTool`) + one spoken sentence.
 //  Every answer is spoken at `.scene` (the lowest band: route, obstacle and safety lines always
-//  pre-empt it) with `immediate: true` (Step 31: novel text never hits the natural-voice cache, so
-//  it is spoken in the system voice at once instead of waiting on a TTS fetch). Effects that
+//  pre-empt it) in the one natural voice (Step 54, owner decision 2026-09-13): a cached answer plays
+//  at once, a novel one races the ElevenLabs fetch for at most 2.5 s (`VoiceEngineChoice`), and the
+//  system voice speaks only when that fetch fails. Step 31's `immediate: true` is gone. Effects that
 //  announce themselves (`setHapticsSilenced`, `setOption`, `stopRoute`, `navigate(to:)`) are not
 //  echoed (Step 23 Muse rounds: double-speak). Every turn is logged: `conv_turn` / `conv_error` /
 //  `marker_dropped`.
 //
+//  Voice shell (Steps 56, 57, 59):
+//    · Rule 0 of the fast path is the eight-word menu (`VoiceMenu`): route, where am I, describe,
+//      status, repeat, quiet, help, emergency, their digits, next / standard / detailed, yes / no.
+//      Each maps to an existing `AppModel` entry point in `executeAction`; `conv_turn.ivr` names the
+//      item. "route" alone is the CIF demo route; "take me to …" reaches any place.
+//    · Latest wins, with a budget (`ConversationBudget`): every new query cancels a cloud turn still
+//      in flight (that turn logs `conv_turn {superseded: true}` and never speaks); a cloud turn says
+//      "One moment." at 1.5 s and gives up at 4 s ("That is taking too long…", `conv_error
+//      {timeout: true}`). A stale completion never speaks. The old `isProcessing` drop is gone.
+//    · Emergency is two utterances (`EmergencyConfirm`): "emergency" speaks the prompt with the
+//      contact's name and number (`.nav`, ttl 8); only "yes" inside 8 s opens `tel:` (the trip log
+//      is flushed first, the app leaves the foreground). "no" or silence → "Emergency canceled."
+//      Logs `emergency {action, contact}` — the contact's name, never the number.
+//
 //  Owner: `AppModel.conversation`, built in `AppModel.init` with the same `VLMClient` as the
 //  describer. Callers: `AppModel`'s `voiceInput.onTranscriptionFinalized` (push-to-talk, head nod)
-//  and `AppModel.handleSpokenQuery` (`TalkToOpenCaneIntent` with a filled query). GuideCard shows
-//  `isProcessing` ("Thinking…") and `lastResponse`.
+//  and `AppModel.handleSpokenQuery` (`TalkToOpenCaneIntent` with a filled query). `VoiceTile` shows
+//  `isProcessing` ("Thinking…") and `lastResponse`; the voice shell reads `awaitingEmergencyAnswer`
+//  to give the emergency prompt its answer window.
 //
 //  Threading / isolation:
 //    · Main actor isolated throughout (`@MainActor @Observable`).
@@ -36,16 +52,18 @@
 //      query may outlive a torn-down model across the network await (Step 23 Muse finding 3).
 //
 //  Tests: the pure halves are in CaneKitLogic (`ConversationLogicTests`: classifier, parser,
-//  history ring, `sceneQuestionDetection`, `walkMarkerJSONRoundTrip`; `NodToTalkFastPathTests`).
+//  history ring, `sceneQuestionDetection`, `walkMarkerJSONRoundTrip`, `ivrRuleRunsBeforeEverythingElse`;
+//  `NodToTalkFastPathTests`; `VoiceMenuTests`; `ConversationBudgetTests`; `EmergencyConfirmTests`).
 //  This class has no unit test (app target) — device test in CHANGELOG Step 23.
 //
 
 import CaneKitLogic
 import Foundation
 import Observation
+import UIKit
 
 /// Orchestrates user queries, fast-path shortcuts, LLM tool calling, and action execution.
-/// One instance (`AppModel.conversation`); main actor; one query at a time (`isProcessing`).
+/// One instance (`AppModel.conversation`); main actor; the latest query wins (`ConversationBudget`).
 @MainActor
 @Observable
 final class ConversationCoordinator {
@@ -60,15 +78,37 @@ final class ConversationCoordinator {
     var markers: [WalkMarker] { store.markers }
     /// Documents/posts/posts.json; both marker paths go through `dropPost(name:)`.
     let store = PostStore()
-    /// True while `handleQuery` runs (including the cloud round trip). A second query meanwhile is
-    /// dropped silently by `handleQuery`'s guard — the voice path speaks "Still working on your last
-    /// question." in AppModel; the Siri / Shortcuts path (`handleSpokenQuery`) says nothing.
-    /// GuideCard titles the Talk button "Thinking…" from it.
+    /// True while the latest `handleQuery` runs (including its cloud round trip). A newer query no
+    /// longer waits or is dropped: it supersedes the older one (Step 57), and only the latest call
+    /// clears this flag. `VoiceTile` titles the mic "Thinking…" from it.
     private(set) var isProcessing: Bool = false
     /// The last answer text (fast path, scene acknowledgement, cloud reply or error line), shown
     /// under the Talk button. For an action that spoke for itself it is the coordinator's own
     /// summary ("Routing to X."), which may differ from what was actually spoken.
     private(set) var lastResponse: String?
+
+    /// The cloud turn's filler / timeout clock and the latest-wins ledger (Step 57). Pure;
+    /// `ConversationBudgetTests`.
+    private var budget = ConversationBudget()
+    /// The gate between "emergency" and a phone call (Step 59). Pure; `EmergencyConfirmTests`.
+    private var emergency = EmergencyConfirm()
+    /// The in-flight cloud turn; cancelled by a newer query or by the budget's timeout.
+    private var cloudTask: Task<Void, Never>?
+    /// The 0.25 s ticker that drives `budget.tick` for the in-flight cloud turn.
+    private var tickerTask: Task<Void, Never>?
+    /// Turn ids the budget timed out, so their cancelled task logs `timed_out`, not `superseded`.
+    /// An id is removed when its `conv_turn` is written.
+    private var timedOutTurns = Set<Int>()
+    /// Turn ids that spoke "One moment." (`conv_turn.filler_spoken`). Removed when logged.
+    private var fillerTurns = Set<Int>()
+    /// Bumped by every `handleQuery`; only the call holding the latest value clears `isProcessing`.
+    private var queryGeneration = 0
+    /// Fires once, just after the emergency window, to speak "Emergency canceled." when no answer came.
+    private var emergencyExpiryTask: Task<Void, Never>?
+
+    /// True while an emergency prompt waits for its yes / no (inside `EmergencyConfirm.confirmWindow`).
+    /// For the voice shell's follow-up listen (`VoiceShellPolicy.followUp(answerWasQuestion:)`).
+    var awaitingEmergencyAnswer: Bool { emergency.isPending(now: Self.clock()) }
 
     // Minimal 1x1 valid JPEG fallback when no camera frame is available
     /// Sent with a cloud query when `DepthFrameProcessor.jpegSnapshot()` returns nil (no retained
@@ -110,19 +150,22 @@ final class ConversationCoordinator {
 
     /// Main entry point for spoken or typed conversational queries.
     /// Takes one of the four paths in the file header and always leaves one `history` turn,
-    /// `lastResponse` and a trip-log record behind — except when it returns early: a query while
-    /// `isProcessing`, no `appModel`, or a blank query (nothing spoken, nothing logged).
+    /// `lastResponse` and a trip-log record behind — except when it returns early: no `appModel`, or
+    /// a blank query (nothing spoken, nothing logged). A cloud turn still in flight is superseded
+    /// first (latest wins, Step 57), whichever path the new query takes.
     /// - Parameter rawQuery: the recogniser's transcript or the intent's text; trimmed here.
-    /// Speech TTLs: fast path and no-cloud line 12 s, cloud answer 15 s, error 8 s (all `.scene`,
-    /// `immediate`).
+    /// Speech TTLs: fast path and no-cloud line 12 s, cloud answer 15 s, error 8 s, filler 3 s,
+    /// timeout 8 s (all `.scene`, one natural voice — Step 54).
     func handleQuery(_ rawQuery: String) async {
-        guard !isProcessing else { return }
         guard let model = appModel else { return }
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
 
+        supersedeCloudTurn()
+        queryGeneration += 1
+        let generation = queryGeneration
         isProcessing = true
-        defer { isProcessing = false }
+        defer { if generation == queryGeneration { isProcessing = false } }
 
         let now = Date().timeIntervalSince1970
         var turn = ConversationTurn(
@@ -131,7 +174,7 @@ final class ConversationCoordinator {
             location: model.location.fix?.coordinate
         )
 
-        // 1. Check Deterministic Fast-Path (<1 ms, 0 tokens)
+        // 1. Check Deterministic Fast-Path (<1 ms, 0 tokens); rule 0 is the voice menu.
         if let immediateAction = FastPathIntentClassifier.classify(query: query) {
             let (response, alreadySpoken) = executeAction(immediateAction)
             turn.agentResponse = response
@@ -139,12 +182,14 @@ final class ConversationCoordinator {
             lastResponse = response
 
             // Only speak if the underlying effect did not already announce itself (e.g. setHapticsSilenced, stopRoute).
-            // `immediate`: conversational answers are novel text, so a TTS fetch would stall
-            // every answer on the network — system voice now, natural voice prefetched.
+            // One voice (Step 54): cached → natural at once, else the 2.5 s race.
             if !alreadySpoken {
-                model.speech.say(response, .scene, ttl: 12, immediate: true)
+                model.speech.say(response, .scene, ttl: 12)
             }
-            model.logger.event("conv_turn", ["query": query, "fast_path": true, "response": response, "already_spoken": alreadySpoken])
+            var fields: [String: Any] = ["query": query, "fast_path": true, "response": response,
+                                         "already_spoken": alreadySpoken]
+            if let item = VoiceMenu.match(query) { fields["ivr"] = item.rawValue }
+            model.logger.event("conv_turn", fields)
             return
         }
 
@@ -155,7 +200,7 @@ final class ConversationCoordinator {
         if FastPathIntentClassifier.isSceneQuestion(query) {
             let accepted = model.askAboutScene(query)
             turn.agentResponse = accepted ? "Checking the scene ahead."
-                                          : "Still describing the previous scene."
+                                          : SpokenPhrases.describerBusyLine
             history.append(turn: turn)
             lastResponse = turn.agentResponse
             model.logger.event("conv_turn", [
@@ -172,7 +217,7 @@ final class ConversationCoordinator {
         //    fast path can answer offline. Pinned by `sceneQuestionDetection` (ConversationLogicTests).
         guard let targetClient = client.cloudPrimary else {
             let response = "I need a network model for that. Try asking about the scene, battery, GPS, or your route."
-            model.speech.say(response, .scene, ttl: 12, immediate: true)
+            model.speech.say(response, .scene, ttl: 12)
             turn.agentResponse = response
             history.append(turn: turn)
             lastResponse = response
@@ -184,17 +229,56 @@ final class ConversationCoordinator {
         let context = buildContext()
         let prompt = ConversationPrompt.buildUserPrompt(query: query, context: context, history: history)
 
-        // 4. Dispatch to the cloud LLM
-        let tStart = Date()
+        // 4. Dispatch to the cloud LLM under the budget: filler at 1.5 s, timeout at 4 s (Step 57).
+        let id = budget.begin(now: Self.clock())
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runCloudTurn(id: id, query: query, prompt: prompt, client: targetClient, turn: turn)
+        }
+        cloudTask = task
+        tickerTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runBudgetTicker(id: id, query: query, turn: turn, task: task)
+        }
+        await task.value
+    }
+
+    /// Latest wins: drop the cloud turn in flight, if any. Its task sees the cancellation (or a
+    /// refused `budget.finished`) and logs `conv_turn {superseded: true}` without speaking.
+    private func supersedeCloudTurn() {
+        budget.cancel()
+        cloudTask?.cancel()
+        tickerTask?.cancel()
+        cloudTask = nil
+        tickerTask = nil
+    }
+
+    /// One cloud turn: frame + prompt → reply → at most one tool → one spoken sentence. Speaks and
+    /// logs only while `budget.finished(id:)` says this is still the live turn.
+    /// - Parameters:
+    ///   - id: the budget's turn id.
+    ///   - query: the trimmed query (for the log).
+    ///   - prompt: the built cloud prompt.
+    ///   - targetClient: `client.cloudPrimary`.
+    ///   - turn: the history turn begun in `handleQuery`.
+    private func runCloudTurn(id: Int, query: String, prompt: String, client targetClient: any VLMClient,
+                              turn: ConversationTurn) async {
+        guard let model = appModel else { return }
+        var turn = turn
+        let started = Self.clock()
         do {
             // Encode JPEG concurrently off main thread to prevent UI stalls
             let jpeg = await Task.detached { [weak processor = model.depth.processor] in
                 processor?.jpegSnapshot()
             }.value ?? Self.minimalJPEG
-
+            try Task.checkCancellation()
             let rawReply = try await targetClient.describe(jpeg: jpeg, prompt: prompt)
-            let latency = Int(Date().timeIntervalSince(tStart) * 1000)
-
+            guard budget.finished(id: id) else {
+                logStaleTurn(id: id, query: query, started: started)
+                return
+            }
+            tickerTask?.cancel()
+            let latency = Self.ms(since: started)
             let parsed = ConversationResponseParser.parse(rawText: rawReply)
 
             // 5. Execute tool call if requested by model
@@ -209,27 +293,82 @@ final class ConversationCoordinator {
             history.append(turn: turn)
             lastResponse = parsed.spokenResponse
 
-            // Spoken at .scene priority so obstacle warnings always take priority (skip if tool already spoke).
-            // `immediate`: the reply is novel text, so skip the TTS fetch wait (see `speakNow`).
             if !toolHandledSpeech {
-                model.speech.say(parsed.spokenResponse, .scene, ttl: 15, immediate: true)
+                model.speech.say(parsed.spokenResponse, .scene, ttl: 15)
             }
             model.logger.event("conv_turn", [
                 "query": query,
                 "fast_path": false,
                 "cloud": true,
                 "response": parsed.spokenResponse,
-                "latency_ms": latency
+                "latency_ms": latency,
+                "budget_ms": latency,
+                "filler_spoken": fillerTurns.remove(id) != nil,
+                "superseded": false,
+                "timed_out": false
             ])
         } catch {
+            guard budget.finished(id: id) else {
+                logStaleTurn(id: id, query: query, started: started)
+                return
+            }
+            tickerTask?.cancel()
             let fallback = "I could not process that request right now."
             turn.agentResponse = fallback
             history.append(turn: turn)
             lastResponse = fallback
-            model.speech.say(fallback, .scene, ttl: 8, immediate: true)
-            model.logger.event("conv_error", ["query": query, "error": error.localizedDescription])
+            model.speech.say(fallback, .scene, ttl: 8)
+            model.logger.event("conv_error", ["query": query, "error": error.localizedDescription,
+                                              "budget_ms": Self.ms(since: started),
+                                              "filler_spoken": fillerTurns.remove(id) != nil])
         }
     }
+
+    /// Drives the budget for turn `id` every `UtteranceEndDetector.checkInterval` (0.25 s): speaks
+    /// "One moment." once at 1.5 s, and at 4 s cancels `task`, speaks the timeout line and logs
+    /// `conv_error {timeout: true}`. Exits as soon as the turn is no longer the live one.
+    private func runBudgetTicker(id: Int, query: String, turn: ConversationTurn, task: Task<Void, Never>) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(UtteranceEndDetector.checkInterval))
+            guard !Task.isCancelled, budget.inFlightID == id, let model = appModel else { return }
+            switch budget.tick(now: Self.clock()) {
+            case .none:
+                continue
+            case .speakFiller:
+                fillerTurns.insert(id)
+                model.speech.say(ConversationBudget.fillerLine, .scene, ttl: 3)
+            case .timeout:
+                timedOutTurns.insert(id)
+                task.cancel()
+                var timedOut = turn
+                timedOut.agentResponse = ConversationBudget.timeoutLine
+                history.append(turn: timedOut)
+                lastResponse = ConversationBudget.timeoutLine
+                model.speech.say(ConversationBudget.timeoutLine, .scene, ttl: 8)
+                model.logger.event("conv_error", ["query": query, "error": "timeout", "timeout": true,
+                                                  "budget_ms": Int(ConversationBudget.budget * 1000)])
+                return
+            }
+        }
+    }
+
+    /// The `conv_turn` of a cloud turn that ended after it stopped being the live one: superseded by
+    /// a newer query, or timed out by the budget. Never speaks.
+    private func logStaleTurn(id: Int, query: String, started: Double) {
+        let timedOut = timedOutTurns.remove(id) != nil
+        appModel?.logger.event("conv_turn", [
+            "query": query, "fast_path": false, "cloud": true, "response": "",
+            "budget_ms": Self.ms(since: started),
+            "filler_spoken": fillerTurns.remove(id) != nil,
+            "superseded": !timedOut, "timed_out": timedOut
+        ])
+    }
+
+    /// Monotonic seconds for the budget and the emergency window (never the wall clock).
+    private static func clock() -> Double { ProcessInfo.processInfo.systemUptime }
+
+    /// Whole milliseconds since `started` on `clock()`.
+    private static func ms(since started: Double) -> Int { Int(((clock() - started) * 1000).rounded()) }
 
     // MARK: - Action & Tool Execution
 
@@ -316,8 +455,97 @@ final class ConversationCoordinator {
             model.askAboutScene(question)
             return ("Checking the scene ahead.", false)
 
+        // MARK: Voice shell (Step 56) — rule 0 of the fast path
+
+        case .startDefaultRoute:
+            // "route" while walking is a question about the route, never a restart of the demo.
+            if model.nav.isNavigating {
+                return (StatusSummary.routeLine(currentStatusFacts()), false)
+            }
+            model.startDemoRoute()
+            return (VoiceMenu.Item.route.confirmationLine, true) // the route intro / depth wait speaks
+
+        case .describeScene:
+            // `describeScene` speaks "Still describing the previous scene." itself when busy.
+            let accepted = model.describeScene(trigger: .voice)
+            return accepted ? (VoiceMenu.Item.describe.confirmationLine, false)
+                            : (SpokenPhrases.describerBusyLine, true)
+
+        case .speakStatus:
+            model.speakStatus() // speaks every clause at .scene
+            return (StatusSummary.sentence(currentStatusFacts()), true)
+
+        case .repeatInstruction:
+            model.repeatInstruction()
+            return (VoiceMenu.Item.repeatLast.confirmationLine, true)
+
+        case .nextWaypoint:
+            model.nextWaypoint() // advances (the next line speaks) or says "No route running."
+            return ("Next.", true)
+
+        case .setCueLevel(let level):
+            // An unchanged level speaks nothing from `cueLevel.didSet`, so the shell confirms it.
+            guard model.cueLevel != level else { return (level.spokenLine, false) }
+            model.setCueLevel(level)
+            return (level.spokenLine, true)
+
+        case .help:
+            return (VoiceMenu.helpLine, false)
+
+        // MARK: Emergency (Step 59) — two utterances, never one
+
+        case .emergency:
+            let profile = model.medicalProfile.profile
+            switch emergency.emergency(now: Self.clock(), name: profile.emergencyContactName,
+                                       number: profile.emergencyContactPhone) {
+            case .prompt(let line):
+                model.speech.say(line, .nav, ttl: EmergencyConfirm.confirmWindow)
+                model.logger.event("emergency", ["action": "prompted", "contact": profile.emergencyContactName])
+                scheduleEmergencyExpiry()
+                return (line, true)
+            default:
+                model.logger.event("emergency", ["action": "no_contact", "contact": profile.emergencyContactName])
+                return (EmergencyConfirm.noContactLine, false)
+            }
+
+        case .confirm(let yes):
+            let contact = model.medicalProfile.profile.emergencyContactName
+            switch emergency.confirm(yes, now: Self.clock()) {
+            case .call(let tel):
+                emergencyExpiryTask?.cancel()
+                guard let url = URL(string: "tel:\(tel)") else { return (EmergencyConfirm.nothingPendingLine, false) }
+                model.logger.event("emergency", ["action": "confirmed", "contact": contact])
+                model.speech.say(EmergencyConfirm.callingLine, .nav, ttl: 6)
+                // The call leaves the app; a log that ends mid-buffer would hide that it happened.
+                model.logger.flush()
+                UIApplication.shared.open(url)
+                return (EmergencyConfirm.callingLine, true)
+            case .cancel:
+                emergencyExpiryTask?.cancel()
+                model.logger.event("emergency", ["action": "declined", "contact": contact])
+                return (EmergencyConfirm.canceledLine, false)
+            default:
+                return (EmergencyConfirm.nothingPendingLine, false)
+            }
+
         case .speakImmediate(let msg):
             return (msg, false)
+        }
+    }
+
+    /// After an emergency prompt: once the window has passed with no yes / no, speak "Emergency
+    /// canceled." (`.nav`) and log `emergency {action: timeout}`. A new prompt restarts it; an answer
+    /// cancels it. The sleep runs 0.1 s past the window so `expire` sees it lapsed.
+    private func scheduleEmergencyExpiry() {
+        emergencyExpiryTask?.cancel()
+        emergencyExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(EmergencyConfirm.confirmWindow + 0.1))
+            guard let self, !Task.isCancelled, let model = self.appModel else { return }
+            if self.emergency.expire(now: Self.clock()) {
+                model.speech.say(EmergencyConfirm.canceledLine, .nav, ttl: 6)
+                model.logger.event("emergency", ["action": "timeout",
+                                                 "contact": model.medicalProfile.profile.emergencyContactName])
+            }
         }
     }
 

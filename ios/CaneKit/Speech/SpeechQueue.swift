@@ -11,10 +11,14 @@
 //  interrupter, so a crossing instruction cut by a head-height warning is never lost
 //  (docs/design.md §5: crossing / arrival / head are P0, obstacle names P1).
 //
-//  Two backends, one queue:
-//    · ElevenLabs (natural voice) when a key is configured — cached mp3s play instantly; a cache
-//      miss is fetched with a short timeout and falls back to…
+//  Two backends, one queue, one voice (Steps 53–54, owner decision 2026-09-13 "ElevenLabs is the one
+//  voice for everything"):
+//    · ElevenLabs (natural voice) when a key is configured and the Settings "Voice" picker is on
+//      Natural — cached mp3s play instantly; a cache miss races a fetch for 2.5 s and falls back to…
 //    · AVSpeechSynthesizer (system voice), always available offline.
+//  Which one speaks a line is decided once, before its `speech_dispatch` record, by CaneKitLogic
+//  `VoiceEngineChoice.decide` (tested); the dispatch record carries `engine` / `engine_reason`, and a
+//  race is resolved by a `speech_engine` record.
 //
 //  Audio: one `.playback` session with `.duckOthers`, mode `.default`, no Bluetooth options
 //  (adding HFP would drop AirPods to phone-call quality and flip routes — ios/README.md §2).
@@ -66,7 +70,16 @@
 //      new lines queue (deduplicated) but nothing plays; `.ended` — or a 15 s fallback when
 //      `.ended` never arrives — re-activates the session (2 retries, 1 s apart) and drains.
 //    · Warnings never wait for the network: `.obstacle` / `.safety` cache misses use the system
-//      voice immediately and prefetch the natural voice for next time.
+//      voice immediately and prefetch the natural voice for next time. Every other line — route
+//      lines, conversational answers, "One moment.", status clauses — takes cache → 2.5 s race →
+//      system voice only when the fetch fails or times out (Step 54; there is no `immediate` any more).
+//    · The breaker is session-sticky (`VoiceBreaker`, Step 54): a race that fails or times out opens
+//      it, and from then on every uncached line is the system voice at once — one flip per outage,
+//      never one per line. Time alone never closes it; only a background prefetch chunk that
+//      actually fetched something does. While open a probe re-runs the prefetch every 60 s.
+//    · Prefetch is additive (`VoicePrefetch.merge`, Step 54): a new batch goes to the front of one
+//      backlog that a single worker drains `VoicePrefetch.chunk` lines at a time; nothing cancels
+//      the batch that is running, so a warning's cache miss can never throw away a route's lines.
 //    · Watchdog: 6 s + characters / 6 after a line starts, a missing end callback is treated
 //      as the end so a stalled backend can never freeze the queue.
 //    · Load policy (Step 30 research, docs/auditory-load.md): a line tagged
@@ -76,8 +89,10 @@
 //      `.normal` and fails open.
 //    · Voice hold (Step 30, device report "instructions kept playing over the dictation"): while
 //      the walker talks to OpenCane, lines below `.safety` wait in the queue (`setVoiceHold`).
-//    · Conversational answers (Step 31): `say(immediate: true)` skips the ElevenLabs fetch, since
-//      novel text can never hit the cache and a batch fetch added 1–2 s to every answer.
+//    · Step 31's `say(immediate: true)` ("answers skip the fetch") is removed (Step 54): it was
+//      the single biggest source of the voice flipping line by line on the first mounted walk.
+//    · `onSpeakingChanged` (Step 55) tells `VoiceInputEngine` when a line starts and stops, so the
+//      recogniser's tap is deaf while the app talks (a `.safety` line breaks through the voice hold).
 //
 //  Threading / isolation: `SpeechQueue` is `@MainActor` (the module default is MainActor; the
 //  attribute is spelled out). Every piece of state and every method below runs on main.
@@ -97,7 +112,7 @@
 //  `onDispatch` / `onLineEnd` / `onSuppressed`, `routeLines` / `backgroundLines`),
 //  `NavigationEngine` via AppModel's `onSpeak`, `SceneDescriber` (`.scene`), `HandsFreeIntents`
 //  (status summary `.scene`, voice switches and haptics status `.nav`),
-//  `ConversationCoordinator` (`.scene`, `immediate: true`), `VoiceInputEngine` (`setVoiceHold`,
+//  `ConversationCoordinator` (`.scene`), `VoiceInputEngine` (`setVoiceHold`, `onSpeakingChanged`,
 //  the `.voiceInput` microphone lease, its own status lines) and `SoundWatcher` (the
 //  `.soundRecognition` lease, `onMicrophoneRouteChanged`, `microphoneRouteSnapshot`,
 //  `microphoneRestoreError`). The beacon reads `isSpeaking` through AppModel's 10 Hz ticker to duck
@@ -106,7 +121,8 @@
 //  Tests: none in-process — AVFoundation, device-only (docs/CODE_REFERENCE.md lists the device
 //  walks). The numbers it applies are pinned in CaneKitLogic: `SpeechResumeTests` (resume point,
 //  pause between bands), `SpeechLoadPolicyTests` (name pacing), `VoicePrefetchTests` (prefetch
-//  order, fatal HTTP codes), `SoundAlertsTests` (the microphone route guard) and `NavSupportTests`
+//  order, fatal HTTP codes, the additive `merge`), `VoiceEngineChoiceTests` (which engine speaks a
+//  line, the 2.5 s deadline, the session-sticky breaker), `SoundAlertsTests` (the microphone route guard) and `NavSupportTests`
 //  (which cues reach the queue). `make uitest` / `make e2e` run it muted (`muted`) with real queue
 //  timing; `ios/scripts/cue_audit.py` measures it from `speech_dispatch` / `speech_end` records.
 //
@@ -123,7 +139,7 @@ import UIKit
 enum SpeechPriority: Int, Comparable, Sendable {
     /// Scene descriptions < obstacle names < route instructions < head-height / safety lines.
     /// - `scene`: "Where am I" results and their progress lines (`SceneDescriber`), conversational
-    ///   answers (`ConversationCoordinator`, `immediate: true`), the spoken status summary and the
+    ///   answers (`ConversationCoordinator`), the spoken status summary and the
     ///   flashlight outcome lines (`TorchSwitch.Outcome.spokenLine`).
     /// - `obstacle`: mesh names ("One meter ahead, door") and left/right/ahead cue lines spoken
     ///   when the phone cannot buzz, sign and hazard-watch lines (`HazardScanner`), horn / vehicle
@@ -150,7 +166,19 @@ final class SpeechQueue {
     /// True while a line is playing (the beacon ducks itself on this).
     /// Set in `speakNow`; cleared by `lineEnded` when the queue drains, by `stopAll`, and on an
     /// interruption `.began`. AppModel's 10 Hz ticker copies it into `BeaconEngine.setSpeaking`.
-    private(set) var isSpeaking = false
+    private(set) var isSpeaking = false {
+        didSet {
+            if oldValue != isSpeaking {
+                onSpeakingChanged?(isSpeaking)
+            }
+        }
+    }
+    /// Fired on the main actor on every `isSpeaking` edge (true when a line starts, false when the
+    /// queue drains, `stopAll`, an interruption or the voice hold ends it). The one listener is
+    /// `VoiceInputEngine` (installed in its `init`, acting only while listening): it pauses the
+    /// recogniser's tap while the app speaks and for `SelfHearFilter.tailSeconds` after (Step 55).
+    /// ⚠ `isSpeaking` stays true through the 0.35 s pause between bands, so a pause covers it too.
+    @ObservationIgnored var onSpeakingChanged: ((Bool) -> Void)?
     /// Last line handed to a backend — always the whole line, even for a resumed one. Nothing
     /// outside this class reads it today (Repeat speaks `NavigationEngine.lastSpokenLine`, and the
     /// trip log gets `onDispatch`); inside, `playFile` re-speaks its remainder from
@@ -171,29 +199,40 @@ final class SpeechQueue {
     /// Built once from `Secrets.plist`; nil without `ELEVENLABS_API_KEY` (hard rule 4: no key,
     /// no crash — the system voice simply carries every line).
     let naturalVoice: ElevenLabsVoice? = ElevenLabsVoice.fromSecrets()
-    /// When false every line uses `AVSpeechSynthesizer`, even with a key and a warm cache.
-    /// Also gates `prefetch` (no point spending API quota on a voice we will not use).
-    /// No shipping code writes it today; it is the switch a debug path would flip.
-    var useNaturalVoice = true
+    /// When false every line uses `AVSpeechSynthesizer`, even with a key and a warm cache
+    /// (`VoiceEngineReason.naturalOff`). Also gates `prefetch` (no point spending API quota on a
+    /// voice we will not use). ⚠ Not persisted here: `AppModel.naturalVoiceEnabled`
+    /// (`Settings.bool("useNaturalVoice")`, the Settings "Voice" card) owns the stored value and
+    /// pushes it at launch and on every change (Step 53). Switching back to Natural resumes the
+    /// prefetch backlog.
+    var useNaturalVoice = true {
+        didSet { if useNaturalVoice, !oldValue { runPrefetchWorker() } }
+    }
+    /// The engine and reason of the last line handed to a backend, updated again when its race or
+    /// playback resolves (`VoiceEngineChoice.resolvedEngine`). nil before the first line. Shown on
+    /// the Details tab's Scene engine card ("Voice" row) and in the Haptics card's voice pill label.
+    private(set) var lastEngine: VoiceEngineDecision?
+    /// Mirror of `breaker.isOpen` for the UI and `AppModel.voiceFacts()`: true while the natural
+    /// voice is treated as unreachable (Step 54).
+    private(set) var naturalVoiceOffline = false
 
-    /// Lines that belong in the cache but are never urgent, appended to the end of *every*
-    /// prefetch batch. `AppModel.start()` sets it to `SpokenPhrases.warningLines`.
+    /// Lines that belong in the cache but are never urgent, the last part of every prefetch pass's
+    /// merge (`VoicePrefetch.merge`'s `tail`, after `routeLines`). `AppModel.start()` sets it to
+    /// `SpokenPhrases.warningLines`.
     ///
-    /// Why a standing set rather than one long batch at launch: `prefetch` cancels the batch
-    /// running before it, and `speakNow` calls `prefetch([text])` for every warning that misses
-    /// the cache. One launch batch would therefore be abandoned by the first warning the walker
-    /// heard — a few seconds in, with most of its lines never synthesized — and the voice would go
-    /// on flipping for the rest of the session. Re-appending the set to every batch instead makes
-    /// each restart resume where the last stopped: `VoicePrefetch.queue` drops whatever already
-    /// reached the disk, so the remainder only shrinks and no line is paid for twice.
-    ///
+    /// Why a standing set rather than one long batch at launch: before Step 54 `prefetch` cancelled
+    /// the batch before it, and every warning that missed the cache started a new one, so a launch
+    /// batch was abandoned a few seconds in. Prefetch is additive now and nothing is cancelled, but
+    /// the standing tail stays: it keeps the warm-up complete whatever else is merged in front of it,
+    /// and `VoicePrefetch.queue` drops whatever already reached the disk, so no line is paid for twice.
     /// Always last, so a route's own lines (waypoint 1 is needed *now*) are still requested first,
     /// and still only `VoicePrefetch.maxConcurrent` requests are in flight.
     @ObservationIgnored var backgroundLines: [String] = []
 
-    /// The spoken lines of the route currently being walked, re-appended to every prefetch batch so
-    /// a warning cache miss can never discard them. Set by `AppModel` when a route starts, cleared
-    /// when it ends; empty when no route is running.
+    /// The spoken lines of the route currently being walked, the front of every prefetch pass's
+    /// standing tail (ahead of `backgroundLines`: a turn is time-critical, a warning phrase is a
+    /// nicety once cached). Set by `AppModel` when a route starts, cleared when it ends; empty when
+    /// no route is running. A line already handed to a pass still finishes after `stopRoute`.
     @ObservationIgnored var routeLines: [String] = []
 
     // MARK: Private
@@ -214,9 +253,6 @@ final class SpeechQueue {
         /// How many times this line was already cut and resumed (capped at `SpeechResume.maxResumes`
         /// by `SpeechResume.nextResume`).
         var replays: Int = 0
-        /// Speak in the system voice at once, prefetching the natural voice for next time
-        /// (carried from `say(immediate:)` through the queue to `speakNow`).
-        var immediate: Bool = false
         /// UTF-16 offset to start speaking from: 0 for a fresh line, the start of the clause it was
         /// cut in for a resumed one (Step 37). The text itself stays whole — it is the coalescing
         /// key, the cache key and what Repeat speaks.
@@ -233,6 +269,10 @@ final class SpeechQueue {
     /// Lines waiting to play, kept sorted by `sortQueue` (priority desc, then sequence asc).
     /// `queue.first` is always the next line to speak.
     @ObservationIgnored private var queue: [Pending] = []
+    /// Lines waiting to speak (not counting the one playing). Read by the voice shell
+    /// (`AppModel.waitForSpeechToDrain`, `VoiceShellPolicy.followUp`) so the microphone never opens
+    /// over a queued route line (Step 58).
+    var queuedLineCount: Int { queue.count }
     /// Pure optional-narration admission state (CaneKitLogic `SpeechLoadPolicy`, 7 s calm window
     /// between admitted names; `SpeechLoadPolicyTests`). Only callers that explicitly pass an ambient
     /// load class reach it — today only `AppModel.handle`'s obstacle names; normal, route and safety
@@ -255,9 +295,6 @@ final class SpeechQueue {
     @ObservationIgnored private var currentExpires: TimeInterval = .infinity
     /// How many times the line playing has already been resumed after a cut.
     @ObservationIgnored private var currentReplays = 0
-    /// Whether the line playing skips the TTS fetch (`say(immediate:)`), carried into the
-    /// re-queue so a cut answer still answers at once instead of stalling on the network.
-    @ObservationIgnored private var currentImmediate = false
     /// Offset the line playing started from (`Pending.resumeFrom`), 0 for a fresh line.
     @ObservationIgnored private var currentResumeFrom = 0
     /// The line playing's `Pending.lastResumeOffset`, carried into its next re-queue.
@@ -301,10 +338,18 @@ final class SpeechQueue {
     @ObservationIgnored private var interruptionGeneration: UInt64 = 0
     /// Delayed activation retry for the current interruption episode.
     @ObservationIgnored private var interruptionRetryTask: Task<Void, Never>?
-    /// Last time an ElevenLabs fetch failed or missed its 2.5 s deadline (reference-date seconds;
-    /// −∞ = never). Circuit breaker for weak networks: for 60 s after it, `speakNow` uses the system
-    /// voice at once and only retries the natural voice in the background (Muse M1).
-    @ObservationIgnored private var naturalVoiceFailedAt: TimeInterval = -.infinity
+    /// The natural voice's session-sticky circuit breaker (CaneKitLogic `VoiceBreaker`, Step 54;
+    /// replaces Step 30's 60 s `naturalVoiceFailedAt` timestamp, Muse M1). Tripped by `resolveRace`
+    /// on a timeout / failure, closed only by `prefetchPass` after a chunk that fetched something.
+    /// Every change goes to `onBreakerChanged` and `naturalVoiceOffline`.
+    @ObservationIgnored private var breaker = VoiceBreaker()
+    /// While the breaker is open: wakes every `VoiceBreaker.probeInterval` and re-runs the prefetch
+    /// worker over the backlog (the lines that missed are in it). Cancelled when the breaker closes.
+    @ObservationIgnored private var probeTask: Task<Void, Never>?
+    /// Lines asked for by `prefetch` and not yet fetched, newest batch first (Step 54). The worker
+    /// merges it with `routeLines + backgroundLines` on every pass and removes a chunk only once it
+    /// was fetched; a failed chunk stays for the next `prefetch` call or the breaker probe.
+    @ObservationIgnored private var prefetchBacklog: [String] = []
     /// The system-voice utterance that is current; `utteranceEnded` matches callbacks against it
     /// by `ObjectIdentifier`, so a cancelled utterance's late `didCancel` is ignored.
     @ObservationIgnored private var currentUtterance: AVSpeechUtterance?
@@ -314,9 +359,9 @@ final class SpeechQueue {
     @ObservationIgnored private var player: AVAudioPlayer?
     /// Strong reference to `player`'s delegate (AVAudioPlayer holds its delegate weakly).
     @ObservationIgnored private var playerRelay: PlayerRelay?
-    /// The one running batch prefetch, so a new batch (a new route, or a warning's cache-miss
-    /// `prefetch([text])`) cancels the previous one — see `routeLines` / `backgroundLines` for why
-    /// that cancellation loses nothing.
+    /// The one prefetch worker (Step 54): drains `prefetchBacklog` + the standing tail one chunk at
+    /// a time and clears itself when there is nothing left or a chunk failed. Never cancelled by a
+    /// new batch — `prefetch` appends and, if this is nil, starts it.
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     /// In-flight ElevenLabs fetch for a cache miss; cancelled by `stopCurrent`.
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
@@ -515,11 +560,23 @@ final class SpeechQueue {
     /// 2026-09-12T20-57-17Z, t = 84 s). ⚠ Dispatched is not heard: the line may still be cut by a
     /// higher priority, fail to fetch, or be muted automation — it proves the queue did not drop
     /// it, nothing more (Step 34 review). Arguments: whole text, priority, replay count (> 0 when a
-    /// cut line resumes, so a resumed line appears twice), and the UTF-16 offset it starts from
-    /// (`resumeFrom`, 0 for a fresh line; Step 37). Main actor; set by `AppModel.start()`,
-    /// logged as `speech_dispatch {text, priority, replays, resume_from}` (a separate kind, so
-    /// `e2e.py`'s `speech` assertions keep their meaning). Fires under `muted` too.
-    @ObservationIgnored var onDispatch: ((String, SpeechPriority, Int, Int) -> Void)?
+    /// cut line resumes, so a resumed line appears twice), the UTF-16 offset it starts from
+    /// (`resumeFrom`, 0 for a fresh line; Step 37), and the engine decision made *before* this call
+    /// (`VoiceEngineChoice.decide`, Step 53: `engine` elevenlabs / system / race / muted and its
+    /// `reason`; a `race` is resolved later through `onEngineResolved`). Main actor; set by
+    /// `AppModel.start()`, logged as `speech_dispatch {text, priority, replays, resume_from, engine,
+    /// engine_reason}` (a separate kind, so `e2e.py`'s `speech` assertions keep their meaning).
+    /// Fires under `muted` too. Also forwards the text to `VoiceInputEngine.noteDispatched` (Step 55).
+    @ObservationIgnored var onDispatch: ((String, SpeechPriority, Int, Int, VoiceEngineDecision) -> Void)?
+    /// How a dispatched line's engine was finally settled (Step 53): `race_won` / `race_timeout` /
+    /// `race_failed` with the milliseconds since the race started, or `playback_failed` (an mp3 that
+    /// would not play; wait 0). Arguments: the whole line, the outcome, `wait_ms`. Main actor; set by
+    /// `AppModel.start()`, logged as `speech_engine {text, engine, engine_reason, wait_ms}`.
+    @ObservationIgnored var onEngineResolved: ((String, VoiceEngineReason, Int) -> Void)?
+    /// Every `VoiceBreaker` state change (Step 54): `(open, reason)` with reason `race_timeout` /
+    /// `race_failed` (opened) or `prefetch_succeeded` (closed). Main actor; set by `AppModel.start()`,
+    /// logged as `voice_breaker {open, reason}`.
+    @ObservationIgnored var onBreakerChanged: ((Bool, String) -> Void)?
     /// Receives the priority of each line that ENDED naturally (finished, or its watchdog fired), at
     /// the moment `lineEnded` starts the next one or the pause before it. Logged as `speech_end` so
     /// `cue_audit.py` can measure the pause between one line's end and the next start — start times
@@ -967,7 +1024,6 @@ final class SpeechQueue {
     ///   - ttl: seconds the line stays valid while waiting (≤ 0 = never expires). Also bounds a
     ///     resume after the line is cut (`requeueCurrent`).
     ///   - load: `.normal` (fail-open) or `.ambientObstacleName`, which `SpeechLoadPolicy` may drop.
-    ///   - immediate: conversational answers only — system voice at once, natural voice prefetched.
     /// - Returns: true when the line started or was queued; false when it was empty, suppressed by
     ///   the load policy, or coalesced with an identical line. `AppModel` writes its `speech`
     ///   trip-log record only on true.
@@ -989,12 +1045,11 @@ final class SpeechQueue {
     ///    that starts at once plays in full.
     /// Callers pick TTLs per line type (AppModel: obstacle names 4 s, cue lines 6 s, ground hazards
     /// 3 s, route lines 12 s, channel / permission lines 20 s, arrival summary 30 s; SceneDescriber
-    /// results 20 s; conversation answers 8–15 s). `immediate` is conversational answers only
-    /// (see `speakNow`); it rides the `Pending` through the queue so a drained answer still
-    /// skips the fetch. Main actor.
+    /// results 20 s; conversation answers 8–15 s). The voice is chosen when the line is dispatched,
+    /// not here (`speakNow`, `VoiceEngineChoice`). Main actor.
     @discardableResult
     func say(_ text: String, _ priority: SpeechPriority, ttl: TimeInterval = 8,
-             load: SpeechLoadClass = .normal, immediate: Bool = false) -> Bool {
+             load: SpeechLoadClass = .normal) -> Bool {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return false }
         let now = Date().timeIntervalSinceReferenceDate
@@ -1013,8 +1068,7 @@ final class SpeechQueue {
         if interrupted || (voiceHeld && priority < .safety) {
             guard !queue.contains(where: { $0.text == line }) else { return false }
             sequence += 1
-            queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence,
-                                 immediate: immediate))
+            queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence))
             sortQueue()
             return true
         }
@@ -1028,13 +1082,12 @@ final class SpeechQueue {
                                                        safetyBand: SpeechPriority.safety.rawValue) == 0
             if priority == .safety || (needsNoPause && priority >= (queue.first?.priority ?? .scene)) {
                 stopCurrent()
-                speakNow(line, priority, expires: expires, immediate: immediate)
+                speakNow(line, priority, expires: expires)
                 return true
             }
             guard !queue.contains(where: { $0.text == line }) else { return false }
             sequence += 1
-            queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence,
-                                 immediate: immediate))
+            queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence))
             sortQueue()
             return true
         }
@@ -1042,17 +1095,16 @@ final class SpeechQueue {
             if priority > cp {
                 requeueCurrent()             // resume the cut line after this one
                 stopCurrent()
-                speakNow(line, priority, expires: expires, immediate: immediate)
+                speakNow(line, priority, expires: expires)
             } else {
                 guard line != currentText, !queue.contains(where: { $0.text == line }) else { return false }   // coalesce
                 sequence += 1
-                queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence,
-                                     immediate: immediate))
+                queue.append(Pending(text: line, priority: priority, expires: expires, sequence: sequence))
                 sortQueue()
             }
             return true
         }
-        speakNow(line, priority, expires: expires, immediate: immediate)
+        speakNow(line, priority, expires: expires)
         return true
     }
 
@@ -1110,7 +1162,7 @@ final class SpeechQueue {
         let expires = currentReplays == 0 ? max(currentExpires, now + 8) : currentExpires
         queue.append(Pending(text: currentText, priority: cp, expires: expires,
                              sequence: front, replays: currentReplays + 1,
-                             immediate: currentImmediate, resumeFrom: offset, lastResumeOffset: offset))
+                             resumeFrom: offset, lastResumeOffset: offset))
         sortQueue()
     }
 
@@ -1124,8 +1176,7 @@ final class SpeechQueue {
     /// *not* re-queued (the user explicitly asked for this line instead). During an interruption
     /// it only queues. `ttl` is always finite here (default 12 s) — unlike `say`, `ttl: 0` does
     /// not mean "never expires"; a queued line with `ttl: 0` would be purged at the next drain.
-    /// Bypasses the load policy and the voice hold (an explicit request wins), and does not carry
-    /// `immediate`.
+    /// Bypasses the load policy and the voice hold (an explicit request wins).
     /// Caller: the Repeat path (watch / on-screen button) through `NavigationEngine.onRepeat`,
     /// wired in `AppModel`, always with `.nav` and the last line actually spoken (AGENTS.md).
     /// Main actor.
@@ -1154,50 +1205,123 @@ final class SpeechQueue {
         queue.sort { ($0.priority, -$0.sequence) > ($1.priority, -$1.sequence) }
     }
 
-    /// Pre-synthesize lines the route will need (no-op without the natural voice, or when
+    /// Pre-synthesize lines the app will need (no-op without the natural voice, or when
     /// `useNaturalVoice` is false; `muted` does not gate it).
-    /// Fire-and-forget on a detached `.utility` task so the network work never runs on (or
-    /// blocks) the main actor; `ElevenLabsVoice` is a Sendable value, so capturing it is safe.
-    /// A line that is still uncached later simply takes the fetch or system-voice path in
-    /// `speakNow`. Callers: `AppModel.start()` (common lines) and route start (every waypoint line
-    /// + intro); `speakNow` for a warning spoken by the system voice.
     ///
-    /// Only one prefetch runs at a time: starting a second route cancels the first. Two overlapping
-    /// batches would put twice `VoicePrefetch.maxConcurrent` (2) requests in flight and rate-limit the live
-    /// cue the walker is waiting for, and the older batch is for a route nobody is walking any more.
-    /// `backgroundLines` is appended to whatever the caller passed, so a cancelled batch's
-    /// never-urgent tail is carried into the replacement instead of being dropped.
-    /// - Parameter lines: the urgent lines, in speaking order; requested before `routeLines`, then
-    ///   `backgroundLines` (`VoicePrefetch.queue` drops repeats and already-cached lines).
-    /// A failure is written to `voiceError` (never while the app is backgrounded, where suspension
-    /// shows up as a timeout); a cancelled batch reports nothing.
+    /// Additive (Step 54): `lines` go to the front of `prefetchBacklog` (repeats dropped) and the one
+    /// worker is started if it is not running. Nothing in flight is cancelled — before Step 54 every
+    /// call cancelled the running batch, so each warning that missed the cache threw away whatever a
+    /// route start or the launch warm-up had not reached yet. Each worker pass merges the backlog
+    /// with `routeLines + backgroundLines` (`VoicePrefetch.merge`, off main: the cache checks are a
+    /// hash and a `stat` per line) and requests the first `VoicePrefetch.chunk` uncached lines, so a
+    /// line merged in mid-warm-up is requested within one chunk and at most `maxConcurrent` requests
+    /// are ever in flight from here. The network work runs on a detached `.utility` task and never
+    /// on (or blocking) the main actor.
+    ///
+    /// Callers: `AppModel.start()` (safety lines + common lines at launch), route starts
+    /// (`buildRoute`, `queueRouteStart`, `startRouteNow`: the announce, the intro and every waypoint
+    /// line), `speakNow` (a warning or breaker-open line that came out in the system voice, a line
+    /// whose race failed or timed out), `AppModel`'s emergency-profile and shell lines.
+    /// - Parameter lines: lines in the order they will be spoken. Blank lines are ignored.
+    /// Clears `voiceError` (a new attempt; a failing chunk writes a fresh one, never while the app is
+    /// backgrounded, where suspension shows up as a timeout).
     func prefetch(_ lines: [String]) {
-        guard let naturalVoice, useNaturalVoice else { return }
-        prefetchTask?.cancel()
-        // A new attempt: drop the previous complaint so the card cannot keep accusing the voice
-        // after the network came back. A failure below writes a fresh one.
+        guard naturalVoice != nil, useNaturalVoice else { return }
         voiceError = nil
-        // Route lines are a standing set too, for the same reason `backgroundLines` is one — and
-        // this is the case that matters most. At route start the whole route is prefetched, but the
-        // first obstacle warning that misses the cache calls `prefetch([text])`, which cancels this
-        // batch and replaces it. Without re-appending them every remaining waypoint line is dropped,
-        // and the walker's next turn or crossing instruction — at a street corner — waits on the
-        // network and arrives late in the system voice. They go before `backgroundLines` because a
-        // turn is time-critical and a warning phrase is only a nicety once it is cached.
-        let batch = lines + routeLines + backgroundLines
-        prefetchTask = Task.detached(priority: .utility) { [weak self] in
-            let failure = await naturalVoice.prefetch(batch)
-            // Only report; never let a prefetch failure disable the voice. The live path has its
-            // own circuit breaker, and the cache may already hold the line that matters.
-            guard let failure, !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                // Backgrounding surfaces as a timeout, not a cancellation, and is not a voice
-                // problem: do not accuse the voice for a suspension the user caused.
-                guard UIApplication.shared.applicationState != .background else { return }
-                self.voiceError = failure
+        prefetchBacklog = VoicePrefetch.queue(lines + prefetchBacklog) { _ in false }
+        runPrefetchWorker()
+    }
+
+    /// Start the prefetch worker unless one is running. The loop holds `self` only across a pass
+    /// and clears `prefetchTask` when `prefetchPass` says stop. Callers: `prefetch`, the breaker
+    /// probe (`armBreakerProbe`) and `useNaturalVoice` switching back on.
+    private func runPrefetchWorker() {
+        guard prefetchTask == nil, naturalVoice != nil, useNaturalVoice else { return }
+        prefetchTask = Task { [weak self] in
+            while let self, await self.prefetchPass() {}
+            self?.prefetchTask = nil
+        }
+    }
+
+    /// One worker pass: merge, fetch one chunk, account for it.
+    /// - Returns: true to run another pass — the chunk was fetched, or it was empty but lines were
+    ///   merged in while the (off-main) merge ran; false when there is nothing left to fetch, a chunk
+    ///   failed (the backlog is kept for the next `prefetch` or probe), the voice went away or was
+    ///   switched off.
+    /// A fetched chunk is removed from the backlog and, if the breaker is open, closes it
+    /// (`VoiceBreaker.prefetchSucceeded(requested:)`: only a chunk that requested ≥ 1 line is proof).
+    private func prefetchPass() async -> Bool {
+        guard let naturalVoice, useNaturalVoice else { return false }
+        let backlog = prefetchBacklog
+        let tail = routeLines + backgroundLines
+        let (chunk, failure) = await Task.detached(priority: .utility) { () async -> ([String], String?) in
+            let pending = VoicePrefetch.merge(new: [], backlog: backlog, tail: tail) { naturalVoice.cached($0) != nil }
+            let chunk = Array(pending.prefix(VoicePrefetch.chunk))
+            guard !chunk.isEmpty else { return ([], nil) }
+            return (chunk, await naturalVoice.prefetch(chunk))
+        }.value
+        guard !chunk.isEmpty else {
+            if prefetchBacklog != backlog { return true }   // new lines arrived during the merge
+            prefetchBacklog.removeAll()                      // everything left is already on disk
+            return false
+        }
+        if let failure {
+            // Only report; never let a prefetch failure disable the voice (the live path has the
+            // breaker, and the cache may already hold the line that matters). Backgrounding surfaces
+            // as a timeout, not a cancellation, and is not a voice problem.
+            if UIApplication.shared.applicationState != .background { voiceError = failure }
+            return false
+        }
+        prefetchBacklog.removeAll { chunk.contains($0) }
+        if breaker.prefetchSucceeded(requested: chunk.count) {
+            naturalVoiceOffline = false
+            probeTask?.cancel()
+            probeTask = nil
+            onBreakerChanged?(false, VoiceBreaker.Reason.prefetchSucceeded.rawValue)
+        }
+        return true
+    }
+
+    /// Open the breaker (if it was closed), log it and start the probe. Caller: `resolveRace`.
+    /// - Parameter reason: `raceTimeout` or `raceFailed`.
+    private func tripBreaker(_ reason: VoiceBreaker.Reason) {
+        guard breaker.trip(reason, now: Date().timeIntervalSinceReferenceDate) else { return }
+        naturalVoiceOffline = true
+        onBreakerChanged?(true, reason.rawValue)
+        armBreakerProbe()
+    }
+
+    /// While the breaker is open, every `VoiceBreaker.probeInterval` (60 s) mark a probe and run the
+    /// prefetch worker: a dead network costs one small chunk a minute and never a line's 2.5 s. The
+    /// probe's payload is the backlog (every line that missed while open is prefetched by
+    /// `speakNow`); with nothing uncached to fetch it proves nothing and the breaker stays open —
+    /// harmless, because then every line is on disk and plays in the natural voice anyway. The task
+    /// ends when the breaker closes; it inherits the main actor.
+    private func armBreakerProbe() {
+        probeTask?.cancel()
+        probeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(VoiceBreaker.probeInterval))
+                guard let self, !Task.isCancelled, self.breaker.isOpen else { return }
+                let now = Date().timeIntervalSinceReferenceDate
+                guard self.breaker.probeDue(now: now) else { continue }
+                self.breaker.probed(now: now)
+                self.runPrefetchWorker()
             }
         }
+    }
+
+    /// Share (0…1) of `lines` whose exact bytes are on disk — the "voice ready" fact (Step 54,
+    /// `StatusSummary.voiceLine`). Repeats and blank lines count once / not at all; an empty list is
+    /// 1; no key is 0. Synchronous: a hash and a `stat` per line on main (~150 lines, called once per
+    /// spoken status), never per frame. Caller: `AppModel.voiceFacts()`.
+    /// - Parameter lines: `AppModel.voiceReadyLines`.
+    func cachedShare(of lines: [String]) -> Double {
+        guard let naturalVoice else { return 0 }
+        let unique = VoicePrefetch.queue(lines) { _ in false }
+        guard !unique.isEmpty else { return 1 }
+        let onDisk = unique.filter { naturalVoice.cached($0) != nil }.count
+        return Double(onDisk) / Double(unique.count)
     }
 
     /// Hold (`true`) or release (`false`) the speech channel while the walker dictates.
@@ -1223,7 +1347,6 @@ final class SpeechQueue {
                 isSpeaking = false
                 currentPriority = nil
                 currentText = ""
-                currentImmediate = false
             }
             return
         }
@@ -1267,17 +1390,16 @@ final class SpeechQueue {
     ///
     /// Bumps `generation`, ends any pause, records the current line's priority / text / deadline /
     /// replay count / resume state (used by `requeueCurrent`), sets `isSpeaking` and `lastSpoken`,
-    /// arms the watchdog on the remainder it will say, fires `onDispatch`, then — unless `muted`,
-    /// which only simulates the line's length — picks a backend:
-    /// - no key, or `useNaturalVoice == false` → system voice;
-    /// - ElevenLabs cache hit → mp3 plays at once;
-    /// - cache miss on `.obstacle` / `.safety`, or an `immediate` line → system voice now +
-    ///   background prefetch (warnings never wait for the network — AGENTS.md);
-    /// - cache miss within 60 s of a natural-voice failure (`naturalVoiceFailedAt`) → the same;
-    /// - cache miss otherwise → fetch with a 2.5 s *total* deadline task racing it (`voicePending`
-    ///   decides the one winner; `ElevenLabsVoice.timeout` is only an idle timeout), then play; on
-    ///   failure or deadline speak with the system voice. The fetch task inherits the main actor and the
-    ///   URLSession await inside `ElevenLabsVoice.audio(for:)` suspends rather than blocks it.
+    /// arms the watchdog on the remainder it will say, **decides the engine**
+    /// (`VoiceEngineChoice.decide`, Step 53 — before `onDispatch`, so the dispatch timestamp
+    /// `cue_audit.py` measures pauses from does not move), fires `onDispatch` with that decision,
+    /// then acts on it:
+    /// - `muted` → no sound; the line "ends" after its estimated spoken length;
+    /// - `system` (`no_key`, `natural_off`, `warning_miss`, `breaker_open`) → system voice now; a
+    ///   `warning_miss` / `breaker_open` line is also prefetched for next time (warnings never wait
+    ///   for the network — AGENTS.md; while the breaker is open this is also the probe's payload);
+    /// - `elevenlabs` (`cached`) → the mp3 plays at once, a warning too, breaker open or not;
+    /// - `race` → `startRace`: fetch against `VoiceEngineChoice.raceDeadline` (2.5 s total).
     /// A result that arrives after the line was superseded (generation changed) is dropped.
     ///
     /// - Parameters:
@@ -1288,12 +1410,8 @@ final class SpeechQueue {
     ///     voice speaks `SpeechResume.remainder`; an mp3 seeks with `SpeechResume.clipTime`.
     ///   - lastResumeOffset: the queued line's `Pending.lastResumeOffset`, carried so a later cut
     ///     can never resume from an earlier point (`SpeechResume.nextResume`).
-    ///   - immediate: speak in the system voice at once (prefetching the natural voice for next
-    ///     time) instead of waiting on a cache-miss fetch. Conversational answers only: their
-    ///     text is novel every time, so a fetch would stall *every* answer on the network.
     private func speakNow(_ text: String, _ priority: SpeechPriority, expires: TimeInterval = .infinity,
-                          replays: Int = 0, immediate: Bool = false,
-                          resumeFrom: Int = 0, lastResumeOffset: Int? = nil,
+                          replays: Int = 0, resumeFrom: Int = 0, lastResumeOffset: Int? = nil,
                           watchdogFallback: Bool = false) {
         generation += 1
         let gen = generation
@@ -1302,7 +1420,6 @@ final class SpeechQueue {
         currentText = text
         currentExpires = expires
         currentReplays = replays
-        currentImmediate = immediate
         currentResumeFrom = resumeFrom
         currentLastResumeOffset = lastResumeOffset
         currentSpokenUTF16 = resumeFrom
@@ -1314,71 +1431,113 @@ final class SpeechQueue {
         // whole cached file from `clipStart` instead (one cache entry per line, never per fragment).
         let spokenText = SpeechResume.remainder(of: text, from: resumeFrom)
         armWatchdog(gen: gen, text: spokenText)
-        onDispatch?(text, priority, replays, resumeFrom)
 
-        // Automation mute (simulator tests, never on a normal launch): keep the queue's timing
-        // and logging but make no sound — the line "ends" after its estimated spoken length.
-        if Self.muted {
+        // The cache is only looked at when it could matter (a `stat` on main, as before Step 53).
+        let cachedURL = (!Self.muted && useNaturalVoice) ? naturalVoice?.cached(text) : nil
+        // The safety watchdog's one retry (Step 51a) goes straight to the system voice: the first
+        // attempt already stalled, so neither the cache nor a race may be trusted with it again.
+        let decision = watchdogFallback
+            ? VoiceEngineDecision(engine: .system, reason: .watchdogFallback)
+            : VoiceEngineChoice.decide(muted: Self.muted, hasKey: naturalVoice != nil,
+                                       naturalEnabled: useNaturalVoice, cached: cachedURL != nil,
+                                       isWarning: priority == .obstacle || priority == .safety,
+                                       breakerOpen: breaker.isOpen)
+        lastEngine = decision
+        onDispatch?(text, priority, replays, resumeFrom, decision)
+
+        switch decision.engine {
+        case .muted:
+            // Automation mute (simulator tests, never on a normal launch): keep the queue's timing
+            // and logging but make no sound — the line "ends" after its estimated spoken length.
             let seconds = 0.4 + Double(spokenText.count) / 15.0
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds))
                 self?.lineEnded(gen: gen)
             }
-            return
+        case .natural:
+            if let cachedURL { playFile(cachedURL, gen: gen) } else { speakSystem(spokenText, gen: gen) }
+        case .race:
+            if let naturalVoice {
+                startRace(text, spokenText: spokenText, gen: gen, voice: naturalVoice)
+            } else {
+                speakSystem(spokenText, gen: gen)
+            }
+        case .system:
+            speakSystem(spokenText, gen: gen)
+            // A warning that missed the cache (2.5 s of fetch is 3.5 m of walking into the obstacle)
+            // or any miss while the breaker is open: natural voice cached for next time.
+            if decision.reason == .warningMiss || decision.reason == .breakerOpen { prefetch([text]) }
         }
+    }
 
-        guard let naturalVoice, useNaturalVoice else {
-            speakSystem(spokenText, gen: gen)
-            return
-        }
-        if let url = naturalVoice.cached(text) {
-            playFile(url, gen: gen)
-            return
-        }
-        // Warnings never wait for the network (a 2.5 s fetch is 3.5 m of walking into the
-        // obstacle): system voice now, natural voice cached for next time. Same for an
-        // `immediate` conversational answer: its text is novel, so the cache can never hit and
-        // the walker would otherwise wait on a fetch after every question.
-        if immediate || priority == .obstacle || priority == .safety {
-            speakSystem(spokenText, gen: gen)
-            prefetch([text])
-            return
-        }
-        // The natural voice failed recently (weak or captive network): don't make every line wait
-        // up to 2.5 s for another failure — system voice now, retry the network in the background
-        // (Muse M1). After 60 s quiet, the natural voice gets another chance.
-        if Date().timeIntervalSinceReferenceDate - naturalVoiceFailedAt < 60 {
-            speakSystem(spokenText, gen: gen)
-            prefetch([text])
-            return
-        }
-        // Cache miss: fetch, but never wait more than 2.5 s in total — URLRequest's timeout is an
-        // *idle* timeout, so a slow trickle could stall the queue far longer (review). On the
-        // deadline: system voice now, mark the natural voice as failing (circuit breaker).
+    /// The cache-miss race (Step 53/54): fetch the line, but never wait more than
+    /// `VoiceEngineChoice.raceDeadline` (2.5 s) in total — URLRequest's timeout is an *idle*
+    /// timeout, so a slow trickle could stall the queue far longer (review). Whichever of the fetch
+    /// and the deadline claims the line first wins (`voicePending`); the loser does nothing, so a
+    /// line is never spoken twice (review round 5). Won → the mp3 plays; timed out or failed → the
+    /// system voice speaks it, the breaker trips (`resolveRace`) and the line is queued for the
+    /// background prefetch. Both tasks inherit the main actor; the URLSession await inside
+    /// `ElevenLabsVoice.audio(for:)` suspends rather than blocks it.
+    /// - Parameters:
+    ///   - text: the whole line (cache key, log text).
+    ///   - spokenText: its remainder from `currentResumeFrom`, for the system voice.
+    ///   - gen: the line's generation; a superseded line's result is ignored.
+    ///   - naturalVoice: the configured voice.
+    private func startRace(_ text: String, spokenText: String, gen: Int, voice naturalVoice: ElevenLabsVoice) {
         voicePending = true
+        let startedAt = Date().timeIntervalSinceReferenceDate
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .seconds(VoiceEngineChoice.raceDeadline))
             guard let self, self.voicePending, self.generation == gen, self.isSpeaking,
                   self.player == nil, self.currentUtterance == nil else { return }
             self.voicePending = false
             self.fetchTask?.cancel()
-            self.naturalVoiceFailedAt = Date().timeIntervalSinceReferenceDate
+            self.resolveRace(text, .raceTimeout, since: startedAt)
             self.speakSystem(spokenText, gen: gen)
+            self.prefetch([text])
         }
         fetchTask = Task { [weak self] in
             let result = await Result { try await naturalVoice.audio(for: text) }
-            // Superseded meanwhile, or the 2.5 s deadline already switched to the system voice.
+            // Superseded meanwhile, or the deadline already switched to the system voice.
             guard let self, self.voicePending, self.generation == gen, self.isSpeaking,
                   self.currentUtterance == nil else { return }
             self.voicePending = false
             switch result {
-            case .success(let url): self.playFile(url, gen: gen)
+            case .success(let url):
+                self.resolveRace(text, .raceWon, since: startedAt)
+                self.playFile(url, gen: gen)
             case .failure(let error):
                 self.voiceError = error.localizedDescription
-                self.naturalVoiceFailedAt = Date().timeIntervalSinceReferenceDate
+                self.resolveRace(text, .raceFailed, since: startedAt)
                 self.speakSystem(spokenText, gen: gen)
+                self.prefetch([text])
             }
         }
+    }
+
+    /// Record how a race ended: `lastEngine`, `onEngineResolved` (`speech_engine`) and, for a
+    /// timeout or failure, `tripBreaker`. Caller: `startRace`'s two tasks.
+    /// - Parameters:
+    ///   - text: the whole line.
+    ///   - outcome: `raceWon`, `raceTimeout` or `raceFailed`.
+    ///   - startedAt: reference-date seconds the race started; `wait_ms` is measured from it.
+    private func resolveRace(_ text: String, _ outcome: VoiceEngineReason, since startedAt: TimeInterval) {
+        let waitMs = Int(((Date().timeIntervalSinceReferenceDate - startedAt) * 1000).rounded())
+        lastEngine = VoiceEngineDecision(engine: VoiceEngineChoice.resolvedEngine(outcome), reason: outcome)
+        onEngineResolved?(text, outcome, waitMs)
+        switch outcome {
+        case .raceTimeout: tripBreaker(.raceTimeout)
+        case .raceFailed: tripBreaker(.raceFailed)
+        default: break
+        }
+    }
+
+    /// An mp3 (cached or just fetched) would not play; the system voice is re-speaking the remainder
+    /// under the same generation. Logged as `speech_engine {engine_reason: playback_failed}` (Step 53);
+    /// not a network failure, so the breaker is untouched. Caller: `playFile`'s two failure paths.
+    private func reportPlaybackFailure() {
+        lastEngine = VoiceEngineDecision(engine: .system, reason: .playbackFailed)
+        onEngineResolved?(lastSpoken, .playbackFailed, 0)
     }
 
     /// System-voice backend. Speaks through the app's audio session (`usesApplicationAudioSession`),
@@ -1438,10 +1597,12 @@ final class SpeechQueue {
             if !p.play() {
                 player = nil
                 voiceError = "Playback did not start"
+                reportPlaybackFailure()
                 speakSystem(SpeechResume.remainder(of: lastSpoken, from: currentResumeFrom), gen: gen)
             }
         } catch {
             voiceError = "Playback: \(error.localizedDescription)"
+            reportPlaybackFailure()
             speakSystem(SpeechResume.remainder(of: lastSpoken, from: currentResumeFrom), gen: gen)
         }
     }
@@ -1492,7 +1653,7 @@ final class SpeechQueue {
             self.stopCurrent()                              // bumps generation: in-flight work stays stale
             if useSafetyFallback, let priority {
                 self.speakNow(wholeText, priority, expires: expires, replays: replays,
-                              immediate: true, resumeFrom: resumeFrom,
+                              resumeFrom: resumeFrom,
                               lastResumeOffset: lastResumeOffset, watchdogFallback: true)
             } else {
                 self.lineEnded(gen: self.generation)
@@ -1566,7 +1727,6 @@ final class SpeechQueue {
         if let endedPriority { onLineEnd?(endedPriority) }
         currentPriority = nil
         currentText = ""
-        currentImmediate = false
         currentResumeFrom = 0
         currentLastResumeOffset = nil
         currentSpokenUTF16 = 0
@@ -1612,7 +1772,7 @@ final class SpeechQueue {
         inGap = false
         let next = queue.removeFirst()
         speakNow(next.text, next.priority, expires: next.expires, replays: next.replays,
-                 immediate: next.immediate, resumeFrom: next.resumeFrom,
+                 resumeFrom: next.resumeFrom,
                  lastResumeOffset: next.lastResumeOffset)
     }
 

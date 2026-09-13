@@ -220,8 +220,9 @@ final class NavigationEngine {
     /// reset, then speaks "Route started. <name>. First: <line>" and stores it for Repeat.
     /// Called by `AppModel.startRouteNow` (reached from `beginRoute` once the depth-readiness
     /// interlock clears). `lastFix` survives only if it is < 30 s old; `heading` is always cleared.
-    /// ⚠ The intro string is also built, byte for byte, in `AppModel.startRouteNow`'s prefetch list
-    /// (natural-voice cache) — change both together or the intro falls back to the system voice.
+    /// The intro is `WalkingIntro.routeStarted(route)` (CaneKitLogic, Step 54) — the same call
+    /// `AppModel` prefetches during the depth wait / MapKit build, so the natural-voice cache holds
+    /// these exact bytes before they are spoken (`introLineIsWhatNavigationSpeaks`).
     func start(_ route: Route) {
         self.route = route
         let t = GeofenceTracker(waypoints: route.waypoints)
@@ -249,7 +250,7 @@ final class NavigationEngine {
         // if it is fresh (< 30 s); otherwise wait for the first live fix.
         if let f = lastFix, Date().timeIntervalSinceReferenceDate - f.timestamp > 30 { lastFix = nil }
         refreshInstruction()
-        let intro = "Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"
+        let intro = WalkingIntro.routeStarted(route)
         lastSpokenLine = intro
         onSpeak?(intro, .nav)
     }

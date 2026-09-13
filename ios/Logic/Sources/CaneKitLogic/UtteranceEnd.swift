@@ -23,7 +23,7 @@
 //  `.endOfUtterance` → `stopListeningAndSubmit(reason: "silence")`, `.timeout` → `reason: "timeout"`;
 //  the reason is written to the `voice_end` trip-log record.
 //  Isolation: nonisolated `Sendable` value, held in one main-actor `var` and written back.
-//  Tests: UtteranceEndTests.swift (7).
+//  Tests: UtteranceEndTests.swift (8).
 //
 
 import Foundation
@@ -68,6 +68,9 @@ public struct UtteranceEndDetector: Sendable, Equatable {
 
     /// When listening began (same clock as `now`).
     private let startedAt: Double
+    /// This listen's hard cap, seconds: `maxListen` for a press, `VoiceShellPolicy.followUpSeconds`
+    /// for a follow-up window (Step 58).
+    private let cap: Double
     /// The last trimmed transcript seen; "" until words arrive.
     private var lastText = ""
     /// When `lastText` last changed; nil until the first words.
@@ -75,9 +78,13 @@ public struct UtteranceEndDetector: Sendable, Equatable {
     /// Set once a terminal verdict was given, so a stale tick repeats it instead of flipping.
     private var ended: Verdict?
 
-    /// - Parameter startedAt: the moment listening began, on the caller's clock.
-    public init(startedAt: Double) {
+    /// - Parameters:
+    ///   - startedAt: the moment listening began, on the caller's clock.
+    ///   - maxListen: this listen's hard cap; default the push-to-talk `maxListen` (10 s). A
+    ///     follow-up window passes `VoiceShellPolicy.followUpSeconds` (`followUpWindowUsesAShorterCap`).
+    public init(startedAt: Double, maxListen: Double = UtteranceEndDetector.maxListen) {
         self.startedAt = startedAt
+        self.cap = maxListen
     }
 
     /// Record the latest transcript and decide. Idempotent after the first terminal verdict.
@@ -97,7 +104,7 @@ public struct UtteranceEndDetector: Sendable, Equatable {
             lastChangeAt = now
         }
         let hasWords = !text.isEmpty
-        if now - startedAt >= Self.maxListen {
+        if now - startedAt >= cap {
             ended = hasWords ? .endOfUtterance : .timeout
             return ended!
         }

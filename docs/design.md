@@ -50,9 +50,10 @@ measurement, a state, or a button. No marketing surfaces.
 1. Words first. Speech is the primary channel; the screen mirrors it, never replaces it.
 2. Redundancy on every hazard: a depth tile has a fill colour **and** a level word (CLEAR / FAR / NEAR /
    STOP) **and** a number; a pill is always a word on a fill (the SF Symbol is a companion).
-3. Big and few. While a route runs the Guide card has seven big buttons in five rows (Where am I +
-   Talk to OpenCane, Repeat + Next, Recenter, Simulate walk / Stop simulation, Stop route), never
-   more than two per row; everything else lives in the cards below it.
+3. Big and few. The Guide is one giant microphone (the voice tile, Step 58) with a compact row
+   under it (idle: Where am I + Start route to CIF; navigating: Repeat + Next + Stop route — the one
+   three-per-row exception, §6.1), then Recenter and Simulate walk below the fold; never more than
+   two per row anywhere else; everything else lives in the cards below it.
 4. Ivory on near-black. The white cane is the brand; the accent is *cane white on ink*, not a hue.
 5. Nothing animates that carries meaning. The grid updates at 30 Hz with no transitions.
 
@@ -129,7 +130,7 @@ Thresholds are `CaneKitLogic.TileLevel`, not the view.
 | `laneFar` | 1.2 – 2.0 m | `#FDE047` | `#FFD500` | FAR | 13.9:1 / 14.8:1 |
 | `laneNear` | 0.7 – 1.2 m | `#FB923C` | `#FF7A00` | NEAR | 8.1:1 / 8.0:1 |
 | `laneUrgent` | < 0.7 m | `#F87171` | `#FF6B6B` | STOP | 6.6:1 / 7.6:1 |
-| `laneNoData` | no depth yet | = `surfaceRaised` | — | NO DATA ("—" instead of metres) | text in `textSecondary` |
+| `laneNoData` | no depth yet, or the band is not visible (Step 51) | = `surfaceRaised` | — | NO DATA / NO COVER ("—" instead of metres) | text in `textSecondary` |
 
 Deuteranopia check: far and near are close in hue, which is why the level word and the number are
 mandatory on every tile. OKLab lightness is far (0.91) > clear (0.80) > near (0.76) > urgent (0.71), so
@@ -177,9 +178,10 @@ the two dangerous states are also the two darkest fills.
 All shapes use `.continuous` corners. Watch buttons use radius 14.
 
 Touch targets (`CKMetrics`): `CKBigButton` is ≥ 72 pt tall (`bigButton`), full width or half width (two per row with
-`lg` between them); a `layout: .tile` big button in a two-up pair (the Guide's Where am I / Talk to
-OpenCane, Step 47) is ≥ 108 pt tall (`CKMetrics.tile`), and the pair's `HStack` stretches both tiles to
-the taller one. Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
+`lg` between them); a `layout: .tile` big button in a compact row (the Guide's row under the voice
+tile, Step 58: two tiles idle, three navigating) is ≥ 108 pt tall (`CKMetrics.tile`), and the row's
+`HStack` stretches every tile to the tallest one. The voice tile itself is one button at least 60 %
+of the page height (`containerRelativeFrame`). Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
 buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s keep their system size (≥ 44 pt, HIG); the destination search field
 and every destination suggestion row are `touchTarget` (60 pt) like the buttons beside them. Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
 (`WKSpacing.touchTarget`: 48 pt pushed the bottom row off a 46 mm screen). Pills are 32 pt tall and not
@@ -268,9 +270,22 @@ Rules (all in `SpeechQueue`; the numbers in `SpeechResume`, pinned by `SpeechRes
 - Coalescing: a line identical to the one playing or already queued is dropped. **Repeat** bypasses this (`sayAgain`): it removes any queued copy, speaks the last line actually spoken plus " Next, <place>, in N meters.", interrupting an equal-or-lower line (which is *not* re-queued) and queuing behind a higher one.
 - Load policy (`SpeechLoadPolicy`, Step 30): a mesh name (load class `.ambientObstacleName`) is dropped while anything is speaking, pausing or interrupted, or within 7 s of the last admitted name; a dropped name is logged `speech_suppressed`, never queued. Every other line fails open.
 - Phone call / Siri: new lines queue (deduplicated) and nothing plays; on `.ended` (or after 15 s if it never arrives) the session is re-activated — up to 3 attempts, 1 s apart — and the queue drains in priority order.
-- Warnings never wait for the network: `.obstacle` and `.safety` lines that are not already cached use the system voice at once (and prefetch the ElevenLabs voice for next time). Other lines use a cached ElevenLabs clip, else fetch it for at most 2.5 s in total, else fall back to the system voice; within 60 s of a natural-voice failure every cache miss goes straight to the system voice.
+- **One voice** (Steps 53–54, owner decision 2026-09-13 "ElevenLabs is the one voice for everything"). Which voice speaks a line is decided once, when it is dispatched, by `VoiceEngineChoice.decide` (CaneKitLogic, `VoiceEngineChoiceTests`), in this order — the **Engine** column of every band above:
+
+  | Condition (first match) | Engine (`speech_dispatch.engine`) | `engine_reason` |
+  |---|---|---|
+  | automation (`CANEKIT_MUTE` / `CANEKIT_UITEST`) | `muted` (no sound) | `muted` |
+  | no ElevenLabs key | `system` | `no_key` |
+  | Settings → Voice = System | `system` | `natural_off` |
+  | the exact line is on disk (any band, breaker open or not) | `elevenlabs` | `cached` |
+  | uncached `.obstacle` / `.safety` line — warnings never wait for the network | `system` now, prefetched for next time | `warning_miss` |
+  | uncached, breaker open | `system` now, prefetched | `breaker_open` |
+  | any other uncached line — route lines, answers, "One moment.", status clauses | `race`: fetch for at most 2.5 s in total | `race`, then `speech_engine` `race_won` / `race_timeout` / `race_failed` |
+
+  A race that times out or fails speaks the system voice and opens the **session-sticky breaker** (`VoiceBreaker`): it closes only when a background prefetch chunk actually fetches something, probed every 60 s — so a network outage flips the voice once, not once per line. An mp3 that will not play is re-spoken in the system voice (`speech_engine {engine_reason: playback_failed}`). Prefetch is additive (`VoicePrefetch.merge`): the launch batch puts every `.safety` line first, route starts queue the announce, the intro (`WalkingIntro.routeStarted`) and every waypoint line during the depth wait, and nothing cancels a running batch. There is no `immediate` any more. The Settings "Voice" card (Natural / System, disabled without a key) is the valve; the Details tab's Scene engine card shows the last line's engine and reason; the spoken status says "Natural voice ready." only when every safety and fixed line is cached.
 - Watchdog: 6 s + characters / 6 (the characters actually to be spoken — the remainder of a resumed line) after a line starts, a missing end callback counts as the end.
-- Trip log (`AppModel.start` wires the hooks): every line handed to a voice backend is `speech_dispatch {text, priority, replays, resume_from}` — `text` is always the whole line, `replays` how many times it was already resumed, `resume_from` the UTF-16 offset it started from (> 0 = resumed mid-line) — and every natural end (finished or watchdog, not a cut) is `speech_end {priority}`. Dispatched is not the same as heard. `ios/scripts/cue_audit.py` (`make audit`) turns them into `replays_resumed_mid_line`, `replays_from_line_start` and `cross_band_pause_under_0_3s` (should be 0).
+- Trip log (`AppModel.start` wires the hooks): every line handed to a voice backend is `speech_dispatch {text, priority, replays, resume_from, engine, engine_reason}` (plus `speech_engine {text, engine, engine_reason, wait_ms}` when a race or playback resolves, `voice_breaker {open, reason}`, `voice_backend {natural, by, key}`) — `text` is always the whole line, `replays` how many times it was already resumed, `resume_from` the UTF-16 offset it started from (> 0 = resumed mid-line) — and every natural end (finished or watchdog, not a cut) is `speech_end {priority}`. Dispatched is not the same as heard. `ios/scripts/cue_audit.py` (`make audit`) turns them into `replays_resumed_mid_line`, `replays_from_line_start` and `cross_band_pause_under_0_3s` (should be 0), and since Step 53 `voice.engine_flips` (per minute) and `voice.engine_flips_inside_route_speech` (should be 0 on a warm cache).
+- **Self-hear** (Step 55): while the walker dictates, a `.safety` line still plays — and the microphone has no echo control (hard rule 7) — so the recogniser's tap drops audio while the app speaks and for 0.3 s after, and a final transcript equal to a line spoken during the press (or one whole clause of it, within 3 s, ≥ 3 characters) is dropped silently (`voice_self_hear {action: paused | dropped, pause_ms, transcript, matched_line}`).
 
 Old comments that say "P0 / P1 / P2" refer to the original spec: P0 ≈ `.safety` + `.nav`, P1 ≈ `.obstacle`, P2 ≈ `.scene`. The four levels above are the truth.
 
@@ -303,7 +318,7 @@ like a centre cue. The rows below are the Detailed patterns.
 | `centerApproach(d)` | torso-centre lane < 2.0 m | Geiger loop: one transient (sharpness 0.6) repeated at 4 / d Hz, clamped 2 Hz @ 2 m → 8 Hz @ 0.5 m; intensity 0.6 @ 2 m → 1.0 @ 0.5 m | Only when the phone cannot buzz: "<distance> ahead." at most every 4 s | Torso-centre tile; cue pill CENTER (warning) | `.click` |
 | `left` | torso-left lane < 1.2 m | 2 transients 120 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Left." at most every 4 s | Torso-left tile; cue pill LEFT | `.start` |
 | `right` | torso-right lane < 1.2 m | 3 transients 100 ms apart, intensity 0.9, sharpness 0.5 | Only when the phone cannot buzz: "Right." at most every 4 s | Torso-right tile; cue pill RIGHT | `.stop` |
-| `head` | any head-row lane < 1.5 m outdoors, **< 1.2 m with Place = Indoors** (`CueRules.headEnterM`, pushed into `CueDecider.thresholds.head`; clears at 1.65 / 1.35 m) | 2 transients 80 ms apart, intensity 1.0, sharpness 1.0; re-fires every second while the obstacle stays — **never suppressed** | Spoken even when the phone can buzz: "Head height." at `.safety`, once per obstacle episode (a new episode starts after the cue clears or another cue is spoken), no more than one per 4 s; identical at every Cue detail level (the safety floor) | Head-row tile; cue pill HEAD | `.failure` (reserved for head height) |
+| `head` | a head-band lane (metric since Step 51: ≥ 140 cm above the ground, a covered cell) < 1.5 m outdoors, **< 1.2 m with Place = Indoors** (`CueRules.headEnterM`, pushed into `CueDecider.thresholds.head`; clears at 1.65 / 1.35 m), **with the overhang signature** (Step 52, ON by default: the same lane's torso cell ≥ 0.5 m farther, no return, or not covered — a wall or a person near in both bands is a torso cue) — `HeadGate` | 2 transients 80 ms apart, intensity 1.0, sharpness 1.0, at the **onset** at once (only the 400 ms change gate), then again only when the distance crosses 1.0 m and 0.6 m (each once, ≥ 1.5 s apart); no time-based re-fire; the episode ends after 2 s of trusted clear — **never suppressed** | Spoken even when the phone can buzz: "Head height." at `.safety` on the onset (no more than one onset line per 4 s) and once more in the same episode under 0.6 m; identical at every Cue detail level (the safety floor) | Head-row tile; cue pill HEAD | `.failure` (reserved for head height) |
 | Mesh name (`ObstacleNamer`) | door / seat / window / table < 3 m at the image centre (`SpokenPhrases.obstacleMaxDistance`); off when thermal ≥ serious. Walls are **never** named: the namer still has a 1.5 m wall limit, but no `CueRules` level allows a wall (the cane trails walls) | — | "Two meters ahead, door" (`.obstacle`, 4 s TTL): only with "Speak obstacle names" on (Haptics card, **off by default since Step 36**) **and** `CueRules.allowsName` — Detailed + Outdoors: every class but wall; Standard + Outdoors: doors only, and only while a route guides; Quiet, or Indoors at any level: nothing. On a class change or ≥ 1 m of movement, at most every 2.5 s, then at most one every 7 s and only while the queue is free (`SpeechLoadPolicy`) | — | — |
 | Ground hazard (not `CueDecider`: `GroundHazardDetector`, "Detect drop-offs" toggle, off by default) | drop-off / hole / step up / low obstacle in a 0.9 m wide corridor 1.5–3.5 m ahead: an edge against the near-field ground, confirmed on 3 of the last 5 trusted frames | 4 heavy taps 70 ms apart (intensity 1.0, sharpness 0.3), `playGroundHazard` | Always spoken, `.safety`: "Two meters ahead, drop-off." (`GroundHazardPolicy`: the same hazard in the same place, e.g. a curb you stand at, is said once, then at most every 30 s, and again once it is 1 m closer) | Hazards card LIDAR row; hazard map entry | `.click` when the phone cannot buzz or the mirror toggle is on |
 | Sign / hazard watch (`HazardScanner`, camera) | "Read signs" (on by default): on-device text every 3 s, small text down to 1/128 of the frame height (7.5 cm letters from ≈ 7 m, measured); never "STOP" (a drivers' sign); Cue detail Quiet or Place Indoors reads only `CueRules.safetySignPhrases` (SIDEWALK CLOSED, ROAD CLOSED, USE OTHER SIDEWALK, NO PEDESTRIANS, DO NOT ENTER, WET FLOOR, KEEP OUT, WORK ZONE, CONSTRUCTION, DETOUR, DANGER, CAUTION, PUSH BUTTON, CLOSED — i.e. every phrase except EXIT / ENTRANCE / PUSH / PULL; fed to `HazardScanner.signAllowedPhrases`); "Hazard watch" (off by default): one frame to the vision model every 8 s while walking a route | Nothing | "Sign: sidewalk closed." (8 s TTL; each sign at most once a minute — a phrase filtered out by the level is not stamped, so it never silences an allowed one); "Caution: 3 meters ahead, cones." ("NONE" is silent) | Hazards card SIGN / WATCH rows; hazard map entry | — |
@@ -451,34 +466,31 @@ Guide, the arrival sheet.
 ```
 While a route runs                                  Idle (before a route / after Stop / after arrival)
 ┌ Guide ─────────────────────────────────┐          ┌ Guide ─────────────────────────────────┐
-│ Goodwin Avenue. Intersection. Turn     │          │ No route                               │
-│ right to face north and stay on this   │          │ (⌖ ±5 M)                               │
-│ side. No crossing needed. Listen for … │          │ ┌ ◉ ─────────┐ ┌ 🎙 ────────┐          │ ← two-up TILES,
-│ 120 m                (↱ VEER RIGHT 40°)│          │ │ Where am I │ │ Talk to    │          │   same height
-│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ │ Camera ·   │ │ OpenCane   │          │
-│ ┌ ◉ ─────────┐ ┌ 🎙 ────────┐          │          │ │ what is    │ │ Voice · ask│          │
-│ │ Where am I │ │ Talk to    │          │          │ │ ahead      │ │ or command │          │
-│ │ Camera ·…  │ │ OpenCane   │          │          │ └────────────┘ └────────────┘          │
-│ └────────────┘ └────────────┘          │          │ [ ⟲ Repeat                           ] │ ← only after arrival
-│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ 🚶 Start route to CIF             › ] │ ← primary, subtitle
-│ [ ⌖ Recenter                         ] │          │ [   Campus Demo · Townsend Hall to CIF ] │
-│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Navigate to CIF from here          ] │ ← secondary, subtitle
-│ [ ▶ Simulate walk                    ] │          │ [   Live GPS · Apple Maps walking route] │
-│ [ ■ Stop route                       ] │          │ [ ▶ Simulate walk                      ] │ ← secondary, subtitle
-└────────────────────────────────────────┘          │ [   Indoor demo · walks the route for you] │
-                                                    │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
-                                                    │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
-                                                    │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
-                                                    │ ⚠ Type a destination first             │ ← only after a
-                                                    └────────────────────────────────────────┘   failed attempt
+│ Goodwin Avenue. Intersection. Turn …   │          │ No route                               │
+│ 120 m                (↱ VEER RIGHT 40°)│          │ (⌖ ±5 M)                               │
+│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │          ≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋             │ ← VoiceTile: ~40 contour
+│          ≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋             │          │        ≋≋≋≋   ( 🎙 )   ≋≋≋≋           │   rings + mic disc, one
+│        ≋≋≋≋   ( 〰 )   ≋≋≋≋  ← ripples  │          │          ≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋             │   button, ≥ 60 % of height
+│          ≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋≋             │          │     Say route, where am I, or help.    │ ← status line / last answer
+│      <the assistant's last answer>     │          │ ┌ ◉ ─────────┐ ┌ 🚶 ─────────┐         │ ← compact row (tiles)
+│ ┌ ⟲ ────┐ ┌ ⏭ ────┐ ┌ ■ ─────┐         │          │ │ Where am I │ │ Start route │         │
+│ │ Repeat│ │ Next  │ │ Stop   │         │          │ └────────────┘ │ to CIF      │         │
+│ └───────┘ └───────┘ │ route  │         │          │                └─────────────┘         │
+│ ─ ─ ─ ─ ─ ─ below the fold ─ ─ ─ ─ ─ ─ │          │ ─ ─ ─ ─ ─ ─ below the fold ─ ─ ─ ─ ─ ─ │
+│ [ ⌖ Recenter                         ] │          │ [ ⟲ Repeat                           ] │ ← only after arrival
+│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Navigate to CIF from here          ] │
+│ [ ▶ Simulate walk                    ] │          │ [ ▶ Simulate walk                      ] │
+└────────────────────────────────────────┘          │ [ ⌕ grainger             ⓧ] [ Go ]     │
+                                                    │ ⚠ Type a destination first             │
+                                                    └────────────────────────────────────────┘
 ```
 
 - Instruction: the *upcoming* waypoint's `say` ("Arrived: <say>" after arrival, "No route" when idle), `instruction` font, wraps without limit — the spotter reads it over the walker's shoulder.
 - Distance row: only with a GPS-derived distance (never in the simulator without a fix): hero integer metres + "m", and the bearing pill when there is a heading and a target (hidden on a curved leg and while silent at a crossing).
-- **The two-up pair is a pair of tiles** (`CKBigButton(layout: .tile)`, Step 47): icon over a centred word over a caption ("Camera · what is ahead" / "Voice · ask or command"), both in one `HStack` that is `fixedSize` vertically so they are the same shape and height however their words wrap. Before Step 47 they were row buttons and `ViewThatFits` stacked the long one while the short one stayed a row — one pair, two shapes. While listening the Talk tile turns destructive red, reads "Listening…" with the caption "Tap again to send".
-- **Route buttons are full-width rows with a subtitle** (Step 46): Start route to CIF (primary, chevron), Navigate to CIF from here and Simulate walk (secondary). A subtitle wraps to a second line rather than forcing the stacked shape (Step 47: the row's text column is flexible width).
-- Button rows while navigating: Repeat (primary) + Next (secondary) share a row; Recenter (secondary) has its own row; the beacon / head pills sit between Recenter and Simulate walk / Stop simulation; **Stop route (destructive, last)**, so Stop is the furthest control from Repeat / Next. The phone button uses a two-tap, three-second confirmation gate; Watch/Siri stop commands remain hands-free direct actions.
-- Where am I and Talk to OpenCane are always present (idle and navigating), above the route controls.
+- **The voice tile (Step 58, owner decision 2026-09-13)**: a giant round microphone in the middle of the page inside ~40 thin, hand-drawn-looking concentric contour rings (a `Canvas`, seeded per-ring noise — the same drawing every launch). The whole ring square, at least 60 % of the page height, is one button → `toggleVoiceInput()`; a thumb anywhere near the middle of the phone talks. Rings **ripple outward while listening**, **breathe while the app speaks**, and are **still when idle**; Reduce Motion keeps them still. Disc: `accent` (ink / ivory), `danger` while listening or starting. VoiceOver sees one button ("Talk to OpenCane" / "Listening…" / "Starting…" / "Thinking…"). Under it one status line: the assistant's last answer, or "Say route, where am I, or help." before the first.
+- **The compact row, directly under the tile**: idle → Where am I | Start route to CIF; navigating → Repeat | Next | Stop route. Tiles (`CKBigButton(layout: .tile)`), one `HStack` fixed vertically so they are one shape. **This is the one exception to "never more than two per row"**: tiles wrap "Stop route" onto two lines instead of hyphenating, and a sighted spotter needs Stop reachable without scrolling now that the microphone owns the top of the page. Trade-off, accepted: Stop sits beside Next (Guided Access on the walk).
+- **Below the fold**, labels unchanged (hard rule 9; the UI tests `scrollTo` them): navigating → Recenter, the beacon / head pills, Simulate walk / Stop simulation; idle → Repeat (after arrival only), Cancel route start (while waiting), Navigate to CIF from here, Simulate walk, the route-start status, the destination field. Route buttons are full-width rows with a subtitle (Step 46).
+- The Talk tile of Step 47 is gone (the microphone replaces it); Where am I is in the idle compact row, and by voice ("where am I") in both states.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
 |---|---|---|---|---|
@@ -487,18 +499,19 @@ While a route runs                                  Idle (before a route / after
 | 3 | Distance row (combined) | "N meters to the next point" | — | — |
 | 4 | GPS pill | "GPS: ±N m" / "GPS: Searching" / "GPS: Denied" / "GPS: Off" | — | `.updatesFrequently` |
 | 5 | GPS weak pill | "GPS weak" | — | — |
-| 6 | Where am I | "Where am I" ("Describing…" while busy) | value "in progress" while busy; hint "Takes a photo and reads out hazards and landmarks ahead" | button; disabled while busy |
-| 6b | Talk to OpenCane | "Talk to OpenCane" ("Listening…" / "Thinking…" while busy) | value "listening" while listening; hint "Tap to speak a command, ask a question, or set a post" | button |
+| 6 | Voice tile (microphone + rings) | "Talk to OpenCane" ("Listening…" / "Starting…" / "Thinking…") | value "listening" / "starting"; hint "Tap to speak a command, ask a question, or set a post" | button; the rings are hidden |
+| 6a | Status line under the tile | "Assistant: <last answer>" / "Say route, where am I, or help." | — | static text |
+| 6b | Where am I (idle compact row) | "Where am I" ("Describing…" while busy) | value "in progress" while busy; hint "Takes a photo and reads out hazards and landmarks ahead" | button; disabled while busy |
 | 7 | Scene text / describer error | "Scene: <description>" / the error text | — | — |
-| 8 | Repeat | "Repeat" | hint "Says the current instruction again" ("Says the arrival line again" after arrival) | button |
-| 9 | Next | "Next" | hint "Skips to the next instruction" | button |
+| 8 | Repeat (navigating compact row; below the fold after arrival) | "Repeat" | hint "Says the current instruction again" ("Says the arrival line again" after arrival) | button |
+| 9 | Next (navigating compact row) | "Next" | hint "Skips to the next instruction" | button |
 | 10 | Recenter | "Recenter" | hint "Sets straight ahead as the beacon's forward direction" | button |
 | 11 | Beacon pill | "Beacon: Beacon N%" / "Beacon: Beacon paused" / "Beacon: Beacon off" / "Beacon: Beacon idle" | — | `.updatesFrequently` |
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
 | 12b | Simulate walk / Stop simulation (navigating, between the pills and Stop route) | "Simulate walk" / "Stop simulation" (`AppModel.isSimulatingWalk`) | hint "Simulates walking along the active route indoors" / "Pauses the walk simulation" | button; **no test uses either label** |
-| 13 | Stop route | "Stop route" | first tap: "Arms route stop; tap again within 3 seconds to end guidance"; armed state: "Confirms ending guidance when tapped again within 3 seconds" | two-tap confirmation button |
+| 13 | Stop route (navigating compact row) | "Stop route" | first tap: "Arms route stop; tap again within 3 seconds to end guidance"; armed state: "Confirms ending guidance when tapped again within 3 seconds" | two-tap confirmation button |
 | — | Cancel route start (idle, only while a route start waits for the depth interlock) | "Cancel route start" | hint "Stops waiting for obstacle detection and does not start guidance"; the status line under the route buttons says why the route has not started | button (destructive); **no test uses it** (§9) |
-| — | Start route to CIF (idle) | "Start route to CIF" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
+| — | Start route to CIF (idle compact row) | "Start route to CIF" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
 | — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
 | — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
 | — | Suggestion row (0–6, campus places first) | "&lt;place>, campus place, 400 meters away, &lt;address>" | hint "Starts walking guidance to this place" | button |
@@ -529,6 +542,10 @@ Focus order is the visual order. Nothing uses `accessibilitySortPriority`.
 Tiles: 3 × 2, gap 8, radius 14, equal widths, `md` vertical padding. Each tile = fill (`laneX`) + position
 label + metres + level word; no glyph. ≥ 4.5 m or no return shows "clear"; before the first depth frame
 "—" on `laneNoData` with NO DATA. Sweeping changes only the pill (tiles keep drawing).
+**NO COVER** (Step 51): a band the camera cannot see at the head-cue distance (the head row on a
+cane held ~45° down) shows "—" on `laneNoData` with the word NO COVER, text in `textSecondary` —
+never CLEAR, because nobody knows it is empty; the row's VoiceOver value says "no cover" for that
+lane. The Mount card then reads "Camera tilt N° down: too steep for head-height cover".
 
 | Element | Label | Value | Traits |
 |---|---|---|---|

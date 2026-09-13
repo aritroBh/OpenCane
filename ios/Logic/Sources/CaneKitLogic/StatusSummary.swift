@@ -18,7 +18,8 @@
 //  decided here and pinned by `StatusSummaryTests`.
 //
 //  Key invariants:
-//    · **Fixed order, always.** Obstacle detection, GPS, audio, haptics, route, battery — in that
+//    · **Fixed order, always.** Obstacle detection, GPS, audio, voice (Step 54, when measured),
+//      haptics, route, battery — in that
 //      order, every time, whether or not anything is wrong. A blind user learns the shape of the
 //      answer and can stop listening once they have heard the clause they asked about; re-ordering
 //      by severity would make the same question answer differently each time.
@@ -40,7 +41,7 @@
 //  status question with one clause — `gpsLine`, `audioLine`, `routeLine`, `batteryLine`,
 //  `hapticsLine` — or `sentence`, from its own `currentStatusFacts()`).
 //  Isolation: stateless and nonisolated; `StatusFacts` is a plain `Sendable` value.
-//  Tests: StatusSummaryTests.swift (12).
+//  Tests: StatusSummaryTests.swift (15; the three `voiceClause…` tests pin Step 54's voice clause).
 //
 
 import Foundation
@@ -93,6 +94,13 @@ public struct StatusFacts: Sendable, Equatable {
     /// (`ConversationCoordinator` says "Battery level unknown." itself in that case.)
     public var batteryPercent: Int
 
+    /// The natural voice's readiness (Step 54), or nil when the caller did not measure it — then
+    /// the voice clause is omitted, like an unknown battery. `AppModel.speakStatus` always fills it
+    /// (`AppModel.voiceFacts()`); `ConversationCoordinator` answers one clause at a time and does
+    /// not. Not an `init` parameter so the existing call sites stay as they are; a caller that
+    /// measures it sets it after building the value.
+    public var voice: VoiceFacts? = nil
+
     /// Memberwise, with every field required: a new fact must be decided at every call site rather
     /// than silently defaulting to "fine".
     public init(lidarSupported: Bool, obstacleDetectionRunning: Bool, depthFps: Double,
@@ -120,6 +128,30 @@ public struct StatusFacts: Sendable, Equatable {
     }
 }
 
+/// Whether the one natural voice can carry every line right now (Step 54, owner decision
+/// 2026-09-13 "ElevenLabs is the one voice for everything"). Gathered by `AppModel.voiceFacts()`
+/// from `SpeechQueue`; worded by `StatusSummary.voiceLine`.
+public struct VoiceFacts: Sendable, Equatable {
+    /// An ElevenLabs key is configured (`SpeechQueue.naturalVoice != nil`).
+    public var hasKey: Bool
+    /// The Settings "Voice" picker is on Natural (`AppModel.naturalVoiceEnabled`).
+    public var naturalEnabled: Bool
+    /// `VoiceBreaker.isOpen`: a live fetch failed or timed out and no background fetch has
+    /// succeeded since.
+    public var breakerOpen: Bool
+    /// Share (0…1) of the launch vocabulary — every safety line and every fixed line
+    /// (`AppModel.voiceReadyLines`) — already on disk (`SpeechQueue.cachedShare(of:)`).
+    public var cachedShare: Double
+
+    /// Memberwise, every field required.
+    public init(hasKey: Bool, naturalEnabled: Bool, breakerOpen: Bool, cachedShare: Double) {
+        self.hasKey = hasKey
+        self.naturalEnabled = naturalEnabled
+        self.breakerOpen = breakerOpen
+        self.cachedShare = cachedShare
+    }
+}
+
 /// Turns `StatusFacts` into the clauses the app speaks. Pure: no clock, no I/O.
 public enum StatusSummary {
 
@@ -140,18 +172,59 @@ public enum StatusSummary {
     /// "low" instead of only the number. 20 % is iOS's own low-power prompt.
     public static let lowBatteryPercent: Int = 20
 
+    // MARK: Fixed clauses (Step 56: the voice shell prefetches them by bytes)
+
+    /// Obstacle clause on a phone with no LiDAR.
+    public static let noDepthSensorLine = "This phone has no depth sensor, so there are no obstacle warnings."
+    /// Obstacle clause with the depth session stopped.
+    public static let detectionOffLine = "Obstacle detection is off."
+    /// Obstacle clause with the session up but no frames arriving.
+    public static let noDepthFramesLine = "Obstacle detection is running but no depth frames are arriving."
+    /// GPS clause with location permission refused.
+    public static let locationDeniedLine = "Location permission is denied, so no route can run."
+    /// GPS clause before the first fix.
+    public static let noGPSFixLine = "No GPS fix yet."
+    /// GPS clause with a fix of unknown (negative) accuracy.
+    public static let gpsUnknownAccuracyLine = "GPS fix with unknown accuracy."
+    /// Audio clause with no headphones.
+    public static let noHeadphonesLine = "No headphones. Speech is on the phone speaker and the beacon is paused."
+    /// Route clause while idle.
+    public static let noRouteLine = "No route running."
+
+    /// Every clause `lines(_:)` can produce that has no measured number or device name in it — the
+    /// constants above plus the five haptics forms — so the voice shell's "status" answer is mostly
+    /// natural voice (`SpokenPhrases.shellLines`). Pinned by `everyNumberFreeClauseIsAFixedLine`.
+    public static let fixedLines: [String] = {
+        var out = [noDepthSensorLine, detectionOffLine, noDepthFramesLine, locationDeniedLine,
+                   noGPSFixLine, gpsUnknownAccuracyLine, noHeadphonesLine, noRouteLine]
+        for healthy in [true, false] {
+            for silenced in [false, true] {
+                for watch in [true, false] {
+                    let line = hapticsLine(healthy: healthy, silenced: silenced, watchReachable: watch)
+                    if !out.contains(line) { out.append(line) }
+                }
+            }
+        }
+        return out
+    }()
+
     // MARK: The answer
 
     /// The clauses to speak, in the fixed order described in the file header. Each is a complete
     /// sentence ending in a full stop, so the caller can speak them as separate lines and let a
     /// warning interrupt one clause rather than the whole report.
     /// - Parameter f: what the app measured, right now.
-    /// - Returns: five or six clauses (battery is omitted when unknown), each ending in a full stop;
+    /// - Returns: five to seven clauses (battery is omitted when unknown, voice when not measured),
+    ///   each ending in a full stop;
     ///   one clause may hold two short sentences ("GPS weak, 25 meters. Waypoint cues are paused.").
     ///   Never empty. Pinned by `statusClausesAlwaysComeInTheSameOrder`,
     ///   `healthyStatusStillNamesEveryChannel`, `noStatusClauseEverPromisesAClearPath`.
     public static func lines(_ f: StatusFacts) -> [String] {
-        var out = [obstacleLine(f), gpsLine(f), audioLine(f), hapticsLine(f), routeLine(f)]
+        var out = [obstacleLine(f), gpsLine(f), audioLine(f)]
+        // Step 54: the voice is an audio fact, so its clause follows the audio clause; omitted when
+        // not measured (like battery). Pinned by `voiceClauseFollowsAudioAndIsOmittedWhenNotMeasured`.
+        if let voice = f.voice { out.append(voiceLine(voice)) }
+        out += [hapticsLine(f), routeLine(f)]
         if let battery = batteryLine(f) { out.append(battery) }
         return out
     }
@@ -172,9 +245,9 @@ public enum StatusSummary {
     /// Pinned by `aRunningDepthSessionWithNoFramesIsNotReportedAsOn`,
     /// `obstacleDetectionOffAndNoSensorReadDifferently`.
     public static func obstacleLine(_ f: StatusFacts) -> String {
-        guard f.lidarSupported else { return "This phone has no depth sensor, so there are no obstacle warnings." }
-        guard f.obstacleDetectionRunning else { return "Obstacle detection is off." }
-        guard f.depthFps >= minDepthFps else { return "Obstacle detection is running but no depth frames are arriving." }
+        guard f.lidarSupported else { return noDepthSensorLine }
+        guard f.obstacleDetectionRunning else { return detectionOffLine }
+        guard f.depthFps >= minDepthFps else { return noDepthFramesLine }
         return "Obstacle detection on, \(Int(f.depthFps.rounded())) frames per second."
     }
 
@@ -185,9 +258,9 @@ public enum StatusSummary {
     /// good (≤ 20 m, inclusive) / weak. Pinned by `gpsClauseSeparatesDeniedFromNoFix`,
     /// `gpsWeakThresholdMatchesTheGeofenceGate`.
     public static func gpsLine(_ f: StatusFacts) -> String {
-        if f.locationDenied { return "Location permission is denied, so no route can run." }
-        guard f.gpsFix else { return "No GPS fix yet." }
-        guard f.gpsAccuracyM >= 0 else { return "GPS fix with unknown accuracy." }
+        if f.locationDenied { return locationDeniedLine }
+        guard f.gpsFix else { return noGPSFixLine }
+        guard f.gpsAccuracyM >= 0 else { return gpsUnknownAccuracyLine }
         let metres = Int(f.gpsAccuracyM.rounded())
         return f.gpsAccuracyM <= weakGPSAccuracyM
             ? "GPS good, within \(metres) meters."
@@ -200,7 +273,7 @@ public enum StatusSummary {
     /// A blank route name reads "Headphones". Pinned by `losingHeadphonesSaysWhatStoppedWorking`.
     public static func audioLine(_ f: StatusFacts) -> String {
         guard f.headphonesConnected else {
-            return "No headphones. Speech is on the phone speaker and the beacon is paused."
+            return noHeadphonesLine
         }
         let name = f.headphoneName.trimmingCharacters(in: .whitespacesAndNewlines)
         let who = name.isEmpty ? "Headphones" : name
@@ -242,7 +315,7 @@ public enum StatusSummary {
     /// question when you cannot see the card.
     /// Pinned by `noRouteIsStillAnAnswer`, `everyStatusClauseIsOneFinishedSentence`.
     public static func routeLine(_ f: StatusFacts) -> String {
-        guard f.routeRunning else { return "No route running." }
+        guard f.routeRunning else { return noRouteLine }
         let instruction = f.routeInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         var line = instruction.isEmpty ? "Route running." : "Route running: \(sentenceCased(instruction))"
         if !line.hasSuffix(".") { line += "." }
@@ -260,6 +333,37 @@ public enum StatusSummary {
         return f.batteryPercent <= lowBatteryPercent
             ? "Battery low, \(f.batteryPercent) percent."
             : "Battery \(f.batteryPercent) percent."
+    }
+
+    // MARK: Voice (Step 54)
+
+    /// The cached share at or above which the natural voice counts as ready: all of it. One
+    /// missing safety line is the line that will come out in the other voice, at the worst moment.
+    /// Pinned by `voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached`.
+    public static let voiceReadyShare: Double = 1
+
+    /// "Voice ready" — the demo checklist's gate (docs/devices_setup.md): a key, Natural chosen,
+    /// the breaker closed and the whole launch vocabulary on disk.
+    /// Pinned by `voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached`,
+    /// `voiceClauseNamesTheSystemVoiceAndWhy`.
+    public static func voiceReady(_ v: VoiceFacts) -> Bool {
+        v.hasKey && v.naturalEnabled && !v.breakerOpen && v.cachedShare >= voiceReadyShare
+    }
+
+    /// The voice clause. The system voice always says why (no key / your setting / unreachable, in
+    /// that order); the natural voice says ready or how much is cached, rounded *down* so
+    /// "100 percent" is never heard next to "warming up".
+    /// Pinned by `voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached`,
+    /// `voiceClauseNamesTheSystemVoiceAndWhy`.
+    public static func voiceLine(_ v: VoiceFacts) -> String {
+        guard v.hasKey else { return "System voice. No natural voice key." }
+        guard v.naturalEnabled else { return "System voice, by your setting." }
+        guard !v.breakerOpen else { return "Natural voice unreachable. Using the system voice." }
+        if voiceReady(v) { return "Natural voice ready." }
+        // The epsilon keeps 0.29 × 100 = 28.999… from reading 28; the cap keeps it under 100.
+        let share = v.cachedShare.isFinite ? max(0, v.cachedShare) : 0
+        let percent = min(99, Int((share * 100 + 1e-9).rounded(.down)))
+        return "Natural voice warming up, \(percent) percent cached."
     }
 
     /// Capitalises the first letter of an instruction so it reads as a sentence after the colon

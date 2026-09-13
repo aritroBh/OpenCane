@@ -50,8 +50,8 @@ struct LaneGridView: View {
                              spoken: report.isTrusted ? "Depth trusted" : "Sweeping, warnings paused",
                              updatesFrequently: true)
             }
-            row(title: "Head", values: report.head)
-            row(title: "Torso", values: report.torso)
+            row(title: "Head", values: report.head, coverage: report.grid.headCoverage)
+            row(title: "Torso", values: report.torso, coverage: report.grid.torsoCoverage)
         }
     }
 
@@ -62,31 +62,40 @@ struct LaneGridView: View {
     /// - Parameters:
     ///   - title: "Head" or "Torso"; shown as the row caption and used in the label.
     ///   - values: three distances in metres, left → right (non-finite = nothing seen).
-    private func row(title: String, values: [Float]) -> some View {
+    ///   - coverage: per lane, whether the camera can see this band at the head-cue distance
+    ///     (`LaneGrid.headCoverage` / `torsoCoverage`, Step 51); false → the NO COVER tile.
+    private func row(title: String, values: [Float], coverage: [Bool]) -> some View {
         VStack(alignment: .leading, spacing: CKSpacing.xs) {
             Text(title)
                 .font(CKFont.secondary.weight(.semibold))
                 .foregroundStyle(CKColor.textSecondary)
             HStack(spacing: CKSpacing.sm) {
                 ForEach(0..<3, id: \.self) { i in
-                    LaneTile(label: Self.laneNames[i], distance: values[i], hasData: report.depthAvailable)
+                    LaneTile(label: Self.laneNames[i], distance: values[i], hasData: report.depthAvailable, covered: coverage[i])
                 }
             }
         }
         // ⚠ test contract: one element per row, label "<title> row".
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title) row")
-        .accessibilityValue(spoken(values))
+        .accessibilityValue(spoken(values, coverage: coverage))
         .accessibilityAddTraits(.updatesFrequently)
     }
 
     /// Spoken row value: "no depth data" without depth, else "left <d>, center <d>, right <d>"
-    /// where each <d> is `SpokenDistance.phrase` under 4.5 m and "clear" otherwise (the same
-    /// 4.5 m cutoff as the visible tile text).
-    private func spoken(_ values: [Float]) -> String {
+    /// where each <d> is "no cover" when the camera cannot see the band (Step 51, the NO COVER
+    /// tile), `SpokenDistance.phrase` under 4.5 m, and "clear" otherwise (the same 4.5 m cutoff as
+    /// the visible tile text).
+    /// - Parameters:
+    ///   - values: three distances in metres, left → right.
+    ///   - coverage: `LaneGrid.headCoverage` / `torsoCoverage` for the row.
+    private func spoken(_ values: [Float], coverage: [Bool]) -> String {
         guard report.depthAvailable else { return "no depth data" }
-        return zip(Self.laneNames, values).map { name, d in
-            "\(name.lowercased()) \(d.isFinite && d < 4.5 ? SpokenDistance.phrase(d) : "clear")"
+        return (0..<3).map { i in
+            let d = values[i]
+            let word = i < coverage.count && !coverage[i] ? "no cover"
+                : (d.isFinite && d < 4.5 ? SpokenDistance.phrase(d) : "clear")
+            return "\(Self.laneNames[i].lowercased()) \(word)"
         }.joined(separator: ", ")
     }
 }
@@ -95,8 +104,8 @@ struct LaneGridView: View {
 /// the row exposes the combined value.
 ///
 /// Three-way redundancy (design.md §0 rule 2): fill colour + level word (STOP / NEAR / FAR /
-/// CLEAR / NO DATA) + a number, so no state depends on colour alone. Text on a lane fill is
-/// `ink`; on the no-data fill it is `textSecondary`.
+/// CLEAR / NO DATA / NO COVER) + a number, so no state depends on colour alone. Text on a lane fill is
+/// `ink`; on the no-data / no-cover fill it is `textSecondary`.
 struct LaneTile: View {
     /// Column caption: "Left", "Center" or "Right".
     let label: String
@@ -104,15 +113,19 @@ struct LaneTile: View {
     let distance: Float
     /// False when the depth engine has no depth at all; the tile then shows "—" / NO DATA.
     let hasData: Bool
+    /// False when the camera cannot see this height band at the head-cue distance (Step 51:
+    /// `LaneGrid.headCoverage` / `torsoCoverage`; e.g. the head band on a 45° cane mount). The tile
+    /// then shows "—" / NO COVER on the no-data fill — never CLEAR (`TileLevel.noCover`).
+    var covered: Bool = true
 
     /// Ladder level from CaneKitLogic (thresholds live there, not in the UI).
-    private var level: TileLevel { TileLevel.level(for: distance, hasData: hasData) }
+    private var level: TileLevel { TileLevel.level(for: distance, hasData: hasData, covered: covered) }
 
     var body: some View {
         VStack(spacing: 2) {
             Text(label)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(level == .noData ? CKColor.textSecondary : CKColor.ink.opacity(0.7))
+                .foregroundStyle((level == .noData || level == .noCover) ? CKColor.textSecondary : CKColor.ink.opacity(0.7))
             Text(text)
                 .font(CKFont.tile)
                 .lineLimit(1)
@@ -120,16 +133,17 @@ struct LaneTile: View {
             Text(levelWord)
                 .font(.caption2.weight(.bold))
         }
-        .foregroundStyle(level == .noData ? CKColor.textSecondary : CKColor.ink)
+        .foregroundStyle((level == .noData || level == .noCover) ? CKColor.textSecondary : CKColor.ink)
         .frame(maxWidth: .infinity)
         .padding(.vertical, CKSpacing.md)
         .background(fill, in: RoundedRectangle(cornerRadius: CKRadius.tile, style: .continuous))
         .accessibilityHidden(true)
     }
 
-    /// Visible metres: "—" without data, "clear" at ≥ 4.5 m or non-finite, else "%.1f m".
+    /// Visible metres: "—" without data or coverage, "clear" at ≥ 4.5 m or non-finite, else "%.1f m".
     /// 4.5 m is a display cutoff, distinct from the 2.0 m colour threshold.
     private var text: String {
+        guard covered else { return "—" }
         guard hasData else { return "—" }
         guard distance.isFinite, distance < 4.5 else { return "clear" }
         return String(format: "%.1f m", distance)
@@ -143,6 +157,7 @@ struct LaneTile: View {
         case .far: return "FAR"
         case .clear: return "CLEAR"
         case .noData: return "NO DATA"
+        case .noCover: return "NO COVER"
         }
     }
 
@@ -153,7 +168,7 @@ struct LaneTile: View {
         case .near: return CKColor.laneNear
         case .far: return CKColor.laneFar
         case .clear: return CKColor.laneClear
-        case .noData: return CKColor.laneNoData
+        case .noData, .noCover: return CKColor.laneNoData
         }
     }
 }

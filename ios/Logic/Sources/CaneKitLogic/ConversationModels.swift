@@ -384,4 +384,25 @@ public enum ConversationAction: Sendable, Equatable {
     case updateSetting(option: String, enabled: Bool)
     /// Silence (true) or restore (false) cane haptics (`AppModel.setHapticsSilenced`).
     case silenceCane(silenced: Bool)
+    // MARK: Voice shell (Step 56) — produced by `FastPathIntentClassifier` rule 0 (`VoiceMenu`)
+
+    /// "route" / one: start the recorded CIF demo route (`AppModel.startDemoRoute`); while a
+    /// route runs, the route clause instead. "take me to …" stays `.startRoute`.
+    case startDefaultRoute
+    /// "where am I" / "describe" / two / three: describe the scene (`AppModel.describeScene`).
+    case describeScene
+    /// "status" / four: the whole spoken status report (`AppModel.speakStatus`).
+    case speakStatus
+    /// "repeat" / five: say the current instruction again (`AppModel.repeatInstruction`).
+    case repeatInstruction
+    /// "next": skip to the next waypoint (`AppModel.nextWaypoint`).
+    case nextWaypoint
+    /// "quiet" / six, "standard", "detailed": set the cue level (`AppModel.setCueLevel`).
+    case setCueLevel(CueLevel)
+    /// "help" / seven: read the numbered list (`VoiceMenu.helpLine`).
+    case help
+    /// "emergency" / eight: prompt for the confirmation-gated call (`EmergencyConfirm`).
+    case emergency
+    /// "yes" (true) / "no", "cancel" (false): the answer to a pending emergency prompt.
+    case confirm(Bool)
 }

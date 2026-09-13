@@ -179,28 +179,57 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: CueSpeechPolicy
 
-/// Under a low branch "Head height." is spoken once while the haptic re-fires every second.
+/// Under a low branch "Head height." is spoken at the onset and once more when the walker gets
+/// under 0.6 m, never on the 1.0 m band re-fire and never a third time.
+/// History: before Step 52 this fed bare `.head` re-fires at 1 Hz and ended the episode with
+/// `cleared()`; the decider now owns the episode and the payload says onset or band re-fire.
 @Test func headHeightIsSpokenOncePerEpisode() {
     var p = CueSpeechPolicy()
-    let r13 = p.line(for: .head, phoneCannotBuzz: false, now: 0)
-    #expect(r13?.text == "Head height.")
-    let r14 = p.line(for: .head, phoneCannotBuzz: false, now: 1)
-    #expect(r14 == nil)   // same episode, 1 Hz re-fire
-    let r15 = p.line(for: .head, phoneCannotBuzz: false, now: 9)
-    #expect(r15 == nil)   // still the same episode
-    p.cleared()
-    let r16 = p.line(for: .head, phoneCannotBuzz: false, now: 9.5)
-    #expect(r16?.tier == .safety)   // new episode
+    let onset = p.line(for: .head(distance: 1.2, onset: true), phoneCannotBuzz: false, now: 0)
+    #expect(onset?.text == "Head height.")
+    #expect(onset?.tier == .safety)
+    let band1 = p.line(for: .head(distance: 0.95, onset: false), phoneCannotBuzz: false, now: 1.5)
+    #expect(band1 == nil)                                   // 1.0 m band: haptic only
+    let band2 = p.line(for: .head(distance: 0.55, onset: false), phoneCannotBuzz: false, now: 3.0)
+    #expect(band2?.text == "Head height.")                  // under 0.6 m: the second line
+    let late = p.line(for: .head(distance: 0.3, onset: false), phoneCannotBuzz: false, now: 9)
+    #expect(late == nil)                                    // never a third line in one episode
 }
 
-/// Stepping in and out under an overhang does not repeat "Head height." inside 4 s.
+/// Stepping in and out under an overhang (two episodes) does not repeat "Head height." inside 4 s.
+/// History: the second episode used to be opened with `cleared()`; it is now an onset payload.
 @Test func headEpisodesAreRateLimitedAcrossEpisodes() {
     var p = CueSpeechPolicy()
-    let r17 = p.line(for: .head, phoneCannotBuzz: false, now: 0)
+    let r17 = p.line(for: .head(distance: 1.0, onset: true), phoneCannotBuzz: false, now: 0)
     #expect(r17 != nil)
-    p.cleared()
-    let r18 = p.line(for: .head, phoneCannotBuzz: false, now: 2)
+    let r18 = p.line(for: .head(distance: 1.0, onset: true), phoneCannotBuzz: false, now: 2)
     #expect(r18 == nil)   // < 4 s since the last one
+    let r19 = p.line(for: .head(distance: 1.0, onset: true), phoneCannotBuzz: false, now: 4.5)
+    #expect(r19?.text == "Head height.")
+}
+
+/// The second line needs a band re-fire under 0.6 m: a 0.6 m or farther re-fire is silent, a
+/// second under-0.6 m fire in the same episode is silent, and a new onset re-arms it.
+@Test func secondHeadLineNeedsUnderSixtyCentimetres() {
+    var p = CueSpeechPolicy()
+    // (`line` is mutating, so each result is bound before `#expect`, as the other tests here do.)
+    _ = p.line(for: .head(distance: 1.4, onset: true), phoneCannotBuzz: false, now: 0)
+    let atSixty = p.line(for: .head(distance: 0.6, onset: false), phoneCannotBuzz: false, now: 2)
+    #expect(atSixty == nil)
+    let under = p.line(for: .head(distance: 0.59, onset: false), phoneCannotBuzz: false, now: 2.1)
+    #expect(under?.text == "Head height.")
+    let again = p.line(for: .head(distance: 0.4, onset: false), phoneCannotBuzz: false, now: 4)
+    #expect(again == nil)
+    // A new episode: onset (≥ 4 s after the last line) speaks and re-arms the second line.
+    let onset2 = p.line(for: .head(distance: 1.2, onset: true), phoneCannotBuzz: false, now: 20)
+    #expect(onset2 != nil)
+    let second2 = p.line(for: .head(distance: 0.5, onset: false), phoneCannotBuzz: false, now: 22)
+    #expect(second2 != nil)
+    // The second line even speaks inside the 4 s onset limiter: under 0.6 m is one step away.
+    let onset3 = p.line(for: .head(distance: 1.2, onset: true), phoneCannotBuzz: false, now: 40)
+    #expect(onset3 != nil)
+    let second3 = p.line(for: .head(distance: 0.5, onset: false), phoneCannotBuzz: false, now: 41.5)
+    #expect(second3 != nil)
 }
 
 /// Left / right / ahead are spoken only when haptics are down or silenced, each at most every 4 s.
@@ -257,15 +286,17 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
 
 // MARK: Step 10 round 3 (Muse review)
 
-/// A silent (buzzed) side cue between head re-fires does not re-speak "Head height."
+/// A silent (buzzed) side cue between the head onset and a 1.0 m band re-fire does not re-speak
+/// "Head height." History: the Step 10 bug was an `episodeKind` the side cue overwrote; the
+/// episode now lives in the decider, and this pins that a side cue still cannot open one here.
 @Test func aBuzzedSideCueDoesNotSplitAHeadEpisode() {
     var p = CueSpeechPolicy()
-    let first = p.line(for: .head, phoneCannotBuzz: false, now: 0)
+    let first = p.line(for: .head(distance: 1.2, onset: true), phoneCannotBuzz: false, now: 0)
     #expect(first != nil)
     let side = p.line(for: .left, phoneCannotBuzz: false, now: 5)     // buzzed, not spoken
     #expect(side == nil)
-    let again = p.line(for: .head, phoneCannotBuzz: false, now: 6)    // same episode: silent
-    #expect(again == nil)
+    let again = p.line(for: .head(distance: 0.9, onset: false), phoneCannotBuzz: false, now: 6)
+    #expect(again == nil)                                            // band re-fire: silent
 }
 
 /// Stopping 11 m short of a crossing (tying a shoe) keeps the beacon silent.

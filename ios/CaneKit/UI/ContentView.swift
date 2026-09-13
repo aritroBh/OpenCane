@@ -359,12 +359,14 @@ private struct SettingsPage: View {
     /// Made `@Bindable` in `body` so the pickers and toggles get two-way bindings.
     @Environment(AppModel.self) private var model
 
-    /// Cues first (the settings a walker changes most), then Haptics, Watch, Mount, This phone.
+    /// Cues first (the settings a walker changes most), then Haptics, Voice (Step 53), Watch, Mount,
+    /// Family alerts, This phone.
     var body: some View {
         @Bindable var model = model
         pageScroll {
             cueSettings($model)
             HapticsCard()
+            voiceSettings($model)
             WatchCard()
             mountSettings($model)
             familyAlertsCard($model)
@@ -408,6 +410,46 @@ private struct SettingsPage: View {
             Text(cueLevelCaption)
                 .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(CKFont.body)
+        .foregroundStyle(CKColor.textPrimary)
+    }
+
+    /// "Voice" card (Step 53; owner decision 2026-09-13 "ElevenLabs is the one voice for everything").
+    ///
+    /// Section 1, the voice: a segmented "Voice" picker, Natural / System (`AppModel.naturalVoiceEnabled`,
+    /// persisted). Natural is the one voice for every line; System is the founder's valve for a venue
+    /// with bad Wi-Fi. Disabled without an ElevenLabs key, and the caption then says so (the Haptics
+    /// card's voice pill shows what actually spoke). Same visible label + VoiceOver container pattern
+    /// as the Cues pickers (a segmented picker does not speak its own title).
+    /// Section 2, listening (Step 58, voice shell): "Listen on launch" and the follow-up window —
+    /// these toggles belong to the voice shell and are added / reworded by that step; keep them below
+    /// the picker. New labels only; nothing here is in the UI-test contract (hard rule 9).
+    /// - Parameter model: the `@Bindable` model from `body`.
+    private func voiceSettings(_ model: Bindable<AppModel>) -> some View {
+        let hasKey = model.wrappedValue.speech.naturalVoice != nil
+        return CKCard(title: "Voice") {
+            Text("Voice").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .accessibilityHidden(true)
+            Picker("Voice", selection: model.naturalVoiceEnabled) {
+                Text("Natural").tag(true)
+                Text("System").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!hasKey)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Voice")
+            .accessibilityHint("Natural uses the ElevenLabs voice for every line. System uses the iPhone voice, which needs no network.")
+            Text(hasKey
+                 ? "Natural: one voice for everything. Cached lines play at once; a new line waits up to 2.5 seconds for the network, then the iPhone voice speaks it. System: the iPhone voice, instant and offline."
+                 : "Add an ElevenLabs key for the natural voice.")
+                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            // Step 58 (voice shell) listening toggles.
+            Toggle("Listen on launch", isOn: model.listenOnLaunch)
+                .accessibilityHint("Speaks the voice menu and listens when OpenCane starts")
+            Toggle("Follow-up listening window", isOn: model.voiceFollowUp)
+                .accessibilityHint("Opens a listening window after assistant answers")
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
@@ -594,7 +636,8 @@ private func dismissKeyboard() {
 /// Rows, top to bottom: the provider-chain pill ("MUSE → ON-DEVICE" / "ON-DEVICE ONLY"); "WHERE
 /// AM I" — who answered and how fast, with the age and trigger under it; "GATE" — what
 /// `CloudSceneGate` did to a cloud sentence (only when the cloud answered); "WATCH" — the hazard
-/// watch's plan or last answer; "CUES" — "Detailed · Outdoors · names off".
+/// watch's plan or last answer; "CUES" — "Detailed · Outdoors · names off"; "VOICE" (Step 53) —
+/// which voice spoke the last line and why ("Natural voice · cached").
 ///
 /// Accessibility: every row is words, never colour; each row is one VoiceOver element whose label
 /// is the row's full `spoken` sentence ("Muse answered the last Where am I in 1.9 seconds."); the
@@ -669,7 +712,25 @@ private struct SceneEngineCard: View {
                 row("Light", SceneEngineSummary.light(live))
             }
             row("Cues", SceneEngineSummary.cues(f))
+            voiceRow
         }
+    }
+
+    /// "VOICE" row (Step 53): the engine and reason of the last spoken line
+    /// (`SpeechQueue.lastEngine`, updated again when its race resolves), in words from
+    /// `VoiceEngineChoice.describe` — "Natural voice · cached", "System voice · warning not cached
+    /// yet". Same shape as `row`; "No line spoken yet" before the first line.
+    private var voiceRow: some View {
+        let words = model.speech.lastEngine.map {
+            VoiceEngineChoice.describe(engine: $0.engine, reason: $0.reason)
+        } ?? "No line spoken yet"
+        return HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
+            Text("VOICE").font(CKFont.pill).foregroundStyle(CKColor.textSecondary)
+            Text(words).font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last spoken line: \(words)")
     }
 
     /// One row: a small uppercased caption and the sentence, the same shape as the Hazards
@@ -708,10 +769,11 @@ private struct MountAimRow: View {
 
     /// With a tilt reading: "<MountTilt status> · N fps" with a check (in the 3–8° window) or a
     /// warning glyph, one VoiceOver element. Without one on a LiDAR phone: how to get a reading.
-    /// On a phone without LiDAR: nothing. The window itself is `MountTilt` (`LaneMathTests.mountTiltWindow`).
+    /// On a phone without LiDAR: nothing. The line itself is `MountTilt.status(downDeg:headCover:)` (`LaneMathTests.mountTiltStatus`, `LaneGeometryTests.mountTiltStatusSaysTooSteepForHeadCover`); `headCover` is the live grid's `headCoverage` (Step 51).
     var body: some View {
         if let tilt = model.depth.report.cameraTiltDownDeg {
-            let s = MountTilt.status(downDeg: tilt)
+            let headCover = model.depth.report.grid.headCoverage.contains(true)
+            let s = MountTilt.status(downDeg: tilt, headCover: headCover)
             let fps = Int(model.depth.fps.rounded())
             Label {
                 Text("\(s.text) · \(fps) fps").foregroundStyle(CKColor.textPrimary)

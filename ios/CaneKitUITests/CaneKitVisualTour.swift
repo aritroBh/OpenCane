@@ -68,7 +68,7 @@ final class CaneKitVisualTour: XCTestCase {
 
         app.buttons["Repeat"].tap(); pause(0.5); snap("after-repeat")
         app.buttons["Next"].tap(); pause(1.0); snap("after-next")
-        app.buttons["Recenter"].tap(); pause(0.5); snap("after-recenter")
+        scrollTo(app.buttons["Recenter"]).tap(); pause(0.5); snap("after-recenter")
 
         scrollDown(); snap("navigating-middle")
         scrollDown(); snap("navigating-bottom")
@@ -98,13 +98,13 @@ final class CaneKitVisualTour: XCTestCase {
 
         openTab("Guide")
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
-        app.buttons["Stop route"].tap()
+        scrollTo(app.buttons["Stop route"]).tap()
         app.buttons["Stop route"].tap()
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5))
         pause(0.5); snap("stopped")
 
         // Destination field: empty → error line; typed → route build attempt (no network in CI).
-        app.buttons["Go"].tap(); pause(0.5); snap("go-empty")
+        scrollTo(app.buttons["Go"]).tap(); pause(0.5); snap("go-empty")
     }
 
     /// Selects a root tab by its VoiceOver label (icon-only on screen). Unlike the
@@ -143,6 +143,18 @@ final class CaneKitVisualTour: XCTestCase {
         let a = XCTAttachment(uniformTypeIdentifier: "public.png", name: name, payload: png)
         a.lifetime = .keepAlways
         add(a)
+    }
+
+    /// Swipes until `element` is hittable: up to four swipes up, then up to eight down. Step 58's
+    /// voice tile fills the top of the Guide, so route controls start below the fold (and one
+    /// swipe too many can push the compact row above it). Returns the element for chaining.
+    @discardableResult
+    private func scrollTo(_ element: XCUIElement) -> XCUIElement {
+        var ups = 0
+        while ups < 4, !(element.exists && element.isHittable) { app.swipeUp(); ups += 1 }
+        var downs = 0
+        while downs < 8, !(element.exists && element.isHittable) { app.swipeDown(); downs += 1 }
+        return element
     }
 
     /// One swipe up plus a short settle.

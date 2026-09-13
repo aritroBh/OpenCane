@@ -176,3 +176,78 @@ private func healthy(
         }
     }
 }
+
+// MARK: - Voice readiness (Step 54)
+
+/// The demo checklist gates on "voice ready": the natural voice is configured, chosen, reachable
+/// and every safety and common line is on disk. Anything less is said as what it is.
+@Test func voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached() {
+    let ready = VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: false, cachedShare: 1)
+    #expect(StatusSummary.voiceReady(ready))
+    #expect(StatusSummary.voiceLine(ready) == "Natural voice ready.")
+    let warming = VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: false, cachedShare: 0.42)
+    #expect(!StatusSummary.voiceReady(warming))
+    #expect(StatusSummary.voiceLine(warming) == "Natural voice warming up, 42 percent cached.")
+    // 99.6 % is not "ready": the missing line is the one that will flip the voice.
+    #expect(!StatusSummary.voiceReady(VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: false, cachedShare: 0.996)))
+    #expect(StatusSummary.voiceReadyShare == 1)
+}
+
+/// The system voice is never a mystery: the clause says which of the three reasons put it there.
+@Test func voiceClauseNamesTheSystemVoiceAndWhy() {
+    #expect(StatusSummary.voiceLine(VoiceFacts(hasKey: false, naturalEnabled: true, breakerOpen: false, cachedShare: 0))
+            == "System voice. No natural voice key.")
+    #expect(StatusSummary.voiceLine(VoiceFacts(hasKey: true, naturalEnabled: false, breakerOpen: false, cachedShare: 1))
+            == "System voice, by your setting.")
+    #expect(StatusSummary.voiceLine(VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: true, cachedShare: 1))
+            == "Natural voice unreachable. Using the system voice.")
+    #expect(!StatusSummary.voiceReady(VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: true, cachedShare: 1)))
+}
+
+/// The voice clause sits right after the audio clause (it is an audio fact) and is omitted, like
+/// battery, when the caller did not measure it — `ConversationCoordinator` answers one clause at a
+/// time and never gathers it; `AppModel.speakStatus` always does.
+@Test func voiceClauseFollowsAudioAndIsOmittedWhenNotMeasured() {
+    var facts = healthy()
+    #expect(StatusSummary.lines(facts).count == 6)
+    facts.voice = VoiceFacts(hasKey: true, naturalEnabled: true, breakerOpen: false, cachedShare: 1)
+    let lines = StatusSummary.lines(facts)
+    #expect(lines.count == 7)
+    #expect(lines[2].contains("AirPods Pro"))
+    #expect(lines[3] == "Natural voice ready.")
+    #expect(lines[4].hasPrefix("Cane haptics"))
+    for line in lines { #expect(line.hasSuffix(".") && line.first?.isUppercase == true) }
+}
+
+// MARK: - Fixed lines for the natural-voice prefetch (Step 56)
+
+/// Every status clause without a number in it is one of `StatusSummary.fixedLines`, byte for byte,
+/// so the voice shell's "status" answer comes out of the cache in the natural voice. Swept over
+/// every failure state the answer can reach; clauses that carry a measured number are skipped
+/// (they are novel text by design).
+@Test func everyNumberFreeClauseIsAFixedLine() {
+    var states: [StatusFacts] = [
+        healthy(), healthy(lidarSupported: false), healthy(obstacleDetectionRunning: false),
+        healthy(depthFps: 0), healthy(gpsFix: false), healthy(gpsAccuracyM: -1),
+        healthy(locationDenied: true), healthy(headphonesConnected: false), healthy(routeRunning: false),
+    ]
+    for healthyEngine in [true, false] {
+        for silenced in [true, false] {
+            for watch in [true, false] {
+                states.append(healthy(hapticsHealthy: healthyEngine, hapticsSilenced: silenced, watchReachable: watch))
+            }
+        }
+    }
+    let fixed = Set(StatusSummary.fixedLines)
+    var checked = 0
+    for facts in states {
+        for clause in StatusSummary.lines(facts) where !clause.contains(where: \.isNumber) {
+            // The headphone clause names the device; only its no-headphones form is fixed.
+            if clause.contains("connected,") { continue }
+            #expect(fixed.contains(clause), "not prefetched: \(clause)")
+            checked += 1
+        }
+    }
+    #expect(checked > 20)
+    #expect(StatusSummary.fixedLines.count == Set(StatusSummary.fixedLines).count)
+}

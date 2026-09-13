@@ -13,7 +13,15 @@
 //      and the beacon immediately upon release, end of utterance or timeout.
 //    · Holds the speech channel while listening (`SpeechQueue.setVoiceHold`): route and
 //      obstacle lines queue with their TTLs instead of talking over the dictation; `.safety`
-//      still breaks through. Released before the answer is spoken.
+//      still breaks through. Set just *before* the microphone lease (Step 55: the line playing is cut
+//      before the microphone can hear it), released before the answer is spoken.
+//    · Never answers itself (Step 55; the first mounted walk logged `conv_error query: "Head
+//      height"`): while `SpeechQueue.isSpeaking` — a `.safety` line breaking through the hold — and
+//      for `SelfHearFilter.tailSeconds` after, the tap drops microphone buffers (`SpeechBufferBox`, a
+//      `Mutex<Bool>` read on the audio thread, no actor hop); and a final transcript equal to a line
+//      the app dispatched while listening, or one clause of it (`SelfHearFilter`), is dropped
+//      silently. Both log `voice_self_hear {action: paused | dropped, pause_ms, transcript,
+//      matched_line}`. No audio-session change (hard rule 7: no `.voiceChat`, no echo control).
 //    · Ends listening on its own (`UtteranceEndDetector`, CaneKitLogic): a blind walker cannot see
 //      "Listening…" and should not need a second press.
 //    · Every press has an audible outcome: an answer, "I did not catch that.", or the reason it
@@ -24,8 +32,9 @@
 //  the Action Button's empty `TalkToOpenCaneIntent`) and `AppModel.startVoiceInput()` (AirPods
 //  double nod — start only, never a toggle). AppModel installs `onTranscriptionFinalized` (→
 //  `ConversationCoordinator.handleQuery`, then `finishProcessing()`), `shouldRestorePlaybackSession`
-//  (false while `SoundWatcher` owns the microphone) and `onEvent` (→ trip log). GuideCard reads
-//  `isListening`.
+//  (false while `SoundWatcher` owns the microphone) and `onEvent` (→ trip log), and forwards every
+//  dispatched line from `SpeechQueue.onDispatch` to `noteDispatched`. This engine installs
+//  `SpeechQueue.onSpeakingChanged` itself. GuideCard reads `isListening`.
 //
 //  Threading / isolation:
 //    · Main actor isolated (`@MainActor @Observable`).
@@ -37,7 +46,8 @@
 //      (Step 24 physical-device crash; 23 crash reports pulled on 2026-09-12).
 //
 //  Tests: the numbers are in CaneKitLogic — `UtteranceEndTests` (1.5 s silence, 10 s cap, 0.25 s
-//  tick), `SoundAlertsTests` (`MicrophoneStart` format retry). The engine itself (audio session,
+//  tick), `SoundAlertsTests` (`MicrophoneStart` format retry), `SelfHearFilterTests` (3 s window,
+//  0.3 s tail, whole line or clause, never "contains"). The engine itself (audio session,
 //  recogniser, permissions) has no unit test; device test in CHANGELOG Steps 23–24 and 30.
 //
 
@@ -46,6 +56,7 @@ import CaneKitLogic
 import Foundation
 import Observation
 import Speech
+import Synchronization
 
 /// Operational states of the voice input engine. Published as `VoiceInputEngine.state`; no view
 /// reads it today (the UI keys off `isListening` and `ConversationCoordinator.isProcessing`).
@@ -73,23 +84,35 @@ enum VoiceInputState: Equatable, Sendable {
 /// function infers the closure to be `@MainActor` isolated. When Core Audio invokes it off-main, the runtime
 /// triggers `_swift_task_checkIsolatedSwift` and traps with SIGTRAP (`_dispatch_assert_queue_fail`).
 /// By installing the tap from this `nonisolated` class method, the tap block is guaranteed nonisolated.
-/// `@unchecked Sendable`: the only state is a weak reference set once in `init` and then only read
-/// (from the audio thread). The request itself is not Sendable; this box is the one place that
-/// crosses that line. (A nonisolated relay, not a main-actor class — hard rule 1's ban on
-/// `@unchecked Sendable` is about main-actor classes.)
+/// `@unchecked Sendable`: the state is a weak reference set once in `init` and then only read
+/// (from the audio thread), and the `paused` flag, which is a `Mutex` (written on main, read on the
+/// audio thread). The request itself is not Sendable; this box is the one place that crosses that
+/// line. (A nonisolated relay, not a main-actor class — hard rule 1's ban on `@unchecked Sendable`
+/// is about main-actor classes.)
 private nonisolated final class SpeechBufferBox: @unchecked Sendable {
     /// The request buffers are fed to. Weak so the tap closure (alive until `removeTap`) never keeps
     /// a finished request alive; `VoiceInputEngine.recognitionRequest` holds it strongly.
     private weak var request: SFSpeechAudioBufferRecognitionRequest?
+    /// True while the app is speaking (+ the 0.3 s tail): buffers are dropped, so the recogniser
+    /// never hears OpenCane's own voice (Step 55). A `Mutex` read inside the tap — never an actor hop
+    /// from the Core Audio thread (the Step 24 SIGTRAP rule in the ⚠ note above).
+    private let paused = Mutex(false)
 
     /// - Parameter request: the current press's recognition request.
     init(_ request: SFSpeechAudioBufferRecognitionRequest) {
         self.request = request
     }
 
+    /// Pause (`true`) or resume (`false`) forwarding. Called on main by
+    /// `VoiceInputEngine.speakingChanged` / `endSelfHearPause`.
+    func setPaused(_ value: Bool) {
+        paused.withLock { $0 = value }
+    }
+
     /// Forwards one microphone buffer to the request; called on the Core Audio thread. A no-op once
-    /// the request is gone.
+    /// the request is gone or while paused.
     func append(_ buffer: AVAudioPCMBuffer) {
+        guard !paused.withLock({ $0 }) else { return }
         request?.append(buffer)
     }
 
@@ -187,6 +210,11 @@ final class VoiceInputEngine {
     /// The current press's end-of-utterance state machine (value type: copy → update → write back
     /// in `checkEnd`); nil between presses.
     @ObservationIgnored private var endDetector: UtteranceEndDetector?
+    /// This listen's hard cap and style (Step 58). nil = a press: `UtteranceEndDetector.maxListen`
+    /// and "I did not catch that." when nothing is said. A number = an unasked-for window opened by
+    /// the voice shell (launch or follow-up): that cap, and silence when nothing is said — the walker
+    /// did not press anything, so there is nothing to apologise for.
+    @ObservationIgnored private var windowSeconds: Double?
     /// The one settle wait between input-format reads (`startEngine(attempt:)`); non-nil only
     /// while a press is waiting for the route, when the session is already `.playAndRecord` and
     /// the beacon already off, so `cancel()` and a second press must treat it as live.
@@ -213,6 +241,15 @@ final class VoiceInputEngine {
     @ObservationIgnored private var microphoneLeaseAcquired = false
     /// `Date().timeIntervalSinceReferenceDate` when the engine started, for `voice_end` timing.
     @ObservationIgnored private var listeningSince: Double = 0
+    /// The lines the app dispatched during this press (`noteDispatched`), and the rule that says a
+    /// final transcript is one of them (CaneKitLogic `SelfHearFilter`, Step 55). Reset per press.
+    @ObservationIgnored private var selfHear = SelfHearFilter()
+    /// When the tap was paused because the app started speaking (reference-date seconds); nil while
+    /// buffers flow. `endSelfHearPause` logs the pause length from it.
+    @ObservationIgnored private var selfHearPausedSince: Double?
+    /// The `SelfHearFilter.tailSeconds` wait after the app stops speaking; cancelled when it speaks
+    /// again or the press ends.
+    @ObservationIgnored private var selfHearTail: Task<Void, Never>?
 
     // MARK: - Callbacks & Coordination
     /// Delivered on the main actor when transcription is finalized with a non-empty prompt. The
@@ -236,6 +273,60 @@ final class VoiceInputEngine {
         // Explicit, not assumed: the result handler's main-actor hop is cheap only because the
         // recogniser already calls back on main.
         self.recognizer?.queue = .main
+
+        // Step 55: the one `onSpeakingChanged` listener; it acts only while a press is listening.
+        speech.onSpeakingChanged = { [weak self] speaking in self?.speakingChanged(speaking) }
+    }
+
+    /// A line was handed to a voice backend (`SpeechQueue.onDispatch`, forwarded by `AppModel`).
+    /// Remembered for `SelfHearFilter` only while this engine is starting or listening: a line
+    /// dispatched before the press — the launch menu, an answer — must never make the walker's own
+    /// reply to it ("status") look like an echo.
+    /// - Parameter text: the whole dispatched line.
+    func noteDispatched(_ text: String) {
+        guard isListening || isStarting else { return }
+        selfHear.record(line: text, at: Date().timeIntervalSinceReferenceDate)
+    }
+
+    /// `SpeechQueue.isSpeaking` changed (Step 55). While listening: speaking → pause the tap at once
+    /// (the hold lets only `.safety` through, so this is a warning breaking in); not speaking → keep
+    /// it paused for `SelfHearFilter.tailSeconds` (the player's end callback and the AirPods path lag
+    /// the last sample), then resume if nothing started meanwhile. Ignored when not listening.
+    /// - Parameter speaking: the new `isSpeaking`.
+    private func speakingChanged(_ speaking: Bool) {
+        guard isListening, let box = bufferBox else { return }
+        if speaking {
+            selfHearTail?.cancel()
+            selfHearTail = nil
+            guard selfHearPausedSince == nil else { return }
+            selfHearPausedSince = Date().timeIntervalSinceReferenceDate
+            box.setPaused(true)
+            return
+        }
+        guard selfHearPausedSince != nil else { return }
+        selfHearTail?.cancel()
+        let run = activeGeneration
+        selfHearTail = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(SelfHearFilter.tailSeconds))
+            guard !Task.isCancelled, let self, self.activeGeneration == run,
+                  !self.speech.isSpeaking else { return }
+            self.endSelfHearPause()
+        }
+    }
+
+    /// Resume the tap and log `voice_self_hear {action: paused, pause_ms}` (the whole pause, tail
+    /// included). No-op when not paused. Callers: the tail task, and `cleanupAudioPipeline` (a press
+    /// that ends mid-pause still logs its pause).
+    private func endSelfHearPause() {
+        selfHearTail?.cancel()
+        selfHearTail = nil
+        guard let since = selfHearPausedSince else { return }
+        selfHearPausedSince = nil
+        bufferBox?.setPaused(false)
+        onEvent?("voice_self_hear", [
+            "action": "paused",
+            "pause_ms": Int(((Date().timeIntervalSinceReferenceDate - since) * 1000).rounded()),
+        ])
     }
 
     // MARK: - Control
@@ -249,10 +340,13 @@ final class VoiceInputEngine {
     /// is spoken once at `.nav` and the engine stays `.idle` (hard rule 4 spirit: never crash,
     /// never go quiet, say what is missing). A prompt that is still up when the walker presses
     /// again is fenced by `generation`.
-    func startListening() {
+    func startListening(windowSeconds: Double? = nil) {
         // A press during the format settle wait is the same press: the session and beacon are
         // already taken, and re-snapshotting the beacon here would remember it as off.
         guard !isListening, formatRetry == nil, !isStarting else { return }
+        self.windowSeconds = windowSeconds
+        // A new press starts with an empty self-hear history (Step 55).
+        selfHear.reset()
         // Snapshot the beacon now: every failure below runs `cleanupAudioPipeline`, which puts
         // this value back, and a stale one from an earlier run would switch the beacon off.
         previousBeaconEnabled = beacon.enabled
@@ -365,6 +459,11 @@ final class VoiceInputEngine {
         speech.onVoiceInputInterruption = { [weak self] event in
             self?.voiceInputInterruption(event, generation: runGeneration)
         }
+        // Step 55: hold the speech channel *before* the microphone opens. The hold cuts the line
+        // playing unless it is `.safety` (re-queued from its last resume point) and queues every
+        // later sub-safety line, so the recogniser never starts on the app's own voice. Every failure
+        // below runs `cleanupAudioPipeline`, which releases it.
+        speech.setVoiceHold(true)
 
         let sessionField: String
         switch speech.setMicrophoneEnabled(true, owner: .voiceInput) {
@@ -462,6 +561,8 @@ final class VoiceInputEngine {
         // an error synchronously, and that error must take the hard-stop path rather than vanish.
         isListening = true
         state = .listening
+        // A `.safety` line may already be playing through the hold: the tap starts paused (Step 55).
+        if speech.isSpeaking { speakingChanged(true) }
 
         // 5. Start recognition task through the nonisolated relay (hard rule 1).
         let relay = SpeechResultsRelay { [weak self] text, isFinal, error in
@@ -494,15 +595,14 @@ final class VoiceInputEngine {
         startPermissionWatch(generation: runGeneration)
         generation += 1
         listeningSince = Date().timeIntervalSinceReferenceDate
-        // Hold the speech channel: route and obstacle chatter queues instead of talking over
-        // the dictation (and the recogniser never hears the app's own voice). `.safety` still
-        // breaks through. Released in `cleanupAudioPipeline`, before any answer is spoken.
-        speech.setVoiceHold(true)
+        // The speech hold was set before the microphone lease (`startAuthorizedListening`, Step 55);
+        // it is released in `cleanupAudioPipeline`, before any answer is spoken.
         logStart(session: sessionField, format: formatField)
         AudioServicesPlaySystemSound(1519) // Crisp tactile feedback confirms recording started
 
         // 6. End-of-utterance + hard cap, both decided by `UtteranceEndDetector` (CaneKitLogic).
-        endDetector = UtteranceEndDetector(startedAt: listeningSince)
+        endDetector = UtteranceEndDetector(startedAt: listeningSince,
+                                           maxListen: windowSeconds ?? UtteranceEndDetector.maxListen)
         endTicker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(UtteranceEndDetector.checkInterval))
@@ -549,7 +649,10 @@ final class VoiceInputEngine {
     /// the finalized prompt. Also the shared end path for silence / cap / final / error.
     /// Teardown (which releases the speech hold) runs *before* the prompt is delivered, so the
     /// answer is never held behind the walker's own dictation. An empty transcript speaks
-    /// "I did not catch that." (`.scene`, ttl 6, immediate). No-op unless listening.
+    /// "I did not catch that." (`.scene`, ttl 6, the one natural voice — cached at launch). A
+    /// transcript that is the app's own recent line (`SelfHearFilter`, Step 55) is dropped silently
+    /// and logged `voice_self_hear {action: dropped, transcript, matched_line}` — it is not something
+    /// the walker said, so there is nothing to answer. No-op unless listening.
     /// - Parameter reason: written to `voice_end` — "press" | "silence" | "timeout" | "final" |
     ///   "error:<text>".
     func stopListeningAndSubmit(reason: String = "press") {
@@ -559,13 +662,23 @@ final class VoiceInputEngine {
         logEnd(reason: reason, transcriptLength: finalPrompt.count)
 
         if !finalPrompt.isEmpty {
+            if let matched = selfHear.shouldDrop(transcript: finalPrompt,
+                                                 now: Date().timeIntervalSinceReferenceDate) {
+                onEvent?("voice_self_hear", [
+                    "action": "dropped", "transcript": finalPrompt, "matched_line": matched,
+                ])
+                state = .idle
+                return
+            }
             state = .processing
             onTranscriptionFinalized?(finalPrompt)
         } else {
             state = .idle
+            // An unasked-for window (launch / follow-up) that heard nothing closes silently.
+            if windowSeconds != nil { return }
             // The one line a blind walker needs most: proof the press was heard and nothing else was.
-            // `immediate`: no TTS fetch wait on the most time-critical confirmation in the app.
-            speech.say("I did not catch that.", .scene, ttl: 6, immediate: true)
+            // One voice (Step 54): it is in `AppModel.commonLines`, so it plays from the cache.
+            speech.say("I did not catch that.", .scene, ttl: 6)
         }
     }
 
@@ -683,6 +796,8 @@ final class VoiceInputEngine {
     private func cleanupAudioPipeline() {
         isListening = false
         isStarting = false
+        // First, while the box still exists: a pause still open is logged and the tap resumed.
+        endSelfHearPause()
         activeGeneration = nil
         pendingPermissionGeneration = nil
         permissionWatchTask?.cancel()

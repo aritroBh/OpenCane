@@ -186,3 +186,18 @@ private func east(_ m: Double) -> Coordinate {
     #expect(WalkingIntro.line(place: "X", meters: 100, accuracyM: -1)
             == "Walking to X, 100 meters.")
 }
+
+/// Step 54: the route intro is built by ONE function. `NavigationEngine.start` speaks
+/// `WalkingIntro.routeStarted(route)` and `AppModel` prefetches the same call during the depth wait,
+/// so the first line of every route is on disk before it is spoken — byte-identical by
+/// construction, never by a copied string (the old copy in `startRouteNow` was prefetched ten lines
+/// before it was needed and missed on every cold cache).
+@Test func introLineIsWhatNavigationSpeaks() throws {
+    let wp1 = Waypoint(id: 1, lat: 40.11, lon: -88.22, radiusM: 10, say: "Leave Townsend Hall and walk west.",
+                       crossing: false, bearingNextDeg: 270, name: "Townsend Hall")
+    let route = Route(name: "ISR to CIF", waypoints: [wp1])
+    #expect(WalkingIntro.routeStarted(route) == "Route started. ISR to CIF. First: Leave Townsend Hall and walk west.")
+    #expect(WalkingIntro.routeStarted(name: "X", firstLine: "Go.") == "Route started. X. First: Go.")
+    // An empty route still has an intro (the engine speaks it before the first fix).
+    #expect(WalkingIntro.routeStarted(Route(name: "Empty", waypoints: [])) == "Route started. Empty. First: ")
+}

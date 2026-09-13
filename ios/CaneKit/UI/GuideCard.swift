@@ -13,6 +13,10 @@
 //  "Off-bearing > 25°" row of §5. Button titles differ from the §6.1 VoiceOver table on purpose
 //  (short words that fit two-up on a 17 Pro Max); the XCUITests pin the shipped words.
 //
+//  Step 58 layout (voice shell): instruction → distance → pills → `VoiceTile` (the giant microphone,
+//  ≥ 60 % of the page height) → the compact row (idle: Where am I | Start route to CIF; navigating:
+//  Repeat | Next | Stop route) → describer text → everything else below the fold, labels unchanged.
+//
 //  Accessibility contract — everything the XCUITests drive lives here (AGENTS.md rule 9):
 //    ⚠ test contract buttons: "Start route to CIF", "Navigate to CIF from here", "Stop route",
 //      "Repeat", "Next", "Recenter", "Where am I" (queried as `app.buttons[label]`); "Go" is in
@@ -23,8 +27,8 @@
 //      describer line under "Where am I" must stay plain static texts too
 //      (testWhereAmIWithoutKeyReportsGracefully accepts a label containing "camera" or starting
 //      "Scene:" — no key is needed any more, so nothing matches "key").
-//  Focus order is the visual order: instruction → distance → pills → Where am I → Talk to
-//  OpenCane → route buttons → error line.
+//  Focus order is the visual order: instruction → distance → pills → Talk to OpenCane (the tile) →
+//  compact row → describer text → the rest of the route controls → error line.
 //
 //  Owner / caller: `GuidePage` in ContentView.swift, which passes its `ScrollViewProxy`.
 //  Tests: `CaneKitUITests` — `testGuideStartsAndStopsDemoRoute`, `testWhereAmIWithoutKeyReportsGracefully`,
@@ -53,11 +57,12 @@ struct GuideCard: View {
     var scroller: ScrollViewProxy? = nil
 
     /// One `CKCard("Guide")`: instruction; distance + bearing (navigating or arrived, with a fix);
-    /// GPS pills; "Where am I" and its result / error; "Talk to OpenCane" and the assistant's last
-    /// answer; then either the route controls (Repeat / Next, Recenter, beacon + head pills, Stop)
-    /// or the idle picker (Repeat after arrival, Cancel route start, Start route to CIF, Navigate
-    /// to CIF from here, the route-start status, `DestinationField`); last, the route / location
-    /// error line.
+    /// GPS pills; the `VoiceTile` microphone with the assistant's last answer; the compact row
+    /// (navigating: Repeat / Next / Stop route; idle: Where am I / Start route to CIF); the
+    /// describer's result / error; then either the rest of the route controls (Recenter, beacon +
+    /// head pills, Simulate walk) or the rest of the idle picker (Repeat after arrival, Cancel route
+    /// start, Navigate to CIF from here, Simulate walk, the route-start status, `DestinationField`);
+    /// last, the route / location error line.
     var body: some View {
         @Bindable var model = model
         CKCard(title: "Guide") {
@@ -105,39 +110,49 @@ struct GuideCard: View {
                 }
             }
 
-            // ⚠ test contract: "Where am I". While describing, the label becomes "Describing…"
-            // and the button is disabled; testWhereAmIWithoutKeyReportsGracefully relies on it
-            // returning to "Where am I" and on a static text containing "camera" (the no-frame
-            // error) or starting "Scene:" (a description).
-            // Conversational assistant push-to-talk (Step 23): paired beside Where am I.
-            // Both are `tile` layout and the row is `fixedSize` vertically, so the two are the
-            // same shape and height whatever their words do (Step 47: before this, `ViewThatFits`
-            // kept "Where am I" in a row and stacked "Talk to OpenCane" — one pair, two shapes).
-            HStack(alignment: .top, spacing: CKSpacing.md) {
-                CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
-                            subtitle: "Camera · what is ahead",
-                            systemImage: "eye", role: .secondary, layout: .tile,
-                            hint: "Takes a photo and reads out hazards and landmarks ahead",
-                            value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
-                    .disabled(model.describer.isDescribing)
+            // Step 58: the voice shell's giant microphone (≥ 60 % of the page height). Its label is
+            // "Talk to OpenCane" / "Listening…" / "Starting…" / "Thinking…"; the assistant's last
+            // answer ("Assistant: …") is its status line.
+            VoiceTile()
 
-                CKBigButton(title: model.voiceInput.isListening ? "Listening…" :
-                                (model.voiceInput.isStarting ? "Starting…" :
-                                    (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane")),
-                            subtitle: model.voiceInput.isListening ? "Tap again to send" :
-                                (model.voiceInput.isStarting ? "Tap again to cancel" : "Voice · ask or command"),
-                            systemImage: model.voiceInput.isListening ? "waveform" :
-                                (model.voiceInput.isStarting ? "hourglass" : "mic.fill"),
-                            role: model.voiceInput.isListening || model.voiceInput.isStarting ? .destructive : .secondary,
-                            layout: .tile,
-                            hint: model.voiceInput.isStarting ? "Tap to cancel microphone setup" :
-                                "Tap to speak a command, ask a question, or set a post",
-                            value: model.voiceInput.isListening ? "listening" :
-                                (model.voiceInput.isStarting ? "starting" : nil)) {
-                    model.toggleVoiceInput()
+            // The compact row directly under the microphone — the only place the Guide puts three
+            // buttons in a row (design.md §6.1 exception): tiles, so "Stop route" wraps instead of
+            // hyphenating. ⚠ test contract: "Repeat", "Next", "Stop route" while navigating;
+            // "Where am I" and "Start route to CIF" while idle. While describing, "Where am I"
+            // becomes "Describing…" and is disabled; testWhereAmIWithoutKeyReportsGracefully relies
+            // on it returning to "Where am I" and on the "camera" / "Scene:" static text below.
+            if model.nav.isNavigating {
+                HStack(alignment: .top, spacing: CKSpacing.sm) {
+                    CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise", layout: .tile,
+                                hint: "Says the current instruction again") { model.repeatInstruction() }
+                    // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
+                    // crown and Siri "Next waypoint in OpenCane".
+                    CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary, layout: .tile,
+                                hint: "Skips to the next instruction") { model.nextWaypoint() }
+                    stopRouteButton
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                if stopConfirmation.isArmed {
+                    Text("Tap Stop route again within 3 seconds to end guidance.")
+                        .font(CKFont.secondary)
+                        .foregroundStyle(CKColor.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Stop route is armed. Tap Stop route again within 3 seconds to end guidance.")
+                }
+            } else {
+                HStack(alignment: .top, spacing: CKSpacing.md) {
+                    CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
+                                systemImage: "eye", role: .secondary, layout: .tile,
+                                hint: "Takes a photo and reads out hazards and landmarks ahead",
+                                value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
+                        .disabled(model.describer.isDescribing)
+                    // ⚠ test contract: "Start route to CIF" is the first thing every UI test waits for.
+                    CKBigButton(title: "Start route to CIF", systemImage: "figure.walk", layout: .tile,
+                                hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
+                        .disabled(model.routeStartWaiting)
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .fixedSize(horizontal: false, vertical: true)
             if !model.describer.lastDescription.isEmpty {
                 Text(model.describer.lastDescription)
                     .font(CKFont.body)
@@ -148,24 +163,10 @@ struct GuideCard: View {
             if let err = model.describer.lastError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
-            if let response = model.conversation.lastResponse, !response.isEmpty {
-                Text(response)
-                    .font(CKFont.body)
-                    .foregroundStyle(CKColor.textPrimary)
-                    .accessibilityLabel("Assistant: \(response)")
-            }
 
             if model.nav.isNavigating {
-                // Two per row: three-up hyphenates "Recenter" on a 17 Pro Max at default type size.
-                // ⚠ test contract: "Repeat", "Next", "Recenter", "Stop route".
-                HStack(spacing: CKSpacing.lg) {
-                    CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise",
-                                hint: "Says the current instruction again") { model.repeatInstruction() }
-                    // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
-                    // crown and Siri "Next waypoint in OpenCane".
-                    CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary,
-                                hint: "Skips to the next instruction") { model.nextWaypoint() }
-                }
+                // Repeat / Next / Stop route live in the compact row under the microphone (Step 58).
+                // ⚠ test contract: "Recenter" (below the fold now: the tests `scrollTo` it).
                 CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
                             hint: "Sets straight ahead as the beacon's forward direction") { model.recenter() }
                 // Beacon pill: warning without headphones (the beacon cannot play), trusted while it
@@ -187,7 +188,6 @@ struct GuideCard: View {
                     CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
                                 hint: "Simulates walking along the active route indoors") { model.startSimulatedWalk() }
                 }
-                stopRouteButton
             } else {
                 if model.nav.arrived {
                     // The arrival line + trip summary are the longest of the walk: keep Repeat.
@@ -206,13 +206,6 @@ struct GuideCard: View {
                         model.cancelRouteStart()
                     }
                 }
-                // ⚠ test contract: "Start route to CIF" is the first thing every UI test waits for.
-                CKBigButton(title: "Start route to CIF",
-                            subtitle: "Campus Demo · Townsend Hall to CIF",
-                            systemImage: "figure.walk",
-                            hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
-                    .disabled(model.routeStartWaiting)
-
                 // Secondary navigation actions:
                 // ⚠ test contract: "Navigate to CIF from here" (its label is its text).
                 CKBigButton(title: "Navigate to CIF from here",
@@ -268,25 +261,17 @@ struct GuideCard: View {
         }
     }
 
-    /// Stop route is deliberately a two-tap confirmation. The first tap gives a spoken and
-    /// visible status; only a second tap inside `StopRouteConfirmation.window` ends guidance.
+    /// Stop route is deliberately a two-tap confirmation (Step 51a). The first tap gives a spoken and
+    /// visible status (the armed line under the compact row); only a second tap inside
+    /// `StopRouteConfirmation.window` ends guidance. A tile, because it sits in the compact row (Step 58).
     /// The button's VoiceOver label remains exactly "Stop route" (the XCUITest contract).
     private var stopRouteButton: some View {
-        VStack(alignment: .leading, spacing: CKSpacing.xs) {
-            CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive,
-                        hint: stopConfirmation.isArmed
-                            ? "Confirms ending guidance when tapped again within 3 seconds"
-                            : "Arms route stop; tap again within 3 seconds to end guidance",
-                        value: stopConfirmation.isArmed ? "confirmation needed" : nil) {
-                stopRoutePressed()
-            }
-            if stopConfirmation.isArmed {
-                Text("Tap Stop route again within 3 seconds to end guidance.")
-                    .font(CKFont.secondary)
-                    .foregroundStyle(CKColor.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Stop route is armed. Tap Stop route again within 3 seconds to end guidance.")
-            }
+        CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive, layout: .tile,
+                    hint: stopConfirmation.isArmed
+                        ? "Confirms ending guidance when tapped again within 3 seconds"
+                        : "Arms route stop; tap again within 3 seconds to end guidance",
+                    value: stopConfirmation.isArmed ? "confirmation needed" : nil) {
+            stopRoutePressed()
         }
         .task(id: stopConfirmation.isArmed) {
             guard stopConfirmation.isArmed else { return }

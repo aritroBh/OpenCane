@@ -19,9 +19,11 @@
 //  `CueDecider`, `ObstacleNamer`, `GroundHazardPolicy`, `SceneContext` and the `lanes` trip-log
 //  record (throttled to 2 Hz by `TripLogger.lanes`). `MountTilt` also drives the Settings → Mount
 //  "Camera tilt" row; `TileLevel` colours `LaneGridView`; `PublishGate` is the processor's rate cap.
-//  Tests: `tileLevels`, `mountTiltWindow`, `tiltSignIsDownPositive`,
+//  Tests: `tileLevels`, `mountTiltStatus`, `tiltSignIsDownPositive`,
 //  `publishGateHitsFifteenHertzFromThirtyHertzFrames`, `groundHazardsNeedAMountLikeTilt` (all in
-//  LaneMathTests.swift); the report itself is exercised by CueDeciderTests and DepthReadinessTests.
+//  LaneMathTests.swift); `mountTiltStatusSaysTooSteepForHeadCover`, `tileNoCoverIsNotClear`,
+//  `headCoverLimitFollowsTheGeometry` and the `HeadCoverNotice` cases (LaneGeometryTests.swift);
+//  the report itself is exercised by CueDeciderTests and DepthReadinessTests.
 //
 
 import Foundation
@@ -96,6 +98,10 @@ public struct LaneReport: Sendable, Equatable {
     /// estimation off). Raw per frame — `LowLightPolicy` (Step 49) smooths and debounces it in
     /// `AppModel.handle(_:)`; nobody else should act on a single frame's value.
     public var ambientLux: Float?
+    /// The camera pose and depth-map intrinsics the metric bands were cut with (Step 51); nil in
+    /// rows mode (no pose yet). `AppModel.handle` logs a `depth_geometry` record once per distinct
+    /// set of intrinsics so a trip log can be re-bucketed offline.
+    public var geometry: LaneGeometry?
 
     /// Every parameter defaults to the "no depth yet" state (empty grid, trusted, no data).
     public init(grid: LaneGrid = .empty,
@@ -108,7 +114,8 @@ public struct LaneReport: Sendable, Equatable {
                 centerHit: MeshHit? = nil,
                 groundHazard: GroundHazard? = nil,
                 cameraTiltDownDeg: Float? = nil,
-                ambientLux: Float? = nil) {
+                ambientLux: Float? = nil,
+                geometry: LaneGeometry? = nil) {
         self.grid = grid
         self.isTrusted = isTrusted
         self.rotationRate = rotationRate
@@ -120,6 +127,7 @@ public struct LaneReport: Sendable, Equatable {
         self.groundHazard = groundHazard
         self.cameraTiltDownDeg = cameraTiltDownDeg
         self.ambientLux = ambientLux
+        self.geometry = geometry
     }
 
     /// Shortcut for `grid.head` (metres; 0 left, 1 centre, 2 right).
@@ -128,14 +136,17 @@ public struct LaneReport: Sendable, Equatable {
     public var torso: [Float] { grid.torso }
 }
 
-/// The mount's camera aim. The lane grid skips a fixed bottom fraction of the image as ground
-/// (`LaneConfig.groundSkipFraction`, no gravity correction), so the phone must look only a little
-/// below the horizon: at ~10° down the torso lanes already read bare pavement near 2 m (the
-/// centre-approach threshold) and the cane buzzes on an empty sidewalk; at 0° or above the ground
-/// detector loses its 0.8–1.5 m ground reference. hardware/mount/DESIGN.md and pitch_model.py
-/// derive the 3–8° window. Pinned by `mountTiltWindow`.
+/// The mount's camera aim. Since Step 51 the lane grid is gravity-corrected (`LaneGeometry`), so
+/// the pitch is no longer a *correctness* requirement for the lanes — it is a *coverage* one: at
+/// camera height 95 cm the top ray of the 67° portrait field of view stops reaching 140 cm at
+/// 1.5 m once the camera looks more than `headCoverLimitDeg()` (≈ 19°) below the horizon, and
+/// beyond that the head band is "NO COVER" (`LaneGrid.headCoverage`). The ground detector still
+/// wants 0–15° (`groundAim`). Together they keep the hinge recommendation at a few degrees down
+/// (hardware/mount/DESIGN.md §4): `aim` is that recommendation, kept for the docs and the hinge
+/// scale, not read by the lane code. Pinned by `mountTiltStatus`, `headCoverLimitFollowsTheGeometry`.
 public enum MountTilt {
-    /// Degrees below the horizon that work with the current lane grid.
+    /// Degrees below the horizon the hinge should sit at: inside the ground detector's window
+    /// with head cover to spare. A recommendation since Step 51, not a lane requirement.
     public static let aim: ClosedRange<Float> = 3...8
 
     /// Ground hazards (drop-offs, holes, curbs) are judged only when the camera looks 0-15 deg below
@@ -155,36 +166,121 @@ public enum MountTilt {
         asin(max(-1, min(1, y))) * 180 / .pi
     }
 
-    /// One line for the Mount card and whether the aim is inside `aim`:
-    /// "Camera tilt 5° down, good", "Camera tilt 12° down: tilt the phone up",
-    /// "Camera tilt 2° up: tilt the phone down", "Camera level: tilt the phone down".
-    /// Caller: `ContentView`'s `MountAimRow` (Settings → Mount). Pinned by `mountTiltWindow`.
-    public static func status(downDeg d: Float) -> (text: String, ok: Bool) {
+    /// The steepest pitch (degrees below the horizon) at which the *top ray* of the portrait field
+    /// of view still reaches `headMinHeightCm` at `coverageRangeCm` of **z-depth** (ARKit's
+    /// `sceneDepth` is distance along the optical axis, as `GroundSampler` treats it) from a camera
+    /// `cameraHeightCm` above the ground. The top ray gains `cos θ · tan h − sin θ` metres of height
+    /// per metre of z-depth (θ pitch, h half FOV), so the limit solves
+    /// `cos θ · tan h − sin θ = k`, `k = (headMin − camH) / range`:
+    /// `θ = acos(k · cos h) − (90° − h)`. Defaults (`LaneConfig`'s 95 / 140 / 150 cm and the 256-px
+    /// long axis of ARKit's depth map, half FOV ≈ 33.5°) → ≈ 19.0°. Documentation, the Mount card
+    /// estimate without a grid and `cue_audit.py`'s cover verdict for rows-mode logs; the app itself
+    /// uses the per-lane `headCoverage` flags, which need `minSamplesPerCell` rays in one lane and
+    /// so fall off within a degree below this. (A first pass used `h − atan(k)`, the range-based
+    /// formula, which gives 16.8° — wrong for z-depth; `headCoverLimitFollowsTheGeometry` pins
+    /// the flag sweep against this function.)
+    public static func headCoverLimitDeg(cameraHeightCm: Float = 95,
+                                         headMinHeightCm: Float = 140,
+                                         coverageRangeCm: Float = 150,
+                                         halfFovDeg: Float = 33.5) -> Float {
+        let k = (headMinHeightCm - cameraHeightCm) / coverageRangeCm
+        let h = halfFovDeg * .pi / 180
+        let arg = max(-1, min(1, k * cos(h)))
+        return (acos(arg) - (.pi / 2 - h)) * 180 / .pi
+    }
+
+    /// One line for the Mount card and whether the aim is usable:
+    /// "Camera tilt 5° down, good"; "Camera tilt 25° down: too steep for head-height cover"
+    /// (ok false — the lanes still see torso height, the head band is NO COVER); "Camera tilt 2°
+    /// up: tilt the phone down"; "Camera level: tilt the phone down" (the ground detector needs
+    /// the ground in view). Since Step 51 a steep-but-covered pitch (12°) is good: the bands are
+    /// metric, so pavement no longer reads as an obstacle at any pitch.
+    /// - Parameters:
+    ///   - d: degrees below the horizon (positive = down).
+    ///   - headCover: `LaneGrid.headCoverage.contains(true)` for the live frame.
+    /// Caller: `ContentView`'s `MountAimRow` (Settings → Mount). Pinned by `mountTiltStatus`,
+    /// `mountTiltStatusSaysTooSteepForHeadCover`.
+    public static func status(downDeg d: Float, headCover: Bool) -> (text: String, ok: Bool) {
         let n = Int(abs(d).rounded())
-        // Judge the number that is shown: 2.6° reads "3°" and must be "good", not "tilt down"
-        // (Muse camera review).
-        let shown = Float(d < 0 ? -n : n)
+        // Judge the number that is shown: 0.3° reads "0°" and must be "level" (Muse camera review).
         if n == 0 { return ("Camera level: tilt the phone down", false) }
-        let dir = d < 0 ? "up" : "down"
-        if aim.contains(shown) { return ("Camera tilt \(n)° \(dir), good", true) }
-        return (shown > aim.upperBound ? "Camera tilt \(n)° \(dir): tilt the phone up"
-                                   : "Camera tilt \(n)° \(dir): tilt the phone down", false)
+        if d < 0 { return ("Camera tilt \(n)° up: tilt the phone down", false) }
+        if !headCover { return ("Camera tilt \(n)° down: too steep for head-height cover", false) }
+        return ("Camera tilt \(n)° down, good", true)
+    }
+
+    /// `status(downDeg:headCover:)` with the cover estimated from the geometry alone (the shown
+    /// angle against `headCoverLimitDeg()`): tests, docs and a caller without a live grid.
+    public static func status(downDeg d: Float) -> (text: String, ok: Bool) {
+        let shown = Float(Int(abs(d).rounded()))
+        return status(downDeg: d, headCover: shown <= headCoverLimitDeg())
     }
 }
 
-/// Tile colouring for the debug grid: green ≥ 2.0 m, yellow ≥ 1.2 m, red < 0.7 m (orange between).
+/// The one spoken admission that head cover is missing (Step 51): "Camera too steep for
+/// head-height cover. Torso obstacles only." — once per route, at `.nav`, after the head band has
+/// been uncovered in every lane for `holdSeconds` of trusted metric frames. The hold keeps a
+/// phone picked up to tap Start (a transient 45°) from triggering it; the once-per-route keeps it
+/// from nagging while the walker decides. Owner: `AppModel.headCoverNotice` (`routeStarted()` in
+/// `startRouteNow`, `update` per report in `handle`). ⚠ The line is in `AppModel.commonLines`
+/// (prefetched; matched by bytes). Pinned by `headCoverNoticeSpeaksOncePerRouteAfterTheHold`,
+/// `headCoverNoticeIgnoresRowsModeAndTransients`.
+public struct HeadCoverNotice: Sendable, Equatable {
+    /// The line the app speaks. ⚠ Byte-identical copy in `AppModel.commonLines`.
+    public static let line = "Camera too steep for head-height cover. Torso obstacles only."
+    /// Seconds the head band must stay uncovered (trusted, metric frames) before the line.
+    public var holdSeconds: TimeInterval = 2.0
+    /// When the current uncovered run began; nil while covered / untrusted / rows mode.
+    private var uncoveredSince: TimeInterval?
+    /// True once the line was spoken on this route.
+    private var spoken = false
+
+    /// A notice armed for a new route.
+    public init() {}
+
+    /// A new route: the line may be spoken again.
+    public mutating func routeStarted() { uncoveredSince = nil; spoken = false }
+
+    /// Feed one depth report while navigating.
+    /// - Parameters:
+    ///   - metric: `grid.bandMode == .metric` (rows mode has no coverage information).
+    ///   - trusted: `LaneReport.isTrusted` (a sweep frame neither counts nor resets).
+    ///   - headCovered: `grid.headCoverage.contains(true)`.
+    ///   - now: seconds (the report's timestamp).
+    /// - Returns: true exactly once per route, on the frame that completes the hold.
+    public mutating func update(metric: Bool, trusted: Bool, headCovered: Bool, now: TimeInterval) -> Bool {
+        guard !spoken else { return false }
+        guard metric, trusted else { return false }
+        guard !headCovered else { uncoveredSince = nil; return false }
+        let since = uncoveredSince ?? now
+        uncoveredSince = since
+        guard now - since >= holdSeconds else { return false }
+        spoken = true
+        return true
+    }
+}
+
+/// Tile colouring for the debug grid: green ≥ 2.0 m, yellow ≥ 1.2 m, red < 0.7 m (orange between),
+/// or dark neutral for no coverage / no data.
 public enum TileLevel: Sendable {
     // `clear` ≥ 2.0 m or nothing, `far` 1.2–2.0 m, `near` 0.7–1.2 m, `urgent` < 0.7 m,
-    // `noData` before the first depth frame. Display only: cue thresholds live in `CueThresholds`.
-    case clear, far, near, urgent, noData
+    // `noData` before the first depth frame, `noCover` when the camera cannot see the band at
+    // the head-cue distance (Step 51). Display only: cue thresholds live in `CueThresholds`.
+    case clear, far, near, urgent, noData, noCover
 
     /// - Parameters:
     ///   - distance: cell depth, metres (`.infinity` = clear).
     ///   - hasData: false before the first depth frame / on non-LiDAR devices.
-    /// - Returns: `.noData` without data; `.clear` for non-finite or ≥ 2.0 m; `.far` ≥ 1.2 m;
-    ///   `.near` ≥ 0.7 m; else `.urgent`. Pinned by `tileLevels`.
-    public static func level(for distance: Float, hasData: Bool) -> TileLevel {
-        guard hasData, distance.isFinite else { return hasData ? .clear : .noData }
+    ///   - covered: `LaneGrid.headCoverage` / `torsoCoverage` for the cell (default true): false
+    ///     when the camera cannot see this band at the head-cue distance (Step 51).
+    /// - Returns: `.noData` without data; else `.noCover` when uncovered (the tile says NO COVER,
+    ///   never CLEAR — a band the camera cannot see is not known to be empty); `.clear` for
+    ///   non-finite or ≥ 2.0 m; `.far` ≥ 1.2 m; `.near` ≥ 0.7 m; else `.urgent`. Pinned by
+    ///   `tileLevels`, `tileNoCoverIsNotClear`.
+    public static func level(for distance: Float, hasData: Bool, covered: Bool = true) -> TileLevel {
+        guard hasData else { return .noData }
+        guard covered else { return .noCover }
+        guard distance.isFinite else { return .clear }
         if distance < 0.7 { return .urgent }
         if distance < 1.2 { return .near }
         if distance < 2.0 { return .far }

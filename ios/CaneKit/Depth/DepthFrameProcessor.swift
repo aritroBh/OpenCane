@@ -298,7 +298,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         // is on by default in `ARWorldTrackingConfiguration`; the simulator never runs ARKit).
         let ambientLux = frame.lightEstimate.map { Float($0.ambientIntensity) }
 
-        guard let (rawGrid, snapshot) = computeGrid(frame: frame, config: s.lane) else {
+        guard let (rawGrid, snapshot, geometry) = computeGrid(frame: frame, config: s.lane) else {
             // Deliberately no `nearHold.reset()` here: a one-frame depth gap happens exactly
             // when a wall is being pressed (Muse F4b); the hold resets at session boundaries.
             continuation.yield(LaneReport(grid: .empty, isTrusted: trusted, rotationRate: ω,
@@ -358,7 +358,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
                                       trackingNormal: trackingNormal,
                                       frameSequence: publishedCount, centerHit: lastMeshHit,
                                       groundHazard: lastGroundHazard, cameraTiltDownDeg: tiltDownDeg,
-                                      ambientLux: ambientLux))
+                                      ambientLux: ambientLux, geometry: geometry))
     }
 
     /// Not called in practice (`SessionObserver` is the session delegate and handles failures);
@@ -411,7 +411,9 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
     ///   describer needs, both read from the same locked buffers so they can never disagree.
     ///   Measured on the same 256x192 buffers: the snapshot adds 19.3 us to the lane pass's
     ///   47.0 us, i.e. 0.06 % of a 33 ms frame at the 30 Hz publish cap (DepthSnapshot header).
-    private func computeGrid(frame: ARFrame, config: LaneConfig) -> (LaneGrid, DepthSnapshot)? {
+    ///   Also returns the `LaneGeometry` the bands were cut with (nil = rows mode), for
+    ///   `LaneReport.geometry` and the `depth_geometry` log record.
+    private func computeGrid(frame: ARFrame, config: LaneConfig) -> (LaneGrid, DepthSnapshot, LaneGeometry?)? {
         guard let depth = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
         let depthMap = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else { return nil }
@@ -430,6 +432,22 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
         let w = CVPixelBufferGetWidth(depthMap)
         let h = CVPixelBufferGetHeight(depthMap)
 
+        // Step 51: metric lane bands. The height of a depth sample is `camH + d · g(u, v)` from the
+        // world-up row of the gravity-aligned camera transform and the intrinsics scaled to the
+        // depth map exactly as `GroundSampler` scales them (`sceneDepth` is registered to
+        // `capturedImage`, same 4:3). No pose yet (`trackingState == .notAvailable`: identity
+        // transform) → nil → rows mode for those first few hundred ms (`bands: rows` in the log).
+        let geometry: LaneGeometry? = {
+            if case .notAvailable = frame.camera.trackingState { return nil }
+            let res = frame.camera.imageResolution
+            guard res.width > 0, res.height > 0 else { return nil }
+            let sx = Float(w) / Float(res.width), sy = Float(h) / Float(res.height)
+            let K = frame.camera.intrinsics
+            let T = frame.camera.transform
+            return LaneGeometry(fx: K[0][0] * sx, fy: K[1][1] * sy, cx: K[2][0] * sx, cy: K[2][1] * sy,
+                                upX: T.columns.0.y, upY: T.columns.1.y, upZ: T.columns.2.y)
+        }()
+
         var grid = LaneMath.computeLanes(
             depth: depthBase,
             depthBytesPerRow: depthStride,
@@ -438,7 +456,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
             width: w,
             height: h,
             config: config,
-            scratch: &scratch)
+            scratch: &scratch,
+            geometry: geometry)
         // Blind share from the RAW map when the smoothed one was used for distances: temporal
         // smoothing holds stale finite values and inpaints neighbours for a few frames as the
         // wall arrives, which delays or hides the blind share (Muse F3). Distances stay smoothed.
@@ -451,7 +470,8 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
                CVPixelBufferGetWidth(rawMap) == w, CVPixelBufferGetHeight(rawMap) == h {
                 let rawGrid = LaneMath.computeLanes(depth: rawBase, depthBytesPerRow: CVPixelBufferGetBytesPerRow(rawMap),
                                                     confidence: nil, confidenceBytesPerRow: 0,
-                                                    width: w, height: h, config: config, scratch: &scratch)
+                                                    width: w, height: h, config: config, scratch: &scratch,
+                                                    geometry: geometry)
                 for i in 0..<3 {
                     grid.headBlind[i] = max(grid.headBlind[i], rawGrid.headBlind[i])
                     grid.torsoBlind[i] = max(grid.torsoBlind[i], rawGrid.torsoBlind[i])
@@ -470,7 +490,7 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
             height: h,
             rotateForPortrait: config.rotateForPortrait,
             minConfidence: config.minConfidence)
-        return (grid, snapshot)
+        return (grid, snapshot, geometry)
     }
 
     // MARK: Snapshot for the scene describer

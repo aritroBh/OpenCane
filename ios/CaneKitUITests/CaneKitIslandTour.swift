@@ -77,7 +77,7 @@ final class CaneKitIslandTour: XCTestCase {
         app.activate()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
         let simulate = app.buttons["Simulate walk"]
-        if simulate.waitForExistence(timeout: 3) { simulate.tap() }
+        if simulate.waitForExistence(timeout: 3) { scrollTo(simulate).tap() }
         pause(6.0)
         XCUIDevice.shared.press(.home)
         pause(2.5)
@@ -88,7 +88,7 @@ final class CaneKitIslandTour: XCTestCase {
         // screen for 60 s), so this picture should show no OpenCane activity at all.
         app.activate()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
-        app.buttons["Stop route"].tap()
+        scrollTo(app.buttons["Stop route"]).tap()
         app.buttons["Stop route"].tap()
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5))
         pause(1.0)
@@ -115,6 +115,18 @@ final class CaneKitIslandTour: XCTestCase {
         let a = XCTAttachment(uniformTypeIdentifier: "public.png", name: name, payload: png)
         a.lifetime = .keepAlways
         add(a)
+    }
+
+    /// Swipes until `element` is hittable: up to four swipes up, then up to eight down. Step 58's
+    /// voice tile fills the top of the Guide, so route controls start below the fold (and one
+    /// swipe too many can push the compact row above it). Returns the element for chaining.
+    @discardableResult
+    private func scrollTo(_ element: XCUIElement) -> XCUIElement {
+        var ups = 0
+        while ups < 4, !(element.exists && element.isHittable) { app.swipeUp(); ups += 1 }
+        var downs = 0
+        while downs < 8, !(element.exists && element.isHittable) { app.swipeDown(); downs += 1 }
+        return element
     }
 
     /// Spins the run loop for `s` seconds so the island animation and ActivityKit settle.

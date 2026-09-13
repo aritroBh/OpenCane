@@ -15,7 +15,7 @@
 //  MainActor app classes so it can be pinned by `swift test`. Owners: `NavigationEngine.settle`
 //  (TurnSettle; built in `reached`, fed by `update(fix:)` / `update(heading:now:)`, cleared in
 //  `refreshSettling` once live), `AppModel.straightWalk` (`autoRecenterIfWalkingStraight`) /
-//  `AppModel.cueSpeech` (`speakCueIfNeeded`, `cleared()` on every `CueOutput.stop`), and
+//  `AppModel.cueSpeech` (`speakCueIfNeeded`; a fresh value per route), and
 //  `WatchModel.crown` (`crownMoved(delta:now:)`).
 //  Isolation: the package has no default actor isolation, so these are nonisolated values; each
 //  app owner holds its copy in a main-actor `var` (`if var s = settle { s.update(fix); settle = s }`).
@@ -27,8 +27,9 @@
 //    · TurnSettle: stationary or poor fixes never ratchet the closest approach or release by
 //      distance; once `releaseAt` is set it never moves. At a crossing the beacon is silent
 //      while settling ("Listen for traffic").
-//    · CueSpeechPolicy: a *new* head-height episode is always eligible to speak (subject only
-//      to the 4 s limiter); "Head height." is never repeated every second.
+//    · CueSpeechPolicy: a head *onset* is always eligible to speak (subject only to the 4 s
+//      limiter); within an episode "Head height." is spoken at most once more, under 0.6 m
+//      (Step 52). The episode itself belongs to `CueDecider`.
 //    · CrownAccumulator: the window is anchored at the first detent, never slid.
 //
 
@@ -271,54 +272,67 @@ public struct StraightWalkDetector: Sendable, Equatable {
 
 // MARK: - CueSpeechPolicy
 
-/// Which obstacle cues are also spoken. Head height is spoken once per *episode* (the haptic keeps
-/// re-firing at 1 Hz; re-speaking every few seconds would cut a crossing instruction to pieces),
-/// with at most one "Head height." per `headInterval` across episodes. Left / right / ahead are
-/// spoken only when the phone cannot buzz (engine down or silenced), per kind at most every
-/// `sideInterval`.
+/// Which obstacle cues are also spoken. "Head height." follows the decider's head episode
+/// (Step 52): spoken on the **onset** fire (`HapticCue.head(distance:onset: true)`), subject to
+/// one line per `headInterval` (4 s) across episodes; spoken **once more** in the same episode
+/// only when a band re-fire brings the overhang under `headSecondLineBelowM` (0.6 m — about one
+/// step). Every other head fire is haptic only. The decider decides where an episode starts and
+/// ends (2 s of trusted clear), so this policy has no `cleared()` any more: a `.stop` inside an
+/// episode (the zone flapping at its exit line) no longer makes the next fire "new" — that split
+/// is what said "Head height." 8 times in 12 minutes on the first cane walk. Left / right / ahead
+/// are spoken only when the phone cannot buzz (engine down or silenced), per kind at most every
+/// `sideInterval`. The text is byte-identical to `AppModel.commonLines` (prefetched).
 ///
 /// Pinned by `headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`,
-/// `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`, `aBuzzedSideCueDoesNotSplitAHeadEpisode`.
+/// `secondHeadLineNeedsUnderSixtyCentimetres`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`,
+/// `aBuzzedSideCueDoesNotSplitAHeadEpisode` (NavSupportTests) and `fixedCueLinesAreLeftToCommonLines`
+/// (SpokenPhrasesTests).
 public struct CueSpeechPolicy: Sendable, Equatable {
     /// Speech priority class of a returned line: `safety` ("Head height.") maps to the speech
     /// queue's highest priority, `obstacle` to the obstacle-name tier.
     public enum Tier: Sendable, Equatable { case safety, obstacle }
 
-    /// Seconds: minimum gap between two spoken "Head height." lines, across episodes.
+    /// Seconds: minimum gap between two spoken onset "Head height." lines, across episodes.
     public var headInterval: TimeInterval = 4
     /// Seconds: minimum gap between two spoken lines of the same side / ahead kind.
     public var sideInterval: TimeInterval = 4
+    /// Metres: a band re-fire closer than this speaks "Head height." a second time (once per
+    /// episode). Matches the decider's last re-fire band (`CueThresholds.headRefireBands`, 0.6 m).
+    public var headSecondLineBelowM: Float = 0.6
 
     /// Last time (seconds) each cue kind was actually spoken.
     private var lastSpoken: [CueKind: TimeInterval] = [:]
-    /// Kind of the current episode; `.clear` after `cleared()`.
-    private var episodeKind: CueKind = .clear
+    /// True once the current head episode has used its second line (reset by every onset).
+    private var headSecondLineSpoken = false
 
-    /// Creates a policy with the default 4 s / 4 s limiters.
+    /// Creates a policy with the default 4 s / 4 s limiters and the 0.6 m second line.
     public init() {}
-
-    /// The decider reported `.stop` (nothing in range): the next head cue is a new episode.
-    /// `AppModel` also calls it when the app goes to the background. The per-kind limiter is kept, so a
-    /// new episode inside `headInterval` of the last "Head height." is still silent
-    /// (`headEpisodesAreRateLimitedAcrossEpisodes`).
-    public mutating func cleared() { episodeKind = .clear }
 
     /// Decide whether a fired haptic cue should also be spoken.
     /// - Parameters:
-    ///   - cue: the cue `CueDecider` just fired.
+    ///   - cue: the cue `CueDecider` just fired (after `TorsoHapticPolicy`); for `.head` the
+    ///     payload says onset or band re-fire and how far.
     ///   - phoneCannotBuzz: true when the haptic engine is unhealthy or silenced.
     ///   - now: seconds (the depth report's timestamp in the app).
     /// - Returns: the line and its tier, or nil to stay silent. `AppModel.speakCueIfNeeded` maps
     ///   `.safety` → `SpeechPriority.safety`, `.obstacle` → `.obstacle`, TTL 6 s.
     public mutating func line(for cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) -> (text: String, tier: Tier)? {
-        let newEpisode = episodeKind != cue.kind
-        // Only a head cue, or a side cue that is actually spoken, moves the episode: a silent
-        // (buzzed) side cue between two head re-fires must not make the second one "new".
-        if case .head = cue { episodeKind = .head }
         let candidate: (String, Tier, TimeInterval)?
         switch cue {
-        case .head:
-            candidate = newEpisode ? ("Head height.", .safety, headInterval) : nil
+        case .head(let d, let onset):
+            if onset {
+                headSecondLineSpoken = false
+                candidate = ("Head height.", .safety, headInterval)
+            } else if !headSecondLineSpoken, d.isFinite, d < headSecondLineBelowM {
+                // The second line is bounded by the decider (one 0.6 m band per episode, ≥ 1.5 s
+                // after the previous fire), not by the 4 s onset limiter: under 0.6 m the walker
+                // is one step from the overhang and must hear it even if the onset line was 2 s ago.
+                headSecondLineSpoken = true
+                lastSpoken[.head] = now
+                return ("Head height.", .safety)
+            } else {
+                candidate = nil
+            }
         case .left:
             candidate = phoneCannotBuzz ? ("Left.", .obstacle, sideInterval) : nil
         case .right:
@@ -330,7 +344,6 @@ public struct CueSpeechPolicy: Sendable, Equatable {
             candidate = phoneCannotBuzz ? (SpokenPhrases.approachLine(distance: d), .obstacle, sideInterval) : nil
         }
         guard let (text, tier, interval) = candidate else { return nil }
-        episodeKind = cue.kind
         if let last = lastSpoken[cue.kind], now - last < interval { return nil }
         lastSpoken[cue.kind] = now
         return (text, tier)

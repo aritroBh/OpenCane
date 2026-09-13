@@ -68,3 +68,29 @@ import Testing
     #expect(VoicePrefetch.maxConcurrent == 2)
     #expect(VoicePrefetch.maxConcurrent < 3)
 }
+
+// MARK: - Additive prefetch (Step 54)
+
+/// A new batch (a route's lines, a warning that just missed) goes to the *front*: it was asked for
+/// now. The backlog of an earlier batch keeps its order behind it, and the standing tail (route
+/// lines, then warning lines) comes last. Nothing in flight is cancelled by the caller any more.
+@Test func aNewBatchGoesAheadOfTheBacklogAndTheTailFollows() {
+    let merged = VoicePrefetch.merge(new: ["Head height."],
+                                     backlog: ["Turn left.", "Cross Green Street."],
+                                     tail: ["Turn left.", "One meter ahead, door"]) { _ in false }
+    #expect(merged == ["Head height.", "Turn left.", "Cross Green Street.", "One meter ahead, door"])
+}
+
+/// Merging never loses an uncached line from any of the three sources, and never re-requests a
+/// line already on disk or listed twice — the same `queue` rule, applied to the union.
+@Test func mergeDropsCachedAndRepeatedLinesButNeverAnUncachedOne() {
+    let merged = VoicePrefetch.merge(new: ["A", "B"], backlog: ["B", "C", ""], tail: ["C", "D", "A"]) { $0 == "C" }
+    #expect(merged == ["A", "B", "D"])
+    #expect(VoicePrefetch.merge(new: [], backlog: [], tail: []) { _ in false }.isEmpty)
+}
+
+/// A worker takes `chunk` lines at a time so a line that arrives mid-batch (a route start during
+/// the 74-line warning warm-up) is requested within one chunk, not after the whole backlog.
+@Test func prefetchChunkIsTheConcurrencyLimit() {
+    #expect(VoicePrefetch.chunk == VoicePrefetch.maxConcurrent)
+}
