@@ -78,6 +78,12 @@ struct ContentView: View {
                     .frame(height: keyboardUp ? 0 : nil)
                     .opacity(keyboardUp ? 0 : 1)
                     .clipped()
+                    // UI audit 2026-09-13: the bar's fill runs under the home indicator. Drawn here,
+                    // after `.clipped()`, because the clip cut the bar's own safe-area background
+                    // and left an ivory strip under the tabs on Face ID iPhones.
+                    .background {
+                        if !keyboardUp { CKColor.surface.ignoresSafeArea(edges: .bottom) }
+                    }
                     .accessibilityHidden(keyboardUp)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
