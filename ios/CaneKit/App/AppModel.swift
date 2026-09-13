@@ -1475,6 +1475,7 @@ final class AppModel {
         }
         speech.say(VoiceMenu.menuLine, .nav, ttl: 20)
         logger.event("voice_menu", ["action": "spoken"])
+        let generation = voiceShellGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Still talking after the cap (a warning run): skip rather than open the mic over it.
@@ -1493,6 +1494,10 @@ final class AppModel {
                 cameraDenied: AVCaptureDevice.authorizationStatus(for: .video) == .denied)
             switch verdict {
             case .listen:
+                guard self.voiceShellMayListen(generation) else {
+                    self.logger.event("voice_menu", ["action": "skipped", "reason": "backgrounded"])
+                    return
+                }
                 guard !self.voiceInput.isListening, !self.voiceInput.isStarting else { return }
                 self.logger.event("voice_listen", ["mode": "launch"])
                 self.voiceInput.startListening(windowSeconds: UtteranceEndDetector.maxListen)
@@ -1510,8 +1515,10 @@ final class AppModel {
         // Read before the drain: the emergency prompt is still speaking, and its window restarts
         // when the microphone opens (`emergencyListenOpened`).
         let wasQuestion = conversation.awaitingEmergencyAnswer
+        let generation = voiceShellGeneration
         let drained = await waitForSpeechToDrain()
-        guard drained, !voiceInput.isListening, !voiceInput.isStarting, !SpeechQueue.muted else {
+        guard drained, voiceShellMayListen(generation),
+              !voiceInput.isListening, !voiceInput.isStarting, !SpeechQueue.muted else {
             if !drained { logger.event("voice_followup", ["action": "skipped", "reason": "still_speaking"]) }
             return
         }
@@ -1540,10 +1547,21 @@ final class AppModel {
         let deadline = Date().addingTimeInterval(VoiceShellPolicy.menuWaitCap)
         while Date() < deadline, speech.isSpeaking || speech.queuedLineCount > 0 {
             try? await Task.sleep(for: .milliseconds(100))
+            if Task.isCancelled { return false }
         }
         guard !speech.isSpeaking, speech.queuedLineCount == 0 else { return false }
         try? await Task.sleep(for: .seconds(SelfHearFilter.tailSeconds))
         return true
+    }
+
+    /// Bumped when the app goes to the background; a launch / follow-up listen that started waiting
+    /// under an older value never opens the microphone. Read by `voiceShellMayListen`.
+    @ObservationIgnored private var voiceShellGeneration = 0
+
+    /// True when a voice-shell listen that began at `generation` may still open the microphone: no
+    /// background transition since, and the app is frontmost.
+    private func voiceShellMayListen(_ generation: Int) -> Bool {
+        generation == voiceShellGeneration && UIApplication.shared.applicationState == .active
     }
 
     /// Set by `protectedDataWillBecomeUnavailableNotification` (the phone is locking); cleared when
@@ -1813,6 +1831,11 @@ final class AppModel {
             // Give the microphone back and put the session on `.playback`: a suspended app must
             // not hold `.playAndRecord` (and the orange recording dot) while nothing listens.
             voiceInput.cancel()
+            // A launch or follow-up listen still waiting for speech to drain must not open the
+            // microphone after the unlock, and a cloud answer about the pre-lock scene must not
+            // speak (Codex review 2026-09-13).
+            voiceShellGeneration &+= 1
+            conversation.cancelForBackground()
             sounds.stop()
             faceHead.stop()                  // ARKit pauses: no face anchors, so no head pose
             sceneContext.set("")             // LiDAR facts from here are stale once we come back

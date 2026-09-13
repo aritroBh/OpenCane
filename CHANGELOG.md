@@ -6,7 +6,7 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 
 **How.** One adversarial prompt (safety, voice, microphone, conversation, UI contract, logging,
 concurrency) over the full diff vs `origin/main` on a repo copy. Muse and OpenCode read the files;
-Codex read-only (first pass timed out at 25 min and was rerun on a narrowed scope); Antigravity
+Codex read-only (the first pass timed out at 25 min; the rerun hung on stdin in a background shell — `< /dev/null` — and the third, focused on lifecycle, answered); Antigravity
 headless with the key diff inlined (it cannot read files here). Every finding checked against the
 current code before it was fixed or rejected.
 
@@ -43,6 +43,12 @@ current code before it was fixed or rejected.
 - *The safety watchdog retry lost its "system voice now" after `immediate:` was removed* (merge with
   Step 51a): `speakNow(watchdogFallback:)` dispatches `system / watchdog_fallback` directly.
 - `VoiceShellPolicy` documents that the app passes "not refused" for permissions (Muse, OpenCode).
+- *A launch or follow-up listen could open the microphone after a lock* (Codex, second pass): the
+  waiting Task survived `scenePhaseChanged(.background)`. `voiceShellGeneration` is bumped on
+  background and checked (with `applicationState == .active`) right before `startListening`.
+- *A cloud answer about the pre-lock scene could speak after the unlock* (Codex): background now calls
+  `ConversationCoordinator.cancelForBackground()` — the budget refuses the turn, so it neither speaks
+  nor runs a tool; `conv_error {reason: backgrounded}`.
 
 **Rejected, with evidence.**
 - "A race timeout / failure never speaks and deadlocks the queue" (Antigravity BLOCKER): both
