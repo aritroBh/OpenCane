@@ -1,0 +1,47 @@
+{
+  "id": "isr_townsend_to_front_doors",
+  "name": "Townsend Hall to the ISR front doors",
+  "fromAliases": ["ISR", "Townsend", "Townsend Hall", "ISR lab", "the lab", "Illinois Street Residence Hall"],
+  "outdoorPlaceID": "isr",
+  "walked": false,
+  "recordedAt": null,
+  "strideM": null,
+  "steps": [
+    {
+      "say": "Start in the Townsend first floor south corridor. Face west and walk to the end of the corridor. Say next when you get there.",
+      "steps": null,
+      "turn": "none",
+      "landmark": null
+    },
+    {
+      "say": "Elevator on your right, stairs on your left. Keep going west through the connector, about 14 steps. Expect a door.",
+      "steps": 14,
+      "turn": "none",
+      "landmark": null
+    },
+    {
+      "say": "You are entering the south lobby. Keep going west about 11 steps.",
+      "steps": 11,
+      "turn": "none",
+      "landmark": "The main desk is on your right."
+    },
+    {
+      "say": "Turn left to face south. Walk about 15 steps to the entry vestibule doors.",
+      "steps": 15,
+      "turn": "left",
+      "landmark": null
+    },
+    {
+      "say": "Go through the inner doors. The outer doors are about 7 steps ahead.",
+      "steps": 7,
+      "turn": "none",
+      "landmark": null
+    }
+  ],
+  "exit": {
+    "say": "You are at the ISR front doors. Go outside and wait a moment for GPS.",
+    "lat": 40.10949,
+    "lon": -88.22135,
+    "radiusM": 25
+  }
+}

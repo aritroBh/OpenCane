@@ -354,13 +354,91 @@ private struct FamilyContactsEditor: View {
     }
 }
 
+/// Step 62 — Settings "Record indoor route": a sighted teammate walks from a room to the exit door
+/// once and the walk becomes an indoor step script (`IndoorGuide` recording: pedometer, 10 Hz yaw,
+/// spoken landmarks, the averaged exit fix), saved as Documents/indoor/<id>.json (walked). Also a
+/// "Start indoor route" test button. New labels only ("Route id", "Start recording", "Add landmark",
+/// "Finish at the exit", "Save", "Cancel recording", "Start indoor route"); nothing here is in the
+/// UI-test contract (hard rule 9). Every action speaks its result at `.nav` too.
+private struct IndoorRecordCard: View {
+    /// The owner of `indoor`.
+    @Environment(AppModel.self) private var model
+
+    /// Idle: the id field, Start recording, Start indoor route. Recording: the live count and the
+    /// Add landmark / Finish at the exit / Save / Cancel recording buttons. Always: the last status.
+    var body: some View {
+        @Bindable var indoor = model.indoor
+        CKCard(title: "Record indoor route") {
+            Text("A sighted teammate walks from the room to the exit door once. Steps and turns are counted; tap Add landmark and say what you pass.")
+                .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if indoor.isRecording {
+                Text(progressLine)
+                    .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                    .accessibilityAddTraits(.updatesFrequently)
+                CKBigButton(title: "Add landmark", systemImage: "mic.fill", role: .secondary,
+                            hint: "Listens once; what you say is attached to the current step") { indoor.addLandmark() }
+                    .disabled(indoor.recordingFinished || indoor.awaitingLandmark)
+                CKBigButton(title: "Finish at the exit", systemImage: "door.left.hand.open", role: .secondary,
+                            hint: "Stand just outside the exit door; takes up to 8 seconds of GPS",
+                            value: indoor.isFinishingExit ? "reading GPS" : nil) { indoor.finishAtExit() }
+                    .disabled(indoor.recordingFinished || indoor.isFinishingExit)
+                CKBigButton(title: "Save", systemImage: "square.and.arrow.down",
+                            hint: "Saves the walk as route \(IndoorScriptCatalog.sanitizedID(indoor.recordingID))") { indoor.saveRecording() }
+                    .disabled(!indoor.recordingFinished)
+                CKBigButton(title: "Cancel recording", systemImage: "xmark.circle", role: .destructive,
+                            hint: "Discards this recording") { indoor.cancelRecording() }
+            } else {
+                TextField("Route id", text: $indoor.recordingID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityHint("The file name; the ISR id replaces the floor-plan draft")
+                CKBigButton(title: "Start recording", systemImage: "record.circle", role: .secondary,
+                            hint: "Counts steps and turns until you finish at the exit") { indoor.startRecording() }
+                    .disabled(indoor.isActive)
+                CKBigButton(title: "Start indoor route", systemImage: "figure.walk", role: .secondary,
+                            hint: "Walks the saved ISR indoor route, then the route to CIF") { model.startIndoorRouteForTesting() }
+                    .disabled(indoor.isActive || model.nav.isNavigating || model.routeStartWaiting)
+                Text(catalogLine)
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let status = indoor.recordingStatus {
+                Text(status)
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(CKFont.body)
+        .foregroundStyle(CKColor.textPrimary)
+    }
+
+    /// "Recording · 2 steps, 31 pedometer steps, 1 landmark" (steps = recorded steps with any count).
+    private var progressLine: String {
+        let counts = model.indoor.recordedStepCounts
+        let steps = counts.filter { $0 > 0 }.count
+        let total = counts.reduce(0, +)
+        let landmarks = model.indoor.recordedLandmarkCount
+        return "Recording · \(steps) \(steps == 1 ? "step" : "steps"), \(total) pedometer steps, \(landmarks) \(landmarks == 1 ? "landmark" : "landmarks")"
+    }
+
+    /// "Indoor routes: Townsend Hall to the ISR front doors (not walked yet)".
+    private var catalogLine: String {
+        let scripts = model.indoor.scripts
+        guard !scripts.isEmpty else { return "No indoor routes." }
+        return "Indoor routes: " + scripts.map { "\($0.name)\($0.walked ? "" : " (not walked yet)")" }
+            .joined(separator: "; ")
+    }
+}
+
 /// Settings page: cues, haptics, watch, mount, this phone.
 private struct SettingsPage: View {
     /// Made `@Bindable` in `body` so the pickers and toggles get two-way bindings.
     @Environment(AppModel.self) private var model
 
     /// Cues first (the settings a walker changes most), then Haptics, Voice (Step 53), Watch, Mount,
-    /// Family alerts, This phone.
+    /// Family alerts, Record indoor route (Step 62), This phone.
     var body: some View {
         @Bindable var model = model
         pageScroll {
@@ -370,6 +448,7 @@ private struct SettingsPage: View {
             WatchCard()
             mountSettings($model)
             familyAlertsCard($model)
+            IndoorRecordCard()
             capabilityCard
         }
     }

@@ -47,7 +47,48 @@ Also: **next** (skip a waypoint), **stop** (end the route — exact phrases only
 "stop navigating", "end route", "cancel route"). Homophones are deliberately not commands: "won",
 "to", "for" do nothing, because a false hit acts.
 
-## 1. The ten spoken commands
+## 1c. Indoors first: from a room to the outdoor route (Step 62)
+
+GPS does not work inside a building, so the walk out of it is a short spoken step script, counted by
+the phone's pedometer, and the outdoor GPS route takes over once you are outside.
+
+- **Say "take me from ISR to CIF"** (also "from Townsend to CIF", "go from the lab to CIF", "take me
+  to CIF from ISR"). If the place you start from has an indoor route, OpenCane reads its first step
+  ("Start in the Townsend first floor south corridor. …"). A route nobody has walked yet begins with
+  "This indoor route has not been walked yet. Use your cane and ask for help if it seems wrong."
+  A starting place with no indoor route is an ordinary "take me to CIF".
+- **Walk.** Each step's line comes a little before its count is reached (so a turn is announced
+  before the turn); landmarks ("The main desk is on your right.") come about two thirds of the way.
+- **next** skips to the next step (a door, a lift, a count that ran short); **repeat** says the
+  current step again; **status** says "Indoors: step 3 of 5."; **stop** ends it. The watch's Next and
+  Repeat, and the Guide's Repeat | Next | Stop route, do the same.
+- **At the door** it says "You are at the ISR front doors. Go outside and wait a moment for GPS."
+  Step outside: after three good GPS fixes near the door the outdoor route starts by itself (its own
+  first line names the doors).
+- **Say "I'm outside"** ("I am outside", "we're outside", "outside now") if it has not started. With a
+  recent usable fix the outdoor route starts at once; otherwise you hear "Waiting for GPS outside."
+  and it starts on the first good fix.
+- To CIF the outdoor leg is the recorded route; to anywhere else it is an Apple Maps walking route
+  from where GPS finds you.
+- ⚠ Keep the screen on for the indoor part: with the phone locked the pedometer and GPS pause, and
+  the handover waits until you unlock.
+
+### Recording an indoor route (a sighted teammate, once)
+
+1. Settings → **Record indoor route**. Leave **Route id** as `isr_townsend_to_front_doors` to replace
+   the ISR floor-plan draft (its name, spoken origins and exit line are kept), or type a new id.
+2. Stand where the walk starts, facing the way to go, phone held (or clamped) as it will be walked.
+   Tap **Start recording**.
+3. Walk to the exit door at a normal pace. Turns are detected by themselves (a turn you hold for
+   1.5 seconds); do not spin the phone to look around.
+4. At each thing worth saying, tap **Add landmark** and say it in one sentence ("The personal lab is
+   on your left."). It is attached to the step you are on.
+5. Step just outside the exit door and tap **Finish at the exit**. Hold still up to 8 seconds while
+   it averages the GPS.
+6. Tap **Save**. It says "Indoor route saved. N steps." The draft's "not walked yet" warning is gone.
+   **Start indoor route** on the same card walks it straight away to check it.
+
+
 
 Say them to Siri. Every phrase has to contain the app's name — that is Apple's rule for app
 shortcuts, not ours. Several wordings work for each command; the first one listed is the shortest.

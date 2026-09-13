@@ -49,8 +49,9 @@ final class CaneKitIslandTour: XCTestCase {
     }
 
     /// Route start → background → compact island → long-press → expanded island → foreground →
-    /// simulated walk for a few seconds (distance changes, obstacle glance stays clear in the
-    /// simulator) → background → compact again → foreground → Stop → background → after-stop.
+    /// simulated walk for a few seconds (distance changes; the glance never claims "Path clear" in
+    /// the simulator — no LiDAR, Step 64) → background → compact again → foreground → Stop →
+    /// background → after-stop (the 10 s "Route stopped" card).
     ///
     /// Shot names: island-compact, island-expanded, island-walking, island-after-stop.
     func testDynamicIsland() {
@@ -83,9 +84,11 @@ final class CaneKitIslandTour: XCTestCase {
         pause(2.5)
         snap("island-walking")
 
-        // Stop the route and check the island afterwards: Stop ends the activity immediately
-        // (`AppModel.stopRoute` → `end(immediate: true)`; only *arrival* keeps a card on the lock
-        // screen for 60 s), so this picture should show no OpenCane activity at all.
+        // Stop the route and check the island afterwards. Since Step 64 Stop leaves a closing card
+        // (`AppModel.stopRoute` → `end(stopped: true)`, "Route stopped" for 10 s), so this picture,
+        // taken ~4 s after Stop, should show the OpenCane mark with "Stopped" — not an empty island.
+        // (Warming and arrived are not photographed: the simulator has no LiDAR, so a route skips
+        // the warm-up, and the simulated walk to CIF takes ~7 min at 1.4 m/s.)
         app.activate()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
         scrollTo(app.buttons["Stop route"]).tap()

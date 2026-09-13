@@ -5,7 +5,8 @@
 //  Widget extension entry: hosts the navigation Live Activity (Dynamic Island + lock screen).
 //
 //  Implements the extension side of docs/design.md §6.7. No home-screen widgets: the bundle
-//  contains only `NavLiveActivity`.
+//  contains `NavLiveActivity`, and since Step 64 the lock-screen accessory `OpenCaneAccessoryWidget`
+//  and the Control Center control `TalkControl` (OpenCaneControls.swift).
 //
 //  Why it exists: ActivityKit renders a Live Activity only from a WidgetKit extension, so the
 //  app (`LiveActivityController`) cannot draw its own Dynamic Island. Added in Steps 8–9.
@@ -26,11 +27,15 @@
 import SwiftUI
 import WidgetKit
 
-/// `@main` entry of the `com.aritro.canekit.widget` extension; vends the one Live Activity.
+/// `@main` entry of the `com.aritro.canekit.widget` extension; vends the Live Activity, the
+/// accessory widget and the control.
 @main
 struct CaneKitWidgetBundle: WidgetBundle {
-    /// The bundle's only widget. Add a home-screen widget here, not a second `@main`.
+    /// Every widget of the extension. Add a new one here, not a second `@main`.
     var body: some Widget {
         NavLiveActivity()
+        // Step 64: the brand when no route runs (OpenCaneControls.swift).
+        OpenCaneAccessoryWidget()
+        TalkControl()
     }
 }

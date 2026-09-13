@@ -35,6 +35,7 @@
 //    · ⚠ CIF and ISR coordinates are the last / first waypoint of route_isr_cif.json
 //      (`gazetteerEndpointsAreTheRouteFileEntrances`). The other entrances are OSM entrance nodes
 //      queried 2026-09-11 and have NOT been walked: verify on site.
+//    · Every `name` is itself an alias (`everyCampusPlaceNameRoundTripsThroughMatch`, Step 62).
 //    · ⚠ The ids are the raw values of the app's `CampusDestination` AppEnum
 //      (`campusPlaceIdsArePinned`): rename both together.
 //  Tests: CampusPlacesTests.swift.
@@ -49,10 +50,10 @@ public struct CampusPlace: Sendable, Equatable, Identifiable {
     /// Spoken / shown name ("Grainger Engineering Library"); becomes the route name
     /// "To <name>" and the arrival line "Arrived at <name>."
     /// ⚠ `FastPathIntentClassifier` hands this *name* (not the id) to `AppModel.navigate(to:)`,
-    /// which runs `match` on it again. A name that is not itself an alias after `normalize` falls
-    /// through to a MapKit search: today "the Townsend Hall doors" → "townsend hall doors" matches
-    /// no ISR alias, so a spoken "take me to Townsend Hall" searches MapKit instead of walking to
-    /// the route file's WP1 (every other name does normalize onto one of its own aliases).
+    /// which runs `match` on it again, so every name must normalize onto one of its own aliases
+    /// (`everyCampusPlaceNameRoundTripsThroughMatch`). Until Step 62 "the Townsend Hall doors" did
+    /// not, and "take me to Townsend Hall" searched MapKit instead of walking to the route file's WP1;
+    /// the alias "Townsend Hall doors" fixed it ("the" is dropped by `normalize`).
     public let name: String
     /// The entrance a walking route should end at (WGS-84).
     public let coordinate: Coordinate
@@ -74,7 +75,8 @@ public struct CampusPlace: Sendable, Equatable, Identifiable {
 /// The campus gazetteer, checked before any MapKit search (`RouteSource.mapKit(to:from:)`).
 /// Pinned by `campusAliasesIgnoreCasePunctuationAndThe`, `everyCampusPlaceAnswersToItsAliases`,
 /// `unknownOrPartialNamesFallThroughToMapKit`, `gazetteerEndpointsAreTheRouteFileEntrances`,
-/// `everyCampusPlaceIsOnCampusAndAliasesAreUnique`, `campusPlaceIdsArePinned`.
+/// `everyCampusPlaceIsOnCampusAndAliasesAreUnique`, `campusPlaceIdsArePinned`,
+/// `everyCampusPlaceNameRoundTripsThroughMatch`.
 public enum CampusPlaces {
 
     /// Every known place, in the order the app's AppEnum lists them.
@@ -89,8 +91,10 @@ public enum CampusPlaces {
         CampusPlace(id: "isr", name: "the Townsend Hall doors",
                     // route_isr_cif.json WP1 (OSM entrance node 5418851678, ISR south vestibule).
                     coordinate: Coordinate(latitude: 40.10949, longitude: -88.22135),
+                    // "Townsend Hall doors" (Step 62) is the spoken name itself, so `match(name)` round-trips.
                     aliases: ["ISR", "Townsend", "Townsend Hall", "ISR Townsend Hall",
-                              "Illinois Street Residence Hall", "Illinois Street Residence Halls"]),
+                              "Illinois Street Residence Hall", "Illinois Street Residence Halls",
+                              "Townsend Hall doors"]),
         CampusPlace(id: "grainger", name: "Grainger Engineering Library",
                     // OSM entrance node 5296014632, Springfield Avenue side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1125612, longitude: -88.2272830),

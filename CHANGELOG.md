@@ -2,7 +2,229 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-## Step 64 — Docs match the Step 60 cloud MVP (Sun Sep 13)
+## Steps 62 + 64 review round (Muse, OpenCode, Codex, Antigravity) (Sun Sep 13)
+
+Every finding was read against the code before acting. Logic tests were written first: the new API
+did not compile (red), then went green: `swift test` → **845 tests in 21 suites passed** (exit 0). The
+throttle test's red was a compile-blocked run, not an observed runtime failure; by reading, the old
+code recorded the throttled `stop` at 10 s as `lastLevel`, so `stop` at 35 s was no escalation. App
+code was checked by reading only (no xcodebuild this round: an e2e run owned the simulator).
+
+**Fixed**
+1. **The landmark hook swallowed commands.** While "Add landmark" waited, *any* transcript became a
+   landmark, including "stop" / "I'm outside" / "emergency". `IndoorRecorder.isLandmarkText(_:)`
+   runs `FastPathIntentClassifier.classify` first; `.stopRoute`, `.indoorOutside`, `.emergency`,
+   `.confirm` and blank text are not consumed (the hook disarms, `indoor {action:
+   record_landmark_command}`). Test `landmarkHookLetsCommandsThrough`.
+2. **A locked phone stalled the indoor walk.** CMPedometer pauses in the background, and the handover
+   needed `reachedExit()`. `IndoorHandover` now also hands over GPS-only: `gpsOnlyFixes` 3 consecutive
+   fixes with accuracy ≤ `gpsOnlyAccuracyM` 10 m within `gpsOnlyRadiusM` 15 m of the exit; any other fix
+   resets the run. The armed path is unchanged. `IndoorGuide.sceneChanged(active:)` logs
+   `indoor {action: paused_background | resumed}` and speaks nothing. Tests
+   `handoverGpsOnlyFiresOnThreeTightFixesWithoutTheExit`,
+   `handoverGpsOnlyNeedsConsecutiveTightFixesNearTheExit`; `handoverIgnoresFixesBeforeItIsArmed` now
+   feeds 12 m fixes (5 m ones at the door would now be a GPS-only handover, as intended).
+   ⚠ Open: `LocationService` arms a background session only while a route navigates, so locked
+   indoor fixes rely on Always authorization (granted on the demo phone). Needs a device check.
+3. **An indoor walk never had a Live Activity.** `setIndoor` no-ops without one, and nothing requested
+   it. New `LiveActivityController.beginIndoor(name:say:stepIndex:stepCount:)` is called from
+   `IndoorGuide.start` before the first `setIndoor`. It ends a closing "Route stopped" card, requests
+   in `.indoor`, or updates the existing activity. `beginWarmup` and `start` now update **any**
+   existing activity in place (they only reused a warming one for the same route name), so the
+   handover keeps one island; its static `routeName` is the trip's (the bundled route name for CIF,
+   "To <destination>" otherwise). `endIfIdle()` ends it when the outdoor leg never begins
+   (`IndoorGuide.handOver`, `AppModel.buildRoute`'s no-fix and error branches).
+4. **ActivityKit ordering.** `Activity.request` ran right after enqueueing the previous activity's end
+   and the closing card's end. Requests are now queued on `activityOperation`: a main-actor task awaits
+   `predecessor?.value`, and a `requestGeneration` fence drops a request an `end` or a newer request
+   superseded. Orphan ends at launch are chained too. `end` already cleared `activity`; it now also
+   drops a queued request.
+5. **`Activity.request` from the background throws.** A request while not `.active` is kept as the
+   latest `requestSpec` (`live_activity {action: deferred}`). `AppModel.scenePhaseChanged(.active)`
+   calls `flushPendingRequest()` (`flushed`); outcomes are logged `requested` / `request_failed` /
+   `request_cancelled` / `end_idle` via `LiveActivityController.onLog`. The warming countdown now
+   survives a voice phase (`warmupEndsAt` kept while `routeStartWaiting`).
+6. **Exit fallback.** The recording exit could fall back to any last fix (a 65 m indoor fix) and to a
+   stale `location.fix`. `IndoorExitAverager` keeps only fixes ≤ `fallbackAccuracyM` 30 m;
+   `usableFallback(accuracyM:ageS:)` requires ≤ 30 m and ≤ `fallbackMaxAgeS` 20 s for the last-known
+   fix. Otherwise "No GPS fix…". Test `exitAveragerFallbackNeedsAUsableFix`.
+7. **`IslandAlertThrottle` forgot a throttled escalation.** It recorded it as `lastLevel`, so the same
+   escalation never alerted after the window. A throttled escalation now keeps the previous level;
+   de-escalation still updates it. Tests `throttledEscalationAlertsAfterTheWindow` (stop@0 alerts,
+   none@5, stop@10 throttled, stop@35 alerts), `deEscalationUpdatesTheLevel`.
+8. **"I'm outside" with a pre-exit fix.** The design is kept (the walker's statement is the evidence,
+   and the fix only confirms which door), and the reason is now in `forced(now:)`'s doc. Muse M4
+   tightened it: the recent fix (≤ 30 m, ≤ 20 s) must lie within the exit's `radiusM`, not 60 m.
+   `forcedRecentDistanceM` is removed. Tests `handoverForcedIsImmediateWithARecentUsableFix` (25 m),
+   `handoverForcedWithoutAFixWaitsForGPS` (26 m), `handoverForcedNeedsTheRecentFixInsideTheRadius`.
+9. **Lows.** (a) `opencane://guide` has no tab binding (`ContentView`'s tab is private `@State`), so
+   the `onOpenURL` comment now says it opens on whatever tab was showing. (b) A nil CMPedometer update
+   logs `indoor {action: pedometer_nil, source}` at most once per 10 s per source (`ActionRateLimit`),
+   walking and recording. (c) `NavActivityAttributes.init` caps `routeName` at
+   `maxRouteNameCharacters` 120. (d) `CANEKIT_INDOOR_ROUTE` auto-start is skipped
+   (`auto_start_skipped`) while navigating, waiting or already indoors. (e) The duplicate
+   `logger.event("repeat")` in `indoorHandlesRepeat` is removed (`IndoorGuide.repeatLine` logs
+   `indoor {action: repeat}`).
+- **Muse M3.** "navigate to / go to / walk to / route to / set destination to … B from A" became
+  `.startRoute("Cif From Isr")`. Rule 13b now splits " from " after every rule-14 prefix
+  (`FastPathIntentClassifier.destinationPrefixes`); "from here" stays a plain route. Test
+  `everyDestinationPrefixTakesAFromOrigin`.
+- **Muse M8.** The widget's stopped trailing figure showed `min(stepCount, stepIndex)`, one less than
+  `progressLabel`. It now uses `stepIndex + 1`.
+- **Muse M11.** "Add landmark" after the exit, and "Finish at the exit" while its window is open or
+  after it, now speak a one-line refusal (`recordingSay`) instead of returning silently.
+
+**Rejected (with evidence)**
+- **Muse M6** (`indoorOutside` `.handedOver` claims "already spoken"). Every outdoor-leg path speaks
+  for itself: `queueRouteStart` "Obstacle detection warming up…", `NavigationEngine.start` →
+  `onSpeak(intro)` on the degraded path, `buildRoute` "Finding a route to …", and the refusal lines
+  (`announceLocationDenied`, self-test). A coordinator "Starting the outdoor route." would queue a
+  second line. The `routeFromTo` fallback returns `alreadySpoken: true` because `navigate(to:)` says
+  "Finding a route to …"; nothing is duplicated. Doc comment updated.
+- **Muse M9** (revert the `Info.plist` `CFBundleURLTypes` hunk). `ios/project.yml` has
+  `info: path: CaneKit/Info.plist` + `properties:` ("XcodeGen writes these keys into
+  CaneKit/Info.plist on every generate"), and Info.plist is tracked. The hunk is the generated
+  output: reverting it would reappear on the next `gen.sh`, and until then it would drop the
+  `opencane://` scheme the widgets open.
+- **Muse M10** (clear voice listening / thinking in `beginWarmup` / `request`). The flags are not
+  stale. `AppModel.observeVoiceForIsland` re-arms on every change of `isListening || isStarting` and
+  `isProcessing`, and `setVoicePhase` stores each change. A route started by voice opens as
+  `thinking` while the coordinator is really still processing, then republishes as warming when that
+  ends. Clearing them would show warming while the microphone is actually open.
+
+test on device: lock the phone mid indoor walk and walk out of the ISR doors → island stays one
+activity and turns warming / walking; "stop" during Add landmark stops the route; Finish at the exit
+indoors → "No GPS fix…".
+
+## Step 64 — The island says OpenCane, and never "Path clear" while obstacle detection is paused (Sun Sep 13)
+
+**Why.** Owner: "the island looks kind of bad… just a location icon thing; make it better, more
+robust, more unique." The Step 64 audit (`make island` pictures + phone trip logs) found: the Live
+Activity existed only while a route guided, so nothing OpenCane showed during the warm-up, voice or
+after Stop; the compact island (bare `figure.walk` + metres + a green check) read as a system glyph;
+the expanded instruction was cut at two lines; and a **safety bug** — with the screen locked,
+`scenePhaseChanged(.background)` paused depth but the GPS glance fell back to `.clear`, so the lock
+screen and island said "Path clear" exactly while obstacle warnings were off.
+
+**What changed.**
+- **Safety first:** `ContentState.sensing` (`live | paused | none`, default `none`, lenient decode).
+  The widget draws "Path clear" / the green check only when sensing is live and the activity is not
+  stale; background with a route, warm-up or indoor script → "Obstacles paused — unlock" (amber);
+  unknown → "Sensing unknown". The controller also sends obstacle fields as clear / 0 unless live.
+  Pure `IslandPhasePolicy` in CaneKitLogic decides phase + sensing (listening > thinking > warming >
+  indoor > walking). AGENTS.md note added.
+- **Phases:** `phase`, `stepIndex`, `stepCount`, `warmupEndsAt`, `alertLevel` in `ContentState`.
+  `queueRouteStart` starts the activity in `warming` with a `Text(timerInterval:)` countdown;
+  `startRouteNow` updates that same activity (no second one); a cancelled warm-up ends it; Stop shows
+  a "Route stopped" card for 10 s (sent as an update and ended later — the island drops an *ended*
+  activity at once, first pictures below); `relevanceScore`; phase / sensing changes bypass the
+  coalescer floor. `setVoicePhase(listening:thinking:)` (AppModel voice observation) and
+  `setIndoor(stepIndex:stepCount:say:)` (wired from `IndoorGuide.perform` / `teardown`).
+  `scenePhaseChanged(.background)` keeps GPS while `indoor.isActive` (Step 62 handover).
+- **Look:** `OpenCaneMark` — static contour rings from the voice tile's ring math, moved to
+  `ios/Shared/Brand/ContourRingGeometry.swift` (VoiceTile now uses it too) — in compact leading,
+  minimal, expanded and the lock screen; `.keylineTint` by level; compact trailing progress ring
+  (check only when live, pause glyph when paused); expanded instruction 3 lines at ≥ 85 %, "1 of 6",
+  `.numericText()`; `widgetURL(opencane://guide)` (scheme registered in project.yml); StandBy layout
+  (`isActivityFullscreen`); `.supplementalActivityFamilies([.small])` Smart Stack card; new lock-screen
+  card with a sensing badge. design.md §6.7 rewritten with every state.
+- **Alerts:** `IslandAlertThrottle` — escalation only, ≤ 1 per level per 30 s, never on de-escalation or
+  frontmost, reset per route; `AlertConfiguration(title:body:sound: .default)`. ⚠ Found while
+  building: depth pauses in the background, so sensing is `paused` and no obstacle reaches the island
+  there — alerts can only fire while the app is `.inactive` (Notification / Control Center over it).
+  Kept as the path for a future background depth mode; not a warning channel.
+- **Extras:** Control Center / Lock Screen / Action button control "Talk to OpenCane" (`TalkControl`,
+  `TalkControlIntent` in `Shared/Intents`, the app's copy toggles push-to-talk) and a lock-screen
+  accessory widget with the mark (`opencane://talk` → `CaneKitApp.onOpenURL`). No buttons inside the
+  Live Activity (design.md §6.7). No idle "guarding" activity (it would be false in the background).
+
+**Tests (written first, red before green).** `IslandPolicyTests.swift`: `walkingForegroundIsLive`,
+`backgroundWithRouteIsPaused`, `backgroundWhileWarmingIsPaused`, `backgroundIndoorIsPaused`,
+`noLidarIsNone`, `untrustedDepthIsNone`, `warmingIsNone`, `phasePriority`, `indoorNeedsAValidStep`,
+`voiceKeepsSensing`, `showsClearOnlyWhenLive`, `relevanceOrder`, `unknownRawFallbacks`,
+`levelFromGlance`, `ranks`, `clearToNearAlerts`, `escalationInsideWindowAlerts`, `deEscalationSilent`,
+`flappingIsThrottled`, `foregroundNeverAlerts`, `resetPerRoute`. `LiveActivityCoalescerTests`:
+`sensingChangeBypassesFloor`, `phaseChangeBypassesFloor`, `legacyJsonDecodesGracefully` extended.
+
+**Verification.** `make test` 832 / 832 (exit 0); `make gen` exit 0; `make sim` BUILD SUCCEEDED;
+`make island` 1 test, 0 failures. Pictures (simulator, no LiDAR, so sensing is honestly "unknown"):
+01 compact = ring mark + walker + "585 m", empty progress ring (no check); 02 expanded = mark + glyph,
+full 3-line instruction, "Sensing unknown" pill — the first run clipped the pill row and "1 of…", fixed
+by a 14 pt instruction and tighter top row (second run: the row fits; the last glyph of "1 of 9" touched
+the rounded corner → 10 pt trailing inset, built but not re-photographed); 03 walking = "601 m" (the
+distance rising is the simulated walk's first leg, as in Step 47); 04 after Stop was empty on the first
+run (ended activities leave the island at once) → Stop now updates to the card and ends 10 s later;
+second run shows the ring mark, a stop glyph and "Stopped".
+Not pictured: warming (no LiDAR in the simulator → no warm-up), arrived (~7 min walk), lock screen,
+StandBy, Smart Stack, control, accessory. Not yet run for this step: Muse / multi-agent / Antigravity
+reviews, `make uitest`, `make e2e`.
+
+test on device: start the CIF route and lock the phone during the warm-up — island shows the ring mark
+and a countdown, then the walk; with the screen locked the pill says "Obstacles paused — unlock", never
+a green check; unlock, walk, lock at a hazard; press Stop and go home — "Stopped" card for 10 s; add
+the "Talk to OpenCane" control and the lock-screen widget and tap each; StandBy on a charger.
+
+## Step 62 — Indoors first: "take me from ISR to CIF" walks a step script out of the building, then hands over to the GPS route (Sun Sep 13)
+
+**Why.** Owner decision 2026-09-13: GPS is useless inside Townsend Hall, so the walk from a room to the
+ISR front doors is a short spoken step script counted by the pedometer (no ARKit breadcrumbs tonight),
+recorded once by a sighted teammate in an in-app recording mode, with a floor-plan draft marked "not
+walked" until then. Spec: scratchpad `indoor_spec.md`; the Logic half (`IndoorScript`, `IndoorProgress`,
+`IndoorHandover`, `IndoorRecorder`, "from A to B", "I'm outside", the ISR alias fix) and the draft
+`indoor_isr.json` landed first in this step.
+
+**What changed (app half).**
+- `IndoorGuide` (new, `ios/CaneKit/Navigation`): loads bundled `indoor_*.json` + `Documents/indoor/*.json`
+  (recorded wins by id; invalid files skipped and logged); `start` feeds CMPedometer (`@Sendable` handler
+  hopping to main — TripTracker's crash note) or synthetic steps into `IndoorProgress`; every line is
+  spoken at `.nav` ttl 20 and logged `indoor {action: say, text, index, count, steps, walked, script}` —
+  never a `speech` record; every GPS fix (one hook in `wireNavigation`) feeds `IndoorHandover`; on the
+  handover (`indoor {action: handover, by}`) the outdoor leg starts: the CIF demo route, else
+  `navigate(to:)`. Recording: CMPedometer + CMDeviceMotion `xArbitraryZVertical` yaw at 10 Hz,
+  "Add landmark" as a one-shot transcript hook ahead of the conversation, "Finish at the exit" averaging
+  fixes ≤ 15 m for up to 8 s, Save → `Documents/indoor/<id>.json` with `walked: true`.
+- `AppModel+Indoor` (new): `.routeFromTo` → the script whose `fromAliases` match (else `navigate(to:)`);
+  `.indoorOutside` → handover now, or "Waiting for GPS outside."; while indoors "next" / watch Next /
+  crown / Guide Next advance the step, "repeat" says it again, Stop route ends it, Simulate walk feeds
+  steps, the status report says "Indoors: step 3 of 5.", and "route" answers with that clause instead of
+  restarting the demo. AppModel.swift carries only one-line hooks (the Live Activity step edits it too).
+- `ConversationCoordinator`: the two Step 62 stubs wired; `currentStatusFacts` sets `indoorClause`.
+- `GuideCard`: indoors, the instruction is the step line, a status line "Indoors · step 3 of 5" follows,
+  the compact row is the navigating Repeat | Next | Stop route (labels unchanged, hard rule 9), and below
+  the fold only Simulate walk / Stop simulation.
+- Settings: "Record indoor route" card (Route id, Start recording, Add landmark, Finish at the exit, Save,
+  Cancel recording, Start indoor route) — new labels only.
+- Logic (tests first, red run confirmed they failed to compile before the code): `IndoorScriptCatalog`
+  (merge by id, alias pick with `CampusPlaces.normalize`, walked beats draft, outdoor leg, file-safe id),
+  `IndoorExitAverager`, `IndoorStatus`, `IndoorYawUnwrapper`, `IndoorSimSteps` (incl. `nextOnlyWaitS` 3 s
+  so a simulated walk passes the draft's "Say next when you get there" step), recording timings,
+  `StatusFacts.indoorClause`. 11 new tests in `IndoorRouteTests`.
+- Hooks: `CANEKIT_INDOOR_SIM_STEPS_PER_S` (synthetic steps) and `CANEKIT_INDOOR_ROUTE=1` (start the ISR
+  script at launch) for simulator evidence.
+
+**Verification.**
+- `cd ios && make test` → exit 0, 831 tests in 21 suites (after the island step's tests landed; earlier,
+  while those were mid-edit, the suite was run on a scratch copy without their two files: 799 / 799).
+- `make gen` → 0; `make sim DERIVED=<scratch>/dd` → BUILD SUCCEEDED.
+- Simulator (dedicated iPhone 17 Pro Max iOS 27, muted, `CANEKIT_INDOOR_ROUTE=1
+  CANEKIT_INDOOR_SIM_STEPS_PER_S=5`), trip log `canekit-2026-09-13T09-37-21Z`: `indoor catalog` →
+  `start` (walked false, count 5) → `say` draft caveat → `say` step 0 → `next` (sim, 3 s) → `advanced`
+  1…4 with their lines and the landmark "The main desk is on your right." at 23 steps → exit line →
+  `exit` (48 steps) → exit-coordinate fixes → `handover {by: gps}` → `sensor_mode route_started` →
+  `route start "ISR Townsend Hall to CIF"` → `waypoint 1`, in 20 s. No `field_kind`.
+- Not run: `make uitest` / `make e2e` / `make tour` (out of this agent's brief); Muse / multi-agent /
+  Antigravity review of the diff is still open (docs/todo.md).
+- Known gap, not fixed here (the region belongs to the Live Activity step): `scenePhaseChanged(.background)`
+  stops GPS when no outdoor route runs and CMPedometer live updates pause while locked, so an indoor
+  walk with the screen locked hands over only after unlocking.
+
+test on device: Settings → Record indoor route → leave `isr_townsend_to_front_doors`, Start recording,
+walk the real lab → ISR front doors with two landmarks, Finish at the exit outside the doors, Save
+("Indoor route saved. N steps."); then say "take me from ISR to CIF" with the screen on: the step lines
+come before each turn, "next" / "repeat" / "status" work, and a few seconds outside the doors the CIF
+route starts on its own (or after "I'm outside").
+
+## Step 64a — Docs match the Step 60 cloud MVP (Sun Sep 13)
 
 **Why.** An audit of comments vs `CloudSync` found agents and the Profile caption still describing the pre-MVP mirror (settings, mobility, route geometry, JSONL trip logs, a trip-event queue). The VoiceOver hint on the consent toggle was already honest; the off-state caption and the layout table were not.
 

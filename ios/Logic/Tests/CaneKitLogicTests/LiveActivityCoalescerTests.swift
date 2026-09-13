@@ -150,5 +150,35 @@ struct LiveActivityCoalescerTests {
         #expect(decoded.obstacleDistanceM == 0.0)
         #expect(decoded.headClearanceM == 0.0)
         #expect(decoded.statusDetail == "")
+        // Step 64 fields: an old payload is walking with unknown sensing — never "live".
+        #expect(decoded.phase == "walking")
+        #expect(decoded.sensing == "none")
+    }
+
+    /// Step 64: a locked screen must reach the island at once ("Obstacles paused"), not wait for
+    /// the next distance band, so a sensing change skips the 0.8 s floor.
+    @Test("A sensing change bypasses the rate-limit floor")
+    func sensingChangeBypassesFloor() {
+        var coalescer = LiveActivityCoalescer(minIntervalSec: 1.0)
+        let live = LiveActivitySnapshot(instruction: "Straight", distanceM: 100, kind: "straight",
+                                        phase: "walking", sensing: "live")
+        _ = coalescer.shouldEmit(snapshot: live, now: 10.0)
+        var paused = live
+        paused.sensing = "paused"
+        do { let r = coalescer.shouldEmit(snapshot: paused, now: 10.1); #expect(r == true) }
+        // And no second emit for the same sensing inside the floor.
+        do { let r = coalescer.shouldEmit(snapshot: paused, now: 10.2); #expect(r == false) }
+    }
+
+    /// Step 64: listening / thinking / indoor steps are what the walker is doing now.
+    @Test("A phase change bypasses the rate-limit floor")
+    func phaseChangeBypassesFloor() {
+        var coalescer = LiveActivityCoalescer(minIntervalSec: 1.0)
+        let walking = LiveActivitySnapshot(instruction: "Straight", distanceM: 100, kind: "straight",
+                                           phase: "walking", sensing: "live")
+        _ = coalescer.shouldEmit(snapshot: walking, now: 10.0)
+        var listening = walking
+        listening.phase = "listening"
+        do { let r = coalescer.shouldEmit(snapshot: listening, now: 10.05); #expect(r == true) }
     }
 }

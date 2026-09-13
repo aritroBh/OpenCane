@@ -75,6 +75,16 @@ private func east(_ m: Double) -> Coordinate {
     }
 }
 
+/// Step 62: the fast path hands a place's spoken `name` to `AppModel.navigate(to:)`, which matches
+/// it again — so every name must match its own place. ("the Townsend Hall doors" used to search
+/// MapKit instead of walking to the route file's WP1.)
+@Test func everyCampusPlaceNameRoundTripsThroughMatch() {
+    for p in CampusPlaces.all {
+        #expect(CampusPlaces.match(p.name)?.id == p.id, "\(p.name)")
+    }
+    #expect(CampusPlaces.match("Townsend Hall doors")?.id == "isr")
+}
+
 /// Anything that is not a whole alias goes to MapKit: no partial or fuzzy hits.
 @Test func unknownOrPartialNamesFallThroughToMapKit() {
     for q in ["Starbucks", "", "   ", "the", "CIFX", "Grainger Street", "library", "union street",

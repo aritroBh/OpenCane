@@ -103,6 +103,10 @@ targets:
         optional: true
         buildPhase: resources
       - path: Shared/LiveActivity
+      # Step 64: the OpenCane contour-ring mark (VoiceTile rings + the island's brand mark).
+      - path: Shared/Brand
+      # Step 64: the "Talk to OpenCane" control's intent (also compiled into the widget).
+      - path: Shared/Intents
     # Embedding: the watch app lands in CaneKit.app/Watch/ (gen.sh patches XcodeGen #1613 for
     # Xcode 26+) and the widget in CaneKit.app/PlugIns/ (a widget anywhere else never loads).
     dependencies:
@@ -133,6 +137,11 @@ targets:
         CFBundleDisplayName: OpenCane
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Step 64: opencane://guide (Live Activity tap) and opencane://talk (accessory widget,
+        # handled by CaneKitApp.onOpenURL). Any other path just opens the app.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.aritro.canekit
+            CFBundleURLSchemes: [opencane]
         UILaunchScreen: {}
         # The phone is clamped to the cane in portrait; the UI and the lane math assume it.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -223,9 +232,14 @@ targets:
     sources:
       - path: CaneKitWidget
       - path: Shared/LiveActivity
+      - path: Shared/Brand
+      - path: Shared/Intents
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aritro.canekit.widget
+        # Step 64: Shared/Intents/TalkControlIntent.swift compiles a no-op `perform` here (the app's
+        # copy runs, `openAppWhenRun`).
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) CANEKIT_WIDGET"
         PRODUCT_NAME: CaneKitWidget
         TARGETED_DEVICE_FAMILY: "1"
         # Ships inside CaneKit.app (PlugIns/), never installed on its own.

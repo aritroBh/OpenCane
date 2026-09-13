@@ -455,6 +455,13 @@ bench has *disproved* must never sit in the file as though it were settled — m
   the minimal bubble; Apple Maps and Google Maps own the island because they hold Always. Do not
   "simplify" back to always-arm-the-session, and do not remove the session either: a walker who
   declines Always still needs fixes with the screen locked. `location_auth` records are the evidence.
+- **The island never says "Path clear" unless obstacle sensing is live** (Step 64,
+  `ContentState.sensing`, `IslandPhasePolicy`). Backgrounding pauses depth, so a route with the app in
+  the background is `sensing: paused` ("Obstacles paused — unlock") and the controller sends the
+  obstacle fields as clear / 0; `none` (no LiDAR, warm-up, untrusted frames, an old payload) and a
+  stale activity show "Sensing unknown". Do not "simplify" the default back to live, do not let the
+  widget draw the green check from `obstacleStatus` alone, and do not start an idle "guarding"
+  activity. Pinned by `showsClearOnlyWhenLive`, `backgroundWithRouteIsPaused`.
 
 ### Steps 34–37 and the rotation fix (Sat 2026-09-12) — do not "simplify" these
 

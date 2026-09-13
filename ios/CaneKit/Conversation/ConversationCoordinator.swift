@@ -471,8 +471,9 @@ final class ConversationCoordinator {
         // MARK: Voice shell (Step 56) — rule 0 of the fast path
 
         case .startDefaultRoute:
-            // "route" while walking is a question about the route, never a restart of the demo.
-            if model.nav.isNavigating {
+            // "route" while walking (outdoors or indoors, Step 62) is a question about the route,
+            // never a restart of the demo.
+            if model.nav.isNavigating || model.indoor.isActive {
                 return (StatusSummary.routeLine(currentStatusFacts()), false)
             }
             model.startDemoRoute()
@@ -540,6 +541,18 @@ final class ConversationCoordinator {
             default:
                 return (EmergencyConfirm.nothingPendingLine, false)
             }
+
+        // MARK: Indoor → outdoor (Step 62)
+
+        case .routeFromTo(let from, let to):
+            // Step 62: an indoor script whose aliases match `from` is walked, then `to` outdoors;
+            // otherwise a plain `navigate(to:)`. Both paths speak for themselves.
+            return (model.routeFromTo(from: from, to: to), true)
+
+        case .indoorOutside:
+            // Step 62: "I'm outside" — hands over now, or says "Waiting for GPS outside."; with no
+            // indoor walk the line is spoken here.
+            return model.indoorOutside()
 
         case .speakImmediate(let msg):
             return (msg, false)
@@ -718,7 +731,7 @@ final class ConversationCoordinator {
                 batteryPercent: -1
             )
         }
-        return StatusFacts(
+        var facts = StatusFacts(
             lidarSupported: model.lidarSupported,
             obstacleDetectionRunning: model.depth.isRunning,
             depthFps: model.depth.fps,
@@ -736,5 +749,7 @@ final class ConversationCoordinator {
             metresToNext: model.nav.distanceToNext,
             batteryPercent: model.batteryPercent
         )
+        facts.indoorClause = model.indoor.statusClause   // Step 62: "Indoors: step 3 of 5."
+        return facts
     }
 }
