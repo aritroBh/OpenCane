@@ -45,9 +45,20 @@ struct ContentView: View {
     /// Instant page swap when the user asked for less motion.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Which page is actually drawn. Normally `tab`; forced to `.guide` on the voice-only screen.
+    ///
+    /// ⚠ The switch that turns voice-only on lives on the **Settings** tab, so without this the
+    /// walker would end up on a Settings page with no tab bar under it and no way off. Entering
+    /// the mode also pins `tab` to `.guide` (the `onChange` below): **Show buttons** and
+    /// "full screen" are the walker's way out, and dumping them back onto Settings — the tab a
+    /// helper was on when they flipped the switch — would hide the microphone and the two
+    /// situational buttons behind another VoiceOver scan. A helper who wants Settings after
+    /// that taps Settings once.
+    private var shownTab: RootTab { model.guideLayout.showsTabBar ? tab : .guide }
+
     /// Distinct title for each top-level tab.
     private var navigationTitleText: String {
-        switch tab {
+        switch shownTab {
         case .guide: "OpenCane"
         case .sense: "Details"
         case .settings: "Settings"
@@ -62,7 +73,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 page
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .id(tab)
+                    .id(shownTab)
                     // Fade the incoming page in; the outgoing page is removed instantly, never
                     // cross-faded. A symmetric cross-fade kept two full ScrollViews (and Sense's
                     // SceneKit preview teardown/setup) alive inside the animation and dropped
@@ -74,11 +85,20 @@ struct ContentView: View {
                 // nobody switches tabs mid-typing. It stays MOUNTED (height 0, invisible, hidden
                 // from VoiceOver) rather than removed, so the accessibility tree keeps its
                 // landmarks and focus does not jump when it comes back (Muse review).
-                CKTabBar(selection: $tab)
-                    .frame(height: keyboardUp ? 0 : nil)
-                    .opacity(keyboardUp ? 0 : 1)
-                    .clipped()
-                    .accessibilityHidden(keyboardUp)
+                // The voice-only screen removes it outright (`GuideLayout.showsTabBar`), rather than
+                // collapsing it: switching tabs is a visual metaphor a blind walker does not use,
+                // and the mode's whole purpose is that there is nothing to scan past. Unlike the
+                // keyboard case this is not transient, so keeping a zero-height landmark in the
+                // accessibility tree would be clutter with no payoff. ⚠ The way back is the spoken
+                // "full screen", which the mode's own change line promises out loud
+                // (`GuideLayout.spokenLine`, `theEscapeHatchIsNamedInTheLineThatNeedsIt`).
+                if model.guideLayout.showsTabBar {
+                    CKTabBar(selection: $tab)
+                        .frame(height: keyboardUp ? 0 : nil)
+                        .opacity(keyboardUp ? 0 : 1)
+                        .clipped()
+                        .accessibilityHidden(keyboardUp)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
@@ -93,7 +113,13 @@ struct ContentView: View {
                         .accessibilityHidden(true)
                 }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
+            .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: shownTab)
+            // Pin the selected tab when voice-only turns on, so leaving the mode (Show buttons,
+            // "full screen", or the Settings switch) lands on Guide rather than restoring
+            // Settings. See `shownTab`.
+            .onChange(of: model.voiceOnlyScreen) { _, on in
+                if on { tab = .guide }
+            }
         }
         // Camera Control / volume-button spike: a press is logged (`describe {source:
         // cameraControl}`) and runs "Where am I". The on-screen press counter went with the debug
@@ -104,7 +130,7 @@ struct ContentView: View {
     /// The selected page. Only the visible page is in the tree, so 30 Hz depth updates stay on Sense.
     @ViewBuilder
     private var page: some View {
-        switch tab {
+        switch shownTab {
         case .guide: GuidePage()
         case .sense: SensePage()
         case .settings: SettingsPage()
@@ -129,7 +155,12 @@ private struct GuidePage: View {
         ScrollViewReader { proxy in
             pageScroll {
                 GuideCard(scroller: proxy)
-                if model.nav.isNavigating || model.nav.arrived {
+                // Spotter trip-stats card. Hidden on the voice-only screen
+                // (`GuideLayout.showsSecondaryControls`): it is extra VoiceOver stops on the way
+                // to the microphone, and every number on it is already spoken (arrival line,
+                // "status", Repeat).
+                if model.guideLayout.showsSecondaryControls
+                    && (model.nav.isNavigating || model.nav.arrived) {
                     ArrivalCardView()
                 }
             }
@@ -450,6 +481,31 @@ private struct SettingsPage: View {
                 .accessibilityHint("Speaks the voice menu and listens when OpenCane starts")
             Toggle("Follow-up listening window", isOn: model.voiceFollowUp)
                 .accessibilityHint("Opens a listening window after assistant answers")
+
+            // Tier 2 of the shell (docs/UX.md §4.3): the two read-backs, as buttons as well as
+            // phrases. Not a duplicate path worth removing — a sighted helper setting the phone up
+            // for a walker uses the screen, and "read my settings" is the fastest way to check that
+            // what they set is what the app thinks. ⚠ Both speak `.scene`, the lowest band, so a
+            // curb warning cuts them (`SpeechResume` resumes from the clause).
+            CKBigButton(title: "Read my settings", systemImage: "list.bullet.rectangle",
+                        role: .secondary,
+                        hint: "Speaks every switch, the cue level and the place") {
+                model.wrappedValue.speakSettingsReport()
+            }
+            CKBigButton(title: "What can I say", systemImage: "text.bubble", role: .secondary,
+                        hint: "Speaks the full list of voice commands") {
+                model.wrappedValue.speech.say(VoiceControlGrammar.listLine, .scene, ttl: 30)
+                model.wrappedValue.logger.event("settings_report", ["by": "button",
+                                                                   "text": "list_commands"])
+            }
+
+            // ⚠ **Ships off** (AGENTS.md → "Safety beats features"). The mode is a real answer to
+            // docs/UX.md §1, but "the walker can no longer reach Recenter with a finger" needs a
+            // walk on the mounted cane before it is a default; the owner flips this, not the code.
+            // The way back out is spoken — the mode's own change line promises "full screen" — since
+            // this switch goes away with the tab bar (`GuideLayout.showsTabBar`).
+            Toggle(GuideLayout.switchTitle, isOn: model.voiceOnlyScreen)
+                .accessibilityHint("Strips the Guide page to the microphone, the instruction and the last answer, and hides the tab bar. Stop route stays while a route is guiding. Say full screen to bring the buttons back.")
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)

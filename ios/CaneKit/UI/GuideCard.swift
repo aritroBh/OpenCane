@@ -56,6 +56,11 @@ struct GuideCard: View {
     /// box scrolls the Guide card above the keyboard. nil in previews (then nothing scrolls).
     var scroller: ScrollViewProxy? = nil
 
+    /// Which controls this card draws (CaneKitLogic `GuideLayout`, docs/UX.md §4.4). The card asks;
+    /// it does not decide — the rule has a safety exception in it (Stop route survives voice-only)
+    /// and that exception is tested in Logic, not re-derived per view.
+    private var layout: GuideLayout { model.guideLayout }
+
     /// One `CKCard("Guide")`: instruction; distance + bearing (navigating or arrived, with a fix);
     /// GPS pills; the `VoiceTile` microphone with the assistant's last answer; the compact row
     /// (navigating: Repeat / Next / Stop route; idle: Where am I / Start route to CIF); the
@@ -94,19 +99,24 @@ struct GuideCard: View {
                 .accessibilityLabel("\(d) meters to the next point")
             }
 
-            HStack(spacing: CKSpacing.sm) {
-                CKStatusPill(text: gpsWord, tone: gpsTone, systemImage: "location",
-                             spoken: "GPS: \(gpsWord)", updatesFrequently: true)
-                if model.nav.gpsWeak {
-                    CKStatusPill(text: "GPS weak", tone: .warning, systemImage: "exclamationmark.triangle")
-                }
-                // Step 49: the light the cameras have, for the sighted spotter — the walker was
-                // told once by voice ("Low light. Obstacle detection still works."). Warning, not
-                // danger: LiDAR, GPS and haptics are unaffected; it is the camera features that
-                // may miss things. Drawn only while `LowLightPolicy` says dark.
-                if model.lightState == .dark {
-                    CKStatusPill(text: "Dark", tone: .warning, systemImage: "moon.fill",
-                                 spoken: "Low light; obstacle detection still works")
+            // Spotter information (`GuideLayout.showsStatusPills`): the walker is told each of these
+            // by voice, so the voice-only screen drops the row entirely rather than leaving three
+            // things for VoiceOver to walk past on the way to the microphone.
+            if layout.showsStatusPills {
+                HStack(spacing: CKSpacing.sm) {
+                    CKStatusPill(text: gpsWord, tone: gpsTone, systemImage: "location",
+                                 spoken: "GPS: \(gpsWord)", updatesFrequently: true)
+                    if model.nav.gpsWeak {
+                        CKStatusPill(text: "GPS weak", tone: .warning, systemImage: "exclamationmark.triangle")
+                    }
+                    // Step 49: the light the cameras have, for the sighted spotter — the walker was
+                    // told once by voice ("Low light. Obstacle detection still works."). Warning, not
+                    // danger: LiDAR, GPS and haptics are unaffected; it is the camera features that
+                    // may miss things. Drawn only while `LowLightPolicy` says dark.
+                    if model.lightState == .dark {
+                        CKStatusPill(text: "Dark", tone: .warning, systemImage: "moon.fill",
+                                     spoken: "Low light; obstacle detection still works")
+                    }
                 }
             }
 
@@ -123,13 +133,19 @@ struct GuideCard: View {
             // on it returning to "Where am I" and on the "camera" / "Scene:" static text below.
             if model.nav.isNavigating {
                 HStack(alignment: .top, spacing: CKSpacing.sm) {
-                    CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise", layout: .tile,
-                                hint: "Says the current instruction again") { model.repeatInstruction() }
-                    // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
-                    // crown and Siri "Next waypoint in OpenCane".
-                    CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary, layout: .tile,
-                                hint: "Skips to the next instruction") { model.nextWaypoint() }
-                    stopRouteButton
+                    // ⚠ Repeat and Next are `showsSituationalButtons`; Stop route is NOT
+                    // (`GuideLayout.showsStopRoute` is true in both modes). Ending guidance must
+                    // never depend on a recogniser working — every reason voice fails (wind, a bus,
+                    // a sore throat) is a reason a walker might want to stop. `stopRouteSurvivesVoiceOnly`.
+                    if layout.showsSituationalButtons {
+                        CKBigButton(title: "Repeat", systemImage: "arrow.counterclockwise", layout: .tile,
+                                    hint: "Says the current instruction again") { model.repeatInstruction() }
+                        // `nextWaypoint()`, not `nav.next()`: one code path with the watch Next, the
+                        // crown and Siri "Next waypoint in OpenCane".
+                        CKBigButton(title: "Next", systemImage: "forward.fill", role: .secondary, layout: .tile,
+                                    hint: "Skips to the next instruction") { model.nextWaypoint() }
+                    }
+                    if layout.showsStopRoute { stopRouteButton }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 if stopConfirmation.isArmed {
@@ -139,7 +155,7 @@ struct GuideCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Stop route is armed. Tap Stop route again within 3 seconds to end guidance.")
                 }
-            } else {
+            } else if layout.showsSituationalButtons {
                 HStack(alignment: .top, spacing: CKSpacing.md) {
                     CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
                                 systemImage: "eye", role: .secondary, layout: .tile,
@@ -164,7 +180,13 @@ struct GuideCard: View {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
 
-            if model.nav.isNavigating {
+            // Everything below the fold. `GuideLayout.showsSecondaryControls` is false on the
+            // voice-only screen: Recenter, Simulate walk, Navigate to CIF, the destination field and
+            // the beacon / head pills all have a spoken equivalent, and each one costs a blind
+            // walker a VoiceOver swipe on every pass (docs/UX.md §1).
+            if !layout.showsSecondaryControls {
+                EmptyView()
+            } else if model.nav.isNavigating {
                 // Repeat / Next / Stop route live in the compact row under the microphone (Step 58).
                 // ⚠ test contract: "Recenter" (below the fold now: the tests `scrollTo` it).
                 CKBigButton(title: "Recenter", systemImage: "location.north.line", role: .secondary,
@@ -236,6 +258,18 @@ struct GuideCard: View {
                 // Search box + live suggestions + "Go" (⚠ test contract: the "Go" button and the
                 // "Destination" field live in DestinationField now).
                 DestinationField(scroller: scroller)
+            }
+            // ⚠ The way out of voice-only mode that does not go through the recogniser
+            // (`GuideLayout.showsEscapeButton`). Last on the page, so it costs nothing on the way to
+            // the microphone. Do not remove it in favour of the spoken "full screen": a walker whose
+            // microphone or recogniser has failed is precisely the walker who needs to leave.
+            // ⚠ test contract: "Show buttons" (`GuideLayout.escapeButtonTitle`).
+            if layout.showsEscapeButton {
+                CKBigButton(title: GuideLayout.escapeButtonTitle, systemImage: "square.grid.2x2",
+                            role: .secondary,
+                            hint: "Brings back every button and the tab bar. You can also say full screen.") {
+                    model.voiceOnlyScreen = false
+                }
             }
             // ⚠ test contract: the error text itself stays a plain `Text` whose accessibility
             // label is its content ("Type a destination first"); the warning glyph beside it is

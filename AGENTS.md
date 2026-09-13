@@ -125,9 +125,11 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
    Type a destination first, Destination, Simulate walk (`CaneKitIslandTour`), the root tabs Guide / Sense /
    Settings / Profile (`RootTab.title`; the tests drive the first three), the Cues picker
-   segments Quiet / Standard / Detailed / Indoors / Outdoors (`CueLevel.title` / `CuePlace.title`), and a campus
-   suggestion's label "Grainger Engineering Library, campus place" —
-   `DestinationSuggestion.voiceOverLabel`) must not change without updating the tests in the same
+   segments Quiet / Standard / Detailed / Indoors / Outdoors (`CueLevel.title` / `CuePlace.title`),
+   a campus suggestion's label "Grainger Engineering Library, campus place"
+   (`DestinationSuggestion.voiceOverLabel`), and the Step 62 voice-first labels **Voice-only screen**
+   (`GuideLayout.switchTitle`), **Show buttons** (`GuideLayout.escapeButtonTitle`), **Read my settings**,
+   **What can I say**) must not change without updating the tests in the same
    commit.
 10. **Every commit**: `cd ios && make test` green (Logic), `make sim` green, and for UI changes
     `make uitest` + `make tour` on the **iPhone 17 Pro Max / iOS 27** simulator (`make sim17` creates

@@ -69,6 +69,20 @@ public enum FastPathIntentClassifier {
             return .confirm(yes)
         }
 
+        // 0b. Voice shell tier 2 (`VoiceControlGrammar`, docs/UX.md §4.3): the nine feature
+        //     switches, the cue level and place, the two read-backs, the flashlight — whole
+        //     utterance only, same as rule 0.
+        //
+        //     ⚠ It runs BEFORE the stop rule, which is only safe because no stop phrase can match
+        //     the control grammar: "stop" is not one of its off-verbs, on purpose
+        //     (`stopIsNotAControlPhrase`, `controlGrammarRunsAfterTheMenuAndBeforeStop`).
+        //     It runs before rules 2–5b so that the tight whole-utterance forms win over those
+        //     rules' looser `contains` matching; the loose rules still catch the phrasings this one
+        //     refuses ("please turn off the drop off warnings" — `theOlderSettingsRulesStillWork`).
+        if let control = VoiceControlGrammar.match(cleaned) {
+            return action(for: control)
+        }
+
         // 1. Navigation Escape / Stop — exact phrases only, so "stop the beacon" or "don't stop"
         //    never end a route.
         if cleaned == "stop" || cleaned == "stop route" || cleaned == "stop navigating"
@@ -239,6 +253,29 @@ public enum FastPathIntentClassifier {
         case .quiet: return .setCueLevel(.quiet)
         case .help: return .help
         case .emergency: return .emergency
+        }
+    }
+
+    /// Rule 0b's mapping from a tier-2 command to the action the coordinator performs.
+    ///
+    /// ⚠ A feature that has a `HandsFreeOption` goes through `.updateSetting` with the option's raw
+    /// value, deliberately: the app already has one code path for those eight switches (Siri, the
+    /// screen and rules 2–5b all use it), and adding a second would mean a switch could behave
+    /// differently depending on how it was flipped. `torch` is the exception because it has no
+    /// `HandsFreeOption` — it is a device state, KVO-confirmed and never persisted.
+    /// - Parameter command: the matched `VoiceControlGrammar.Command`.
+    /// - Returns: the action.
+    public static func action(for command: VoiceControlGrammar.Command) -> ConversationAction {
+        switch command {
+        case .setFeature(.torch, let on): return .setTorch(on: on)
+        case .setFeature(let f, let on): return .updateSetting(option: f.rawValue, enabled: on)
+        case .setCueLevel(let level): return .setCueLevel(level)
+        case .setCuePlace(let place): return .setCuePlace(place)
+        case .readSettings: return .readSettings
+        case .listCommands: return .listCommands
+        case .readMedicalID: return .readMedicalID
+        case .setVoiceOnlyScreen(let on): return .setVoiceOnlyScreen(on)
+        case .cancel: return .cancelPending
         }
     }
 

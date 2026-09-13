@@ -119,11 +119,16 @@ public enum VoiceMenu {
     public static let menuLine = "Say route, where am I, describe, status, repeat, quiet, help, or emergency."
 
     /// The numbered list read on "help" / seven: "One, route. Two, where am I. … Eight, emergency.
-    /// Or say stop to end the route." Built from the items so it cannot drift from them
-    /// (`helpListsEveryItemWithItsDigit`).
+    /// Or say stop to end the route, or what can I say for more." Built from the items so it cannot
+    /// drift from them (`helpListsEveryItemWithItsDigit`).
+    ///
+    /// ⚠ The tail names tier 2 (`VoiceControlGrammar`, docs/UX.md rule 4). Without it the wider
+    /// grammar — every feature switch, the cue place, the read-backs — is invisible: a walker who
+    /// only ever hears the eight words has no reason to believe there is anything else to say. This
+    /// is the one place the two tiers are connected, so do not trim it.
     public static let helpLine: String = {
         let entries = Item.allCases.map { "\(digitWord($0).capitalized), \(word($0))." }
-        return entries.joined(separator: " ") + " Or say stop to end the route."
+        return entries.joined(separator: " ") + " Or say stop to end the route, or what can I say for more."
     }()
 
     /// Recogniser output → item, whole utterance only. Words, digits as words, digits as
@@ -197,7 +202,10 @@ public enum VoiceMenu {
                           "repeat that"],
             .quiet: ["quiet cues", "quiet mode"],
             // Not "help me": a walker in trouble says it, and the menu is the wrong answer.
-            .help: ["options", "menu", "what can i say"],
+            // ⚠ "what can i say" moved to `VoiceControlGrammar` (docs/UX.md §4.3): it is the
+            // natural question for the *long* list, and answering it with the eight words a walker
+            // has already heard at launch was the wrong list. `helpLine` now points at it.
+            .help: ["options", "menu"],
             .emergency: ["call emergency", "call for help", "call my emergency contact"],
         ]
         for (item, forms) in extra {

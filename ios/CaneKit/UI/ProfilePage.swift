@@ -198,7 +198,12 @@ struct ProfilePage: View {
                 role: .secondary,
                 hint: "Reads emergency medical identification aloud"
             ) {
-                let summary = "\(p.name). White cane user, legally blind. Blood type \(p.bloodType). Allergies: \(p.allergies). Emergency contact: \(p.emergencyContactName), \(p.emergencyContactPhone)."
+                // ⚠ One owner for the bytes: `MedicalProfileStore.spokenSummary`, which the voice
+                // command "read my medical ID" also reads. A second hand-typed copy would drift and,
+                // because the natural-voice cache is keyed by bytes, would silently fall back to
+                // Apple's system voice.
+                let summary = model.medicalProfile.spokenSummary
+                    ?? VoiceControlGrammar.medicalUnavailableLine
                 // `.scene`, not `.obstacle` (Step 47 audit): this is a user-requested paragraph,
                 // and `.obstacle` is the hazard band of AGENTS.md hard rule 8 / design.md §5.1 —
                 // an obstacle name or a route line must be able to cut it, never the reverse.

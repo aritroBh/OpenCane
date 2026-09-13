@@ -78,6 +78,25 @@ public final class MedicalProfileStore {
         }
     }
 
+    /// The Medical ID as one spoken paragraph, or **nil** when the walker has never filled it in.
+    ///
+    /// ⚠ One owner for these bytes. The Profile tab's "Announce Medical ID" button and the voice
+    /// command "read my medical ID" (`VoiceControlGrammar`, docs/UX.md §4.3) both read this, so they
+    /// cannot drift apart — and because the natural-voice cache is keyed by bytes, a hand-typed
+    /// second copy would silently come out in Apple's system voice (the `AppModel.commonLines` trap).
+    ///
+    /// ⚠ nil, not a paragraph of "Not set", when `name` is still the privacy-safe default: reading
+    /// "Not set. White cane user. Blood type Not set." at a walker is worse than saying the ID needs
+    /// filling in once, which is what `VoiceControlGrammar.medicalUnavailableLine` does.
+    /// Pinned on the Logic side by that line's presence in `SpokenPhrases.shellLines`.
+    public var spokenSummary: String? {
+        let p = profile
+        guard p.name != CKMedicalProfile.standardDefault.name, !p.name.isEmpty else { return nil }
+        return "\(p.name). White cane user, legally blind. Blood type \(p.bloodType). "
+            + "Allergies: \(p.allergies). "
+            + "Emergency contact: \(p.emergencyContactName), \(p.emergencyContactPhone)."
+    }
+
     /// The Medical ID after every edit, for the cloud mirror (`CloudSync.saveMedicalProfile`).
     /// Set once by `AppModel.startCloudMirror()`; nil = no mirror, and the profile stays on the
     /// phone exactly as before.

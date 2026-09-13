@@ -197,6 +197,86 @@ final class CaneKitUITests: XCTestCase {
                       "defaults restored")
     }
 
+    /// Settings → Voice: the two spoken read-backs are reachable as buttons, and the voice-only
+    /// switch exists and is **off** as shipped.
+    ///
+    /// ⚠ test contract: tab "Settings"; buttons "Read my settings" / "What can I say"; switch
+    /// "Voice-only screen" (`GuideLayout.switchTitle`).
+    ///
+    /// Off-by-default is asserted, not assumed: the whole reason this mode ships off is that hiding
+    /// the tab bar has not been walked on the mounted cane yet (AGENTS.md → "Safety beats features"),
+    /// and a default flipped by accident in a later refactor is exactly the kind of change nobody
+    /// notices from a green suite. The value is read after the app has settled rather than flipped,
+    /// so this test leaves no persisted state behind.
+    func testVoiceCardOffersTheReadBacksAndShipsVoiceOnlyOff() {
+        openTab("Settings")
+        XCTAssertTrue(app.buttons["Read my settings"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["What can I say"].exists)
+        let voiceOnly = app.switches["Voice-only screen"]
+        XCTAssertTrue(voiceOnly.exists, "the voice-only switch should be on the Voice card")
+        XCTAssertEqual(voiceOnly.value as? String, "0",
+                       "voice-only screen must ship off until it is walked on the cane")
+    }
+
+    /// ⚠ **The safety exception, proven on a real screen.** With the voice-only screen on, the Guide
+    /// keeps "Stop route" while a route guides and loses the rest; the tab bar goes; and turning it
+    /// back off restores every button.
+    ///
+    /// Why this is a UI test and not only a `GuideLayout` unit test: `showsStopRoute` returning true
+    /// proves the *rule*, and the rule is already pinned in Logic. What can still go wrong is the
+    /// wiring — a gate written round the wrong `if`, or `stopRouteButton` ending up inside the
+    /// `showsSituationalButtons` branch. Ending guidance must never depend on a recogniser working,
+    /// so that wiring is worth a simulator run.
+    ///
+    /// The teardown block is registered before the flip so a failed assert still leaves the switch
+    /// off for later tests, the tour and e2e (the same pattern as `testCuePickersChangeAndRestore`).
+    func testVoiceOnlyScreenKeepsStopRouteAndHidesTheTabBar() {
+        openTab("Settings")
+        let voiceOnly = app.switches["Voice-only screen"]
+        XCTAssertTrue(voiceOnly.waitForExistence(timeout: 10))
+        addTeardownBlock { [app] in
+            guard let app else { return }
+            // ⚠ The teardown uses "Show buttons", which is the whole point of that button existing:
+            // the mode hides the tab bar and the switch with it, and a test cannot speak "full
+            // screen". `voiceOnlyScreen` is persisted, so failing to restore it here would leave
+            // every later test, the tour and e2e running against a stripped screen.
+            if app.buttons["Show buttons"].exists { app.buttons["Show buttons"].tap() }
+        }
+        flip(voiceOnly)
+        // ⚠ Do not read `voiceOnly.value` after the flip. Turning the mode on removes the tab bar and
+        // forces the page to the Guide, so the switch is out of the tree by the time XCUITest
+        // resolves the query and it raises "No matches found" rather than returning a value. The
+        // consequence below *is* the assertion, and it is the better one anyway.
+
+        // The page is forced to the Guide (`ContentView.shownTab`) — without that the walker would
+        // be left on a Settings page with no tab bar under it.
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.app.buttons["Guide"].exists },
+                      "the tab bar should be gone in voice-only mode")
+        XCTAssertTrue(app.buttons["Talk to OpenCane"].waitForExistence(timeout: 5),
+                      "the microphone is what is left")
+        XCTAssertFalse(app.buttons["Start route to CIF"].exists,
+                       "situational buttons are hidden in voice-only mode")
+        XCTAssertFalse(app.buttons["Navigate to CIF from here"].exists,
+                       "secondary controls are hidden in voice-only mode")
+
+        // ⚠ The escape that does not go through the recogniser. The Settings switch is gone with the
+        // tab bar, so this button is the walker's only non-voice way out — and a walker whose
+        // microphone has failed is exactly the walker who needs it.
+        XCTAssertFalse(app.switches["Voice-only screen"].exists,
+                       "the Settings switch goes away with the tab bar")
+        let escape = app.buttons["Show buttons"]
+        XCTAssertTrue(escape.waitForExistence(timeout: 5), "voice-only mode must have a way out")
+        escape.tap()
+
+        // Everything comes back on the Guide: entering voice-only pins the selected tab there
+        // (`ContentView.onChange`), so Show buttons does not dump the walker back onto Settings
+        // (the tab this test opened to flip the switch). Stop route only exists while a route
+        // guides; `stopRouteSurvivesVoiceOnly` covers that rule.
+        XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5),
+                      "Show buttons should restore the full Guide. Tree: \(app.debugDescription)")
+        XCTAssertTrue(app.buttons["Guide"].exists, "the tab bar should be back")
+    }
+
     /// A SwiftUI `Toggle` is exposed as a switch whose centre is the *label*; tapping there does
     /// nothing. Tap the nested switch when there is one, else the knob at the trailing edge
     /// (normalized x 0.94, mid-height). Keep identical to `CaneKitVisualTour.flip(_:)`.

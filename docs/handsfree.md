@@ -24,6 +24,7 @@ phone menu (Steps 56–59).
   rings (at least 60 % of the page). The rings ripple while it listens and breathe while it speaks.
   Say one word; it stops listening by itself 1.5 s after you finish.
 - **Words and digits both work.** "status" and "four" are the same. "help" reads the numbered list.
+  "what can I say" reads the longer list of settings and read-backs (Step 62).
 - **The eight words never go to the network.** They are matched on the phone, as the whole thing you
   said: "route" starts the route, "the route is long" does not.
 - **Quick answers, or an honest wait.** An open question goes to the cloud model: you hear
@@ -40,12 +41,34 @@ phone menu (Steps 56–59).
 | **status** | four | The whole status report: obstacle detection, GPS, audio, haptics, route, battery. |
 | **repeat** | five | Says the current instruction again. |
 | **quiet** | six | Quiet cues ("Quiet cues."). "standard" and "detailed" switch back. |
-| **help** | seven | Reads the list: "One, route. Two, where am I. … Eight, emergency. Or say stop to end the route." |
+| **help** | seven | Reads the list: "One, route. Two, where am I. … Eight, emergency. Or say stop to end the route, or what can I say for more." |
 | **emergency** | eight | Asks first: "Say yes to call <name> at <number>." Only **yes** within 8 seconds calls (the phone leaves OpenCane). "no", "cancel" or silence → "Emergency canceled." It never calls on one word. |
 
 Also: **next** (skip a waypoint), **stop** (end the route — exact phrases only: "stop", "stop route",
 "stop navigating", "end route", "cancel route"). Homophones are deliberately not commands: "won",
 "to", "for" do nothing, because a false hit acts.
+
+## 1c. Settings and read-backs (Step 62)
+
+These are longer on purpose. They are what you say while standing, not while walking. Say
+**"what can I say"** to hear this list. Every phrase is the whole thing you said: "turn on the
+beacon" works; "is the beacon on" is a question, not a command.
+
+| Say | What happens |
+|---|---|
+| **read my settings** / **what is on** | Speaks the cue level, the place, whether cane haptics are silenced, whether the voice-only screen is on, then every switch grouped on / off. Ends with "Head-height warnings are always on." |
+| **what can I say** / **list commands** | Speaks the list on this table. |
+| **turn on / turn off** then **drop-offs, signs, hazard watch, obstacle names, people, the beacon, sirens, nodding,** or **the flashlight** | Flips that switch and says what changed. Turning a warning off also says the consequence. |
+| **standard** / **detailed** | Cue level. **quiet** is still the eight-word menu. |
+| **indoors** / **outdoors** | Where you are. |
+| **read my medical ID** | Speaks the Medical ID paragraph. Never automatic — it is a blood type said out loud. |
+| **voice only** | Strips the screen to the microphone. **Say full screen** (or tap **Show buttons**) to bring everything back. Ships off. |
+| **cancel** / **never mind** | Drops a pending confirmation, or says "Nothing to cancel." |
+
+Deliberately **not** by voice: editing the Medical ID or a family contact (needs a helper and a
+form), and anything that would turn off "Head height."
+
+The longer write-up of why, and what is still a helper-only form, is [`UX_UPDATE.md`](UX_UPDATE.md).
 
 ## 1. The ten spoken commands
 

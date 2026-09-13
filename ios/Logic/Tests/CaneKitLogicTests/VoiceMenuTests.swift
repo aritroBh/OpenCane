@@ -78,7 +78,12 @@ struct VoiceMenuTests {
             }
             cursor = range.upperBound
         }
-        #expect(help.hasSuffix("Or say stop to end the route."))
+        // ⚠ The tail names tier 2 as well as stop. Without "what can I say" here the wider grammar
+        // (`VoiceControlGrammar`) is unreachable by anyone who has not read the docs — a walker who
+        // only hears the eight words has no reason to think there is anything else (docs/UX.md
+        // rule 4). Changed deliberately when tier 2 shipped; `whatCanISayBelongsToTierTwo` is the
+        // other half.
+        #expect(help.hasSuffix("Or say stop to end the route, or what can I say for more."))
         #expect(VoiceMenu.Item.help.confirmationLine == help)
     }
 

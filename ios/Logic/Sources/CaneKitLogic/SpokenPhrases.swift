@@ -252,10 +252,17 @@ public enum SpokenPhrases {
         var lines = [VoiceMenu.menuLine, VoiceMenu.helpLine]
         lines += VoiceMenu.Item.allCases.map(\.confirmationLine)
         lines += CueLevel.allCases.map(\.spokenLine)
+        lines += CuePlace.allCases.map(\.spokenLine)
         lines += [ConversationBudget.fillerLine, ConversationBudget.timeoutLine]
         lines += EmergencyConfirm.fixedLines
         lines += StatusSummary.fixedLines
         lines += [notHeardLine, describerBusyLine, HeadCoverNotice.line]
+        // Tier 2 of the shell (docs/UX.md §4.3) and the voice-only screen: the command list, the
+        // two short refusals, the safety-floor clause every settings report ends with, and both
+        // layout change lines. Pinned by `everyControlLineIsPrefetched`.
+        lines += VoiceControlGrammar.fixedLines
+        lines += SpokenSettingsReport.fixedLines
+        lines += GuideLayout.spokenLines
         var seen = Set<String>()
         return lines.filter { seen.insert($0).inserted }
     }()
@@ -263,7 +270,16 @@ public enum SpokenPhrases {
     /// Characters of ElevenLabs quota `shellLines` may cost, one time. The same reasoning as
     /// `warningCharacterBudget`: a new family of shell lines should fail a test and be a decision.
     /// ⚠ Pinned by `shellLinesStayInsideTheirBudget`.
-    public static let shellCharacterBudget = 1_500
+    ///
+    /// 1,500 → 2,000 when tier 2 shipped (docs/UX.md §4.3). The decision, written down because the
+    /// test exists to force it: tier 2 added 286 characters of `VoiceControlGrammar.listLine`, the
+    /// safety-floor clause, two refusals and the two layout lines, taking the shell to 1,786. That
+    /// is 18 % of one month of the 10,000-character free tier, paid **once** — every line is cached
+    /// on disk forever after its first synthesis — in exchange for making every switch in the app
+    /// reachable without a screen. Worth it. The settings *report* is deliberately not in here: it
+    /// is built per call from the walker's own state, so it cannot be prefetched, and it is spoken
+    /// at `.scene` where a cache miss costs a 2.5 s race and never a warning.
+    public static let shellCharacterBudget = 2_000
 
     /// Total characters ElevenLabs would be billed for `lines` (its quota counts request text).
     /// - Parameter lines: the lines that would be synthesized.

@@ -505,6 +505,60 @@ final class ConversationCoordinator {
         case .help:
             return (VoiceMenu.helpLine, false)
 
+        // MARK: Voice shell tier 2 — rule 0b of the fast path (`VoiceControlGrammar`, docs/UX.md §4.3)
+
+        case .setCuePlace(let place):
+            // Same shape as `.setCueLevel`: an unchanged place speaks nothing from `cuePlace.didSet`,
+            // so the shell confirms it rather than leaving the walker unsure it was heard.
+            guard model.cuePlace != place else { return (place.spokenLine, false) }
+            model.cuePlace = place
+            return (place.spokenLine, true)
+
+        case .readSettings:
+            // The read-back that replaces the Settings screen (docs/UX.md rule 3). Returned, not
+            // spoken here, so it takes the normal answer path: `.scene`, the lowest band, cut by any
+            // warning and resumed by clause (`SpeechResume`).
+            return (SpokenSettingsReport.line(model.settingsSnapshot), false)
+
+        case .listCommands:
+            return (VoiceControlGrammar.listLine, false)
+
+        case .readMedicalID:
+            // ⚠ Explicit only. This is a blood type and an emergency contact's name spoken out loud
+            // on a public sidewalk, so it is never automatic and never a step inside another
+            // command's flow. The same paragraph the Profile tab's "Announce Medical ID" button says.
+            let summary = model.medicalProfile.spokenSummary
+            return (summary ?? VoiceControlGrammar.medicalUnavailableLine, false)
+
+        case .setTorch(let on):
+            // Through `setTorch(_:byApp:)` so KVO still confirms the change and the 2 s settle
+            // deadline still decides failure (Step 34 — never read `isTorchActive` right after
+            // setting). `byApp: false`: the walker asked, so the auto-torch policy must not later
+            // turn off a light they lit themselves.
+            //
+            // ⚠ `alreadySpoken: true`. `applyTorch` speaks `TorchSwitch.Outcome.spokenLine`
+            // ("Flashlight on." / "Flashlight off.") after KVO confirms, or "This phone has no
+            // flashlight." immediately. Returning false here would speak the same words twice —
+            // once now, once when the device settles. The answer text is still the confirmation
+            // line so `conv_turn` and Repeat have something to hold.
+            model.setTorch(on)
+            return (on ? "Flashlight on." : "Flashlight off.", true)
+
+        case .setVoiceOnlyScreen(let on):
+            // The `didSet` speaks `GuideLayout.spokenLine`, which for voice-only names the way out
+            // ("Say full screen to bring the buttons back") — the mode hides the tab bar, so that
+            // sentence is the walker's only exit. An unchanged value speaks nothing from the
+            // `didSet`, so say the line here instead of leaving them unsure they were heard.
+            let layout: GuideLayout = on ? .voiceOnly : .full
+            guard model.voiceOnlyScreen != on else { return (layout.spokenLine, false) }
+            model.voiceOnlyScreen = on
+            return (layout.spokenLine, true)
+
+        case .cancelPending:
+            // Nothing was pending — an emergency prompt would have taken "cancel" as `.confirm(false)`
+            // in rule 0. Say so: a silent success leaves the walker unsure they were heard at all.
+            return (VoiceControlGrammar.cancelledLine, false)
+
         // MARK: Emergency (Step 59) — two utterances, never one
 
         case .emergency:

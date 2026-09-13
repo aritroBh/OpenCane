@@ -882,6 +882,9 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
 
 ## Voice-first cane — Steps 51–61 (plan `glittery-floating-tiger`, 2026-09-13)
 
+- [x] **Step 62** Tier-2 grammar + voice-only screen (`docs/UX.md` §4, `docs/UX_UPDATE.md`): `VoiceControlGrammar`, `SpokenSettingsReport`, `GuideLayout`; rule 0b; Settings Voice card read-backs; voice-only ships off; Stop route and Show buttons survive. Helper-only forms (Medical ID edit, mount/camera, family-alert wiring) stay off the grammar on purpose.
+  - [ ] Device: "what can I say", "read my settings", "turn off the beacon", "voice only" → "full screen" on the mounted cane; `make audit` lines/min
+  - [ ] Later: spoken forms for helper-only setup switches if a walk shows anyone needs them without a spotter (`UX.md` rule 1)
 - [x] **Step 56** IVR grammar on the phone: `VoiceMenu` (8 words + digits, whole utterance, help / menu lines, yes / no, next / standard / detailed), classifier rule 0, `ConversationAction` voice-shell cases, rule 12 before rule 8, `SpokenPhrases.shellLines` + completeness test, `StatusSummary.fixedLines`
 - [x] **Step 57** `ConversationBudget` + coordinator latest-wins (filler 1.5 s, timeout 4 s, stale results silent, `conv_turn` budget fields)
 - [x] **Step 58 (part 1)** `VoiceTile` giant microphone + compact row; `VoiceShellPolicy` / `ScenePhaseReason` pure; `UtteranceEndDetector(maxListen:)`; `scrollTo` in the three UI suites
