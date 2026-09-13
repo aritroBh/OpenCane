@@ -210,6 +210,9 @@ final class CloudSync {
                                   logFileName: logFileName,
                                   startLat: start?.coordinate.latitude,
                                   startLon: start?.coordinate.longitude)
+        // A new walk cannot inherit the previous one's pending close — that close belonged to a
+        // row this one is not. (It is only ever set for a walk whose row never opened.)
+        pendingClose = nil
         pendingTrip = pending
         // Where this walk's lines begin. Rows queued before Start belong to no trip and must stay
         // null; rows from here on are this walk's and get stamped when the row id arrives.
@@ -643,6 +646,10 @@ final class CloudSync {
 
         let (send, keep) = policy.split(queue)
         queue = keep
+        // ⚠ `tripQueueMark` is an index INTO `queue`, and this just removed rows from its front.
+        // Without shifting it by the same amount it points at the wrong rows, and the walk's first
+        // lines never get stamped with the trip id when it lands (they stay `trip_id` null).
+        tripQueueMark = policy.shiftMark(tripQueueMark, flushed: send.count)
         // Rows queued before registration carry an empty walker id; stamp them now.
         let stamped = send.map { row -> TripEventRow in
             guard row.walkerID.isEmpty else { return row }
@@ -657,6 +664,7 @@ final class CloudSync {
         } catch {
             // Back on the front of the queue, in order, and try again next tick.
             queue = stamped + queue
+            tripQueueMark += stamped.count          // the rows came back; so does the mark
             failedAttempts += 1
             note(error)
             if failedAttempts >= policy.maxAttempts {
@@ -723,9 +731,12 @@ final class CloudSync {
                     // failed to decode must not wipe the ids the cane is already using — that
                     // would silently stop every later write.
                     if let ids {
+                        let isFirst = self.walkerID == nil
                         self.walkerID = ids.walker_id
                         self.deviceID = ids.device_id
                         self.lastError = nil
+                        // Only on the first registration, not on a device-facts refresh.
+                        if isFirst { self.closeAbandonedTrips(walkerID: ids.walker_id, client: client) }
                     }
                     self.registering = false
                     self.updateStatus()
@@ -738,6 +749,41 @@ final class CloudSync {
             }
         }
     }
+
+    /// Close any walk this walker left open, as `abandoned`.
+    ///
+    /// A `trips` row is closed by `endTrip`, which needs the app to still be alive. A process that
+    /// is killed mid-walk — iOS reclaiming memory, a crash, the e2e harness terminating the app —
+    /// never gets there, and the row sits for ever with a null `ended_at` and a null `outcome`,
+    /// which makes `trip_summary` accumulate walks that look like they are still happening.
+    /// `abandoned` is the third outcome in the schema's check constraint and this is the only
+    /// thing that writes it.
+    ///
+    /// ⚠ Scoped to rows that started BEFORE this process did, so it can never close the walk this
+    /// launch is about to open (or has just opened) — a route can start inside the registration
+    /// round trip, which is the same race `beginTrip` already has to defer around.
+    /// Called once, right after `register_cane` returns.
+    private func closeAbandonedTrips(walkerID: String, client: SupabaseClient) {
+        struct Abandon: Encodable {
+            let ended_at: String
+            let outcome = "abandoned"
+        }
+        let cutoff = OpenCaneEvent.iso8601(Self.processStart)
+        Task { [weak self] in
+            do {
+                try await client.patch("trips", filter: [
+                    URLQueryItem(name: "walker_id", value: "eq.\(walkerID)"),
+                    URLQueryItem(name: "ended_at", value: "is.null"),
+                    URLQueryItem(name: "started_at", value: "lt.\(cutoff)"),
+                ], row: Abandon(ended_at: cutoff))
+            } catch {
+                await MainActor.run { self?.note(error) }
+            }
+        }
+    }
+
+    /// When this process launched. Every trip older than this is a previous launch's.
+    @ObservationIgnored private static let processStart = Date()
 
     /// `register_cane`'s return value.
     private struct RegisterResult: Decodable {
@@ -758,8 +804,6 @@ final class CloudSync {
             let alert_id: String
             let contact_id: String
         }
-        struct Stamp: Encodable { let last_alerted_at: String }
-
         do {
             let data = try await client.select("family_contacts", query: [
                 URLQueryItem(name: "select", value: "id"),
@@ -769,16 +813,14 @@ final class CloudSync {
             let contacts = (try? JSONDecoder().decode([Contact].self, from: data)) ?? []
             guard !contacts.isEmpty else { return }
 
+            // `alerts_sent` and `last_alerted_at` on each contact are maintained by the
+            // `family_alert_recipients_bump` trigger (migration `opencane_07`), from this insert.
+            // The phone deliberately does not PATCH them: a counter the client maintains can
+            // disagree with the join table that is the actual evidence.
             try await client.bulkInsert(into: "family_alert_recipients",
                                         rows: contacts.map {
                                             Link(alert_id: alertID, contact_id: $0.id)
                                         })
-            // "When was this person last told something" — one PATCH over the same set.
-            try await client.patch("family_contacts",
-                                   filter: [URLQueryItem(name: "walker_id",
-                                                         value: "eq.\(walkerID)"),
-                                            URLQueryItem(name: "is_registered", value: "is.true")],
-                                   row: Stamp(last_alerted_at: OpenCaneEvent.iso8601(Date())))
         } catch {
             await MainActor.run { self.note(error) }
         }

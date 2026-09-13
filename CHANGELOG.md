@@ -451,6 +451,57 @@ haptics-only before Step 47), noted in `docs/todo.md`.
 - `.siri` trigger is defined but no caller can distinguish Siri from the Action button today.
 - No lock-screen picture in `make island` (no public API locks the simulator from XCUITest).
 
+## Step 46 — Audit of the Supabase mirror: four bugs the tests could not see (Sun Sep 13)
+
+**Why:** Step 45 shipped green — `make test`, `make sim` and `make e2e` all passed — and the
+mirror still had four defects, every one of them invisible to a passing build because they are
+about *when* a write happens, not whether the code compiles. Found by reading the cloud rows back
+out of Postgres and asking why they did not match the walk.
+
+**What was wrong:**
+
+1. **Restarting a route merged two walks into one row that never closed.** `endRouteQuietly()` (the
+   restart path) stopped navigation but never closed the cloud trip, and `openPendingTrip` refuses
+   to open a new row while one is open — so the old `trips` row kept a null `ended_at` and a null
+   `outcome` for ever, and the *new* walk's lines were stamped with the *old* trip id. It now closes
+   the walk as `stopped`, before `startRouteNow` opens the next one.
+2. **A flush invalidated the trip mark, so a walk's first lines kept a null `trip_id`.**
+   `tripQueueMark` is an index into the live queue; `tick()` removed rows from the front without
+   shifting it, so when the trip id landed the stamping loop started at the wrong offset. The
+   arithmetic moved to `CloudBatchPolicy.shiftMark` (CaneKitLogic) with a test, per hard rule 3 —
+   a failed batch put back on the front shifts it the other way.
+3. **Every debounced hazard uploaded the previous hazard again.** `HazardLog.record` returned Void,
+   so the caller read `records.last` — which, after the 3 s jitter debounce refused a detection, is
+   the *earlier* hazard. That inserted a duplicate cloud row for a hazard announced once. `record`
+   now returns `HazardRecord?` (nil when refused) and the caller uses the return value. ⚠ It returns
+   the record it actually appended, not `records.last`: a `createDirectory` failure means nothing
+   was appended at all, and returning the one before it would reintroduce the same bug.
+4. **A killed app left its walk open for ever.** `endTrip` needs the process to survive; iOS
+   reclaiming memory, a crash, or the e2e harness terminating the app never gets there. Nothing
+   wrote the schema's third outcome. `closeAbandonedTrips` now sweeps the walker's open trips on the
+   next launch, scoped to rows that started before this process did so it can never close the walk
+   this launch is about to open.
+
+**Also:** `family_contacts.alerts_sent` was documented as a running count and nothing incremented
+it — it sat at 0 for every contact. Migration `opencane_07` maintains it (and `last_alerted_at`)
+with a trigger on `family_alert_recipients`, the only fact that actually establishes them, and the
+phone's PATCH is gone: a counter the client maintains can disagree with the join table.
+
+**Verified:** `make test` (644, exit 0), `make sim` (exit 0), `make e2e SCENARIO=clean` (PASS, exit
+0). Fix 4 was proven against the live project rather than assumed: a probe trip left open was
+closed as `abandoned` on the next launch — confirmed in the edge log as `PATCH /rest/v1/trips` 204
+— and the probe row deleted afterwards. The first attempt to verify it *failed*, because the probe
+was attached to the wrong walker; the sweep is correctly scoped per walker.
+
+⚠ One `make e2e` run failed during this work with "app never started the demo route". It was not
+the cloud code: the crash report was `AURemoteIO::Cleanup` → an RPC timeout to the simulator's
+audio daemon inside `BeaconEngine.start()`. A full simulator shutdown/boot cleared it, and the same
+build then passed. Check `~/Library/Logs/DiagnosticReports/CaneKit-*.ips` before blaming a change.
+
+**test on device:** start a route, restart it mid-walk, and confirm two closed `trips` rows rather
+than one open one; force a hazard twice within 3 s and confirm a single `hazards` row; kill the app
+mid-walk and relaunch, and confirm that walk reads `abandoned`.
+
 ## Step 45 — Everything the phone knows, mirrored into Supabase (Sat Sep 12)
 
 **Why:** Every piece of state OpenCane held lived in exactly one place, on one phone, and died with
