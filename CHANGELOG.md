@@ -8,7 +8,7 @@ Build log for the hackathon. One entry per step; each ends with what to test on 
 
 **What changed.** Profile off-state caption; `AppModel` / `AGENTS.md` / `ios/README.md` / `design.md` / `CODE_REFERENCE` `cloudSharingEnabled` row now name the seven live tables and the no-op seams. `SupabaseClient` lives in `Cloud/`, not `Trip/`. UX work stays on `ux/voice-first`.
 
-**Verification.** Comment and caption only; `make test` not required for this pass.
+**Verification.** `make test` 770 / 770.
 
 test on device: Profile → Privacy off reads "Medical ID, family contacts and walk summaries stay on this phone."
 
