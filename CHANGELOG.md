@@ -2,6 +2,7 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+<<<<<<< Updated upstream
 ## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
 
 **Why:** The user requested:
@@ -75,6 +76,88 @@ test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab feature
   - Live REST verified: confirmed `HTTP 200/201` upsert on `medical_profiles`, `mobility_days`, `hazards`, `family_alerts`, and `walker_dashboard`.
 
 test on device: open OpenCane; verify profile edits in the Profile tab sync seamlessly, check that today's steps update the cloud dashboard, and confirm that family alert test events and hazards populate the Supabase tables in real-time.
+=======
+## Step 45 — Everything the phone knows, mirrored into Supabase (Sat Sep 12)
+
+**Why:** Every piece of state OpenCane held lived in exactly one place, on one phone, and died with
+it: settings in `UserDefaults`, the walk in `Documents/canekit-*.jsonl`, the hazard map in
+`Documents/hazards/*.geojson`, posts in `posts.json`, the Medical ID in a `UserDefaults` blob. A
+family could not see a walk, a city could not see the potholes, and a reinstall erased the lot. The
+owner asked for all of it in Supabase, with the family email list tracked, and for the tables to
+read well in a demo.
+
+**What changed — the database** (project `ppmuqgswuyniwiwsdnto`, migrations `opencane_01`…`_06`):
+- 16 tables: `walkers`, `devices`, `family_contacts`, `medical_profiles`, `device_settings`,
+  `routes`, `route_waypoints`, `trips`, `trip_events`, `hazards`, `posts`, `family_alerts`,
+  `family_alert_recipients`, `conversation_turns`, `app_launches`, `mobility_days`. Every table and
+  the non-obvious columns carry a SQL `comment`.
+- PostGIS `geography` generated columns on `hazards`, `posts` and `route_waypoints` (null geometry
+  when a hazard had no fix, exactly as the phone's GeoJSON writes it), with GiST indexes.
+- Four demo views: `trip_summary`, `hazard_map` (GeoJSON + photo URL), `family_alert_feed` (with
+  the addresses each alert was routed to), `walker_dashboard`. All `security_invoker = on`.
+- Three RPCs so a cane on campus Wi-Fi does one round trip: `register_cane` (upserts walker +
+  device + settings), `save_family_contacts` (replaces the list; survivors keep their id and alert
+  history), `hazards_near` (every walker's mapped hazards within a radius).
+- RLS enabled on all 16 tables with explicit anon policies; `hazard-photos` storage bucket.
+- Advisors: zero findings on the OpenCane tables (the remaining warnings are PostGIS's own
+  `spatial_ref_sys` and `st_estimatedextent`, which ship with the extension).
+
+**What changed — the app:**
+- `CloudSchema.swift` + `CloudSchemaTests.swift` (CaneKitLogic): the row types and
+  `CloudBatchPolicy` (batch 200, flush 5 s, queue ceiling 5000 dropping OLDEST, backoff 2→30 s).
+  17 new tests, 555 total.
+  - ⚠ **The uniform-key rule.** PostgREST rejects a bulk insert whose objects disagree on their key
+    set (400 `PGRST102`, "All object keys must match") and writes nothing — measured against the
+    live project. `TripEventRow` and `RouteWaypointRow` therefore hand-encode every column on every
+    row, writing explicit JSON nulls. Codable's synthesised encoder omits nil optionals, which
+    would silently cost a whole walk. `tripEventRowsAlwaysCarryEveryKey` stands in the way.
+- `SupabaseClient.swift`: hand-rolled PostgREST + Storage over `URLSession` (hard rule 2 — no
+  SDK). `nonisolated`, 15 s timeout, throws the response body because that is where PostgREST puts
+  the real reason.
+- `CloudSync.swift`: the mirror. Queues trip-log lines and flushes on a 5 s loop; a failed batch
+  goes back on the front of the queue. Wired from `TripLogger.onRecord`, `AppModel.recordHazard`,
+  `ConversationCoordinator.dropPost`, `FamilyAlerts.onDelivered`, `MedicalProfileStore`'s two new
+  hooks, and `Settings.onChange`.
+- `Settings.onChange` (AppModel): one hook fired by every persisted write, rather than eighteen
+  calls in eighteen `didSet`s — a setting added later is mirrored with no extra wiring. `CloudSync`
+  coalesces the burst on a 0.4 s trailing debounce.
+- `Secrets.plist`: `SUPABASE_URL` / `SUPABASE_ANON_KEY`. Both absent = the cloud is simply off and
+  the app behaves exactly as it did before this step. ⚠ Publishable key only, never service-role.
+
+**Two bugs found by running it, not by reading it.** The first e2e walk wrote 899 `trip_events` and
+**zero** `trips`, and no `routes` at all: a route starts well inside the `register_cane` round trip
+on a cold launch, and `beginTrip` / `uploadRoute` both gave up when there was no walker id yet, so a
+whole walk arrived as loose lines with a null `trip_id`. Both are now *deferred* rather than
+dropped — held with their real start time and sent the moment ids arrive, retried on every tick —
+and the lines queued in between are stamped with the trip id when it lands. Verified after the fix:
+one e2e walk produced a `trips` row (arrived, 978 m, 9 waypoints), its `routes` row with all 9
+`route_waypoints`, and 295 linked `trip_events`.
+
+**Merged with the parallel `Trip/SupabaseClient.swift`.** A second Supabase client landed on main
+while this was being built, covering a subset of the same tables (walker, device, medical profile,
+mobility, hazards, family alerts). Kept as two clients they would have **double-inserted every
+hazard and every alert**, and two types named `SupabaseClient` in one module do not compile. They
+are consolidated onto `Cloud/` — which additionally carries settings, trips, the whole trip log,
+routes, posts, storage uploads, offline queueing and tests — and `Trip/SupabaseClient.swift` is
+removed. Nothing from it was lost:
+- `recordDeviceCapabilities()` (its refresh of the `devices` row when the watch or AirPods connect
+  mid-session) is kept and re-pointed at the new `CloudSync.updateDeviceFacts`.
+- Its `@Sendable` fix in `MedicalProfileStore.refreshMobilityStats` is kept as-is.
+- `SUPABASE_PUBLISHABLE_KEY` is now accepted alongside `SUPABASE_ANON_KEY`, so an existing local
+  `Secrets.plist` keeps working either way.
+Both clients already shared the `opencane_install_id` key, so they resolve to the same walker and
+no history is split.
+
+**Verified:** `make test` (555 tests, exit 0), `make sim` (exit 0), `make e2e SCENARIO=clean`
+(PASS, exit 0), and the resulting rows queried back out of Postgres. Re-ran `make test` and
+`make sim` after the merge — both exit 0.
+
+**test on device:** walk a route with the phone on the cane, then open `trip_summary` in the
+Supabase dashboard — one row, the destination, the metres and the steps the arrival card spoke.
+Turn a switch in Settings and watch `device_settings` change. Add a family email, press Save, and
+check `family_contacts`. Record a hazard with drop-offs on and confirm the row **and** its JPEG in
+the `hazard-photos` bucket.
+>>>>>>> Stashed changes
 
 ## Step 44 — Medical ID Profile tab, mobility fitness tracking, streamlined Guide buttons, Dynamic Island indicator fix, and Grok Bot webhook integration (Sat Sep 12)
 

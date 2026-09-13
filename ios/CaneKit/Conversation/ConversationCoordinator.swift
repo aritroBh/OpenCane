@@ -378,8 +378,13 @@ final class ConversationCoordinator {
     private func dropPost(name: String) -> String {
         let fix = appModel?.location.fix
         let coord = fix?.coordinate ?? Coordinate(latitude: 0, longitude: 0)
-        let persisted = store.append(WalkMarker(name: name, coordinate: coord,
-                                                 timestamp: Date().timeIntervalSince1970))
+        let marker = WalkMarker(name: name, coordinate: coord,
+                                timestamp: Date().timeIntervalSince1970)
+        let persisted = store.append(marker)
+        // Mirrored whether or not posts.json accepted it: the walker said the words, so the post
+        // exists. The phone's marker UUID is the cloud row's primary key, so a retry cannot
+        // duplicate it.
+        appModel?.cloud.recordPost(marker)
         var fields: [String: Any] = [
             "name": name, "lat": coord.latitude, "lon": coord.longitude,
             "has_fix": fix != nil, "persisted": persisted

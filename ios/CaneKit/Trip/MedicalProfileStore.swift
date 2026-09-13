@@ -68,8 +68,17 @@ public final class MedicalProfileStore {
     public var profile: CKMedicalProfile {
         didSet {
             save()
+            onProfileSaved?(profile)
         }
     }
+
+    /// The Medical ID after every edit, for the cloud mirror (`CloudSync.saveMedicalProfile`).
+    /// Set once by `AppModel.startCloudMirror()`; nil = no mirror, and the profile stays on the
+    /// phone exactly as before.
+    @ObservationIgnored public var onProfileSaved: ((CKMedicalProfile) -> Void)?
+
+    /// Today's mobility numbers after every pedometer refresh, for `mobility_days`.
+    @ObservationIgnored public var onMobilityRefreshed: ((CKMobilityStats) -> Void)?
 
     public var mobilityStats = CKMobilityStats()
     public private(set) var isFetchingPedometer = false
@@ -92,35 +101,21 @@ public final class MedicalProfileStore {
         let trips = UserDefaults.standard.integer(forKey: Self.tripsKey)
         self.mobilityStats.completedTrips = max(trips, 0)
         refreshMobilityStats()
-        triggerSync()
     }
 
-    /// In-flight task handle to serialize profile syncs and prevent older saves from overwriting newer edits.
-    @ObservationIgnored private var inFlightSync: Task<Void, Never>?
-
-    private func triggerSync() {
-        let currentProfile = profile
-        inFlightSync?.cancel()
-        inFlightSync = Task {
-            await SupabaseClient.shared.syncMedicalProfile(currentProfile)
-        }
-    }
-
-    /// Saves the medical profile to UserDefaults and syncs to Supabase.
+    /// Saves the medical profile to UserDefaults, then hands it to the cloud mirror.
     public func save() {
         if let data = try? JSONEncoder().encode(profile) {
             UserDefaults.standard.set(data, forKey: Self.profileKey)
         }
-        triggerSync()
+        onProfileSaved?(profile)
     }
 
     /// Increments the count of completed walks.
     public func recordCompletedTrip() {
         mobilityStats.completedTrips += 1
         UserDefaults.standard.set(mobilityStats.completedTrips, forKey: Self.tripsKey)
-        Task { [stats = mobilityStats] in
-            await SupabaseClient.shared.syncMobilityStats(stats)
-        }
+        onMobilityRefreshed?(mobilityStats)
     }
 
     /// Queries CMPedometer for today's steps and walking distance from midnight to now.
@@ -151,9 +146,7 @@ public final class MedicalProfileStore {
                     self.mobilityStats.averagePaceMps = min(2.0, dist / max(60, seconds))
                 }
                 self.mobilityStats.lastUpdated = now
-                Task { [stats = self.mobilityStats] in
-                    await SupabaseClient.shared.syncMobilityStats(stats)
-                }
+                self.onMobilityRefreshed?(self.mobilityStats)
             }
         }
     }

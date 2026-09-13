@@ -66,6 +66,15 @@ final class FamilyAlerts {
     /// events still go, carrying only what the detection itself knew.
     @ObservationIgnored var contextProvider: (@MainActor () -> AlertContext)?
 
+    /// Every delivered event and how its POST turned out, for the cloud mirror
+    /// (`CloudSync.recordAlert`). Set once by `AppModel.startCloudMirror()`; nil = no mirror.
+    ///
+    /// ⚠ Called from `deliver`, which is the single funnel every send passes through — the cue
+    /// detections, the "Send test event" button and nothing else. `registerContacts` deliberately
+    /// does NOT go through `deliver`, so a family email list can never reach the alert feed.
+    /// The event handed over is the final one, `ai_context` included.
+    @ObservationIgnored var onDelivered: (@MainActor (OpenCaneEvent, GrokBotResult) -> Void)?
+
     /// Every number lives here (CaneKitLogic).
     @ObservationIgnored private var policy = FamilyAlertPolicy()
     /// nil when unconfigured; resolved once at init.
@@ -246,6 +255,10 @@ final class FamilyAlerts {
         return (out, prompt)
     }
 
+    /// Summarise (best effort, bounded) then POST. A failed or slow summary costs the event its
+    /// `ai_context` and nothing else — it is never a reason not to send.
+    /// The single funnel every send passes through, so `onDelivered` (the cloud mirror) sees the
+    /// final event and its result exactly once.
     private func deliver(_ event: OpenCaneEvent, prompt: String,
                          client: GrokBotClient) async -> GrokBotResult {
         var toSend = event
@@ -253,35 +266,7 @@ final class FamilyAlerts {
             toSend.extra?["ai_context"] = .string(line)
         }
         let result = await client.send(toSend)
-        Task { [toSend, result] in
-            let statusStr: String
-            let code: Int?
-            let err: String?
-            switch result {
-            case .accepted:
-                statusStr = "posted"
-                code = 200
-                err = nil
-            case .rejected(let status, let body):
-                statusStr = "rejected"
-                code = status
-                err = body
-            case .failed(let message):
-                statusStr = "failed"
-                code = nil
-                err = message
-            case .notConfigured:
-                statusStr = "not_configured"
-                code = nil
-                err = nil
-            }
-            await SupabaseClient.shared.recordFamilyAlert(
-                event: toSend,
-                deliveryStatus: statusStr,
-                statusCode: code,
-                errorMessage: err
-            )
-        }
+        onDelivered?(toSend, result)
         return result
     }
 }
