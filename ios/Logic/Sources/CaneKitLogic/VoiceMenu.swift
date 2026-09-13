@@ -20,21 +20,23 @@
 //      recogniser that heard "to" heard a preposition, not a command, and a false hit *acts*.
 //    · "stop" is not here. It stays `FastPathIntentClassifier` rule 1 (exact phrases) so the
 //      classifier's order — stop before everything — is unchanged (`stopIsNotAMenuWord`).
-//    · Every line spoken from here (`menuLine`, `helpLine`, each `confirmationLine`) is in
+//    · Every line spoken from here (`helpLine`, each `confirmationLine`) is in
 //      `SpokenPhrases.shellLines`, so it is prefetched in the natural voice by bytes
 //      (`everyLineTheShellCanSpeakIsPrefetched`).
 //    · Pure and nonisolated; no clock, no I/O.
 //
 //  Owner / callers: `FastPathIntentClassifier.classify` (rule 0: `match`, `verb`, `confirmation`),
-//  `ConversationCoordinator.executeAction` (`confirmationLine`, `helpLine`), `AppModel` (speaks
-//  `launchMenuLine(firstLaunch:)` after "OpenCane ready." — the full `menuLine` once after install,
-//  then `shortMenuLine`, Step 65), `SpokenPhrases.shellLines`.
+//  `ConversationCoordinator.executeAction` (`confirmationLine`, `helpLine`), `SpokenPhrases.shellLines`.
+//  Step 67: there is no launch menu. The owner, on `canekit-2026-09-13T15-48-34Z.jsonl`: "when it
+//  immediately pops up there's a lot of jargon. It should just be 'OpenCane ready'". `menuLine`,
+//  `shortMenuLine` and `launchMenuLine(firstLaunch:)` were deleted; the only list the shell reads is
+//  `helpLine`, when the walker says "help", "menu", "options" or "seven".
 //  Tests: VoiceMenuTests.swift (10).
 //
 
 import Foundation
 
-/// The IVR grammar: items, digits, the two spoken lists, and the three parsers.
+/// The IVR grammar: items, digits, the spoken help list, and the three parsers.
 public enum VoiceMenu {
 
     /// One menu item, in spoken order. Raw values are the trip-log `ivr` field on `conv_turn`
@@ -84,7 +86,7 @@ public enum VoiceMenu {
         case next, standard, detailed
     }
 
-    /// The spoken word of an item, as it appears in `menuLine` and `helpLine`.
+    /// The spoken word of an item, as it appears in `helpLine`.
     /// - Parameter item: the menu item.
     /// - Returns: "route", "where am I", "describe", "status", "repeat", "quiet", "help", "emergency".
     public static func word(_ item: Item) -> String {
@@ -114,28 +116,10 @@ public enum VoiceMenu {
     /// "one" … "eight", index = digit − 1.
     private static let digitWords = ["one", "two", "three", "four", "five", "six", "seven", "eight"]
 
-    /// The launch menu, spoken once after "OpenCane ready." and again on a bare "help"? No — on
-    /// "help" the numbered `helpLine` is read; this is the short form. ⚠ Exact bytes are pinned by
-    /// `menuLineIsTheEightWords`: it is prefetched and matched by the self-hear filter as clauses.
-    public static let menuLine = "Say route, where am I, describe, status, repeat, quiet, help, or emergency."
-
-    /// The launch menu on every launch after the first (Step 65, calm feedback): three words, 31
-    /// characters instead of 76. "help" still reads the whole numbered list. ⚠ Exact bytes pinned by
-    /// `shortMenuLineIsThreeWordsAndTheFullMenuOnlyOnFirstLaunch`; prefetched via
-    /// `SpokenPhrases.shellLines`.
-    public static let shortMenuLine = "Say route, where am I, or help."
-
-    /// Which menu `AppModel.speakMenuThenListen` speaks after "OpenCane ready.".
-    /// - Parameter firstLaunch: no launch has spoken a menu since install (persisted flag
-    ///   `heardFullVoiceMenu` in the app).
-    /// - Returns: `menuLine` on the first launch, `shortMenuLine` afterwards.
-    public static func launchMenuLine(firstLaunch: Bool) -> String {
-        firstLaunch ? menuLine : shortMenuLine
-    }
-
-    /// The numbered list read on "help" / seven: "One, route. Two, where am I. … Eight, emergency.
-    /// Or say stop to end the route." Built from the items so it cannot drift from them
-    /// (`helpListsEveryItemWithItsDigit`).
+    /// The numbered list read on "help" / "menu" / "options" / seven: "One, route. Two, where am I. …
+    /// Eight, emergency. Or say stop to end the route." Built from the items so it cannot drift from
+    /// them (`helpListsEveryItemWithItsDigit`). Since Step 67 the only menu the shell ever speaks, and
+    /// only when asked (`theOnlyMenuIsTheOneTheWalkerAsksFor`).
     public static let helpLine: String = {
         let entries = Item.allCases.map { "\(digitWord($0).capitalized), \(word($0))." }
         return entries.joined(separator: " ") + " Or say stop to end the route."

@@ -49,10 +49,17 @@
 //    · Passed-by never speaks the passed waypoint's own line; skip-ahead says "Passed one waypoint."
 //    · Repeat speaks the last line actually spoken, via `onRepeat` (bypasses queue coalescing).
 //    · Arrival is irreversible.
-//    · A route started with no fix at all says "GPS weak…" after `noFixAfter` (20 s) instead of
-//      going silent (cc04946: the demo run sheet starts the route indoors). A retained fix also
-//      stops driving the route once `NavigationHealth.maxFixAge` elapses, even if the stream
-//      fails without delivering a diagnostic.
+//    · A route started with no fix at all says "GPS weak." after 20 s instead of going silent
+//      (cc04946: the demo run sheet starts the route indoors). A retained fix also stops driving
+//      the route once `NavigationHealth.maxFixAge` elapses, even if the stream fails without
+//      delivering a diagnostic.
+//    · Step 68: the GPS lines are decided by `GPSAnnouncer` (CaneKitLogic), not by `gpsWeak`.
+//      `gpsWeak` (the pill, the paused fences, the withdrawn target) flips exactly as before. Review
+//      round Steps 67–68: the speech comes 10 s after GPS turned bad for the announcer (a fix worse
+//      than 20 m or older than 12 s — a stale fix dated from the 5 s guidance pause), "GPS weak."
+//      again after 60 s, "GPS back." after 10 s good and at most once per 2 min.
+//      Before it, a phone standing still indoors (a fix every ~6 s, stale after 5 s) said
+//      "GPS weak…" / "GPS back." 25 times in 145 s (log 2026-09-13T15-48-34Z).
 //  Tests: ⚠ no unit test covers this class (app target). The decisions it delegates are pinned by
 //  `GeoMathTests` (GeofenceTracker, OffCourseDetector incl. `aStopMidDriftRestartsTheHold`),
 //  `NavSupportTests` (TurnSettle), `CourseSmootherTests`; the class itself only end to end, by
@@ -124,8 +131,13 @@ final class NavigationEngine {
     // Outputs, all invoked synchronously on the main actor; all installed by
     // `AppModel.wireNavigation()`.
     /// Every waypoint / GPS / veer / arrival-hint line; priority is always `.nav`.
+    /// GPS lines are only `GPSAnnouncer.weakLine` / `backLine` (Step 68).
     /// AppModel → `speech.say(ttl: 12)` + a `speech` trip-log record.
     @ObservationIgnored var onSpeak: ((String, SpeechPriority) -> Void)?
+    /// True while an indoor step script is active (`AppModel` installs `indoor.isActive`): GPS is
+    /// expected to be bad indoors, so `GPSAnnouncer` never says "GPS weak." then (Step 68; its bad clock
+    /// keeps running, review round Steps 67–68). nil = outdoors.
+    @ObservationIgnored var isIndoorActive: (() -> Bool)?
     /// "Say that again": must bypass the queue's coalescing (the line may still be playing).
     /// AppModel → `speech.sayAgain(_, .nav)` + a `speech` record with `repeat: true`.
     @ObservationIgnored var onRepeat: ((String) -> Void)?
@@ -149,10 +161,12 @@ final class NavigationEngine {
     /// `GeofenceTracker.maxAccuracy` (20 m) — the "GPS weak" line promises the fences are paused
     /// (AGENTS.md: "GPS weak" is spoken at the same 20 m).
     var veerMaxAccuracy: Double = 20
-    /// Seconds of continuously bad accuracy (fix clock) before "GPS weak" is spoken. Long enough
-    /// that one blurry fix under a tree never interrupts guidance with a warning.
+    /// Seconds of continuously bad accuracy (fix clock) before `gpsWeak` turns on (pill, fences).
+    /// Long enough that one blurry fix under a tree never withdraws guidance. Since Step 68 the
+    /// spoken line has its own clock (`GPSAnnouncer`: 10 s, review round Steps 67–68).
     var gpsWeakAfter: TimeInterval = 10
-    /// Seconds after a route starts with NO fix at all before the walker is told.
+    /// Seconds after a route starts with NO fix at all before `gpsWeak` turns on. (Step 68: the
+    /// walker is told by `GPSAnnouncer`, also after 20 s of no fix: `noFixGrace` 10 s + `weakAfter` 10 s.)
     ///
     /// Every other GPS-health line lives inside `update(fix:)`, which only runs when a fix arrives —
     /// so a route started indoors said "Route started…" and then went **permanently silent**: no
@@ -196,6 +210,12 @@ final class NavigationEngine {
     @ObservationIgnored private var arrivalHintGiven = false
     /// Fix timestamp at which accuracy first went bad; nil while accuracy is good.
     @ObservationIgnored private var weakSince: TimeInterval?
+    /// Decides the spoken "GPS weak." / "GPS back." (Step 68, CaneKitLogic). Fresh per route; fed by
+    /// `announceGPS(now:)` from `update(fix:)` and `tick`.
+    @ObservationIgnored private var gpsAnnouncer = GPSAnnouncer()
+    /// True after `markLocationUnavailable(speak: false)` (authorization revoked: AppModel speaks the
+    /// Settings line instead) until the next good fix; keeps `GPSAnnouncer` from adding "GPS weak.".
+    @ObservationIgnored private var gpsLineSuppressed = false
     /// Recorded bearing (`bearing_next_deg`) of the leg that led to the waypoint about to be
     /// reached — the leg's direction, not a measured one. `reached` compares it with the new leg
     /// for the turn wrist cue and holds it as the settle's bearing.
@@ -217,7 +237,7 @@ final class NavigationEngine {
     // MARK: Control
 
     /// Begins guidance on `route`: fresh tracker (with `maxAccuracy = veerMaxAccuracy`), all flags
-    /// reset, then speaks "Route started. <name>. First: <line>" and stores it for Repeat.
+    /// reset, then speaks "Route to <destination>. <first say>" (Step 68) and stores it for Repeat.
     /// Called by `AppModel.startRouteNow` (reached from `beginRoute` once the depth-readiness
     /// interlock clears). `lastFix` survives only if it is < 30 s old; `heading` is always cleared.
     /// The intro is `WalkingIntro.routeStarted(route)` (CaneKitLogic, Step 54) — the same call
@@ -235,6 +255,8 @@ final class NavigationEngine {
         startedAt = Date()
         gpsWeak = false
         weakSince = nil
+        gpsAnnouncer = GPSAnnouncer()
+        gpsLineSuppressed = false
         previousBearing = nil
         settle = nil
         isSettling = false
@@ -329,18 +351,18 @@ final class NavigationEngine {
             smoothedCourse = nil
         }
 
-        // GPS quality: announce once when it degrades long enough to pause the fences, once
-        // when it recovers. Same threshold as the tracker, so the warning is never silent.
+        // GPS quality: `gpsWeak` (pill, fences) turns on when accuracy stays bad for
+        // `gpsWeakAfter`, off with the next good fix — same threshold as the tracker. Whether
+        // that is SPOKEN is `GPSAnnouncer`'s call (Step 68), in `announceGPS`.
         if fix.accuracy < 0 || fix.accuracy > veerMaxAccuracy {
             if weakSince == nil { weakSince = now }
-            if !gpsWeak, now - weakSince! >= gpsWeakAfter {
-                gpsWeak = true
-                onSpeak?("GPS weak. Waypoint cues paused until it recovers.", .nav)
-            }
+            if !gpsWeak, now - weakSince! >= gpsWeakAfter { gpsWeak = true }
         } else {
             weakSince = nil
-            if gpsWeak { gpsWeak = false; onSpeak?("GPS back.", .nav) }
+            gpsWeak = false
+            gpsLineSuppressed = false
         }
+        announceGPS(now: wallNow)
 
         // TurnSettle is a value type: copy, mutate, write back.
         if var s = settle {
@@ -367,20 +389,20 @@ final class NavigationEngine {
     /// Clock-driven checks that must not wait for a GPS fix. Called at 10 Hz by AppModel's
     /// ticker while a route runs: CoreLocation stops delivering fixes when the walker stands
     /// still, which is exactly when the arrival hint is needed (review round 5). With no fix at
-    /// all since `start`, it speaks "GPS weak…" once after `noFixAfter` (cc04946).
+    /// all since `start`, `gpsWeak` turns on after `noFixAfter` (cc04946). Every beat feeds
+    /// `announceGPS` first, so "GPS weak." / "GPS back." never wait for a fix (Step 68).
     /// - Parameter now: wall clock, same clock as `GeoFix.timestamp`. (The no-fix branch reads
     ///   `Date()` itself.)
     func tick(now: TimeInterval) {
         guard isNavigating else { return }
+        announceGPS(now: now)
         guard let f = lastFix else {
-            // No fix has EVER arrived for this route. Say so once, reusing the existing wording —
-            // it is already in `commonLines` and therefore already in the mp3 cache, so the first
-            // line of the failure case does not itself wait on the network. Recovery needs nothing
-            // new: the first good fix takes the existing "GPS back." path in `update(fix:)`.
+            // No fix has EVER arrived for this route: show it (pill). The spoken "GPS weak." comes
+            // from `announceGPS` above after 20 s of no fix (`GPSAnnouncer.badOnset`); recovery is the first
+            // good fix in `update(fix:)`.
             if !gpsWeak, let started = startedAt,
                Date().timeIntervalSince(started) >= noFixAfter {
                 gpsWeak = true
-                onSpeak?("GPS weak. Waypoint cues paused until it recovers.", .nav)
             }
             return
         }
@@ -402,12 +424,12 @@ final class NavigationEngine {
     /// resumes normally through `update(fix:)`.
     /// - Parameters:
     ///   - now: wall-clock timestamp used for the off-course evidence hole.
-    ///   - speak: whether to announce the standard GPS warning. Authorization failures use their
-    ///     more actionable Settings line instead, while still clearing these outputs.
+    ///   - speak: false for authorization failures, which use their more actionable Settings line:
+    ///     `GPSAnnouncer` then adds no "GPS weak." until a good fix. True leaves the line to
+    ///     `GPSAnnouncer` (10 s after its bad onset; Step 68 — this no longer speaks at once).
     func markLocationUnavailable(at now: TimeInterval = Date().timeIntervalSinceReferenceDate,
                                  speak: Bool = true) {
         guard isNavigating else { return }
-        let wasWeak = gpsWeak
         gpsWeak = true
         weakSince = now
         distanceToNext = nil
@@ -417,8 +439,26 @@ final class NavigationEngine {
         smoothedCourse = nil
         nearArrivalSince = nil
         offCourse.gated(at: now)
-        if speak, !wasWeak {
-            onSpeak?("GPS weak. Waypoint cues paused until it recovers.", .nav)
+        if !speak { gpsLineSuppressed = true }
+        announceGPS(now: now)
+    }
+
+    /// Feeds `GPSAnnouncer` when GPS turned bad for it (`GPSAnnouncer.badOnset`: the retained fix
+    /// older than 12 s — dated from the 5 s guidance pause — or worse than 20 m, or no fix 10 s after
+    /// the route started; nil while good) and speaks its line. Review round Steps 67–68: the
+    /// announcer's 12 s fix age is deliberately longer than `NavigationHealth.maxFixAge` (5 s), which
+    /// still pauses guidance here and in `tick` (Step 51a) — a walker standing still with a 6 s fix
+    /// cadence is not told "GPS weak.". Called by `update(fix:)`, `tick` and
+    /// `markLocationUnavailable`; wall clock.
+    /// - Parameter now: wall clock (`timeIntervalSinceReferenceDate`).
+    private func announceGPS(now: TimeInterval) {
+        guard isNavigating else { return }
+        let onset = GPSAnnouncer.badOnset(lastFixAt: lastFix?.timestamp, accuracy: lastFix?.accuracy,
+                                          routeStartedAt: startedAt?.timeIntervalSinceReferenceDate ?? now,
+                                          now: now)
+        let outdoors = !(isIndoorActive?() ?? false) && !gpsLineSuppressed
+        if let line = gpsAnnouncer.update(badOnset: onset, outdoors: outdoors, now: now) {
+            onSpeak?(line, .nav)
         }
     }
 

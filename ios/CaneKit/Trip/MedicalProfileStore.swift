@@ -7,9 +7,17 @@
 //  contacts, home address) and daily mobility fitness metrics (today's steps, distance, active time).
 //
 //  Owner: `AppModel.medicalProfile` (one instance).
+//  Step 68: an empty emergency contact phone falls back to the git-ignored Secrets.plist keys
+//  `EMERGENCY_CONTACT_NAME` / `EMERGENCY_CONTACT_PHONE` (`EmergencyContactSeed`, CaneKitLogic, pinned
+//  by `EmergencyContactSeedTests`), so a real number never enters git and a number typed on the
+//  Profile tab always wins. Review round Steps 67–68 (Codex #2, Antigravity #5, Muse #3): the fallback
+//  is `effectiveEmergencyContact`, computed on read — never written into `profile`, so UserDefaults
+//  and the cloud mirror (`onProfileSaved` → `CloudSync.saveMedicalProfile`) only ever see what the
+//  walker typed. Read by `ProfilePage` and `ConversationCoordinator` (EmergencyConfirm).
 //  Module `navigation-trip` in docs/CODE_REFERENCE.md.
 //
 
+import CaneKitLogic
 import CoreMotion
 import Foundation
 import Observation
@@ -115,6 +123,19 @@ public final class MedicalProfileStore {
         let trips = UserDefaults.standard.integer(forKey: Self.tripsKey)
         self.mobilityStats.completedTrips = max(trips, 0)
         refreshMobilityStats()
+    }
+
+    /// The emergency contact to show, prompt and dial: the stored contact when its phone is not
+    /// blank, else the Secrets.plist one (`fromSetup` — the Profile card captions it), else the stored
+    /// "no contact" (`EmergencyContactSeed.effective`). Computed on every read and never assigned to
+    /// `profile`: the Secrets number must not reach UserDefaults or the cloud mirror (review round
+    /// Steps 67–68). Callers: `ProfilePage.medicalIDCard` (name, number, Call link, Announce),
+    /// `ConversationCoordinator` (`.emergency` prompt, confirm / timeout log names).
+    public var effectiveEmergencyContact: EmergencyContactSeed.Contact {
+        EmergencyContactSeed.effective(storedName: profile.emergencyContactName,
+                                       storedPhone: profile.emergencyContactPhone,
+                                       secretName: Secrets.string("EMERGENCY_CONTACT_NAME"),
+                                       secretPhone: Secrets.string("EMERGENCY_CONTACT_PHONE"))
     }
 
     /// Saves the medical profile to UserDefaults, then hands it to the cloud mirror.

@@ -1,0 +1,104 @@
+{
+ "name": "To Grainger Engineering Library",
+ "source": "OSRM foot routing over OpenStreetMap (ODbL), routing.openstreetmap.de; built by ios/scripts/stress/build_routes.py (RouteBuilder mirror); not walked",
+ "waypoints": [
+  {
+   "id": 1,
+   "lat": 40.109294,
+   "lon": -88.221354,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 269.3
+  },
+  {
+   "id": 2,
+   "lat": 40.109287,
+   "lon": -88.222071,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 5.4
+  },
+  {
+   "id": 3,
+   "lat": 40.109624,
+   "lon": -88.222029,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 347.0
+  },
+  {
+   "id": 4,
+   "lat": 40.110425,
+   "lon": -88.22227,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 268.3
+  },
+  {
+   "id": 5,
+   "lat": 40.110391,
+   "lon": -88.223804,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 278.9
+  },
+  {
+   "id": 6,
+   "lat": 40.110595,
+   "lon": -88.2255,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 358.7
+  },
+  {
+   "id": 7,
+   "lat": 40.11218,
+   "lon": -88.225547,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 287.1
+  },
+  {
+   "id": 8,
+   "lat": 40.112223,
+   "lon": -88.22573,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 359.2
+  },
+  {
+   "id": 9,
+   "lat": 40.112667,
+   "lon": -88.225738,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 269.5
+  },
+  {
+   "id": 10,
+   "lat": 40.112657,
+   "lon": -88.227289,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 177.3
+  },
+  {
+   "id": 11,
+   "lat": 40.112561,
+   "lon": -88.227283,
+   "radius_m": 20,
+   "say": "Arrived at Grainger Engineering Library.",
+   "crossing": false
+  }
+ ]
+}

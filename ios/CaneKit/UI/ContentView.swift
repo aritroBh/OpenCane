@@ -30,7 +30,8 @@ import UIKit
 ///
 /// Reads everything from the shared `AppModel` (injected by the app entry). Owns the selected
 /// `RootTab`. Also hosts the invisible `CameraControlInteraction`: a Camera Control / volume
-/// press is treated as "Where am I" and logged (`describe {source: cameraControl}`).
+/// press is treated as "Where am I" and logged (`describe {trigger: cameraControl}`) unless
+/// `CameraControlGate` refuses it (launch grace, listening, debounce — Step 67, `describe_skipped`).
 struct ContentView: View {
     /// Incoming-page fade length. Matches the tab pill's travel (TabBar `pillTravel`) so pill
     /// and page land together; longer than this the switch feels laggy, shorter it flashes.
@@ -101,9 +102,10 @@ struct ContentView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
         }
-        // Camera Control / volume-button spike: a press is logged (`describe {source:
-        // cameraControl}`) and runs "Where am I". The on-screen press counter went with the debug
-        // footer in Step 11; the trip log is the readout.
+        // Camera Control / volume-button spike: a press runs "Where am I" (`describe {trigger:
+        // cameraControl}`) unless `AppModel.cameraControlPressed`'s gate refuses it
+        // (`describe_skipped`, Step 67). The on-screen press counter went with the debug footer in
+        // Step 11; the trip log is the readout.
         .background(CameraControlInteraction { model.cameraControlPressed() })
     }
 

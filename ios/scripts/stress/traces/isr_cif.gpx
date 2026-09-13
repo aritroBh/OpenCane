@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="OpenCane build_routes.py" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><name>isr_cif</name><trkseg>
+      <trkpt lat="40.10949" lon="-88.22135"/>
+      <trkpt lat="40.10913" lon="-88.22183"/>
+      <trkpt lat="40.10904" lon="-88.2239"/>
+      <trkpt lat="40.1105" lon="-88.22395"/>
+      <trkpt lat="40.11163" lon="-88.22396"/>
+      <trkpt lat="40.11277" lon="-88.22397"/>
+      <trkpt lat="40.11277" lon="-88.22563"/>
+      <trkpt lat="40.11265" lon="-88.22741"/>
+      <trkpt lat="40.11242" lon="-88.22788"/>
+  </trkseg></trk>
+</gpx>

@@ -4,9 +4,12 @@
 //
 //  Camera Control button (iPhone 16+) and volume buttons via AVCaptureEventInteraction.
 //  Apple only delivers these events to apps "actively performing capture"; whether an
-//  ARKit-owned camera counts is unverified, so step 2 is a spike: every press is logged by
-//  `AppModel.cameraControlPressed()` as a trip-log `describe {source: cameraControl}` record and
-//  then treated as "Where am I". (The debug footer that used to count presses on screen was
+//  ARKit-owned camera counts is unverified, so step 2 is a spike: every press reaches
+//  `AppModel.cameraControlPressed()`, which runs "Where am I" (trip-log `describe {trigger:
+//  cameraControl}`) unless `CameraControlGate` refuses it — first 5 s after launch, while the voice
+//  shell listens or the launch line is pending, within 2 s of the previous press — and then writes
+//  `describe_skipped {reason, trigger}` instead (Step 67: the phone log 2026-09-13T15-48-34Z shows
+//  the device does deliver presses under ARKit, and a gripping hand delivers them by accident). (The debug footer that used to count presses on screen was
 //  removed in Step 11; the trip log is the only readout now.) If a device log never shows that
 //  record, delete this file and rely on the Action button, the watch, and the on-screen button.
 //
@@ -32,7 +35,8 @@ import UIKit
 
 /// Attach once anywhere in the view tree: `.background(CameraControlInteraction { … })`.
 /// Used by `ContentView`, which forwards presses to `AppModel.cameraControlPressed()`
-/// (`describeScene(trigger: .cameraControl)`, one `describe {trigger: cameraControl}` record).
+/// (gated by `CameraControlGate`, Step 67; an accepted press is `describeScene(trigger: .cameraControl)`,
+/// one `describe {trigger: cameraControl}` record; a refused one is `describe_skipped`).
 struct CameraControlInteraction: UIViewRepresentable {
     /// Called on the main actor on a press (`.began`); releases are ignored.
     var onPress: () -> Void

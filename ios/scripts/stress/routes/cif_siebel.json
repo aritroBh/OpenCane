@@ -1,0 +1,77 @@
+{
+ "name": "To the Siebel Center",
+ "source": "OSRM foot routing over OpenStreetMap (ODbL), routing.openstreetmap.de; built by ios/scripts/stress/build_routes.py (RouteBuilder mirror); not walked",
+ "waypoints": [
+  {
+   "id": 1,
+   "lat": 40.112426,
+   "lon": -88.227769,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 81.2
+  },
+  {
+   "id": 2,
+   "lat": 40.112667,
+   "lon": -88.225738,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 359.2
+  },
+  {
+   "id": 3,
+   "lat": 40.114389,
+   "lon": -88.225768,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 85.6
+  },
+  {
+   "id": 4,
+   "lat": 40.114401,
+   "lon": -88.225564,
+   "radius_m": 15,
+   "say": "Turn left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 359.4
+  },
+  {
+   "id": 5,
+   "lat": 40.114476,
+   "lon": -88.225565,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 89.7
+  },
+  {
+   "id": 6,
+   "lat": 40.114481,
+   "lon": -88.224321,
+   "radius_m": 15,
+   "say": "Turn right onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 179.5
+  },
+  {
+   "id": 7,
+   "lat": 40.114386,
+   "lon": -88.22432,
+   "radius_m": 15,
+   "say": "Turn slight left onto the path.",
+   "crossing": false,
+   "bearing_next_deg": 177.5
+  },
+  {
+   "id": 8,
+   "lat": 40.114105,
+   "lon": -88.224304,
+   "radius_m": 20,
+   "say": "Arrived at the Siebel Center.",
+   "crossing": false
+  }
+ ]
+}

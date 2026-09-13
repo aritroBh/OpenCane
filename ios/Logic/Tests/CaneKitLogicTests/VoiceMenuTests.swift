@@ -11,9 +11,9 @@
 //  (d) "stop" — the one word that must stay an exact-phrase rule of its own — being swallowed here.
 //
 //  Source pinned: `ios/Logic/Sources/CaneKitLogic/VoiceMenu.swift` (`VoiceMenu.Item`, `word(_:)`,
-//  `digit(_:)`, `menuLine`, `shortMenuLine`, `launchMenuLine(firstLaunch:)`, `helpLine`, `match(_:)`, `confirmation(_:)`, `verb(_:)`,
+//  `digit(_:)`, `helpLine`, `match(_:)`, `confirmation(_:)`, `verb(_:)`,
 //  `Item.confirmationLine`). Callers: `FastPathIntentClassifier.classify` rule 0 (app path:
-//  `ConversationCoordinator.handleQuery`), `AppModel` (speaks `menuLine` at launch),
+//  `ConversationCoordinator.handleQuery`), `AppModel` (no launch menu since Step 67),
 //  `SpokenPhrases.shellLines` (prefetches every line here).
 //
 
@@ -82,27 +82,18 @@ struct VoiceMenuTests {
         #expect(VoiceMenu.Item.help.confirmationLine == help)
     }
 
-    /// The exact menu sentence spoken at launch and on "help" is pinned: it is prefetched by bytes
-    /// and the self-hear filter matches it by clause.
-    @Test func menuLineIsTheEightWords() {
-        #expect(VoiceMenu.menuLine == "Say route, where am I, describe, status, repeat, quiet, help, or emergency.")
-        for item in VoiceMenu.Item.allCases {
-            #expect(VoiceMenu.menuLine.contains(VoiceMenu.word(item)), "\(VoiceMenu.word(item))")
+    /// Step 67 (owner: "when it immediately pops up there's a lot of jargon. It should just be
+    /// 'OpenCane ready'"): there is no launch menu any more. The only menu the shell ever speaks is
+    /// the numbered `helpLine`, and only when the walker asks for it — "help", "menu", "options" or
+    /// "seven". It still names every item.
+    @Test func theOnlyMenuIsTheOneTheWalkerAsksFor() {
+        for ask in ["help", "Help.", "menu", "options", "what can I say", "seven", "7"] {
+            #expect(VoiceMenu.match(ask) == .help, "\(ask)")
         }
-    }
-
-    /// Step 65: the launch menu after the first launch is three words, each a real menu word; the
-    /// full eight-word menu only on the very first launch; "help" still reads everything.
-    @Test func shortMenuLineIsThreeWordsAndTheFullMenuOnlyOnFirstLaunch() {
-        #expect(VoiceMenu.shortMenuLine == "Say route, where am I, or help.")
-        for word in ["route", "where am I", "help"] {
-            #expect(VoiceMenu.shortMenuLine.contains(word))
-            #expect(VoiceMenu.match(word) != nil, "\(word)")
-        }
-        #expect(VoiceMenu.shortMenuLine.count < VoiceMenu.menuLine.count / 2)
-        #expect(VoiceMenu.launchMenuLine(firstLaunch: true) == VoiceMenu.menuLine)
-        #expect(VoiceMenu.launchMenuLine(firstLaunch: false) == VoiceMenu.shortMenuLine)
         #expect(VoiceMenu.Item.help.confirmationLine == VoiceMenu.helpLine)
+        for item in VoiceMenu.Item.allCases {
+            #expect(VoiceMenu.helpLine.contains(VoiceMenu.word(item)), "\(VoiceMenu.word(item))")
+        }
     }
 
     /// Yes / no / cancel for the emergency prompt; anything else is not a confirmation.

@@ -247,6 +247,88 @@ private func settle(crossing: Bool = false, held: Double? = 270, next: Double? =
     #expect(r23 == nil)   // per-kind limiter
 }
 
+// MARK: CueSpeechPolicy — "Close." (Step 68)
+
+/// Feeds one centre-torso reading (trusted, covered, measured unless `held`).
+private func close(_ p: inout CueSpeechPolicy, _ d: Float, at now: TimeInterval, held: Bool = false,
+                   trusted: Bool = true, covered: Bool = true) -> String? {
+    p.close(torsoCentreM: d, covered: covered, held: held, trusted: trusted, now: now)
+}
+
+/// Walking up to a wall: the tile turns red at < 0.7 m → "Close." once; staying red, getting closer,
+/// or the point-blank hold that follows says nothing more.
+@Test func closeIsSpokenOncePerRedEpisode() {
+    var p = CueSpeechPolicy()
+    #expect(close(&p, 1.5, at: 0) == nil)                  // orange / yellow: silent
+    #expect(close(&p, 0.7, at: 0.5) == nil)                // 0.7 m is still orange (`TileLevel.near`)
+    #expect(close(&p, 0.69, at: 1) == "Close.")
+    #expect(close(&p, 0.5, at: 2) == nil)
+    #expect(close(&p, 0.1, at: 3, held: true) == nil)      // point-blank hold continues the episode
+    #expect(close(&p, 0.3, at: 30) == nil)                 // still the same episode
+    #expect(CueSpeechPolicy.closeText == "Close.")
+}
+
+/// The episode ends only after 3 s out of the red: a reading flapping at the boundary is one line.
+@Test func closeNeedsThreeSecondsOutOfTheRed() {
+    var p = CueSpeechPolicy()
+    #expect(close(&p, 0.6, at: 0) == "Close.")
+    #expect(close(&p, 0.75, at: 5) == nil)
+    #expect(close(&p, 0.65, at: 7.9) == nil)               // 2.9 s out: same episode
+    #expect(close(&p, 0.8, at: 8) == nil)
+    #expect(close(&p, 1.2, at: 11) == nil)                 // 3 s out: episode over
+    #expect(close(&p, 0.6, at: 11.5) == "Close.")          // a new red episode speaks
+}
+
+/// Never two lines within 4 s: a new episode inside the limiter waits, then speaks if still red.
+@Test func closeIsRateLimitedToOneEveryFourSeconds() {
+    var p = CueSpeechPolicy()
+    p.closeClearSeconds = 0.5                               // isolate the 4 s limiter
+    #expect(close(&p, 0.6, at: 0) == "Close.")
+    #expect(close(&p, 1.0, at: 0.5) == nil)
+    #expect(close(&p, 1.0, at: 1.0) == nil)                // episode over after 0.5 s
+    #expect(close(&p, 0.6, at: 2.0) == nil)                // new red, 2 s after the line: waits
+    #expect(close(&p, 0.6, at: 3.9) == nil)
+    #expect(close(&p, 0.6, at: 4.0) == "Close.")           // limiter expired, still red
+}
+
+/// `NearHold` can never start an episode: the phone switched on against a wall (point-blank) or a
+/// cold-start caution (0.8 m, not red anyway) is silent however long it lasts.
+@Test func aPointBlankHoldNeverStartsClose() {
+    var p = CueSpeechPolicy()
+    for i in 0..<100 {
+        #expect(close(&p, 0.1, at: Double(i) * 0.1, held: true) == nil)
+    }
+    #expect(close(&p, 0.8, at: 20, held: true) == nil)
+    #expect(close(&p, 0.4, at: 21) == "Close.")            // the first measured red still speaks
+}
+
+/// A sweep (untrusted) frame and an uncovered cell neither start nor end an episode.
+@Test func sweepAndUncoveredFramesNeitherStartNorEndClose() {
+    var p = CueSpeechPolicy()
+    #expect(close(&p, 0.3, at: 0, trusted: false) == nil)
+    #expect(close(&p, 0.3, at: 0.1, covered: false) == nil)
+    #expect(close(&p, 0.6, at: 1) == "Close.")
+    #expect(close(&p, 2.0, at: 2, trusted: false) == nil)  // does not count as out of the red
+    #expect(close(&p, 2.0, at: 5, covered: false) == nil)
+    #expect(close(&p, 0.6, at: 6) == nil)                  // same episode
+    #expect(close(&p, 0.6, at: .nan) == nil)
+}
+
+/// Review round Steps 67–68. Antigravity #3: "Close." (< 0.7 m) is an imminent-collision warning;
+/// at `.obstacle` it queued behind the 8–10 s route intro and its 3 s TTL dropped it, so it is a
+/// `.safety` line now (it cuts `.nav`; "Head height." and "Close." never cut each other — equal
+/// priority queues in order of arrival). Muse #2: Quiet renders no torso haptic, so "Close." is
+/// the only near-obstacle signal there — it is allowed at every cue level while a route or an
+/// indoor script guides, and never otherwise.
+@Test func closeIsASafetyLineAtEveryCueLevel() {
+    #expect(CueSpeechPolicy.closeTier == .safety)
+    for level in CueLevel.allCases {
+        #expect(CueSpeechPolicy.closeAllowed(navigating: true, indoorActive: false, level: level), "\(level)")
+        #expect(CueSpeechPolicy.closeAllowed(navigating: false, indoorActive: true, level: level), "\(level)")
+        #expect(!CueSpeechPolicy.closeAllowed(navigating: false, indoorActive: false, level: level), "\(level)")
+    }
+}
+
 // MARK: CrownAccumulator
 
 /// A deliberate three-detent crown turn (either direction) within 1 s means Next.
