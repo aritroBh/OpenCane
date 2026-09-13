@@ -80,6 +80,16 @@ public struct LowLightPolicy: Sendable, Equatable {
         /// cool, short enough to try again on the same block.
         public let torchBackoffSeconds: TimeInterval
 
+        /// While app-lit and the reading sits in the dead zone (`litLux` < lux ≤ `litWithTorchLux`),
+        /// the app switches the torch off for `probeSeconds` (1 s) every `probeIntervalSeconds`
+        /// (60 s) to read the true ambient light; over `litLux` with the torch off ends the episode,
+        /// otherwise the torch comes back. Without the probe a torch lit in the dark would never
+        /// go off in a room the torch itself lifts to 250 lux (Muse review). [H]
+        public let probeIntervalSeconds: TimeInterval
+        /// How long the probe's torch-off lasts before the reading is judged (the 0.3 s EMA needs
+        /// ~1 s to settle). [H]
+        public let probeSeconds: TimeInterval
+
         /// Creates a configuration; a negative lux clamps to 0, `litLux` is kept above `darkLux`,
         /// negative dwells clamp to 0, a non-finite dwell falls back to its default, and a
         /// non-positive or non-finite smoothing constant falls back to 0.3 s.
@@ -87,7 +97,10 @@ public struct LowLightPolicy: Sendable, Equatable {
                     enterSeconds: TimeInterval = 3, exitSeconds: TimeInterval = 5,
                     smoothingSeconds: TimeInterval = 0.3,
                     minTorchOnSeconds: TimeInterval = 60, torchBackoffSeconds: TimeInterval = 60,
-                    litWithTorchLux: Float = 400) {
+                    litWithTorchLux: Float = 400,
+                    probeIntervalSeconds: TimeInterval = 60, probeSeconds: TimeInterval = 1.0) {
+            self.probeIntervalSeconds = probeIntervalSeconds.isFinite ? max(1, probeIntervalSeconds) : 60
+            self.probeSeconds = probeSeconds.isFinite ? max(0.3, probeSeconds) : 1.0
             let dark = darkLux.isFinite ? max(0, darkLux) : 40
             self.darkLux = dark
             self.litLux = litLux.isFinite ? max(dark + 1, litLux) : max(dark + 1, 120)
@@ -146,6 +159,41 @@ public struct LowLightPolicy: Sendable, Equatable {
     private var appTorchSince: TimeInterval?
     /// Until when the auto-torch is backed off after a device cut-out; −∞ = not backed off.
     private var torchBackoffUntil: TimeInterval = -.infinity
+    /// ARKit time of the last probe's start; −∞ = never.
+    private var lastProbeAt: TimeInterval = -.infinity
+    /// True between `beginProbe` and `endProbe` (the torch is off to read the true ambient).
+    public private(set) var probing = false
+
+    /// Should the app switch its torch off for a moment to read the true ambient light? True when
+    /// dark, app-lit past the minimum on-time, the reading is in the dead zone
+    /// (`litLux` < lux ≤ `litWithTorchLux`) and the last probe is ≥ `probeIntervalSeconds` ago.
+    /// Pinned by `deadZoneProbeEndsEpisodeOnlyOnRealLight`.
+    public func probeDue(now: TimeInterval) -> Bool {
+        guard state == .dark, !probing, let since = appTorchSince, let lux = smoothedLux else { return false }
+        guard now - since >= configuration.minTorchOnSeconds else { return false }
+        guard lux > configuration.litLux, lux <= configuration.litWithTorchLux else { return false }
+        return now - lastProbeAt >= configuration.probeIntervalSeconds
+    }
+
+    /// The app has switched its torch off for the probe. `update` keeps running meanwhile with
+    /// `torchByApp: false` so the EMA settles on the ambient reading.
+    public mutating func beginProbe(now: TimeInterval) {
+        probing = true
+        lastProbeAt = now
+    }
+
+    /// The probe is over: true when the ambient reading (torch off) is over `litLux` — the
+    /// episode ends (`state` becomes `.lit`, the torch stays off); false when it is still dark —
+    /// the app re-lights the torch and the episode continues, `appTorchSince` kept so the minimum
+    /// on-time is not restarted.
+    public mutating func endProbe(now: TimeInterval) -> Bool {
+        probing = false
+        guard let lux = smoothedLux, lux > configuration.litLux else { return false }
+        state = .lit
+        overSince = nil
+        underSince = nil
+        return true
+    }
 
     /// Creates a policy in the `unknown` state.
     public init(configuration: Configuration = Configuration()) {
@@ -166,8 +214,8 @@ public struct LowLightPolicy: Sendable, Equatable {
     public mutating func update(lux: Float?, now: TimeInterval, torchByApp: Bool = false) -> Step {
         if torchByApp {
             if appTorchSince == nil { appTorchSince = now }
-        } else {
-            appTorchSince = nil
+        } else if !probing {
+            appTorchSince = nil                  // a probe's torch-off is not the walker's choice
         }
         guard let lux, lux.isFinite else {
             return Step(state: state, didEnterDark: false, didExitDark: false, smoothedLux: smoothedLux)

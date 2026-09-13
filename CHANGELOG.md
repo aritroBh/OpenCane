@@ -2,6 +2,45 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 50 — Typing a destination: the tab bar leaves with the keyboard, and no rows from Australia (Sat Sep 12, 23:21)
+
+**Why.** Owner's screenshot while typing "Oab": iOS 26 draws the keyboard's "Done" as a floating
+glass capsule, and it sat on top of the Profile icon of our tab bar, which stayed on screen above
+the keyboard; and the suggestion list read Osborne Park WA (Australia), OAB in Lake Isabella MI,
+OAB RJ in Rio — MapKit's completer matches famous names anywhere even with a 6 km `.required`
+region, and a blind walker cannot see that a row is on another continent.
+
+**What changed.**
+- `ContentView`: the tab bar collapses while the keyboard is up (`keyboardWillShow` /
+  `keyboardWillHide`) — height 0, invisible, hidden from VoiceOver, but still mounted so the
+  accessibility tree keeps its landmarks and focus does not jump when it returns (Muse); the
+  floating Done now sits over page content, where iOS puts it.
+- `Locality` (CaneKitLogic, in `DestinationSuggestions.swift`): a completion has no coordinate
+  (AGENTS.md), so its subtitle is the only evidence, and the only safe cut is the **country**: a
+  row whose subtitle ends in another country's name is dropped; anything else — another US state
+  included — is kept, because a state line is not a distance (Vancouver WA → Portland OR; Muse
+  rejected the first cut, which dropped other states). Country names come from Foundation's ISO
+  region table in US English (MapKit's subtitle spelling), never a hand list; the walker's country
+  is the reverse geocode's `isoCountryCode`, refreshed once per 500 m, applied only if the fix has
+  not moved on since the request, and never re-announcing the row count. Tests:
+  `foreignCompletionsAreDropped`, `localAndUnmarkedCompletionsAreKept`.
+- Torch dead zone (Muse on Step 49): once app-lit, a room the torch lifts to 120–400 lux would
+  have kept the torch on for the whole route. Now, after the minimum on-time, the torch goes off
+  for 1 s once a minute (`LowLightPolicy.probeDue` / `beginProbe` / `endProbe`); over 120 lux with
+  the torch off ends the episode, otherwise the torch is straight back, both confirmations muted.
+  `light {action: probe_begin | probe_lit | probe_dark}`. `deadZoneProbeEndsEpisodeOnlyOnRealLight`.
+
+**Reviews.** Muse (compact, on this diff): eight findings; taken — no state-based dropping, a
+country table instead of a hand list (its tautology in the old guard included), geocode request
+stamping and no re-announce, tab bar kept mounted, the torch probe. Refuted / not applicable: the
+`administrativeArea` full-name trap (the state branch is gone); "St" vs "ST" (the branch is gone).
+OpenCode and Antigravity produced no output tonight; Codex was not rerun on this small diff.
+
+**Verification.** `make test` 630 / 630; `make sim` green; `make uitest` and the device install
+in the gate below.
+
+test on device: type "Oab" — no Australia, no Michigan, no Rio; the tab bar is gone while typing
+and back after Done or Go; Done no longer overlaps anything.
 ## Step 31 — Voice input fails safe for its full microphone lifetime (Sat Sep 12)
 
 Push-to-talk now uses a generation-fenced, route-aware lifecycle. `VoiceInputEngine` and the shared

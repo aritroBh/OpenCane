@@ -44,6 +44,33 @@ private func fromCIF(_ m: Double) -> Coordinate {
 
 /// One letter (or nothing but punctuation) shows no list at all: it would match half of Urbana
 /// and VoiceOver would announce a row count for nothing.
+/// Step 50: the owner typed "Oab" on campus and got Osborne Park WA (Australia), Lake Isabella MI
+/// and Rio. A completion has no coordinate, so its subtitle's state / country is the filter.
+@Test func foreignCompletionsAreDropped() {
+    let rows = [CompletionLine(title: "Osborne Park, WA", subtitle: "Australia"),
+                CompletionLine(title: "OAB", subtitle: "50 N Coldwater Rd, Lake Isabella, MI 48893, United States"),
+                CompletionLine(title: "OAB RJ", subtitle: "Avenida Marechal Câmara, 150, Centro, Rio de Janeiro, Brazil"),
+                CompletionLine(title: "Oak Brook Allergists", subtitle: "23909 W Renwick Rd, Plainfield, IL 60544, United States")]
+    let out = DestinationSuggestions.suggestions(query: "Oab", completions: rows, from: nil)
+    // Another US state is NOT dropped (a state line is not a distance); other countries are.
+    #expect(out.map(\.title) == ["OAB", "Oak Brook Allergists"])
+    #expect(Locality.campus.countryName == "United States")
+}
+
+@Test func localAndUnmarkedCompletionsAreKept() {
+    let rows = [CompletionLine(title: "OABCIG High School", subtitle: "900 John Montgomery Dr"),
+                CompletionLine(title: "Oak Street", subtitle: "Champaign, IL"),
+                CompletionLine(title: "Oakwood", subtitle: "Urbana")]
+    let out = DestinationSuggestions.suggestions(query: "Oak", completions: rows, from: nil)
+    #expect(out.map(\.title) == ["OABCIG High School", "Oak Street", "Oakwood"])
+    // A walker in Australia keeps Australian rows and unmarked rows, and drops a "United States" row.
+    let abroad = Locality(countryCode: "AU")
+    let out2 = DestinationSuggestions.suggestions(query: "Oak", completions: rows + [CompletionLine(title: "Osborne Park, WA", subtitle: "Australia"), CompletionLine(title: "Oak Park", subtitle: "Oak Park, IL 60301, United States")], from: nil, locality: abroad)
+    #expect(out2.map(\.title) == ["OABCIG High School", "Oak Street", "Oakwood", "Osborne Park, WA"])
+    // A street named after a country is not a country.
+    #expect(Locality.campus.plausiblyNearby(subtitle: "12 Brazil St, Urbana"))
+}
+
 @Test func shortQueriesGetNoSuggestions() {
     for q in ["", " ", "g", "the", "?", "  a "] {
         #expect(DestinationSuggestions.suggestions(query: q,

@@ -633,7 +633,7 @@ final class AppModel {
         // so its confirmation a second later would be a duplicate. Failures and device changes are
         // news and stay spoken; a failed app request also forgets the torch as app-lit, so the
         // route's end does not announce "Flashlight off." for a torch that never lit.
-        let muted = torchConfirmationMuted && outcome == .confirmed(on: true)
+        let muted = torchConfirmationMuted && (outcome == .confirmed(on: true) || torchProbing || outcome == .confirmed(on: false) && torchLitByApp)
         torchConfirmationMuted = false
         if outcome == .failed(requested: true) { torchLitByApp = false }
         // The device cut an app-lit torch (thermal): forget it as ours and back the auto-torch off
@@ -696,6 +696,7 @@ final class AppModel {
         // itself raises the reading (an auto-exposure proxy) and would otherwise switch itself off.
         let step = lowLight.update(lux: report.ambientLux, now: report.timestamp, torchByApp: torchLitByApp)
         ambientLux = step.smoothedLux
+        if lowLight.probeDue(now: report.timestamp) { beginTorchProbe() }
         guard step.state != lightState else { return }
         lightState = step.state
         if step.didExitDark { releaseAppTorch() }
@@ -725,6 +726,49 @@ final class AppModel {
             speech.say(line, .nav, ttl: 10)
             logger.event("speech", ["text": line, "priority": "nav"])
         }
+    }
+
+    /// Dead-zone probe (Step 50 review): the app's own torch holds the reading between `litLux`
+    /// and `litWithTorchLux`, so once a minute the torch goes off for `probeSeconds`, the policy
+    /// reads the true ambient light, and either the episode ends (torch stays off, "lit") or the
+    /// torch comes straight back. Both torch confirmations are muted for the probe — a walker who
+    /// heard "Flashlight off. Flashlight on." every minute would think the phone was broken.
+    private func beginTorchProbe() {
+        guard torchLitByApp, !torchProbing else { return }
+        torchProbing = true
+        lowLight.beginProbe(now: lastReportTime)
+        torchConfirmationMuted = true
+        setTorchQuietly(false)
+        logger.event("light", ["action": "probe_begin", "lux": ambientLux ?? -1])
+        let wait = lowLight.configuration.probeSeconds
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, self.torchProbing else { return }
+            self.torchProbing = false
+            let lit = self.lowLight.endProbe(now: self.lastReportTime)
+            if lit {
+                self.lightState = .lit
+                self.torchLitByApp = false
+                self.torchConfirmationMuted = false
+                self.logger.event("light", ["action": "probe_lit", "lux": self.ambientLux ?? -1])
+                self.logLight()
+            } else {
+                self.torchConfirmationMuted = true
+                self.setTorchQuietly(true)
+                self.logger.event("light", ["action": "probe_dark", "lux": self.ambientLux ?? -1])
+            }
+        }
+    }
+
+    /// True while a probe has the app's torch off; the next report must not treat that as "lit".
+    @ObservationIgnored private var torchProbing = false
+
+    /// `setTorch(_:byApp: true)` for the probe, keeping `torchLitByApp` true across the off phase
+    /// so `updateLowLight` and `releaseAppTorch` still know the torch belongs to the app.
+    private func setTorchQuietly(_ on: Bool) {
+        setTorch(on, byApp: true)
+        torchLitByApp = true
+        torchConfirmationMuted = true
     }
 
     /// Switch off a torch the app lit — never one the walker lit. Its "Flashlight off." confirmation
