@@ -66,8 +66,11 @@ final class LiveActivityController {
         headClearanceM: Double = 0.0,
         statusDetail: String = ""
     ) {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+        let auth = ActivityAuthorizationInfo().areActivitiesEnabled
+        print("[LiveActivity] start requested: routeName=\(routeName), areActivitiesEnabled=\(auth)")
+        guard auth else {
             lastError = "Live Activities are off in Settings"
+            print("[LiveActivity] ABORT: Live Activities are off in Settings")
             return
         }
         end(immediate: true)
@@ -100,8 +103,10 @@ final class LiveActivityController {
             lastState = state
             isActive = true
             lastError = nil
+            print("[LiveActivity] SUCCESS: activity id=\(activity?.id ?? "nil"), state=\(String(describing: activity?.activityState))")
         } catch {
             lastError = "Live Activity: \(error.localizedDescription)"
+            print("[LiveActivity] ERROR: request threw: \(error)")
         }
     }
 

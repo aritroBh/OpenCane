@@ -2636,6 +2636,11 @@ final class AppModel {
         trip.start()
         lastNavKind = "straight"
         liveActivity.start(routeName: route.name, instruction: nav.instruction, distanceM: nav.distanceToNext ?? 0)
+        if let err = liveActivity.lastError {
+            logger.event("live_activity", ["action": "error", "error": err])
+        } else {
+            logger.event("live_activity", ["action": "start", "active": liveActivity.isActive])
+        }
         logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count,
                                "headphones": audioRoute.outputName, "watch": watch.isReachable])
         pushStatusToWatch()
