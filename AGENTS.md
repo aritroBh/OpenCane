@@ -66,7 +66,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | `docs/` | `README.md` (index of every doc), `CODE_REFERENCE.md`, `design.md` (UI/cue design system), `cue_design_v2.md` (cue research, Step 35), `auditory-load.md` (speech-load research, Step 30), `handsfree.md` (Siri / Action Button use), `route_isr_cif.md` (route evidence), `stress_test_plan.md`, `devices_setup.md`, `todo.md`, `ideas.md` (history), `TEAM_BRIEF.md` / `TEAM_HANDOFF.md` (dated status snapshots), `superpowers/` (speech-load plan + spec) |
 | `hardware/mount/` | Phone-to-cane mount, screwed: design brief + parametric OpenSCAD (Sagar) |
 | `hardware/mount_screwless/` | Same job, **zero bought hardware**: collet clamp + dovetail modularity. `PRINTING.md` is the operator runbook — read it before sending anything to a printer (Sagar) |
-| `hardware/3d_print_files/` | What to print: sliced `gcode/` (Creality SPARKX i7) and `stl/` for the screwless mount |
+| `hardware/3d_print_files/` | Print runbook for the screwless mount; local `gcode/` + `stl/` after `scripts/build_stl.ps1` + `slice_gcode.ps1` (gitignored) |
 | `hardware/cane_tip/` | `ball_tip.scad`, a printed rolling ball tip (sized for the 27.65 mm prototype shaft) |
 | `scripts/` (repo root) | Windows mount pipeline: `verify_mount.ps1` (model checks), `build_stl.ps1` (renders), `slice_gcode.ps1` (slices headlessly), `stl_tools.js` (volume / shells / overhang measurements) |
 | `cad/`, `firmware/` | Legacy ESP32-era grip drafts and BLE grip firmware. Not part of the phone-only build; do not print or flash for the demo |

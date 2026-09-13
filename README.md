@@ -56,7 +56,7 @@ Any other destination works through MapKit walking directions. The route and its
 |---|---|
 | iPhone 17 Pro Max (iOS 27) | The only computer. LiDAR depth, Core Haptics through the cane, GPS + compass, camera for "Where am I" |
 | Non-metal stick, 27.65 mm shaft (a broom handle, for the prototype) | The cane |
-| Printed phone mount | Clamps the phone to the shaft. The live design is the screwless mount ([`hardware/mount_screwless/`](hardware/mount_screwless/)); print files are in [`hardware/3d_print_files/`](hardware/3d_print_files/). Overview: [`hardware/README.md`](hardware/README.md); tilt reasoning: [`hardware/mount/DESIGN.md`](hardware/mount/DESIGN.md). |
+| Printed phone mount | Clamps the phone to the shaft. The live design is the screwless mount ([`hardware/mount_screwless/`](hardware/mount_screwless/)); slice locally with [`scripts/`](scripts/) (see [`hardware/3d_print_files/README.md`](hardware/3d_print_files/README.md)). Overview: [`hardware/README.md`](hardware/README.md); tilt reasoning: [`hardware/mount/DESIGN.md`](hardware/mount/DESIGN.md). |
 | AirPods Pro | Spatial-audio beacon, speech, head yaw for the beacon |
 | Apple Watch | Wrist taps for turns / crossings / arrival, Repeat / Next / Describe / Recenter, crown = Next |
 | Power bank on the strap | ARKit + LiDAR run ≈ 3–4 h on the phone battery |
@@ -76,7 +76,7 @@ and are stretch goals only.
 | [`CHANGELOG.md`](CHANGELOG.md) | Build log, newest first, one entry per step (Step 37 is the latest), each with its "test on device" list |
 | [`ios/`](ios/) | The app (code name CaneKit, display name OpenCane): `CaneKit/` iPhone app, `CaneKitWatch/`, `CaneKitWidget/` Live Activity, `Shared/`, `Logic/` SwiftPM package (`CaneKitLogic`, every numeric decision + its unit tests), `CaneKitUITests/`, `project.yml` (XcodeGen), `Makefile`, `scripts/` (test, e2e, cue audit, probes). See [`ios/README.md`](ios/README.md). |
 | [`docs/`](docs/) | Design system, cue design v2 research, auditory-load notes, hands-free guide, device setup, route evidence, todo checklist, stress-test plan, ideas and pitch, `superpowers/` speech-load spec + plan |
-| [`hardware/`](hardware/) | Physical kit: `mount_screwless/` (the live mount), `3d_print_files/` (G-code + STLs), `mount/` (screwed draft + tilt model), `cane_tip/` (printed rolling ball tip, OpenSCAD) |
+| [`hardware/`](hardware/) | Physical kit: `mount_screwless/` (the live mount, OpenSCAD source), `3d_print_files/` (print runbook; G-code/STLs generated locally), `mount/` (screwed draft + tilt model), `cane_tip/` (printed rolling ball tip) |
 | [`scripts/`](scripts/) | Windows mount toolchain (PowerShell + Node): render STLs, slice G-code, verify the screwless mount |
 | `firmware/`, `cad/`, `ios/stretch/` | ESP32 grip firmware and OpenSCAD drafts. Stretch / legacy only. |
 | [`graphify-out/`](graphify-out/) | Knowledge graph of the repo (code + docs; the committed build has 3,527 nodes, built from `076fcaa`). `GRAPH_REPORT.md` lists the communities, `graph.html` opens in a browser. Query it with `graphify query "<question>"`; refresh with `graphify update .` after code changes. |
@@ -142,5 +142,5 @@ voice, describes scenes on the phone, and family alerts stay disabled. Then foll
 - [`docs/handsfree.md`](docs/handsfree.md): every voice command and the Action button, for the walker
 - [`docs/todo.md`](docs/todo.md): what's still open
 - [`docs/stress_test_plan.md`](docs/stress_test_plan.md): device tests, failure injection, go/no-go, demo run sheet
-- [`hardware/README.md`](hardware/README.md): the printed phone mount (Sagar, Tommy); at a printer, [`hardware/3d_print_files/`](hardware/3d_print_files/)
+- [`hardware/README.md`](hardware/README.md): the printed phone mount (Sagar, Tommy); print runbook in [`hardware/3d_print_files/README.md`](hardware/3d_print_files/README.md)
 - [`docs/ideas.md`](docs/ideas.md): why phone-only (§9), pitch, prior art

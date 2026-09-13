@@ -1,6 +1,7 @@
 # hardware/mount_screwless/: the no-hardware phone mount
 
-> **At a printer? [`../3d_print_files/`](../3d_print_files/) has the G-code, the STLs and the print list.**
+> **At a printer?** Generate G-code locally (see [`../3d_print_files/README.md`](../3d_print_files/README.md)),
+> then follow [`PRINTING.md`](PRINTING.md).
 
 **Sagar owns this folder.** It is an alternative to [`../mount/`](../mount/), not a
 replacement — pick whichever one is fitted on the day and say so in `CHANGELOG.md`.

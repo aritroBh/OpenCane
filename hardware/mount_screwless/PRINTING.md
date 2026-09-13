@@ -2,9 +2,9 @@
 
 ## Print list — read this if you are standing at a printer
 
-The G-code and STLs are committed in [`hardware/3d_print_files/`](../3d_print_files/) (also on
-the Releases page as `mount-gcode-step25`), or regenerate them with the five commands under
-"Slicing" below and copy them there. Check the Filament Selection screen before every job.
+The G-code and STLs are **not in git** (~85 MB of build output). Generate them with the five
+commands under "Slicing" below, copy into [`hardware/3d_print_files/`](../3d_print_files/), then
+check the Filament Selection screen before every job.
 
 | # | File | Slot | Time | Then |
 |---|---|---|---|---|

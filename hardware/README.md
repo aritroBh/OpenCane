@@ -1,8 +1,8 @@
 # hardware/: phone-to-cane mount
 
-> **Printing? Go to [`3d_print_files/`](3d_print_files/).** The sliced G-code, the STLs, and a
-> README that says which file, in what order, on which filament slot, and what to check when each
-> one comes off the bed. Nothing to install, nothing to generate.
+> **Printing?** Read [`3d_print_files/README.md`](3d_print_files/README.md) for the print order,
+> then generate G-code locally (`scripts/build_stl.ps1` + `scripts/slice_gcode.ps1` on Windows).
+> Sliced files are gitignored — they are ~85 MB of build output, not source.
 
 The only new hardware in OpenCane / CaneKit is a mount. It clamps the iPhone 17 Pro Max upright to
 the 27.65 mm non-metal stick (measured by the bore rings on 2026-09-12; it is a broom handle
@@ -29,7 +29,7 @@ sliced, bore rings printed and read; the rest is not yet printed. See `CHANGELOG
 
 | File | What it is |
 |---|---|
-| [`3d_print_files/`](3d_print_files/README.md) | The one place build output is committed (un-ignored in `.gitignore`): sliced G-code for the Creality SPARKX i7 and the STLs of the screwless mount, hand-copied from `mount_screwless/stl/` and `gcode/` after `scripts/build_stl.ps1` and `scripts/slice_gcode.ps1`. Re-copy after every rebuild |
+| [`3d_print_files/`](3d_print_files/README.md) | Print-order runbook for the screwless mount. G-code and STLs live here **locally** after `scripts/build_stl.ps1` + `scripts/slice_gcode.ps1`; they are gitignored build artifacts |
 | [`mount_screwless/`](mount_screwless/README.md) | The live design: collet clamp + dovetail, zero bought hardware. `screwless_mount.scad` (parts), `coupons.scad` (bore / thread / dovetail fit coupons), `verify.scad` (intersection harness driven by `scripts/verify_mount.ps1`), `PRINTING.md` (operator runbook — read before printing) |
 | [`cane_tip/ball_tip.scad`](cane_tip/ball_tip.scad) | Printed rolling ball tip (swivel test, lower, upper, stem), sized to the 27.65 mm prototype stick, not a real cane; rendered by `scripts/build_stl.ps1 -Part swivel_test` etc. |
 | `../scripts/` | Windows CAD toolchain for `mount_screwless/` and `cane_tip/`: `build_stl.ps1` (OpenSCAD → binary STL), `verify_mount.ps1` (clearance / mechanism / shell checks), `slice_gcode.ps1` (headless Creality Print slice + material guard), `stl_tools.js` (volume, shells, overhang, support-in-box measurements, node only) |

@@ -71,7 +71,7 @@ themselves in their headers (AGENTS.md "How we engineer" 7).
 | Doc | Read it when |
 |---|---|
 | [`hardware/README.md`](../hardware/README.md) | You are working on the physical kit (Sagar, Tommy): the four things the app needs from any mount, which of the two designs is live (`mount_screwless/`), the screwed design's files, quick start and bill of materials. |
-| [`hardware/3d_print_files/README.md`](../hardware/3d_print_files/README.md) | **You are standing at a printer.** The committed G-code (Creality SPARKX i7) and STLs, the print order, which filament slot, how to read step 1, assembly, what is not settled. |
+| [`hardware/3d_print_files/README.md`](../hardware/3d_print_files/README.md) | **You are standing at a printer.** Print order, filament slot, how to read step 1, assembly, what is not settled. G-code/STLs are generated locally (gitignored). |
 | [`hardware/mount_screwless/README.md`](../hardware/mount_screwless/README.md) | You are changing the live, no-hardware mount: how it works, build, printer, what to measure before trusting it, the known-unknowns. |
 | [`hardware/mount_screwless/PRINTING.md`](../hardware/mount_screwless/PRINTING.md) | Operator runbook for the screwless mount: print list, the one rule, slicing commands, reading the bore rings / thread set / dovetail pair, fitting, calibration. |
 | [`hardware/mount/DESIGN.md`](../hardware/mount/DESIGN.md) | You are working on the screwed mount (an unrendered draft) or need the reasoning both mounts share: Apple dimensions, the camera-tilt derivation (3–8° down), concepts, print settings, assembly, test protocol T0–T11. |

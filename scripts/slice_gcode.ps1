@@ -9,8 +9,8 @@
         .\scripts\slice_gcode.ps1 -Plate bore -Material PLA
 
     G-code lands in hardware/mount_screwless/gcode/, which is gitignored.
-    Files people print from are hand-copied into hardware/3d_print_files/
-    gcode/ (committed); re-copy after re-slicing.
+    Copy into hardware/3d_print_files/gcode/ for the printer room; that
+    folder is gitignored too.
 
     CALLERS / TESTS
     Run by hand on the Windows machine after build_stl.ps1 (it reads the
