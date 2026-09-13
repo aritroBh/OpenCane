@@ -68,27 +68,44 @@ struct HazardsCard: View {
     /// camera view + the view + the front-camera readout; Both cameras + its block; Flashlight
     /// (binds through `AppModel.setTorch`, never refused); and the debug self tests when the
     /// launch flag is set.
+    ///
+    /// UI audit 2026-09-13: one card with eleven switches became three focused cards — "Hazards"
+    /// (what to warn about, what was found, the map), "Hands-free" (nod, head tracking) and
+    /// "Camera" (live view, both cameras, flashlight) — each switch a `CKToggleRow` with a plain
+    /// subtitle. Switch labels, bindings, disabling and every refusal caption are unchanged.
     var body: some View {
+        VStack(alignment: .leading, spacing: CKSpacing.xl) {
+            hazardsCard
+            handsFreeCard
+            cameraCard
+        }
+    }
+
+    /// "Hazards": the four detection switches, the provider / map pills, the last line from each
+    /// source, the map share button, and the siren listener with its status.
+    private var hazardsCard: some View {
         @Bindable var model = model
-        CKCard(title: "Hazards") {
-            Toggle("Detect drop-offs", isOn: $model.groundHazardsEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("LiDAR warns about curbs, holes and drop-offs 1.5 to 3.5 meters ahead")
-            Toggle("Read signs", isOn: $model.signsEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Reads signs like sidewalk closed or detour, on the phone, offline")
-            Toggle("Hazard watch", isOn: $model.hazardWatchEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("While walking a route, checks the path for cones, barriers and scooters every 8 seconds")
-            Toggle("Name people ahead", isOn: $model.namePeopleEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Experimental and not validated on the cane. When you ask where am I, says how many people are ahead, which way and how far")
+        return CKCard(title: "Hazards", systemImage: "exclamationmark.triangle",
+                      caption: "What OpenCane warns you about beyond obstacles.") {
+            CKToggleRow(title: "Detect drop-offs", subtitle: "Curbs, holes and steps 1.5–3.5 m ahead",
+                        isOn: $model.groundHazardsEnabled,
+                        hint: "Warns about curbs, holes and drop-offs 1.5 to 3.5 meters ahead")
+            CKToggleRow(title: "Read signs", subtitle: "Like “Sidewalk closed” or “Detour”",
+                        isOn: $model.signsEnabled,
+                        hint: "Reads signs like sidewalk closed or detour, on the phone, offline")
+            CKToggleRow(title: "Hazard watch", subtitle: "Looks for cones, barriers and scooters on a route",
+                        isOn: $model.hazardWatchEnabled,
+                        hint: "While walking a route, checks the path for cones, barriers and scooters every 8 seconds")
+            CKToggleRow(title: "Name people ahead", subtitle: "Experimental — counts people when you ask Where am I",
+                        isOn: $model.namePeopleEnabled,
+                        hint: "Experimental and not yet tested on the cane. When you ask where am I, says how many people are ahead, which way and how far")
             liveCaption(PeopleDetection.state(enabled: model.namePeopleEnabled).userFacingDescription)
 
+            CKRowDivider()
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: model.hazards.watchProvider, tone: .neutral, systemImage: "eye",
                              spoken: "Hazard watch uses \(model.hazards.watchProvider)")
-                CKStatusPill(text: "\(model.hazardLog.records.count) mapped", tone: .neutral,
+                CKStatusPill(text: "\(model.hazardLog.records.count) on map", tone: .neutral,
                              systemImage: "mappin.and.ellipse",
                              spoken: "\(model.hazardLog.records.count) hazards on the map")
                 Spacer(minLength: 0)
@@ -106,58 +123,72 @@ struct HazardsCard: View {
                         .frame(maxWidth: .infinity, minHeight: CKMetrics.touchTarget)
                 }
                 .buttonStyle(CKBigButtonStyle(role: .secondary))
-                .accessibilityHint("Shares a GeoJSON map of every hazard found on this walk")
+                .accessibilityHint("Shares a map file of every hazard found on this walk")
             }
 
-            Toggle("Listen for sirens and horns", isOn: $model.dangerSoundsEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+            CKRowDivider()
+            CKToggleRow(title: "Listen for sirens and horns", subtitle: "Uses the microphone",
+                        isOn: $model.dangerSoundsEnabled,
+                        hint: "Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default.")
                 .disabled(!SoundWatcher.isAvailable)
-                .accessibilityHint("Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default.")
             if !SoundWatcher.isAvailable {
-                liveCaption("Siren and horn listening is unavailable on this phone's sound classifier.")
+                liveCaption("Siren and horn alerts aren't available on this phone.")
             }
             soundStatus
+        }
+    }
 
+    /// "Hands-free": nod to talk and head tracking without AirPods, with their refusal captions.
+    private var handsFreeCard: some View {
+        @Bindable var model = model
+        return CKCard(title: "Hands-free", systemImage: "hand.raised") {
             // Off by default and not persisted (`AppModel.nodToTalkEnabled`): the gesture is untuned.
             // Disabled without headphone motion support — the nod comes from the AirPods.
-            Toggle("Nod to talk", isOn: $model.nodToTalkEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+            CKToggleRow(title: "Nod to talk", subtitle: "Nod twice with AirPods in to start talking",
+                        isOn: $model.nodToTalkEnabled,
+                        hint: "Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default.")
                 .disabled(!model.head.isAvailable)
-                .accessibilityHint("Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default.")
             if !model.head.isAvailable {
-                liveCaption("Nod to talk is unavailable because AirPods head motion is not connected.")
+                liveCaption("Connect AirPods that track head movement to use this.")
             }
 
-            Toggle("Head tracking without AirPods", isOn: $model.faceHeadTrackingEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+            CKToggleRow(title: "Head tracking without AirPods", subtitle: "Uses the front camera to follow where you face",
+                        isOn: $model.faceHeadTrackingEnabled,
+                        hint: "Uses the front camera to follow your head direction, so the direction sound works without AirPods. Cannot change while a route is guiding you.")
                 .disabled(!DepthEngine.supportsFrontCameraWithLiDAR)
-                .accessibilityHint("Uses the front camera to follow your head direction, so the beacon works without AirPods. Cannot change while a route is guiding you.")
             if !DepthEngine.supportsFrontCameraWithLiDAR {
-                liveCaption("Head tracking without AirPods is unavailable: this phone cannot run the front camera with LiDAR.")
+                liveCaption("This phone can't use the front camera for head tracking.")
             } else if model.nav.isNavigating {
-                liveCaption("Head tracking without AirPods cannot change while a route is guiding you.")
+                liveCaption("Head tracking without AirPods can't change while a route is guiding you.")
             } else if model.routeStartWaiting {
-                liveCaption("Head tracking without AirPods cannot change while a route is starting.")
+                liveCaption("Head tracking without AirPods can't change while a route is starting.")
             }
-
-            Toggle("Live camera view", isOn: $model.liveViewEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Shows what the camera sees, for a sighted helper")
-            liveView
             frontCameraReadout
+        }
+    }
 
-            Toggle("Both cameras (pauses obstacle detection)", isOn: $model.bothCamerasEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+    /// "Camera": live view, both cameras (with its safety caption), the flashlight, and the debug
+    /// self tests when the launch flag is set.
+    private var cameraCard: some View {
+        @Bindable var model = model
+        return CKCard(title: "Camera", systemImage: "camera") {
+            CKToggleRow(title: "Live camera view", subtitle: "Shows what the camera sees, for a helper",
+                        isOn: $model.liveViewEnabled,
+                        hint: "Shows what the camera sees, for a sighted helper")
+            liveView
+
+            CKToggleRow(title: "Both cameras (pauses obstacle detection)",
+                        subtitle: "For a helper. Obstacle warnings stop while it's on.",
+                        isOn: $model.bothCamerasEnabled,
+                        hint: "Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you.")
                 .disabled(!DualCameraSession.isSupported || model.routeStartWaiting)
-                .accessibilityHint("Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you.")
             if !DualCameraSession.isSupported {
-                liveCaption("Both cameras are unavailable: this phone does not support simultaneous camera capture.")
+                liveCaption("This phone can't show two cameras at once.")
             }
             bothCameras
-            Toggle("Flashlight", isOn: Binding(get: { model.torchEnabled },
-                                               set: { model.setTorch($0) }))
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Turns the back-camera flashlight on or off. Works while a route guides and while both cameras are on. Off at every launch.")
+            CKToggleRow(title: "Flashlight", subtitle: "Off each time the app opens",
+                        isOn: Binding(get: { model.torchEnabled }, set: { model.setTorch($0) }),
+                        hint: "Turns the back-camera flashlight on or off. Works while a route guides and while both cameras are on. Off at every launch.")
             if AppModel.selfTestControlsVisible { selfTests }
         }
     }
@@ -214,7 +245,7 @@ struct HazardsCard: View {
             // single-camera fallback, and `AppModel.setBothCameras` refuses before pausing
             // anything, so obstacle detection keeps running. (The `.unsupported` case was called
             // `backOnly` and was documented as showing the back camera; nothing ever did.)
-            liveCaption("This phone cannot show two cameras at once, so the two-camera view is not available.")
+            liveCaption("This phone can't show two cameras at once, so this view isn't available.")
         case .live:
             VStack(alignment: .leading, spacing: CKSpacing.sm) {
                 BothCamerasView(session: model.bothCameras)
@@ -262,7 +293,8 @@ struct HazardsCard: View {
         if model.faceHeadTrackingEnabled, DepthEngine.supportsFrontCameraWithLiDAR {
             VStack(alignment: .leading, spacing: 2) {
                 detection("Front camera", "detecting: \(model.faceHead.readout)")
-                Text("Head direction only — ARKit gives one camera picture at a time, and it is the back camera's.")
+                // Plain words, same meaning: it follows the head and shows no front picture.
+                Text("Only follows where your head points — there is no front camera picture.")
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
             .accessibilityElement(children: .combine)

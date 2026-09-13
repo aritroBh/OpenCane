@@ -484,21 +484,39 @@ struct CKStatusPill: View {
 struct CKCard<Content: View>: View {
     /// Optional card heading; also the container's VoiceOver label.
     var title: String? = nil
+    /// Optional SF Symbol drawn in a small badge before the title (UI audit 2026-09-13). Hidden
+    /// from VoiceOver: the title carries the meaning.
+    var systemImage: String? = nil
+    /// Optional one-sentence plain-language caption under the title: what the card is for.
+    var caption: String? = nil
     /// The card's rows.
     @ViewBuilder let content: () -> Content
     /// Increase Contrast thickens the card border to 3 pt.
     @Environment(\.colorSchemeContrast) private var contrast
 
-    /// Title (header trait) then the rows, `lg` padding, full width, `surface` fill in a
-    /// continuous `card`-radius shape with a hairline (3 pt under Increase Contrast). No shadow.
+    /// Header (badge + title with the header trait, then the caption) then the rows, `lg` padding,
+    /// full width, `surface` fill in a continuous `card`-radius shape with a hairline (3 pt under
+    /// Increase Contrast). No shadow.
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CKRadius.card, style: .continuous)
         VStack(alignment: .leading, spacing: CKSpacing.md) {
             if let title {
-                Text(title)
-                    .font(CKFont.label)
-                    .foregroundStyle(CKColor.textSecondary)
-                    .accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: CKSpacing.xs) {
+                    HStack(spacing: CKSpacing.sm) {
+                        if let systemImage { CKIconBadge(systemImage: systemImage) }
+                        Text(title)
+                            .font(CKFont.label)
+                            .foregroundStyle(CKColor.textPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    if let caption {
+                        Text(caption)
+                            .font(CKFont.secondary)
+                            .foregroundStyle(CKColor.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.bottom, CKSpacing.xs)
             }
             content()
         }
@@ -509,6 +527,96 @@ struct CKCard<Content: View>: View {
         .accessibilityElement(children: .contain)
         // An empty label would override the children for VoiceOver; only label titled cards.
         .accessibilityLabel(title.map { Text($0) } ?? Text(""))
+    }
+}
+
+// MARK: - Settings rows (UI audit 2026-09-13)
+
+/// A small rounded-square badge holding an SF Symbol: the leading mark of a card title or a
+/// settings row, the way iOS Settings marks its rows. Decoration only, hidden from VoiceOver.
+struct CKIconBadge: View {
+    /// SF Symbol drawn in the badge.
+    let systemImage: String
+
+    /// 30 pt raised square with a semibold symbol in `textPrimary`.
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(CKColor.textPrimary)
+            .frame(width: 30, height: 30)
+            .background(CKColor.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+/// One settings switch: optional icon badge, a short title, and a plain-language subtitle under it.
+///
+/// Accessibility: the switch's VoiceOver label is exactly `title` (⚠ XCUITests query
+/// `app.switches[title]`, so the subtitle must never leak into the label); the hint is `hint`, or the
+/// subtitle when no separate hint is given. The row grows with Dynamic Type; nothing truncates.
+struct CKToggleRow: View {
+    /// Visible title and the switch's VoiceOver label (a test contract for some rows).
+    let title: String
+    /// One short sentence under the title saying what the switch does, in everyday words.
+    var subtitle: String? = nil
+    /// Optional leading SF Symbol badge.
+    var systemImage: String? = nil
+    /// The setting.
+    @Binding var isOn: Bool
+    /// VoiceOver hint; defaults to the subtitle.
+    var hint: String? = nil
+
+    /// A system `Toggle` whose label is the badge + title + subtitle.
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            HStack(alignment: .center, spacing: CKSpacing.md) {
+                if let systemImage { CKIconBadge(systemImage: systemImage) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(CKFont.body)
+                        .foregroundStyle(CKColor.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(CKFont.secondary)
+                            .foregroundStyle(CKColor.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .accessibilityLabel(title)
+        .accessibilityHint(hint ?? subtitle ?? "")
+    }
+}
+
+/// A hairline between rows inside a card. Hidden from VoiceOver.
+struct CKRowDivider: View {
+    /// 1 pt `border` line.
+    var body: some View {
+        Rectangle()
+            .fill(CKColor.border.opacity(0.6))
+            .frame(height: 1)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A small uppercase group label above a run of cards on a page ("EVERYDAY", "TESTING TOOLS").
+/// A VoiceOver heading, so the rotor can jump between groups.
+struct CKSectionHeader: View {
+    /// The group's name; drawn uppercased.
+    let title: String
+
+    /// `CKFont.pill` in `textSecondary`, tracked, with a little top air.
+    var body: some View {
+        Text(title.uppercased())
+            .font(CKFont.pill)
+            .kerning(0.9)
+            .foregroundStyle(CKColor.textSecondary)
+            .padding(.horizontal, CKSpacing.xs)
+            .padding(.top, CKSpacing.sm)
+            .padding(.bottom, -CKSpacing.sm)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

@@ -36,10 +36,10 @@ struct VoiceTile: View {
     /// Reduce Motion: the rings never move.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Microphone disc diameter, scaled with Dynamic Type so the glyph keeps its margin.
-    @ScaledMetric(relativeTo: .largeTitle) private var disc: CGFloat = 132
+    @ScaledMetric(relativeTo: .largeTitle) private var disc: CGFloat = 116
 
     /// Shown under the rings when there is no answer yet: the three words to start with.
-    static let hintLine = "Say route, where am I, or help."
+    static let hintLine = "Tap to talk. Try “route”, “where am I” or “help”."
 
     /// Rings + disc as one button (≥ 60 % of the page height), then the status line.
     var body: some View {
@@ -58,7 +58,10 @@ struct VoiceTile: View {
                         .accessibilityHidden(true)
                 }
                 .frame(maxWidth: .infinity)
-                .containerRelativeFrame(.vertical) { height, _ in height * 0.6 }
+                // UI audit 2026-09-13: 0.6 → 0.46 of the visible page so the compact row (Where am I /
+                // Start route) sits above the tab bar on a 17 Pro Max instead of cut in half, and
+                // stays reachable on smaller iPhones. Still the largest target on the page.
+                .containerRelativeFrame(.vertical) { height, _ in height * 0.46 }
                 // The whole ring square is the target, not just the stroked pixels.
                 .contentShape(Rectangle())
             }
