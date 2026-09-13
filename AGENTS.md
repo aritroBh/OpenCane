@@ -54,7 +54,7 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | Path | What lives there |
 |---|---|
 | `ios/Logic/` | `CaneKitLogic` SwiftPM package: pure, Foundation-only decisions (lane math, cue state machine, geofences, route schema, watch message codec, VLM request/response codec) + Swift Testing tests |
-| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Conversation/` (voice assistant: `ConversationCoordinator`, `VoiceInputEngine`, `PostStore`), `Alerts/` (family alerts, Steps 39/43: `FamilyAlerts`, `GrokBotClient`, `FallWatcher`, `AlertSummarizer`), `Trip/` (trip log + tracker, `LiveActivityController`, `MedicalProfileStore` (Step 44), `SupabaseClient` (Step 45)), `UI/` (incl. `ProfilePage`, the 4th tab), `Resources/` |
+| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Conversation/` (voice assistant: `ConversationCoordinator`, `VoiceInputEngine`, `PostStore`), `Alerts/` (family alerts, Steps 39/43: `FamilyAlerts`, `GrokBotClient`, `FallWatcher`, `AlertSummarizer`), `Cloud/` (`CloudSync`, `SupabaseClient` — Step 60 MVP), `Trip/` (trip log + tracker, `LiveActivityController`, `MedicalProfileStore` (Step 44)), `UI/` (incl. `ProfilePage`, the 4th tab), `Resources/` |
 | `ios/CaneKitWatch/` | watchOS app |
 | `ios/CaneKitWidget/` | Live Activity widget (Dynamic Island / lock screen) |
 | `ios/Shared/` | Types compiled into more than one target (Live Activity attributes) |

@@ -1064,7 +1064,7 @@ Each is a stored `var` initialised from `Settings.bool(key, default:)` (persiste
 | `mirrorLeftRight` | `false` | `pushDepthSettings()` |
 | `hapticsSilenced` | `false` | `haptics.silenced` (decider keeps running so speech/watch stay in sync) |
 | `loggingEnabled` | `true` | `logger.enabled` |
-| `cloudSharingEnabled` | `false` (explicit privacy opt-in) | `CloudSync.setSharingEnabled(_:)`; when on, starts the optional Supabase mirror; when off, cancels future flushes and drops queued uploads |
+| `cloudSharingEnabled` | `false` (explicit privacy opt-in) | `CloudSync.setSharingEnabled(_:)`; when on, starts the MVP writers (Medical ID, family contacts, trip summaries, hazards, family alerts); when off, cancels future writes and drops deferred registration / trip-open work — there is no trip-event upload queue |
 | `obstacleNamesEnabled` | `false` (Step 36; was `true`) | read in `handle` only, filtered by `cueRules.allowsName` |
 | `cueLevel` | `.detailed` (`Settings.string`, raw value) | `cueProfileChanged` → persists both, `applyCueRules()` (`decider.thresholds.head = headEnterM`, `hazards.signAllowedPhrases`), speaks `spokenLine` at `.nav` ttl 6, logs `cue_profile {level, place, text}`; `init` calls `applyCueRules()` once after the hazard scanner exists |
 | `cuePlace` | `.outdoors` | same path as `cueLevel` (speaks the place line) |

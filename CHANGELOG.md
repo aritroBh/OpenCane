@@ -2,6 +2,16 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 64 — Docs match the Step 60 cloud MVP (Sun Sep 13)
+
+**Why.** An audit of comments vs `CloudSync` found agents and the Profile caption still describing the pre-MVP mirror (settings, mobility, route geometry, JSONL trip logs, a trip-event queue). The VoiceOver hint on the consent toggle was already honest; the off-state caption and the layout table were not.
+
+**What changed.** Profile off-state caption; `AppModel` / `AGENTS.md` / `ios/README.md` / `design.md` / `CODE_REFERENCE` `cloudSharingEnabled` row now name the seven live tables and the no-op seams. `SupabaseClient` lives in `Cloud/`, not `Trip/`. UX work stays on `ux/voice-first`.
+
+**Verification.** Comment and caption only; `make test` not required for this pass.
+
+test on device: Profile → Privacy off reads "Medical ID, family contacts and walk summaries stay on this phone."
+
 ## Step 63 — Audit of Step 61: the refused key survives a restart, and a lock drops "Where am I" (Sun Sep 13)
 
 **Why.** Step 61 latched the session into Apple's voice after a fatal ElevenLabs status, but a warm mp3 cache never calls the API (`ElevenLabsVoice.prefetch`), so the latch only armed after the first miss. The owner's restart (`canekit-2026-09-13T08-51-14Z`) still mixed cached ElevenLabs lines with new Apple ones. A later prefetch also wiped the HTTP 401 off the Haptics card. Separately, `scenePhaseChanged(.background)` cancelled the conversation turn but not `SceneDescriber`, so a JPEG captured before a lock could still speak the pre-lock scene.
