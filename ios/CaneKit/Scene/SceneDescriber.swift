@@ -182,7 +182,8 @@ final class SceneDescriber {
     /// fallback, or on-device only; never nil), gate a cloud sentence (`grounded`), add the people
     /// line when the cloud answered, speak it (20 s TTL).
     /// Failures speak "Camera warming up. Try again." or "Scene description failed."; a press while
-    /// one is running speaks "Still describing the previous scene." and is dropped.
+    /// one is running plays `Earcon.busy` (two soft taps, Step 65) and is dropped. A description of
+    /// ≥ 100 characters is preceded by the `Earcon.done` bell.
     /// Caller: `AppModel.describeScene(trigger:)` (button, watch, Action button, Camera Control,
     /// the waypoint hook).
     /// - Parameter trigger: who asked (default the Guide button); kept as `lastTrigger` for the
@@ -233,7 +234,8 @@ final class SceneDescriber {
     @discardableResult
     private func run(question: String?, trigger: DescribeTrigger) -> Bool {
         guard !isDescribing else {
-            speech.say("Still describing the previous scene.", .scene, ttl: 6)
+            // Step 65: two soft taps instead of "Still describing the previous scene.".
+            speech.perform(EarconPolicy.feedback(for: .describerBusy), .scene, ttl: 6)
             return false
         }
         let client = self.client
@@ -314,6 +316,8 @@ final class SceneDescriber {
                     // Step 49: an answer given in the dark says so first (the caveat is a fact
                     // about the camera, not a claim by the model, so it is added after the gate).
                     let answer = (self.isDark() && !text.contains(CloudSceneGate.tooDark)) ? Self.darkCaveat + text : text
+                    // Step 65: a gentle bell first when the answer is long.
+                    self.speech.perform(EarconPolicy.feedback(for: .answer(characters: answer.count)), .scene, ttl: 10)
                     self.speech.say(answer, .scene, ttl: 10)
                     self.onResult?(answer, nil, self.lastLatencyMs, frameName, gate, raw)
                     return
@@ -351,6 +355,7 @@ final class SceneDescriber {
                 // the caveat, and it is spoken as the answer (with the LiDAR line in front, as usual).
                 if self.isDark(), !text.contains(CloudSceneGate.tooDark) { text = Self.darkCaveat + text }
                 self.lastDescription = text
+                self.speech.perform(EarconPolicy.feedback(for: .answer(characters: text.count)), .scene, ttl: 20)
                 self.speech.say(text, .scene, ttl: 20)
                 self.onResult?(text, nil, self.lastLatencyMs, frameName, gate,
                                answer.source == .cloud ? answer.text : "")

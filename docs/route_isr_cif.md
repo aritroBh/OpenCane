@@ -129,7 +129,7 @@ Facility, east entrance. 1.0 kilometers, 14 minutes, 1300 steps."), which Repeat
 
 File: [`ios/CaneKit/Resources/indoor_isr.json`](../ios/CaneKit/Resources/indoor_isr.json) (id
 `isr_townsend_to_front_doors`, `walked: false`, `recordedAt` / `strideM` null). It is a **floor-plan
-draft, not a recording**: the app says "This indoor route has not been walked yet…" before step 1. Every
+draft, not a recording**: the app says "Draft route. Use your cane." before step 1. Every
 line comes from the University Housing **ISR Floor Plans PDF, page 2 "Illinois Street Residence Hall - 1st
 Floor"** (Nov 2025; downloaded and rendered 2026-09-13; the PDF has no text layer, so labels were read off
 the drawing). The plan has no scale bar. Its scale was calibrated against OSM at about 0.055 m per 300-dpi

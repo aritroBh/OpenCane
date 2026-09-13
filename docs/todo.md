@@ -1,5 +1,15 @@
 # LIVE TRACKER — Sun Sep 13 (updated as work lands; newest first)
 
+- [ ] Step 65 — calm feedback (owner: "don't over-stimulate the blind person too much or else they won't listen")
+  - [x] Evidence: phone log 08-51-14Z, first 34 s = 301 characters of speech (menu 76, "Still describing…" ×2, "One moment.", timeout 47)
+  - [x] Logic tests first: `EarconTests` (14), short menu, thinking ticks + "No answer.", prefetch set, draft caveat → `swift test` 861 green
+  - [x] App: `EarconPlayer`, `SpeechQueue.playEarcon` / `perform`, VoiceInputEngine, ConversationCoordinator, SceneDescriber, AppModel (short menu, warm-up ticks, "Starting.") → `make gen` + `make sim` green
+  - [x] Docs: design §5.1 earcon table, handsfree, CODE_REFERENCE, test_checklist §1, route_isr_cif, CHANGELOG Step 65
+  - [ ] Reviews: multi-agent + Muse + Antigravity (not run)
+  - [ ] make uitest / e2e on this build (not run)
+  - [ ] Device: listen to every tone on the cane (checklist §1); tune levels from a trip log's `earcon` records
+  - [ ] Commit + install
+
 - [x] Step 61 — first launch in Apple's voice: ElevenLabs account has 0 of 10,000 credits (HTTP 401 quota_exceeded); a refused key now keeps the session in one voice (pushed 7b62b0b, on the phone)
 - [ ] **Owner action:** top up ElevenLabs (or a paid key in Secrets.plist), then Settings → Voice → System → Natural
 - [ ] Step 62 — indoor → outdoor guidance (step script + handover, owner decision)
@@ -33,7 +43,8 @@
   - [x] 9 lows (a–e); Muse M3 (every "to B from A" prefix), M8 (stopped figure), M11 (recording refusals)
   - [x] Rejected with evidence: Muse M6, M9, M10
   - [ ] make sim / uitest / e2e on the fixes (orchestrator)
-- [ ] Gate after fixes: make test ✅ 845 / sim ✅ / device build + install ✅ / commit + push ✅ / uitest + e2e (running on the final build)
+- [ ] Gate after fixes: make test ✅ 845 / sim ✅ / device build + install ✅ / pushed a11ed7e ✅ (rebased on teammate Steps 64a docs) / uitest + e2e (running on the final build)
+- [ ] Owner: unlock the phone and run docs/test_checklist.md
 - [ ] Commit + push after each step; pull teammates' changes first
 
 # CaneKit — strict build checklist

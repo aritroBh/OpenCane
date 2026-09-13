@@ -233,6 +233,9 @@ final class AppModel {
     /// The request's own deadline (`DepthReadiness.standardConfiguration.timeout`, 5 s), separate
     /// from the pure gate's so a camera transition that never drains still fails loudly.
     @ObservationIgnored private var routeReadinessTimeoutTask: Task<Void, Never>?
+    /// The quiet warm-up ticks of a queued route start (Step 65, `queueRouteStart`); ends by itself
+    /// after `EarconPolicy.warmupMaxTicks` or when the start is no longer pending.
+    @ObservationIgnored private var routeWarmupTickTask: Task<Void, Never>?
     /// Bumped (`&+=`) by every queue, failure and cancel; a readiness task whose captured number
     /// is no longer current exits without touching state (the `routeBuildGeneration` pattern).
     @ObservationIgnored private var routeStartGeneration = 0
@@ -1282,6 +1285,10 @@ final class AppModel {
         // Step 53: `engine` / `engine_reason` are `VoiceEngineChoice.decide`'s answer, made before this
         // record; a `race` is settled by the `speech_engine` record below. Step 55: while listening,
         // the line goes into the voice engine's self-hear history.
+        // Step 65: every calm-feedback tone, played or refused, is in the log (`earcon`).
+        speech.onEarcon = { [weak self] earcon, played, reason in
+            self?.logger.event("earcon", ["name": earcon.rawValue, "played": played, "reason": reason])
+        }
         speech.onDispatch = { [weak self] text, priority, replays, resumeFrom, decision in
             self?.logger.event("speech_dispatch", [
                 "text": text, "priority": "\(priority)", "replays": replays,
@@ -1497,8 +1504,13 @@ final class AppModel {
             logger.event("voice_menu", ["action": "skipped", "reason": "muted"])
             return
         }
-        speech.say(VoiceMenu.menuLine, .nav, ttl: 20)
-        logger.event("voice_menu", ["action": "spoken"])
+        // Step 65 (calm feedback): the whole eight-word menu once after install, then the three-word
+        // one ("help" still reads the list). The flag is set when the menu is queued, not heard: a
+        // launch cut short still counts, which errs toward fewer words.
+        let firstLaunch = !Settings.bool("heardFullVoiceMenu", default: false)
+        speech.say(VoiceMenu.launchMenuLine(firstLaunch: firstLaunch), .nav, ttl: 20)
+        if firstLaunch { Settings.set(true, "heardFullVoiceMenu") }
+        logger.event("voice_menu", ["action": "spoken", "menu": firstLaunch ? "full" : "short"])
         let generation = voiceShellGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1524,7 +1536,7 @@ final class AppModel {
                 }
                 guard !self.voiceInput.isListening, !self.voiceInput.isStarting else { return }
                 self.logger.event("voice_listen", ["mode": "launch"])
-                self.voiceInput.startListening(windowSeconds: UtteranceEndDetector.maxListen)
+                self.voiceInput.startListening(windowSeconds: UtteranceEndDetector.maxListen, kind: .launch)
             case .skip(let reason):
                 self.logger.event("voice_menu", ["action": "skipped", "reason": reason])
             }
@@ -1557,7 +1569,7 @@ final class AppModel {
             let window = wasQuestion ? EmergencyConfirm.confirmWindow : seconds
             logger.event("voice_followup", ["action": "opened", "seconds": window, "emergency": wasQuestion])
             if wasQuestion { conversation.emergencyListenOpened() }
-            voiceInput.startListening(windowSeconds: window)
+            voiceInput.startListening(windowSeconds: window, kind: wasQuestion ? .question : .followUp)
         case .skip(let reason):
             logger.event("voice_followup", ["action": "skipped", "reason": reason])
         }
@@ -3639,11 +3651,10 @@ final class AppModel {
         "OpenCane ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
-        // Step 54: the empty-transcript line (`VoiceInputEngine.stopListeningAndSubmit`) lost
-        // `immediate: true`; cached here so it is the natural voice at once. ⚠ Byte-identical.
-        "I did not catch that.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
-        "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
+        // Step 65: the warm-up sentence is gone (quiet ticks, then "Starting.", which is in
+        // `SpokenPhrases.shellLines`); "I did not catch that." is there too.
+        "Route start canceled.",
         "Obstacle detection warming up. Guiding with GPS.",
         // Step 49: the honest twin of the line above for a dark hallway (`failQueuedRouteStart`,
         // `.safety`). ⚠ Byte-identical to `trackingLimitedLine`.
@@ -3762,7 +3773,9 @@ final class AppModel {
     /// over 0.5 s, all within 5 s.
     ///
     /// Effects: stores `pendingRouteStart`, sets `routeStartWaiting` / `routeStartStatus`, speaks
-    /// "Obstacle detection warming up. Route will start when it is ready." (`.nav`, 8 s), sends
+    /// nothing — Step 65 (calm feedback) replaced the 66-character warm-up sentence with the quiet
+    /// `Earcon.thinking` tick at 0, 2 and 4 s (`EarconPolicy.warmupTickDue`, `routeWarmupTickTask`),
+    /// and `depthReadinessChanged(.ready)` plays the bell and says "Starting." — sends
     /// the watch a status, logs `route_readiness {state: warming, timeout_s, required_frames}`,
     /// then starts the two tasks (`routeReadinessTimeoutTask`, `routeReadinessTask`). A newer call
     /// supersedes an older one via `routeStartGeneration`. Outcome arrives in
@@ -3782,7 +3795,22 @@ final class AppModel {
         routeStartWaiting = true
         routeStartStatus = "Obstacle detection warming up. Route will start when it is ready."
         routeError = nil
-        speech.say("Obstacle detection warming up. Route will start when it is ready.", .nav, ttl: 8)
+        // Step 65: no warm-up sentence; a quiet tick every 2 s, at most 3, while depth warms up.
+        routeWarmupTickTask?.cancel()
+        let queuedAt = ProcessInfo.processInfo.systemUptime
+        routeWarmupTickTask = Task { @MainActor [weak self] in
+            var ticks = 0
+            while !Task.isCancelled, ticks < EarconPolicy.warmupMaxTicks {
+                guard let self, self.routeStartGeneration == generation,
+                      self.pendingRouteStart != nil else { return }
+                let elapsed = ProcessInfo.processInfo.systemUptime - queuedAt
+                if EarconPolicy.warmupTickDue(elapsed: elapsed, ticksSoFar: ticks) {
+                    ticks += 1
+                    self.speech.perform(EarconPolicy.feedback(for: .routeWarming), .nav, ttl: 8)
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
         watch.send(status: "Obstacle detection warming up", distanceM: -1)
         // Step 64: the island shows OpenCane and a countdown while depth warms up (the same
         // activity becomes the walk in `startRouteNow`; `cancelPendingRouteStart` ends it).
@@ -3849,6 +3877,9 @@ final class AppModel {
             routeStartStatus = nil
             depth.cancelReadiness()
             logger.event("route_readiness", ["state": "ready"])
+            routeWarmupTickTask?.cancel()
+            // Step 65: the bell and "Starting." (`.nav`, prefetched), then the route intro.
+            speech.perform(EarconPolicy.feedback(for: .routeReady), .nav, ttl: 8)
             startRouteNow(pending.route, announce: pending.announce)
         case .timedOut:
             failQueuedRouteStart()

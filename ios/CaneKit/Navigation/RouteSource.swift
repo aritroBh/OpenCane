@@ -72,6 +72,14 @@ enum RouteSource {
     /// Throws `RouteError.missingBundledRoute` when absent, or the decoder's error when malformed.
     /// Reads the file on every call (no cache); synchronous, main actor.
     static func bundled() throws -> Route {
+        // Step 66 automation hook (simulator stress campaign, `ios/scripts/e2e.py --scenario stress_*`):
+        // `CANEKIT_ROUTE_FILE=<absolute path>` replaces the bundled file with any route JSON of the same
+        // schema, so the demo-route hook can walk a non-bundled route (ISR → Grainger, CIF → Siebel …)
+        // with no MapKit or network. Unset on every normal launch. Side effect to know: `AppModel`'s
+        // `bundledRouteName` reads this too, so the cloud `uploadRoute` label says "bundled" for it.
+        if let path = ProcessInfo.processInfo.environment["CANEKIT_ROUTE_FILE"], !path.isEmpty {
+            return try Route.load(from: Data(contentsOf: URL(fileURLWithPath: path)))
+        }
         guard let url = Bundle.main.url(forResource: "route_isr_cif", withExtension: "json") else {
             throw RouteError.missingBundledRoute
         }

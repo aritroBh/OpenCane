@@ -237,25 +237,27 @@ public enum SpokenPhrases {
     /// Spoken when a listen ends with no words (`VoiceInputEngine`). ⚠ Byte-identical there.
     public static let notHeardLine = "I did not catch that."
 
-    /// Spoken when "Where am I" is asked while a description is still in flight (`SceneDescriber`,
-    /// `ConversationCoordinator`). ⚠ Byte-identical there.
-    public static let describerBusyLine = "Still describing the previous scene."
+    /// Shown (the Talk tile's last response, `conv_turn.response`) — never spoken — when "Where am I"
+    /// is asked while a description is still in flight. Step 65: the walker hears `Earcon.busy`
+    /// instead, so this is deliberately not in `shellLines` (`replacedWaitingLinesAreNotPrefetched`).
+    public static let describerBusyText = "Still describing the previous scene."
 
-    /// Every fixed line the voice shell can speak, deduplicated, in the order it is heard: the menu
-    /// and help first (said at launch), then each item's confirmation, the three cue-level lines,
-    /// the latency filler and timeout, the emergency flow, the number-free status clauses, and the
-    /// shell's odd ones. `AppModel.commonLines` appends it, so every one is prefetched in the
+    /// Every fixed line the voice shell can speak, deduplicated, in the order it is heard: the short
+    /// launch menu, the first-launch menu and help, then each item's confirmation, the cue-level
+    /// lines, the timeout ("No answer."), the emergency flow, the number-free status clauses, and the
+    /// shell's odd ones (the second empty press, "Starting.", the head-cover notice). Step 65 removed
+    /// "One moment." and "Still describing the previous scene." (now `Earcon.thinking` / `.busy`). `AppModel.commonLines` appends it, so every one is prefetched in the
     /// natural voice. Built from the production constants, never retyped; the per-profile
     /// emergency prompt is prefetched separately (it has a name and number in it).
     /// Pinned by `everyLineTheShellCanSpeakIsPrefetched`, `shellLinesStayInsideTheirBudget`.
     public static let shellLines: [String] = {
-        var lines = [VoiceMenu.menuLine, VoiceMenu.helpLine]
+        var lines = [VoiceMenu.shortMenuLine, VoiceMenu.menuLine, VoiceMenu.helpLine]
         lines += VoiceMenu.Item.allCases.map(\.confirmationLine)
         lines += CueLevel.allCases.map(\.spokenLine)
-        lines += [ConversationBudget.fillerLine, ConversationBudget.timeoutLine]
+        lines += [ConversationBudget.timeoutLine]
         lines += EmergencyConfirm.fixedLines
         lines += StatusSummary.fixedLines
-        lines += [notHeardLine, describerBusyLine, HeadCoverNotice.line]
+        lines += [notHeardLine, EarconPolicy.routeReadyLine, HeadCoverNotice.line]
         var seen = Set<String>()
         return lines.filter { seen.insert($0).inserted }
     }()

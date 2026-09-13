@@ -261,9 +261,10 @@ public struct IndoorProgress: Sendable, Equatable {
     public static let landmarkFraction = 0.7
     /// Most lines one update may speak after a pedometer jump.
     public static let maxJumpLines = 2
-    /// Said once before step 0 of a draft (`walked == false`).
-    public static let notWalkedLine =
-        "This indoor route has not been walked yet. Use your cane and ask for help if it seems wrong."
+    /// Said once before step 0 of a draft (`walked == false`). Step 65 (calm feedback) shortened it
+    /// from 92 characters ("This indoor route has not been walked yet. Use your cane and ask for
+    /// help if it seems wrong.") to the two facts the walker acts on.
+    public static let notWalkedLine = "Draft route. Use your cane."
 
     /// The script being walked.
     public let script: IndoorScript

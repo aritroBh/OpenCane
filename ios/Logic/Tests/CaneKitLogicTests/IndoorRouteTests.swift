@@ -84,7 +84,7 @@ private func says(_ events: [IndoorEvent]) -> [String] {
     #expect(IndoorProgress.landmarkFraction == 0.7)
     #expect(IndoorProgress.maxJumpLines == 2)
     #expect(IndoorProgress.notWalkedLine
-            == "This indoor route has not been walked yet. Use your cane and ask for help if it seems wrong.")
+            == "Draft route. Use your cane.")
 }
 
 /// A hand-written draft may leave out `turn` (→ none), `steps`, `landmark` and the exit radius (→ 25).

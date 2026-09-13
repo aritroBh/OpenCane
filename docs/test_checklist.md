@@ -11,14 +11,20 @@ Tick each box on the phone (iPhone 17 Pro Max, unlocked, USB or not). Pull a tri
 - [ ] ElevenLabs: account topped up? (0 credits = every line in Apple's voice — expected, not a bug)
 
 ## 1. Launch and the voice shell
-- [ ] Open the app: "OpenCane ready." → the menu → tick → mic opens by itself
-- [ ] Say **"status"** → one sentence, one voice (no Apple/ElevenLabs flip mid-session)
+Step 65 (calm feedback): waiting is tones, not words. Every tone is short (≤ 0.18 s) and quiet, with a
+soft tap felt on the cane. Nothing plays over "Head height.".
+- [ ] Open the app: "OpenCane ready." → **"Say route, where am I, or help."** (the full eight-word menu only on the very first launch after install) → soft rising two-note → mic opens by itself
+- [ ] Say **"status"** → a short tap as the mic closes → one sentence, one voice (no Apple/ElevenLabs flip mid-session)
 - [ ] Say **"help"** → numbered list; say **"four"** → status again
-- [ ] Say nothing after an answer → the 5 s follow-up window closes silently (no "I did not catch that")
-- [ ] Tap the big mic, ask a free question → "One moment." if slow, answer or timeout by ~4 s
+- [ ] After an answer: a *quieter* rising two-note (you may talk); say nothing → the 5 s window closes with **no sound at all**
+- [ ] Tap the big mic and say nothing → soft falling note only, no words; do it again straight away → falling note + "I did not catch that."
+- [ ] Tap the big mic, ask a free question → tap, then a faint tick at 1.5 s (and 3 s) if slow → the answer (a gentle bell first if it is long) or a low double tap + **"No answer."** by ~4 s — never "One moment."
+- [ ] Say "where am I" twice quickly → the second is two soft taps, not "Still describing the previous scene."
+- [ ] Say **"route"** (LiDAR phone) → up to three faint ticks while obstacle detection warms up → bell + "Starting." → the route intro (no "Obstacle detection warming up. Route will start…")
 - [ ] Ask a question, then ask another before it answers → only the second answer is spoken
 - [ ] Lock the phone mid-question, unlock → no stale answer, no mic dot
 - [ ] Settings → Voice: Natural / System picker works; Haptics card shows why if the key is refused
+- [ ] Pull the log: `earcon {name, played, reason}` records for each tone above
 
 ## 2. Emergency (do NOT say "yes" unless the contact expects a call)
 - [ ] Say **"emergency"** → "Say yes to call … at …" → wait for the whole prompt → say **"no"** → "Emergency canceled."
@@ -34,7 +40,7 @@ Tick each box on the phone (iPhone 17 Pro Max, unlocked, USB or not). Pull a tri
 - [ ] Dark hallway → "Low light. Obstacle detection still works."
 
 ## 4. Indoor → outdoor (ISR → CIF)
-- [ ] In Townsend 1st-floor south corridor, say **"take me from ISR to CIF"** → "This indoor route has not been walked yet…" then step 1
+- [ ] In Townsend 1st-floor south corridor, say **"take me from ISR to CIF"** → "Draft route. Use your cane." then step 1
 - [ ] Walk: steps advance by the pedometer; say **"next"** to skip, **"repeat"** to hear the step again
 - [ ] "The main desk is on your right." near the lobby
 - [ ] At the doors: "You are at the ISR front doors. Go outside and wait a moment for GPS."

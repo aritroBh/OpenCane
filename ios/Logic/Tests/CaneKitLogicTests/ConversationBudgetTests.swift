@@ -11,7 +11,7 @@
 //  last question asked to be the one answered. Every number here is [H] until a walk log tunes it.
 //
 //  Source pinned: `ios/Logic/Sources/CaneKitLogic/ConversationBudget.swift` (`fillerAfter` 1.5,
-//  `budget` 4.0, `fillerLine`, `timeoutLine`, `begin(now:)`, `tick(now:)`, `finished(id:)`,
+//  `thinkingRepeatAfter` 3.0, `maxThinkingTicks` 2, `budget` 4.0, `timeoutLine`, `thinkingTicks`, `begin(now:)`, `tick(now:)`, `finished(id:)`,
 //  `inFlightID`, `fillerSpoken`, `elapsedMs(now:)`). Caller: `ConversationCoordinator.handleQuery`
 //  (app), which starts a turn only for the cloud path, ticks every 0.25 s, cancels the in-flight
 //  task on a new query and drops a completion whose `finished(id:)` is false.
@@ -23,29 +23,37 @@ import Testing
 @Suite("Conversation budget — latest wins")
 struct ConversationBudgetTests {
 
-    /// The two numbers and the two lines. 1.5 s is the longest silence that still reads as
-    /// "heard you"; 4 s is where a walker stops waiting and asks again.
+    /// The numbers and the one line. 1.5 s is the longest silence that still reads as "heard you";
+    /// the quiet thinking tick repeats once at 3 s (Step 65: a tone, never "One moment."); 4 s is
+    /// where a walker stops waiting and asks again, and all they hear then is "No answer.".
     @Test func numbersArePinned() {
         #expect(ConversationBudget.fillerAfter == 1.5)
+        #expect(ConversationBudget.thinkingRepeatAfter == 3.0)
+        #expect(ConversationBudget.maxThinkingTicks == 2)
         #expect(ConversationBudget.budget == 4.0)
-        #expect(ConversationBudget.fillerAfter < ConversationBudget.budget)
-        #expect(ConversationBudget.fillerLine == "One moment.")
-        #expect(ConversationBudget.timeoutLine.hasSuffix("."))
+        #expect(ConversationBudget.fillerAfter < ConversationBudget.thinkingRepeatAfter)
+        #expect(ConversationBudget.thinkingRepeatAfter < ConversationBudget.budget)
+        #expect(ConversationBudget.timeoutLine == "No answer.")
     }
 
-    /// The filler is spoken exactly once, at 1.5 s, and not again on later ticks.
-    @Test func fillerFiresOnceAtOneAndAHalfSeconds() {
+    /// The thinking tick fires at 1.5 s and once more at 3 s, never a third time.
+    @Test func thinkingTicksAtOneAndAHalfAndThreeSeconds() {
         var b = ConversationBudget()
         _ = b.begin(now: 10)
         var e = b.tick(now: 11.4)
         #expect(e == .none)
         e = b.tick(now: 11.5)
-        #expect(e == .speakFiller)
+        #expect(e == .thinking)
         e = b.tick(now: 11.75)
         #expect(e == .none)
+        e = b.tick(now: 12.9)
+        #expect(e == .none)
         e = b.tick(now: 13.0)
+        #expect(e == .thinking)
+        e = b.tick(now: 13.75)
         #expect(e == .none)
         #expect(b.fillerSpoken)
+        #expect(b.thinkingTicks == 2)
     }
 
     /// At 4 s the turn times out: one `.timeout`, the turn is no longer in flight, a late result is
@@ -54,6 +62,7 @@ struct ConversationBudgetTests {
         var b = ConversationBudget()
         let id = b.begin(now: 0)
         _ = b.tick(now: 1.5)
+        _ = b.tick(now: 3.0)
         var e = b.tick(now: 3.99)
         #expect(e == .none)
         e = b.tick(now: 4.0)
@@ -74,11 +83,11 @@ struct ConversationBudgetTests {
         let second = b.begin(now: 2.0)
         #expect(second != first)
         #expect(b.inFlightID == second)
-        #expect(!b.fillerSpoken)                   // the new turn has not said "One moment." yet
+        #expect(!b.fillerSpoken)                   // the new turn has not ticked yet
         var e = b.tick(now: 3.4)
         #expect(e == .none)
         e = b.tick(now: 3.5)
-        #expect(e == .speakFiller)
+        #expect(e == .thinking)
         let stale = b.finished(id: first)
         #expect(stale == false)
         let fresh = b.finished(id: second)
@@ -96,7 +105,7 @@ struct ConversationBudgetTests {
         #expect(stale == false)
         #expect(b.inFlightID == second)
         let e = b.tick(now: 2.5)
-        #expect(e == .speakFiller)
+        #expect(e == .thinking)
     }
 
     /// A fast-path answer never begins a turn, so a stray tick with nothing in flight is silent

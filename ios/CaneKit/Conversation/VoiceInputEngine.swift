@@ -24,8 +24,10 @@
 //      matched_line}`. No audio-session change (hard rule 7: no `.voiceChat`, no echo control).
 //    · Ends listening on its own (`UtteranceEndDetector`, CaneKitLogic): a blind walker cannot see
 //      "Listening…" and should not need a second press.
-//    · Every press has an audible outcome: an answer, "I did not catch that.", or the reason it
-//      could not listen. Silence is a bug here (AGENTS.md "make the invisible visible").
+//    · Every press has an audible outcome: an answer, a tone (Step 65 — rising when the mic opens,
+//      a tap when it heard words, a falling note when it heard nothing, with "I did not catch
+//      that." on the second empty press in a row), or the reason it could not listen. Silence is a
+//      bug here (AGENTS.md "make the invisible visible").
 //
 //  Owner: `AppModel.voiceInput`, built in `AppModel.init` with the app's `SpeechQueue` and
 //  `BeaconEngine`. Callers: `AppModel.toggleVoiceInput(source:)` (GuideCard "Talk to OpenCane",
@@ -211,10 +213,16 @@ final class VoiceInputEngine {
     /// in `checkEnd`); nil between presses.
     @ObservationIgnored private var endDetector: UtteranceEndDetector?
     /// This listen's hard cap and style (Step 58). nil = a press: `UtteranceEndDetector.maxListen`
-    /// and "I did not catch that." when nothing is said. A number = an unasked-for window opened by
+    /// and the falling `Earcon.nothing` when nothing is said (Step 65). A number = an unasked-for window opened by
     /// the voice shell (launch or follow-up): that cap, and silence when nothing is said — the walker
     /// did not press anything, so there is nothing to apologise for.
     @ObservationIgnored private var windowSeconds: Double?
+    /// Who opened this listen (Step 65): picks the listening cue's level and whether an empty close
+    /// makes any sound (`EarconPolicy`). Set by `startListening(windowSeconds:kind:)`.
+    @ObservationIgnored private var listenKind: EarconPolicy.ListenKind = .press
+    /// Empty presses in a row, 1, 2, 1, 2 … (`EarconPolicy.emptyPressCount`); the words "I did not
+    /// catch that." come only on the second. Reset by a press that heard words.
+    @ObservationIgnored private var emptyPressCount = 0
     /// The one settle wait between input-format reads (`startEngine(attempt:)`); non-nil only
     /// while a press is waiting for the route, when the session is already `.playAndRecord` and
     /// the beacon already off, so `cancel()` and a second press must treat it as live.
@@ -340,11 +348,12 @@ final class VoiceInputEngine {
     /// is spoken once at `.nav` and the engine stays `.idle` (hard rule 4 spirit: never crash,
     /// never go quiet, say what is missing). A prompt that is still up when the walker presses
     /// again is fenced by `generation`.
-    func startListening(windowSeconds: Double? = nil) {
+    func startListening(windowSeconds: Double? = nil, kind: EarconPolicy.ListenKind? = nil) {
         // A press during the format settle wait is the same press: the session and beacon are
         // already taken, and re-snapshotting the beacon here would remember it as off.
         guard !isListening, formatRetry == nil, !isStarting else { return }
         self.windowSeconds = windowSeconds
+        listenKind = kind ?? (windowSeconds == nil ? .press : .followUp)
         // A new press starts with an empty self-hear history (Step 55).
         selfHear.reset()
         // Snapshot the beacon now: every failure below runs `cleanupAudioPipeline`, which puts
@@ -599,6 +608,8 @@ final class VoiceInputEngine {
         // it is released in `cleanupAudioPipeline`, before any answer is spoken.
         logStart(session: sessionField, format: formatField)
         AudioServicesPlaySystemSound(1519) // Crisp tactile feedback confirms recording started
+        // Step 65: the soft rising two-note (quieter for a follow-up window) — talk now.
+        speech.perform(EarconPolicy.feedback(for: .listenOpened(listenKind)), .scene, ttl: 6)
 
         // 6. End-of-utterance + hard cap, both decided by `UtteranceEndDetector` (CaneKitLogic).
         endDetector = UtteranceEndDetector(startedAt: listeningSince,
@@ -648,8 +659,9 @@ final class VoiceInputEngine {
     /// Second press: stops listening, cleans up audio, restores .playback session, and delivers
     /// the finalized prompt. Also the shared end path for silence / cap / final / error.
     /// Teardown (which releases the speech hold) runs *before* the prompt is delivered, so the
-    /// answer is never held behind the walker's own dictation. An empty transcript speaks
-    /// "I did not catch that." (`.scene`, ttl 6, the one natural voice — cached at launch). A
+    /// answer is never held behind the walker's own dictation. Words → `Earcon.heard`; an empty
+    /// press → `Earcon.nothing`, plus "I did not catch that." (`.scene`, ttl 6) on the second in a row;
+    /// an empty launch / follow-up window → silence (`EarconPolicy`, Step 65). A
     /// transcript that is the app's own recent line (`SelfHearFilter`, Step 55) is dropped silently
     /// and logged `voice_self_hear {action: dropped, transcript, matched_line}` — it is not something
     /// the walker said, so there is nothing to answer. No-op unless listening.
@@ -671,14 +683,20 @@ final class VoiceInputEngine {
                 return
             }
             state = .processing
+            if listenKind == .press { emptyPressCount = EarconPolicy.emptyPressCount(previous: emptyPressCount, heardWords: true) }
+            // Step 65: one short tap — heard you; the answer (or the thinking tick) follows.
+            speech.perform(EarconPolicy.feedback(for: .listenHeardWords), .scene, ttl: 6)
             onTranscriptionFinalized?(finalPrompt)
         } else {
             state = .idle
-            // An unasked-for window (launch / follow-up) that heard nothing closes silently.
-            if windowSeconds != nil { return }
-            // The one line a blind walker needs most: proof the press was heard and nothing else was.
-            // One voice (Step 54): it is in `AppModel.commonLines`, so it plays from the cache.
-            speech.say("I did not catch that.", .scene, ttl: 6)
+            // Step 65: a press that heard nothing gets the soft falling note; the words "I did not
+            // catch that." (cached, `SpokenPhrases.shellLines`) only on the second empty press in a
+            // row. An unasked-for window (launch / follow-up) that heard nothing closes silently.
+            if listenKind == .press {
+                emptyPressCount = EarconPolicy.emptyPressCount(previous: emptyPressCount, heardWords: false)
+            }
+            speech.perform(EarconPolicy.feedback(for: .listenEmpty(listenKind, emptyPressCount: emptyPressCount)),
+                           .scene, ttl: 6)
         }
     }
 
