@@ -16,7 +16,7 @@ import Testing
 /// Ordinary addresses pass, including the plus-tags and subdomains families actually use.
 @Test func plausibleAddressesAreAccepted() {
     #expect(FamilyContacts.isValid("mom@example.com"))
-    #expect(FamilyContacts.isValid("tejaschak2008@gmail.com"))
+    #expect(FamilyContacts.isValid("dad@example.com"))
     #expect(FamilyContacts.isValid("first.last+opencane@mail.example.co.uk"))
 }
 
@@ -83,12 +83,12 @@ import Testing
 
 /// The payload matches the bot contract exactly: `type`, `emails`, and `send_test` only when asked.
 @Test func registrationMatchesTheContract() throws {
-    let event = FamilyContacts.registration(emails: ["Mom@Example.com", "tejaschak2008@gmail.com"],
+    let event = FamilyContacts.registration(emails: ["Mom@Example.com", "dad@example.com"],
                                             sendTest: true)
     let json = try #require(JSONSerialization.jsonObject(with: event.jsonBody()) as? [String: Any])
 
     #expect(json["type"] as? String == "family_contacts")
-    #expect(json["emails"] as? [String] == ["mom@example.com", "tejaschak2008@gmail.com"])
+    #expect(json["emails"] as? [String] == ["mom@example.com", "dad@example.com"])
     #expect(json["send_test"] as? Bool == true)          // ⚠ snake_case: the bot's key
 }
 
