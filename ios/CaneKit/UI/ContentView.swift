@@ -47,7 +47,7 @@ struct ContentView: View {
     private var navigationTitleText: String {
         switch tab {
         case .guide: "OpenCane"
-        case .sense: "Sense"
+        case .sense: "Details"
         case .settings: "Settings"
         }
     }
@@ -71,6 +71,14 @@ struct ContentView: View {
             .background(CKColor.background)
             .navigationTitle(navigationTitleText)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(navigationTitleText)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(CKColor.textPrimary)
+                        .accessibilityHidden(true)
+                }
+            }
             .animation(reduceMotion ? nil : .easeOut(duration: Self.pageFade), value: tab)
         }
         // Camera Control / volume-button spike: a press is logged (`describe {source:

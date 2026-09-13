@@ -184,6 +184,16 @@ final class AppModel {
     /// A timed-out status remains visible but does not disable a retry.
     private(set) var routeStartWaiting = false
 
+    // MARK: - On-Device Walk Simulation
+    /// True while simulating walking the route indoors on this device.
+    var isSimulatingWalk = false
+    /// Speed for the on-device walk simulator (metres per second). Default 1.4 m/s.
+    var simulationSpeedMps: Double = 1.4
+    /// Background task driving simulated walk fixes.
+    @ObservationIgnored private var simulatedWalkTask: Task<Void, Never>?
+    /// Generation counter guarding simulated walk cancellation and task races.
+    @ObservationIgnored private var simulatedWalkGeneration = 0
+
     /// A route that has been requested but cannot start until the depth interlock is ready
     /// (Step 22/25). Value type so it can be held across the readiness wait without aliasing.
     private struct PendingRouteStart: Sendable {
@@ -869,6 +879,7 @@ final class AppModel {
         observeThermalAndBattery()
         observeLaunchHealth()
         logger.start()
+        liveActivity.endAllOrphanedActivities()
         speech.onSuppressed = { [weak self] text, load, reason in
             self?.logger.event("speech_suppressed", [
                 "text": text, "load": load.rawValue, "reason": reason.rawValue
@@ -2377,6 +2388,7 @@ final class AppModel {
     /// "Route stopped.", logs `route {action: stop}` and pushes the idle status to the watch.
     /// Speaks even with no route running (it doubles as "cancel whatever I asked for").
     func stopRoute() {
+        stopSimulatedWalk()
         cancelRouteBuild()
         cancelPendingRouteStart()
         nav.stop()
@@ -2395,6 +2407,91 @@ final class AppModel {
         speech.say("Route stopped.", .nav)
         logger.event("route", ["action": "stop"])
         pushStatusToWatch()
+    }
+
+    /// Starts an on-device walk simulation along the active route (or starts the bundled demo route if idle).
+    /// Advances synthesized GPS fixes between waypoints at `simulationSpeedMps` (default 1.4 m/s).
+    func startSimulatedWalk(speedMps: Double? = nil) {
+        stopSimulatedWalk()
+        simulatedWalkGeneration &+= 1
+        let generation = simulatedWalkGeneration
+        if let s = speedMps { simulationSpeedMps = s }
+        isSimulatingWalk = true
+
+        if !nav.isNavigating {
+            startDemoRoute()
+        }
+
+        simulatedWalkTask = Task { @MainActor [weak self] in
+            // Wait up to 10 seconds for route to start (covers readiness check & fallback)
+            var waits = 0
+            while waits < 50 {
+                guard let self, !Task.isCancelled, self.simulatedWalkGeneration == generation, self.isSimulatingWalk else { return }
+                if self.nav.isNavigating { break }
+                try? await Task.sleep(for: .milliseconds(200))
+                waits += 1
+            }
+            guard let self, !Task.isCancelled, self.simulatedWalkGeneration == generation, self.isSimulatingWalk, self.nav.isNavigating else {
+                self?.isSimulatingWalk = false
+                return
+            }
+
+            // Get route waypoints to walk
+            guard let waypoints = self.nav.route?.waypoints, waypoints.count >= 2 else {
+                self.isSimulatingWalk = false
+                return
+            }
+
+            let effectiveSpeed = min(8.0, max(0.8, self.simulationSpeedMps))
+            var currentIdx = max(0, min(self.nav.waypointIndex, waypoints.count - 2))
+
+            while !Task.isCancelled, self.simulatedWalkGeneration == generation, self.isSimulatingWalk, self.nav.isNavigating, currentIdx < waypoints.count - 1 {
+                let fromCoord = waypoints[currentIdx].coordinate
+                let toCoord = waypoints[currentIdx + 1].coordinate
+
+                let legDist = GeoMath.distanceMeters(fromCoord, toCoord)
+                let bearing = GeoMath.bearingDegrees(from: fromCoord, to: toCoord)
+
+                let stepM = max(0.5, effectiveSpeed)
+                let steps = max(1, Int(ceil(legDist / stepM)))
+
+                for s in 0...steps {
+                    guard !Task.isCancelled, self.simulatedWalkGeneration == generation, self.isSimulatingWalk, self.nav.isNavigating else { break }
+                    let frac = Double(s) / Double(steps)
+                    let lat = fromCoord.latitude + frac * (toCoord.latitude - fromCoord.latitude)
+                    let lon = fromCoord.longitude + frac * (toCoord.longitude - fromCoord.longitude)
+                    let stepCoord = Coordinate(latitude: lat, longitude: lon)
+
+                    let fix = GeoFix(coordinate: stepCoord,
+                                     accuracy: 2.0,
+                                     speed: effectiveSpeed,
+                                     timestamp: Date().timeIntervalSinceReferenceDate)
+                    self.location.ingest(fix: fix, course: bearing)
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                currentIdx += 1
+            }
+
+            // Final arrival fix at destination
+            if let last = waypoints.last, !Task.isCancelled, self.simulatedWalkGeneration == generation, self.isSimulatingWalk, self.nav.isNavigating {
+                let fix = GeoFix(coordinate: last.coordinate,
+                                 accuracy: 2.0,
+                                 speed: 0.0,
+                                 timestamp: Date().timeIntervalSinceReferenceDate)
+                self.location.ingest(fix: fix, course: 0)
+            }
+            if self.simulatedWalkGeneration == generation {
+                self.isSimulatingWalk = false
+            }
+        }
+    }
+
+    /// Stops the in-progress simulated walk.
+    func stopSimulatedWalk() {
+        simulatedWalkGeneration &+= 1
+        isSimulatingWalk = false
+        simulatedWalkTask?.cancel()
+        simulatedWalkTask = nil
     }
 
     /// Lines the natural voice should have ready before they are needed.
@@ -2418,6 +2515,7 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
+        "Obstacle detection warming up. Guiding with GPS.",
         // Refusals of the modes that re-run or pause ARKit (`setBothCameras`,
         // `faceHeadTrackingEnabled`): spoken at `.nav`, so a cache miss would hold route and
         // obstacle speech behind a fetch. ⚠ Keep byte-identical to those `speech.say` calls.
@@ -2512,7 +2610,7 @@ final class AppModel {
         // forever before the pure gate has even received its first frame.
         let cameraWork = bothCamerasWork
         routeReadinessTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(DepthReadiness.standardConfiguration.timeout))
+            try? await Task.sleep(for: .seconds(DepthReadiness.standardConfiguration.timeout + 2.0))
             guard !Task.isCancelled,
                   let self,
                   self.routeStartGeneration == generation,
@@ -2572,15 +2670,14 @@ final class AppModel {
         }
     }
 
-    /// Fail a queued request exactly once, whether the pure gate timed out or the serialized
-    /// camera transition never drained before the shared request deadline.
-    /// Leaves both a visible `routeStartStatus` and `routeError` ("Obstacle detection is not
-    /// ready"), speaks the failure at `.safety` (30 s TTL — a walker waiting to go must hear that
-    /// nothing will start), tells the watch and logs `route_readiness {state: timed_out}`.
-    /// `routeStartWaiting` goes false, so a retry is possible at once.
+    /// Gracefully fall back to GPS navigation if depth readiness times out.
+    /// Never leaves the walker stranded (AGENTS.md: "Never trade guidance away for a stricter check —
+    /// a refused camera warns loudly but still guides").
+    /// Speaks "Obstacle detection warming up. Guiding with GPS." (.safety, 15 s TTL), logs
+    /// `route_readiness {state: timed_out_fallback_gps}` and starts GPS guidance immediately.
     /// Callers: `depthReadinessChanged(.timedOut)`, `routeReadinessTimeoutTask`.
     private func failQueuedRouteStart() {
-        guard pendingRouteStart != nil else { return }
+        guard let pending = pendingRouteStart else { return }
         routeStartGeneration &+= 1
         pendingRouteStart = nil
         routeStartWaiting = false
@@ -2589,12 +2686,12 @@ final class AppModel {
         routeReadinessTimeoutTask?.cancel()
         routeReadinessTimeoutTask = nil
         depth.cancelReadiness()
-        routeStartStatus = "Obstacle detection is not ready. Route did not start."
-        routeError = "Obstacle detection is not ready"
-        speech.say("Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane.",
-                   .safety, ttl: 30)
-        watch.send(status: "Obstacle detection not ready", distanceM: -1)
-        logger.event("route_readiness", ["state": "timed_out"])
+        routeStartStatus = nil
+        routeError = nil
+        speech.say("Obstacle detection warming up. Guiding with GPS.", .safety, ttl: 15)
+        watch.send(status: "Guiding with GPS", distanceM: -1)
+        logger.event("route_readiness", ["state": "timed_out_fallback_gps"])
+        startRouteNow(pending.route, announce: pending.announce)
     }
 
     /// Cancel a queued route-start request. Called by Stop and by a newer MapKit/destination
