@@ -31,7 +31,7 @@
 //      item. "route" alone is the CIF demo route; "take me to …" reaches any place.
 //    · Latest wins, with a budget (`ConversationBudget`): every new query cancels a cloud turn still
 //      in flight (that turn logs `conv_turn {superseded: true}` and never speaks); a cloud turn says
-//      "One moment." at 1.5 s and gives up at 4 s ("That is taking too long…", `conv_error
+//      a quiet thinking tick at 1.5 s and 3 s (Step 65) and gives up at 4 s (error tone + "No answer.", `conv_error
 //      {timeout: true}`). A stale completion never speaks. The old `isProcessing` drop is gone.
 //    · Emergency is two utterances (`EmergencyConfirm`): "emergency" speaks the prompt with the
 //      contact's name and number (`.nav`, ttl 8); only "yes" inside 8 s opens `tel:` (the trip log
@@ -99,7 +99,7 @@ final class ConversationCoordinator {
     /// Turn ids the budget timed out, so their cancelled task logs `timed_out`, not `superseded`.
     /// An id is removed when its `conv_turn` is written.
     private var timedOutTurns = Set<Int>()
-    /// Turn ids that spoke "One moment." (`conv_turn.filler_spoken`). Removed when logged.
+    /// Turn ids that played the thinking tick (`conv_turn.filler_spoken`). Removed when logged.
     private var fillerTurns = Set<Int>()
     /// Bumped by every `handleQuery`; only the call holding the latest value clears `isProcessing`.
     private var queryGeneration = 0
@@ -154,8 +154,8 @@ final class ConversationCoordinator {
     /// a blank query (nothing spoken, nothing logged). A cloud turn still in flight is superseded
     /// first (latest wins, Step 57), whichever path the new query takes.
     /// - Parameter rawQuery: the recogniser's transcript or the intent's text; trimmed here.
-    /// Speech TTLs: fast path and no-cloud line 12 s, cloud answer 15 s, error 8 s, filler 3 s,
-    /// timeout 8 s (all `.scene`, one natural voice — Step 54).
+    /// Speech TTLs: fast path and no-cloud line 12 s, cloud answer 15 s, error / timeout "No answer."
+    /// 8 s (after the error tone; the thinking tick replaced the filler, Step 65) (all `.scene`, one natural voice — Step 54).
     func handleQuery(_ rawQuery: String) async {
         guard let model = appModel else { return }
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -200,7 +200,7 @@ final class ConversationCoordinator {
         if FastPathIntentClassifier.isSceneQuestion(query) {
             let accepted = model.askAboutScene(query)
             turn.agentResponse = accepted ? "Checking the scene ahead."
-                                          : SpokenPhrases.describerBusyLine
+                                          : SpokenPhrases.describerBusyText
             history.append(turn: turn)
             lastResponse = turn.agentResponse
             model.logger.event("conv_turn", [
@@ -307,6 +307,9 @@ final class ConversationCoordinator {
             lastResponse = parsed.spokenResponse
 
             if !toolHandledSpeech {
+                // Step 65: a gentle bell first when the answer is long (≥ 100 characters).
+                model.speech.perform(EarconPolicy.feedback(for: .answer(characters: parsed.spokenResponse.count)),
+                                     .scene, ttl: 15)
                 model.speech.say(parsed.spokenResponse, .scene, ttl: 15)
             }
             model.logger.event("conv_turn", [
@@ -330,7 +333,9 @@ final class ConversationCoordinator {
             turn.agentResponse = fallback
             history.append(turn: turn)
             lastResponse = fallback
-            model.speech.say(fallback, .scene, ttl: 8)
+            // Step 65: the same calm failure as a timeout — low double tap, "No answer." — the
+            // longer sentence stays on screen (`lastResponse`) and in the log.
+            model.speech.perform(EarconPolicy.feedback(for: .cloudFailed), .scene, ttl: 8)
             model.logger.event("conv_error", ["query": query, "error": error.localizedDescription,
                                               "budget_ms": Self.ms(since: started),
                                               "filler_spoken": fillerTurns.remove(id) != nil])
@@ -338,7 +343,8 @@ final class ConversationCoordinator {
     }
 
     /// Drives the budget for turn `id` every `UtteranceEndDetector.checkInterval` (0.25 s): speaks
-    /// "One moment." once at 1.5 s, and at 4 s cancels `task`, speaks the timeout line and logs
+    /// the thinking tick at 1.5 s and 3 s, and at 4 s cancels `task`, plays the error tone, speaks
+    /// "No answer." and logs
     /// `conv_error {timeout: true}`. Exits as soon as the turn is no longer the live one.
     private func runBudgetTicker(id: Int, query: String, turn: ConversationTurn, task: Task<Void, Never>) async {
         while !Task.isCancelled {
@@ -347,9 +353,10 @@ final class ConversationCoordinator {
             switch budget.tick(now: Self.clock()) {
             case .none:
                 continue
-            case .speakFiller:
+            case .thinking:
+                // Step 65: a quiet tick at 1.5 s and 3 s, never the words "One moment.".
                 fillerTurns.insert(id)
-                model.speech.say(ConversationBudget.fillerLine, .scene, ttl: 3)
+                model.speech.perform(EarconPolicy.feedback(for: .thinking), .scene, ttl: 3)
             case .timeout:
                 timedOutTurns.insert(id)
                 task.cancel()
@@ -357,7 +364,8 @@ final class ConversationCoordinator {
                 timedOut.agentResponse = ConversationBudget.timeoutLine
                 history.append(turn: timedOut)
                 lastResponse = ConversationBudget.timeoutLine
-                model.speech.say(ConversationBudget.timeoutLine, .scene, ttl: 8)
+                // Step 65: the low double tap, then "No answer.".
+                model.speech.perform(EarconPolicy.feedback(for: .timedOut), .scene, ttl: 8)
                 model.logger.event("conv_error", ["query": query, "error": "timeout", "timeout": true,
                                                   "budget_ms": Int(ConversationBudget.budget * 1000)])
                 return
@@ -480,10 +488,10 @@ final class ConversationCoordinator {
             return (VoiceMenu.Item.route.confirmationLine, true) // the route intro / depth wait speaks
 
         case .describeScene:
-            // `describeScene` speaks "Still describing the previous scene." itself when busy.
+            // `describeScene` plays the busy earcon itself when a description is running (Step 65).
             let accepted = model.describeScene(trigger: .voice)
             return accepted ? (VoiceMenu.Item.describe.confirmationLine, false)
-                            : (SpokenPhrases.describerBusyLine, true)
+                            : (SpokenPhrases.describerBusyText, true)
 
         case .speakStatus:
             model.speakStatus() // speaks every clause at .scene

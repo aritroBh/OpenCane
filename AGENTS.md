@@ -308,8 +308,8 @@ bench has *disproved* must never sit in the file as though it were settled — m
 - Silencing haptics routes obstacle cues to the watch and to speech. "Head height." is spoken at a head
   episode's onset (onset lines ≥ 4 s apart) and once more under 0.6 m, never every second. Warnings never wait for the ElevenLabs network.
 - **One voice, and answers wait up to 2.5 s for it** (Steps 53–54, owner decision 2026-09-13). Nothing
-  passes `immediate: true` any more (the parameter is gone): a conversational answer, "One moment." and
-  "I did not catch that." take the same path as a route line — cached → ElevenLabs at once, uncached →
+  passes `immediate: true` any more (the parameter is gone): a conversational answer, "No answer." and
+  "I did not catch that." (Step 65: the waiting words are now earcons) take the same path as a route line — cached → ElevenLabs at once, uncached →
   a 2.5 s race (`VoiceEngineChoice.raceDeadline`), system voice only if the fetch fails or times out.
   "Warnings never wait for the network" is unchanged: an uncached `.obstacle` / `.safety` line is the
   system voice now (the launch prefetch puts the safety lines first). The breaker (`VoiceBreaker`) is

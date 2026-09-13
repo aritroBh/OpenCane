@@ -27,8 +27,9 @@
 //
 //  Owner / callers: `FastPathIntentClassifier.classify` (rule 0: `match`, `verb`, `confirmation`),
 //  `ConversationCoordinator.executeAction` (`confirmationLine`, `helpLine`), `AppModel` (speaks
-//  `menuLine` after "OpenCane ready."), `SpokenPhrases.shellLines`.
-//  Tests: VoiceMenuTests.swift (9).
+//  `launchMenuLine(firstLaunch:)` after "OpenCane ready." — the full `menuLine` once after install,
+//  then `shortMenuLine`, Step 65), `SpokenPhrases.shellLines`.
+//  Tests: VoiceMenuTests.swift (10).
 //
 
 import Foundation
@@ -117,6 +118,20 @@ public enum VoiceMenu {
     /// "help" the numbered `helpLine` is read; this is the short form. ⚠ Exact bytes are pinned by
     /// `menuLineIsTheEightWords`: it is prefetched and matched by the self-hear filter as clauses.
     public static let menuLine = "Say route, where am I, describe, status, repeat, quiet, help, or emergency."
+
+    /// The launch menu on every launch after the first (Step 65, calm feedback): three words, 31
+    /// characters instead of 76. "help" still reads the whole numbered list. ⚠ Exact bytes pinned by
+    /// `shortMenuLineIsThreeWordsAndTheFullMenuOnlyOnFirstLaunch`; prefetched via
+    /// `SpokenPhrases.shellLines`.
+    public static let shortMenuLine = "Say route, where am I, or help."
+
+    /// Which menu `AppModel.speakMenuThenListen` speaks after "OpenCane ready.".
+    /// - Parameter firstLaunch: no launch has spoken a menu since install (persisted flag
+    ///   `heardFullVoiceMenu` in the app).
+    /// - Returns: `menuLine` on the first launch, `shortMenuLine` afterwards.
+    public static func launchMenuLine(firstLaunch: Bool) -> String {
+        firstLaunch ? menuLine : shortMenuLine
+    }
 
     /// The numbered list read on "help" / seven: "One, route. Two, where am I. … Eight, emergency.
     /// Or say stop to end the route." Built from the items so it cannot drift from them

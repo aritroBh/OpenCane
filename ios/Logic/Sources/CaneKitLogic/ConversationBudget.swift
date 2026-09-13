@@ -8,13 +8,15 @@
 //  bound, a second question during one was dropped, and the walker heard "Still working on your
 //  last question." several times. A blind walker cannot see a spinner: silence past a second or
 //  two reads as "it did not hear me", so they ask again — and the app must then answer the *new*
-//  question, not the old one. This type decides, from a clock the caller passes, when to say
-//  "One moment.", when to give up, and which completion is still the live one.
+//  question, not the old one. This type decides, from a clock the caller passes, when to play the
+//  quiet thinking tick (Step 65; it used to say "One moment."), when to give up, and which
+//  completion is still the live one.
 //
 //  Key invariants:
 //    · Only the cloud path begins a turn. Fast-path and scene answers never start the clock
 //      (`fastPathTurnsNeverStartTheClock`).
-//    · The filler is spoken once per turn, at `fillerAfter` (`fillerFiresOnceAtOneAndAHalfSeconds`).
+//    · The thinking tick fires at `fillerAfter` and once more at `thinkingRepeatAfter`, never a
+//      third time (`thinkingTicksAtOneAndAHalfAndThreeSeconds`).
 //    · At `budget` the turn times out exactly once; afterwards the turn is not in flight and a late
 //      completion is refused (`timeoutAtFourSeconds`).
 //    · `begin` while a turn is in flight supersedes it: the old id is refused forever
@@ -34,35 +36,42 @@ import Foundation
 /// Filler-and-timeout clock for one cloud turn; latest query wins.
 public struct ConversationBudget: Sendable, Equatable {
 
-    /// Seconds of silence before "One moment." is spoken. [H] 1.5 s: the longest pause that still
-    /// reads as "heard you" (the same number as `UtteranceEndDetector.silenceAfterSpeech`, for
-    /// the same reason — a breath, not a wait).
+    /// Seconds of silence before the first quiet thinking tick (`Earcon.thinking`; Step 65 replaced
+    /// the spoken "One moment."). [H] 1.5 s: the longest pause that still reads as "heard you" (the
+    /// same number as `UtteranceEndDetector.silenceAfterSpeech`, for the same reason).
     public static let fillerAfter: Double = 1.5
+
+    /// Seconds after which the thinking tick plays once more (Step 65). [H] 3 s.
+    public static let thinkingRepeatAfter: Double = 3.0
+
+    /// Most thinking ticks per turn: the one at `fillerAfter` and the one at `thinkingRepeatAfter`.
+    public static let maxThinkingTicks = 2
 
     /// Seconds after which the cloud turn is abandoned and `timeoutLine` spoken. [H] 4 s: past it
     /// the walker on the first walk had already asked again.
     public static let budget: Double = 4.0
 
-    /// Spoken once at `fillerAfter`. Prefetched (`SpokenPhrases.shellLines`), so it is natural voice.
-    public static let fillerLine = "One moment."
-
-    /// Spoken at `budget`. Prefetched. It tells the walker what to do, not what went wrong.
-    public static let timeoutLine = "That is taking too long. Ask again in a moment."
+    /// Spoken at `budget`, after the low `Earcon.error` double tap (Step 65: was "That is taking too
+    /// long. Ask again in a moment.", 47 characters). Also the words after a failed cloud turn.
+    /// Prefetched (`SpokenPhrases.shellLines`).
+    public static let timeoutLine = "No answer."
 
     /// What the ticker should do now.
     public enum Event: Sendable, Equatable {
         /// Nothing.
         case none
-        /// Speak `fillerLine` (once per turn).
-        case speakFiller
-        /// Cancel the cloud task, speak `timeoutLine`, log `conv_error {timeout: true}`.
+        /// Play the quiet `Earcon.thinking` tick (at `fillerAfter`, again at `thinkingRepeatAfter`).
+        case thinking
+        /// Cancel the cloud task, play `Earcon.error`, speak `timeoutLine`, log `conv_error {timeout: true}`.
         case timeout
     }
 
     /// The id of the live turn, nil when nothing is in flight.
     public private(set) var inFlightID: Int?
-    /// Whether the live turn has already spoken the filler (`conv_turn.filler_spoken`).
-    public private(set) var fillerSpoken = false
+    /// Thinking ticks played for the live turn (0…`maxThinkingTicks`).
+    public private(set) var thinkingTicks = 0
+    /// Whether the live turn has ticked at least once (`conv_turn.filler_spoken`, name kept for the log).
+    public var fillerSpoken: Bool { thinkingTicks > 0 }
     /// When the live turn began (the caller's clock).
     private var startedAt: Double = 0
     /// Monotonic id source; never reused within one instance.
@@ -77,7 +86,7 @@ public struct ConversationBudget: Sendable, Equatable {
         nextID += 1
         inFlightID = nextID
         startedAt = now
-        fillerSpoken = false
+        thinkingTicks = 0
         return nextID
     }
 
@@ -92,9 +101,10 @@ public struct ConversationBudget: Sendable, Equatable {
             inFlightID = nil
             return .timeout
         }
-        if !fillerSpoken, elapsed >= Self.fillerAfter {
-            fillerSpoken = true
-            return .speakFiller
+        let due = thinkingTicks == 0 ? Self.fillerAfter : Self.thinkingRepeatAfter
+        if thinkingTicks < Self.maxThinkingTicks, elapsed >= due {
+            thinkingTicks += 1
+            return .thinking
         }
         return .none
     }

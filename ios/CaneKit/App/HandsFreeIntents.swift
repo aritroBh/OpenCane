@@ -129,7 +129,7 @@ extension AppModel {
     /// - Parameter question: what the walker said; Siri's transcription arrives unedited and is
     ///   cleaned by `QuestionPrompt.clean`.
     /// - Returns: false when nothing was sent — a wordless question (spoken "I did not catch a
-    ///   question.") or a description already in flight ("Still describing the previous scene.").
+    ///   question.") or a description already in flight (`Earcon.busy`, two soft taps — Step 65).
     ///   Without a cloud model the question is downgraded to a plain description, which still
     ///   returns true. The outcome is logged later as `describe_result` with `question`.
     /// Logs `ask {question, provider}` first, so a question that never produced an answer is visible.

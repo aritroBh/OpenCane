@@ -17,18 +17,33 @@ working, and set the **Action button** to **Talk to OpenCane** (steps at the bot
 Siri needs the app's name in every phrase. Inside the app you do not: OpenCane has its own short
 phone menu (Steps 56–59).
 
-- **Open the app.** It says "OpenCane ready." and then the menu: *"Say route, where am I, describe,
-  status, repeat, quiet, help, or emergency."* The listen-on-launch and the follow-up window after
-  an answer are the voice-shell integration (part 2): until they land, tap to talk.
+- **Open the app.** It says "OpenCane ready." and then the short menu: *"Say route, where am I, or
+  help."* (the whole eight-word menu is read only on the very first launch after install; "help"
+  reads it any time). Then a soft rising two-note: the microphone is open, say one word.
 - **Tap the middle of the screen to talk.** The Guide page is one giant microphone surrounded by
   rings (at least 60 % of the page). The rings ripple while it listens and breathe while it speaks.
   Say one word; it stops listening by itself 1.5 s after you finish.
 - **Words and digits both work.** "status" and "four" are the same. "help" reads the numbered list.
 - **The eight words never go to the network.** They are matched on the phone, as the whole thing you
   said: "route" starts the route, "the route is long" does not.
-- **Quick answers, or an honest wait.** An open question goes to the cloud model: you hear
-  "One moment." after 1.5 s, and an answer or "That is taking too long. Ask again in a moment." by
+- **Quick answers, or an honest wait.** An open question goes to the cloud model: a faint tick at
+  1.5 s (and once more at 3 s) while it thinks, and an answer or a low double tap + "No answer." by
   4 s. Ask something new at any time — the newest question wins, the old answer is thrown away.
+- **What you hear instead of words (Step 65, calm feedback).** Every sound is under 0.18 s, quiet,
+  and comes with a soft tap on the cane; none plays over "Head height.".
+
+  | Sound | Means |
+  |---|---|
+  | soft rising two notes | the microphone is open — talk (quieter after an answer: you *may* talk) |
+  | one short high tap | heard you |
+  | soft falling two notes | heard nothing (the second time in a row it also says "I did not catch that.") |
+  | faint tick | still working — a slow answer, or obstacle detection warming up before a route (at most three) |
+  | two soft same taps | still describing the last scene; this one was dropped |
+  | gentle bell | a long answer follows, or the route is starting ("Starting.") |
+  | low double tap | that did not work — "No answer." |
+
+  A listening window the app opened by itself (at launch, after an answer) that hears nothing closes
+  with no sound at all.
 
 ## 1b. The eight words
 
@@ -55,7 +70,7 @@ the phone's pedometer, and the outdoor GPS route takes over once you are outside
 - **Say "take me from ISR to CIF"** (also "from Townsend to CIF", "go from the lab to CIF", "take me
   to CIF from ISR"). If the place you start from has an indoor route, OpenCane reads its first step
   ("Start in the Townsend first floor south corridor. …"). A route nobody has walked yet begins with
-  "This indoor route has not been walked yet. Use your cane and ask for help if it seems wrong."
+  "Draft route. Use your cane."
   A starting place with no indoor route is an ordinary "take me to CIF".
 - **Walk.** Each step's line comes a little before its count is reached (so a turn is announced
   before the turn); landmarks ("The main desk is on your right.") come about two thirds of the way.
@@ -256,11 +271,12 @@ The answer is held to the same rules as "Where am I":
 - If there is no cloud key set up, it says so and describes the scene instead — the on-device model
   cannot read a question.
 
-**Latency (Step 57).** A question to the cloud model has a 4-second budget. Silence past a second
-reads as "it did not hear me", so at 1.5 s you hear "One moment."; at 4 s the app gives up and says
-"That is taking too long. Ask again in a moment." A second question while the first is still
-thinking cancels the first — its answer, if it arrives, is never spoken. The trip log shows each turn
-with `budget_ms`, `filler_spoken`, `superseded` and `timed_out`.
+**Latency (Step 57, calm feedback Step 65).** A question to the cloud model has a 4-second budget.
+Silence past a second reads as "it did not hear me", so a short tap confirms the microphone heard you,
+and a faint tick plays at 1.5 s and once more at 3 s; at 4 s the app gives up with a low double tap
+and "No answer." A second question while the first is still thinking cancels the first — its answer,
+if it arrives, is never spoken, and makes no sound. The trip log shows each turn with `budget_ms`,
+`filler_spoken` (a tick played), `superseded` and `timed_out`, and every tone as `earcon`.
 
 An answer is spoken at the lowest priority of anything the app says. An obstacle warning, a route
 instruction or "Head height." will cut it off mid-sentence. That is correct.

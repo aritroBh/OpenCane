@@ -609,6 +609,12 @@ final class SpeechQueue {
     /// engine_reason}` (a separate kind, so `e2e.py`'s `speech` assertions keep their meaning).
     /// Fires under `muted` too. Also forwards the text to `VoiceInputEngine.noteDispatched` (Step 55).
     @ObservationIgnored var onDispatch: ((String, SpeechPriority, Int, Int, VoiceEngineDecision) -> Void)?
+    /// Every earcon request (Step 65): the tone, whether it actually played, and why not
+    /// (`muted`, `safety_speaking`, `player_failed`; "" when it played). Main actor; set by
+    /// `AppModel.start()`, logged as `earcon {name, played, reason}` (never a field named `t` / `kind`).
+    @ObservationIgnored var onEarcon: ((Earcon, Bool, String) -> Void)?
+    /// The calm-feedback tone player (Step 65). Plays in this queue's session; never changes it.
+    @ObservationIgnored private let earconPlayer = EarconPlayer()
     /// How a dispatched line's engine was finally settled (Step 53): `race_won` / `race_timeout` /
     /// `race_failed` with the milliseconds since the race started, or `playback_failed` (an mp3 that
     /// would not play; wait 0). Arguments: the whole line, the outcome, `wait_ms`. Main actor; set by
@@ -1147,6 +1153,40 @@ final class SpeechQueue {
         }
         speakNow(line, priority, expires: expires)
         return true
+    }
+
+    // MARK: Calm feedback (Step 65)
+
+    /// Plays a short tone (`Earcon`) unless `EarconPolicy.gate` refuses: never under `muted`
+    /// automation, never while a `.safety` line is playing. Not a line: nothing is queued, nothing
+    /// ducks, `isSpeaking` is untouched, and no audio-session call is made (hard rule 7).
+    /// The soft haptic goes with every tone except `.listening` (the 1519 system haptic already marks it).
+    /// Logs through `onEarcon`.
+    /// - Parameters:
+    ///   - earcon: the tone.
+    ///   - gainOffsetDB: level change, ≤ 0.
+    /// - Returns: true when it played.
+    /// Callers: `perform`, `AppModel` (route warm-up ticks).
+    @discardableResult
+    func playEarcon(_ earcon: Earcon, gainOffsetDB: Double = 0) -> Bool {
+        let safetySpeaking = isSpeaking && currentPriority == .safety
+        switch EarconPolicy.gate(muted: Self.muted, safetySpeaking: safetySpeaking) {
+        case .skip(let reason):
+            onEarcon?(earcon, false, reason)
+            return false
+        case .play:
+            let played = earconPlayer.play(earcon, gainOffsetDB: gainOffsetDB, haptic: earcon != .listening)
+            onEarcon?(earcon, played, played ? "" : "player_failed")
+            return played
+        }
+    }
+
+    /// Acts on one `EarconPolicy.Feedback`: the tone first (`playEarcon`), then the words, if any,
+    /// through `say` at `priority` / `ttl`.
+    /// Callers: `VoiceInputEngine`, `ConversationCoordinator`, `SceneDescriber`, `AppModel`.
+    func perform(_ feedback: EarconPolicy.Feedback, _ priority: SpeechPriority, ttl: TimeInterval) {
+        if let earcon = feedback.earcon { playEarcon(earcon, gainOffsetDB: feedback.gainOffsetDB) }
+        if let line = feedback.line { say(line, priority, ttl: ttl) }
     }
 
     /// Put the line now playing back at the *front* of its priority band, to resume from the clause it

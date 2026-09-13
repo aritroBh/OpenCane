@@ -214,10 +214,9 @@ import Testing
 /// never retyped (a one-byte drift is a silent flip to the system voice).
 @Test func everyLineTheShellCanSpeakIsPrefetched() {
     let prefetched = Set(SpokenPhrases.shellLines)
-    var spoken: [String] = [VoiceMenu.menuLine, VoiceMenu.helpLine,
-                            ConversationBudget.fillerLine, ConversationBudget.timeoutLine,
-                            SpokenPhrases.notHeardLine, SpokenPhrases.describerBusyLine,
-                            HeadCoverNotice.line]
+    var spoken: [String] = [VoiceMenu.shortMenuLine, VoiceMenu.menuLine, VoiceMenu.helpLine,
+                            ConversationBudget.timeoutLine, EarconPolicy.routeReadyLine,
+                            SpokenPhrases.notHeardLine, HeadCoverNotice.line]
     spoken += VoiceMenu.Item.allCases.map(\.confirmationLine)
     spoken += EmergencyConfirm.fixedLines
     spoken += StatusSummary.fixedLines
@@ -226,5 +225,18 @@ import Testing
         #expect(prefetched.contains(line), "not prefetched: \(line)")
     }
     #expect(SpokenPhrases.notHeardLine == "I did not catch that.")
-    #expect(SpokenPhrases.describerBusyLine == "Still describing the previous scene.")
+}
+
+/// Step 65 (calm feedback): the waiting words became tones, so they are no longer prefetched —
+/// paying ElevenLabs for a line nobody hears is the quiet way this set rots. The busy text is still
+/// shown on screen (`describerBusyText`), never spoken.
+@Test func replacedWaitingLinesAreNotPrefetched() {
+    let prefetched = Set(SpokenPhrases.shellLines)
+    for gone in ["One moment.", "Still describing the previous scene.",
+                 "That is taking too long. Ask again in a moment.",
+                 "Obstacle detection warming up. Route will start when it is ready."] {
+        #expect(!prefetched.contains(gone), "still prefetched: \(gone)")
+    }
+    #expect(!prefetched.contains(SpokenPhrases.describerBusyText))
+    #expect(prefetched.contains("No answer.") && prefetched.contains("Starting."))
 }

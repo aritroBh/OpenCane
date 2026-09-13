@@ -276,7 +276,13 @@ public final class CueDecider {
         // say. Inside a live episode with no closer band to cross, the head zone is quiet and the
         // next cue plays (review 2026-09-13, OpenCode: the old branch `.stop`ped the centre loop and
         // left the walker with no proximity feedback until a band was crossed).
-        let headSpeaks = zoneActive[.head]! && (headEpisode == nil || bandWouldFire(distance: headD, now: now))
+        // An onset needs a finite gated distance on *this* frame (Step 66, `noHeadOnsetOnANonFiniteDistance`):
+        // the point-blank dropout latch may keep the zone (and a live episode) alive across a blind
+        // frame, but it must never start a new "Head height." for a cell `HeadGate` rejects now
+        // (uncovered, or near in both bands = a wall). A real saturation is finite here: `NearHold`
+        // substitutes 0.1 m for a blind cell after a near reading.
+        let headSpeaks = zoneActive[.head]!
+            && ((headEpisode == nil && headD.isFinite) || bandWouldFire(distance: headD, now: now))
         let desired: HapticCue? =
             headSpeaks ? .head(distance: headD, onset: headEpisode == nil) :
             zoneActive[.center]! ? .centerApproach(distance: max(thresholds.centerNear, effCenterD)) :
@@ -302,7 +308,13 @@ public final class CueDecider {
             return nil
         }
 
-        if desired.kind != active {
+        // A head onset while `active` is still `.head` from an episode that has since ended (Step 66,
+        // `headOnsetFiresAfterAGatedHandoffAndALongSweep`): the change gate held the hand-off to another
+        // cue, a sweep outlasted the 2 s clock, and the "same cue still active" branch below would treat
+        // the returning overhang as a band re-fire with no episode — silent until the zone cleared.
+        let onsetWhileHeadActive: Bool
+        if case .head(_, true) = desired { onsetWhileHeadActive = active == .head } else { onsetWhileHeadActive = false }
+        if desired.kind != active || onsetWhileHeadActive {
             guard now - lastChange >= thresholds.minChangeInterval else { return nil }
             if case .head(let d, let onset) = desired {
                 // A head onset is never held by a repeat floor (hard rule 8): it fires the moment

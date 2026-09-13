@@ -2,6 +2,76 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 65 — calm feedback: tones instead of waiting words (Sun Sep 13)
+
+Owner, verbatim: "make sure it's not over stimulating again like with the amount of questions with
+the loading etc — make it nice, maybe a little tap or bell and then it releases something; don't
+over-stimulate the blind person too much or else they won't listen."
+
+**Evidence.** Phone log `canekit-2026-09-13T08-51-14Z.jsonl`, `speech_dispatch` records: before the
+launch listen opened (11 s) the walker heard "OpenCane ready." (15), the eight-word menu (76) and
+"Still describing the previous scene." (36) = **126 characters**; around one question ("Yo yo yo",
+11–34 s) the description, "One moment." (11), "Still describing the previous scene." (36) and "That is
+taking too long. Ask again in a moment." (47) = **175 characters**, 94 of them about waiting.
+
+**Replay count** (the same log, each replaced line mapped to its Step 65 form, scratch script):
+
+| Moment | Before | After |
+|---|---|---|
+| Launch (not the first after install) | 126 chars: ready + 76-char menu + busy line | **46 chars**: "OpenCane ready." + "Say route, where am I, or help." (31); busy → two soft taps; rising two-note as the mic opens |
+| First launch after install | 91 chars | 91 chars (the full menu once; then the flag `heardFullVoiceMenu`) |
+| One question | 175 chars (94 waiting words) | **91 chars** (the answer + "No answer."): tap, tick, busy taps, error double tap |
+| First 51 s of the walk | 394 chars | 230 chars |
+| Route start (LiDAR phone) | "Obstacle detection warming up. Route will start when it is ready." (66) + intro | ≤ 3 faint ticks, bell, "Starting." (9) + intro |
+| Indoor draft caveat | 92 chars | "Draft route. Use your cane." (27) |
+
+**What changed**
+1. `Earcon` + `EarconPolicy` (CaneKitLogic, new): seven tones — `listening` (C5→G5), `heard` (C6 tap),
+   `nothing` (E5→B4), `thinking` (A6 20 ms, −28 dBFS), `busy` (D5 ×2), `done` (E6 bell), `error`
+   (B♭3, G3) — each ≤ 180 ms and ≤ −12 dBFS measured on the synthesized samples, silent edges, an
+   in-memory 16-bit WAV. `EarconPolicy.feedback(for:)` is the table of tone vs words per event
+   (`docs/design.md` §5.1 "Earcons"). Tests first: `EarconTests` (14) did not compile (red), then green.
+2. `EarconPlayer` (app, new) plays them with `AVAudioPlayer(data:)` in the session `SpeechQueue`
+   already owns — no `setCategory` / `setActive` (hard rule 7) — plus a soft impact haptic (not for
+   `listening`, which keeps the 1519 haptic). `SpeechQueue.playEarcon` applies `EarconPolicy.gate`:
+   silent under `muted` automation and never while a `.safety` line plays; not a queued line, ducks
+   nothing. Log: `earcon {name, played, reason}`.
+3. Launch: `VoiceMenu.shortMenuLine` "Say route, where am I, or help."; the full `menuLine` only on the
+   first launch after install; "help" still reads everything.
+4. Question flow: rising two-note as the mic opens (−8 dB for a follow-up window) → tap when it
+   closes with words → `ConversationBudget` thinking tick at 1.5 s and 3 s (no "One moment.") → answer
+   (bell first when ≥ 100 characters) or error double tap + **"No answer."** at 4 s (the cloud-failure
+   path too; "I could not process that request right now." stays on screen only). Superseded turn:
+   nothing. Empty press: falling note, "I did not catch that." only on the second empty press in a
+   row; an empty launch / follow-up window: no sound.
+5. "Where am I" while describing: two soft taps (`SceneDescriber`), `SpokenPhrases.describerBusyText`
+   stays as the on-screen / log text only.
+6. Route warm-up: the sentence is gone; `thinking` every 2 s (max 3) while depth warms up, then the
+   bell and "Starting." before the intro. The GPS-fallback and tracking-limited lines (`.safety`) and
+   every refusal stay words.
+7. Indoor draft caveat `IndoorProgress.notWalkedLine` = "Draft route. Use your cane.".
+8. Prefetch: `SpokenPhrases.shellLines` drops "One moment." and "Still describing the previous scene.",
+   the timeout is now "No answer.", adds `shortMenuLine` and "Starting."; `AppModel.commonLines` drops
+   the warm-up sentence and its duplicate "I did not catch that.". Pinned by
+   `replacedWaitingLinesAreNotPrefetched` and `everyLineTheShellCanSpeakIsPrefetched`.
+
+**Kept as words, deliberately:** "Nothing to confirm." (the answer to a stray "yes"), every safety,
+refusal, permission and route line. e2e asserts on `speech` records only (route start, waypoints,
+veer, arrival summary); none of the replaced lines was a `speech` record, and the simulator has no
+LiDAR, so it never queued a warm-up. UI-test labels unchanged.
+
+**Verification.** `swift test` (Logic) → **861 tests in 22 suites passed** (was 845; +14
+`EarconTests`, +1 VoiceMenu, +1 SpokenPhrases). `make gen` exit 0 (new file), `make sim` →
+**BUILD SUCCEEDED**. Not run this step: `make uitest`, `make e2e`, the multi-agent / Muse /
+Antigravity review round.
+
+**Not verified / open:** iOS may mute `UIImpactFeedbackGenerator` and the 1519 system haptic while the
+session is recording (`listening` / `heard` happen at the mic edges); tone levels are [H] until heard on
+the cane over AirPods and the street.
+
+test on device: open the app twice (full menu the first time, short after), press and say nothing twice,
+ask a slow question, say "where am I" twice fast, say "route" on the LiDAR phone — checklist §1.
+
 ## Steps 62 + 64 review round (Muse, OpenCode, Codex, Antigravity) (Sun Sep 13)
 
 Every finding was read against the code before acting. Logic tests were written first: the new API
