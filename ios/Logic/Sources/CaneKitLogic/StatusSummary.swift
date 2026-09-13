@@ -142,13 +142,18 @@ public struct VoiceFacts: Sendable, Equatable {
     /// Share (0…1) of the launch vocabulary — every safety line and every fixed line
     /// (`AppModel.voiceReadyLines`) — already on disk (`SpeechQueue.cachedShare(of:)`).
     public var cachedShare: Double
+    /// ElevenLabs refused the key this session (quota used up, revoked key, wrong voice):
+    /// `SpeechQueue.naturalVoiceUnavailable`.
+    public var unavailable: Bool
 
-    /// Memberwise, every field required.
-    public init(hasKey: Bool, naturalEnabled: Bool, breakerOpen: Bool, cachedShare: Double) {
+    /// Memberwise; `unavailable` defaults to false.
+    public init(hasKey: Bool, naturalEnabled: Bool, breakerOpen: Bool, cachedShare: Double,
+                unavailable: Bool = false) {
         self.hasKey = hasKey
         self.naturalEnabled = naturalEnabled
         self.breakerOpen = breakerOpen
         self.cachedShare = cachedShare
+        self.unavailable = unavailable
     }
 }
 
@@ -347,7 +352,7 @@ public enum StatusSummary {
     /// Pinned by `voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached`,
     /// `voiceClauseNamesTheSystemVoiceAndWhy`.
     public static func voiceReady(_ v: VoiceFacts) -> Bool {
-        v.hasKey && v.naturalEnabled && !v.breakerOpen && v.cachedShare >= voiceReadyShare
+        !v.unavailable && v.hasKey && v.naturalEnabled && !v.breakerOpen && v.cachedShare >= voiceReadyShare
     }
 
     /// The voice clause. The system voice always says why (no key / your setting / unreachable, in
@@ -358,6 +363,7 @@ public enum StatusSummary {
     public static func voiceLine(_ v: VoiceFacts) -> String {
         guard v.hasKey else { return "System voice. No natural voice key." }
         guard v.naturalEnabled else { return "System voice, by your setting." }
+        guard !v.unavailable else { return "System voice. The natural voice account is out of credit or refused the key." }
         guard !v.breakerOpen else { return "Natural voice unreachable. Using the system voice." }
         if voiceReady(v) { return "Natural voice ready." }
         // The epsilon keeps 0.29 × 100 = 28.999… from reading 28; the cap keeps it under 100.

@@ -80,6 +80,11 @@ public enum VoiceEngineReason: String, Sendable, Equatable, CaseIterable {
     /// the system voice at once (`SpeechQueue.armWatchdog`, Step 51a): a stalled backend must not
     /// swallow "Head height.". Not a `decide` outcome; set by the queue.
     case watchdogFallback = "watchdog_fallback"
+    /// ElevenLabs refused the key: quota used up (HTTP 401 `quota_exceeded`), a revoked key, or a
+    /// voice / model the account cannot use (401 / 403 / 422, `VoicePrefetch.isFatal`). The whole
+    /// session then speaks in the system voice — cached lines too — so the walker hears one voice,
+    /// not the natural voice for old lines and Apple's for new ones (first-launch report, 2026-09-13).
+    case naturalUnavailable = "natural_unavailable"
 }
 
 /// One decision: the engine and the reason, as written to the trip log.
@@ -113,14 +118,18 @@ public enum VoiceEngineChoice {
     ///   - cached: the exact line's mp3 is on disk.
     ///   - isWarning: the line is `.obstacle` or `.safety`.
     ///   - breakerOpen: `VoiceBreaker.isOpen`.
+    ///   - naturalUnavailable: the service refused the key this session (`naturalUnavailable`
+    ///     reason); checked before the cache so the session stays in one voice.
     /// - Returns: the engine and the reason. `.race` means the caller must start the fetch and
     ///   the `raceDeadline` timer and log the outcome as a `speech_engine` record.
     /// Pinned by the first seven tests of `VoiceEngineChoiceTests`.
     public static func decide(muted: Bool = false, hasKey: Bool, naturalEnabled: Bool, cached: Bool,
-                              isWarning: Bool, breakerOpen: Bool) -> VoiceEngineDecision {
+                              isWarning: Bool, breakerOpen: Bool,
+                              naturalUnavailable: Bool = false) -> VoiceEngineDecision {
         if muted { return VoiceEngineDecision(engine: .muted, reason: .muted) }
         guard hasKey else { return VoiceEngineDecision(engine: .system, reason: .noKey) }
         guard naturalEnabled else { return VoiceEngineDecision(engine: .system, reason: .naturalOff) }
+        guard !naturalUnavailable else { return VoiceEngineDecision(engine: .system, reason: .naturalUnavailable) }
         if cached { return VoiceEngineDecision(engine: .natural, reason: .cached) }
         if isWarning { return VoiceEngineDecision(engine: .system, reason: .warningMiss) }
         if breakerOpen { return VoiceEngineDecision(engine: .system, reason: .breakerOpen) }
@@ -138,7 +147,7 @@ public enum VoiceEngineChoice {
         case .muted: return .muted
         case .race: return .race
         case .raceTimeout, .raceFailed, .playbackFailed, .noKey, .naturalOff, .warningMiss, .breakerOpen,
-             .watchdogFallback:
+             .watchdogFallback, .naturalUnavailable:
             return .system
         }
     }
@@ -171,6 +180,7 @@ public enum VoiceEngineChoice {
         case .raceFailed: why = "natural voice fetch failed"
         case .playbackFailed: why = "natural voice file would not play"
         case .watchdogFallback: why = "warning repeated after a stall"
+        case .naturalUnavailable: why = "ElevenLabs refused the key or its quota is used up"
         }
         return "\(voice) · \(why)"
     }

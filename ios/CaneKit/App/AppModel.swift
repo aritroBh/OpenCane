@@ -360,6 +360,7 @@ final class AppModel {
         didSet {
             Settings.set(naturalVoiceEnabled, "useNaturalVoice")
             speech.useNaturalVoice = naturalVoiceEnabled
+            if naturalVoiceEnabled { speech.retryNaturalVoice() }   // e.g. after topping up the account
             logger.event("voice_backend", ["natural": naturalVoiceEnabled, "by": "settings",
                                            "key": speech.naturalVoice != nil])
         }
@@ -371,7 +372,8 @@ final class AppModel {
     func voiceFacts() -> VoiceFacts {
         VoiceFacts(hasKey: speech.naturalVoice != nil, naturalEnabled: naturalVoiceEnabled,
                    breakerOpen: speech.naturalVoiceOffline,
-                   cachedShare: speech.cachedShare(of: Self.voiceReadyLines))
+                   cachedShare: speech.cachedShare(of: Self.voiceReadyLines),
+                   unavailable: speech.naturalVoiceUnavailable)
     }
     /// Whether OpenCane speaks the voice menu and starts listening at launch (disabled in automation).
     var listenOnLaunch: Bool = Settings.bool("listenOnLaunch", default: true) {
@@ -1290,6 +1292,10 @@ final class AppModel {
             ])
         }
         // The session-sticky natural-voice breaker opening or closing (Step 54, `VoiceBreaker`).
+        // Refused key (quota used up / revoked / wrong voice): the session is now one system voice.
+        speech.onNaturalVoiceUnavailable = { [weak self] message in
+            self?.logger.event("voice_backend", ["natural": false, "by": "refused", "error": message])
+        }
         speech.onBreakerChanged = { [weak self] open, reason in
             self?.logger.event("voice_breaker", ["open": open, "reason": reason])
         }

@@ -102,6 +102,7 @@ import Testing
         .warningMiss: "warning_miss", .breakerOpen: "breaker_open", .race: "race",
         .raceWon: "race_won", .raceTimeout: "race_timeout", .raceFailed: "race_failed",
         .playbackFailed: "playback_failed", .watchdogFallback: "watchdog_fallback",
+        .naturalUnavailable: "natural_unavailable",
     ]
     for reason in VoiceEngineReason.allCases {
         #expect(reason.rawValue == expected[reason], "\(reason) is not pinned")
@@ -130,6 +131,24 @@ import Testing
     #expect(VoiceEngineChoice.describe(engine: .natural, reason: .cached) == "Natural voice · cached")
     #expect(VoiceEngineChoice.describe(engine: .system, reason: .warningMiss) == "System voice · warning not cached yet")
     #expect(VoiceEngineChoice.describe(engine: .system, reason: .raceTimeout) == "System voice · natural voice took over 2.5 s")
+}
+
+/// A refused key (quota used up, revoked, wrong voice) puts the whole session in the system voice —
+/// cached lines too — so the walker never hears two voices alternate (first-launch report 2026-09-13:
+/// cached lines played in ElevenLabs while every new line came out in Apple's voice).
+@Test func aRefusedKeyKeepsTheSessionInOneVoice() {
+    for cached in [true, false] {
+        for warning in [true, false] {
+            let d = VoiceEngineChoice.decide(hasKey: true, naturalEnabled: true, cached: cached,
+                                             isWarning: warning, breakerOpen: false, naturalUnavailable: true)
+            #expect(d == VoiceEngineDecision(engine: .system, reason: .naturalUnavailable))
+        }
+    }
+    // The Settings picker and a missing key still win (their reason is the more useful one).
+    #expect(VoiceEngineChoice.decide(hasKey: false, naturalEnabled: true, cached: true, isWarning: false,
+                                     breakerOpen: false, naturalUnavailable: true).reason == .noKey)
+    #expect(VoiceEngineChoice.decide(hasKey: true, naturalEnabled: false, cached: true, isWarning: false,
+                                     breakerOpen: false, naturalUnavailable: true).reason == .naturalOff)
 }
 
 // MARK: - The breaker

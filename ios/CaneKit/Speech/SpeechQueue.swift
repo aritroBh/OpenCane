@@ -215,6 +215,32 @@ final class SpeechQueue {
     /// Mirror of `breaker.isOpen` for the UI and `AppModel.voiceFacts()`: true while the natural
     /// voice is treated as unreachable (Step 54).
     private(set) var naturalVoiceOffline = false
+    /// ElevenLabs refused the key this session (HTTP 401 / 403 / 422: quota used up, revoked key,
+    /// wrong voice — `VoicePrefetch.isFatal`). Latched: every line, cached or not, speaks in the
+    /// system voice until `retryNaturalVoice()` (the Settings picker off → on), and prefetching stops
+    /// spending requests. One voice for the session instead of cached lines in ElevenLabs and new
+    /// ones in Apple's (first-launch report 2026-09-13; the account had 0 of 10,000 credits).
+    private(set) var naturalVoiceUnavailable = false
+    /// Called once when `naturalVoiceUnavailable` latches, with the service's message (for
+    /// `voice_backend {natural: false, by: refused, error}`).
+    @ObservationIgnored var onNaturalVoiceUnavailable: ((String) -> Void)?
+
+    /// Clear the refused-key latch and try the natural voice again (the Settings picker was switched
+    /// back to Natural — e.g. after topping up the account). Caller: `AppModel.naturalVoiceEnabled`.
+    func retryNaturalVoice() {
+        guard naturalVoiceUnavailable else { return }
+        naturalVoiceUnavailable = false
+        voiceError = nil
+        runPrefetchWorker()
+    }
+
+    /// Latch `naturalVoiceUnavailable` (once) and report why.
+    private func markNaturalVoiceUnavailable(_ message: String) {
+        voiceError = message
+        guard !naturalVoiceUnavailable else { return }
+        naturalVoiceUnavailable = true
+        onNaturalVoiceUnavailable?(message)
+    }
 
     /// Lines that belong in the cache but are never urgent, the last part of every prefetch pass's
     /// merge (`VoicePrefetch.merge`'s `tail`, after `routeLines`). `AppModel.start()` sets it to
@@ -1251,10 +1277,10 @@ final class SpeechQueue {
     /// A fetched chunk is removed from the backlog and, if the breaker is open, closes it
     /// (`VoiceBreaker.prefetchSucceeded(requested:)`: only a chunk that requested ≥ 1 line is proof).
     private func prefetchPass() async -> Bool {
-        guard let naturalVoice, useNaturalVoice else { return false }
+        guard let naturalVoice, useNaturalVoice, !naturalVoiceUnavailable else { return false }
         let backlog = prefetchBacklog
         let tail = routeLines + backgroundLines
-        let (chunk, failure) = await Task.detached(priority: .utility) { () async -> ([String], String?) in
+        let (chunk, failure) = await Task.detached(priority: .utility) { () async -> ([String], ElevenLabsVoice.Failure?) in
             let pending = VoicePrefetch.merge(new: [], backlog: backlog, tail: tail) { naturalVoice.cached($0) != nil }
             let chunk = Array(pending.prefix(VoicePrefetch.chunk))
             guard !chunk.isEmpty else { return ([], nil) }
@@ -1266,10 +1292,15 @@ final class SpeechQueue {
             return false
         }
         if let failure {
-            // Only report; never let a prefetch failure disable the voice (the live path has the
-            // breaker, and the cache may already hold the line that matters). Backgrounding surfaces
-            // as a timeout, not a cancellation, and is not a voice problem.
-            if UIApplication.shared.applicationState != .background { voiceError = failure }
+            // A refused key (quota used up, revoked, wrong voice) latches the session into the
+            // system voice — every later request would be refused too. Anything else only reports
+            // (the live path has the breaker, and the cache may hold the line that matters).
+            // Backgrounding surfaces as a timeout, not a cancellation, and is not a voice problem.
+            if failure.fatal {
+                markNaturalVoiceUnavailable(failure.message)
+            } else if UIApplication.shared.applicationState != .background {
+                voiceError = failure.message
+            }
             return false
         }
         prefetchBacklog.removeAll { chunk.contains($0) }
@@ -1441,7 +1472,8 @@ final class SpeechQueue {
             : VoiceEngineChoice.decide(muted: Self.muted, hasKey: naturalVoice != nil,
                                        naturalEnabled: useNaturalVoice, cached: cachedURL != nil,
                                        isWarning: priority == .obstacle || priority == .safety,
-                                       breakerOpen: breaker.isOpen)
+                                       breakerOpen: breaker.isOpen,
+                                       naturalUnavailable: naturalVoiceUnavailable)
         lastEngine = decision
         onDispatch?(text, priority, replays, resumeFrom, decision)
 
@@ -1515,7 +1547,11 @@ final class SpeechQueue {
                 self.voiceError = error.localizedDescription
                 self.resolveRace(text, .raceFailed, since: startedAt)
                 self.speakSystem(spokenText, gen: gen)
-                self.prefetch([text])
+                if (error as? ElevenLabsVoice.VoiceError)?.isFatal == true {
+                    self.markNaturalVoiceUnavailable(error.localizedDescription)   // refused: stop asking
+                } else {
+                    self.prefetch([text])
+                }
             }
         }
     }

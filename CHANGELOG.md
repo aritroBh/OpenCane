@@ -2,6 +2,35 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 61 — First launch in Apple's voice: the ElevenLabs account is out of credit; a refused key is now one voice, not two (Sun Sep 13)
+
+**Why.** Owner: "when I restarted and started up for the first time it's still using the Apple voice."
+Trip log `canekit-2026-09-13T08-51-14Z`: "OpenCane ready." played from the cache (`elevenlabs /
+cached`); the menu line's fetch failed after 71 ms (`speech_engine {race_failed}`), the breaker opened,
+and every uncached line after it was `system / breaker_open` — so old lines came out in ElevenLabs and
+new ones in Apple's voice for the whole session. A direct request with the app's key returned
+**HTTP 401 `quota_exceeded`: "This request exceeds your quota of 10000. You have 0 credits remaining"**.
+No code makes the natural voice speak without credit; the account needs topping up (or a paid key in
+Secrets.plist). What the code did wrong was the mix.
+
+**What changed.**
+- `VoiceEngineReason.naturalUnavailable` and `VoiceEngineChoice.decide(..., naturalUnavailable:)`:
+  checked after the key and the Settings picker and *before* the cache, so a refused session is one
+  voice. `aRefusedKeyKeepsTheSessionInOneVoice`.
+- `SpeechQueue.naturalVoiceUnavailable` latches on a fatal ElevenLabs status (401 / 403 / 422,
+  `VoicePrefetch.isFatal`) from a live race or a prefetch chunk (`ElevenLabsVoice.prefetch` now returns
+  its `Failure` with `fatal`); prefetching stops spending requests. `voice_backend {natural: false, by:
+  refused, error}`. `retryNaturalVoice()` clears it when Settings → Voice is switched back to Natural
+  (after topping up).
+- Status: "System voice. The natural voice account is out of credit or refused the key."
+  (`voiceClauseSaysWhenTheAccountRefusedTheKey`); Haptics card pill turns warning with the same words.
+
+**Verification.** `make test` 765 / 765; `make sim` green.
+
+test on device: with the empty account, launch — every line is Apple's voice, none flips; Settings →
+Haptics shows the refused-key message; after topping up, Settings → Voice → System → Natural and say
+"status": "Natural voice warming up…" then ElevenLabs.
+
 ## Steps 51–60 review round — Muse, OpenCode, Codex, Antigravity on the merged diff (Sun Sep 13)
 
 **How.** One adversarial prompt (safety, voice, microphone, conversation, UI contract, logging,

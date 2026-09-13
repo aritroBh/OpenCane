@@ -76,7 +76,7 @@ struct HapticsCard: View {
                 // (`VoiceEngineChoice.describe`), and says so when the breaker holds the system voice.
                 CKStatusPill(text: model.speech.naturalVoice == nil ? "System" : model.speech.backendName,
                              tone: model.speech.backendName == "ElevenLabs" ? .trusted
-                                 : (model.speech.naturalVoiceOffline ? .warning : .neutral),
+                                 : (model.speech.naturalVoiceOffline || model.speech.naturalVoiceUnavailable ? .warning : .neutral),
                              systemImage: "waveform.and.mic",
                              spoken: voicePillSpoken)
                 Spacer(minLength: 0)
@@ -104,6 +104,7 @@ struct HapticsCard: View {
     /// ("Voice: Natural voice · cached"), or the backend name before the first line.
     private var voicePillSpoken: String {
         guard model.speech.naturalVoice != nil else { return "System voice; add an ElevenLabs key for the natural voice" }
+        if model.speech.naturalVoiceUnavailable { return "System voice; the ElevenLabs account is out of credit or refused the key" }
         if model.speech.naturalVoiceOffline { return "Natural voice unreachable; using the system voice until the network is back" }
         if let last = model.speech.lastEngine {
             return "Voice: " + VoiceEngineChoice.describe(engine: last.engine, reason: last.reason)

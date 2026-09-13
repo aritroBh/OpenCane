@@ -139,21 +139,21 @@ nonisolated struct ElevenLabsVoice: Sendable {
     /// (CaneKitLogic, pinned by VoicePrefetchTests) — speaking order, no repeats, nothing cached.
     /// Returns when every request has finished or failed. Caller: `SpeechQueue.prefetch`.
     ///
-    /// - Returns: the description of the first failure, or nil if every line was fetched (or there
+    /// - Returns: the first failure (a fatal one — refused key / quota — wins), or nil if every line was fetched (or there
     ///   was nothing to fetch). A prefetch is the app's *first* call to ElevenLabs, seconds after
     ///   launch, so this is how a wrong key ("HTTP 401") reaches the Haptics card before anyone
     ///   has spoken a word — silently swallowing it left the demo looking merely voice-less.
     ///   ⚠ With every line already cached nothing is requested, so a key that went bad since the
     ///   last run stays unreported until the next miss. Prefetch reports failures; it does not
     ///   validate the key.
-    func prefetch(_ lines: [String]) async -> String? {
+    func prefetch(_ lines: [String]) async -> Failure? {
         let missing = VoicePrefetch.queue(lines) { cached($0) != nil }
         // A `let` copy, not a mutated `var`: the task closures capture it, and under region-based
         // isolation a mutable local in this region cannot be sent into a concurrent closure.
         let slow = withTimeout(prefetchTimeout)
         return await withTaskGroup(of: Failure?.self) { group in
             var iterator = missing.makeIterator()
-            var firstError: String?
+            var firstError: Failure?
             func addNext() {
                 guard let line = iterator.next() else { return }
                 group.addTask {
@@ -169,7 +169,7 @@ nonisolated struct ElevenLabsVoice: Sendable {
             }
             for _ in 0..<min(VoicePrefetch.maxConcurrent, missing.count) { addNext() }
             while let result = await group.next() {
-                if firstError == nil, let result { firstError = result.message }
+                if let result, firstError == nil || (result.fatal && firstError?.fatal != true) { firstError = result }
                 // A wrong key fails every remaining line identically. Carrying on would turn one
                 // mistake in Secrets.plist into twenty rejected requests, which is how an account
                 // gets rate-limited an hour before a demo.
@@ -184,7 +184,7 @@ nonisolated struct ElevenLabsVoice: Sendable {
     }
 
     /// One failed line: what to show, and whether the rest of the batch is worth attempting.
-    private struct Failure: Sendable {
+    struct Failure: Sendable {
         /// `localizedDescription` of the error, e.g. "ElevenLabs HTTP 401: …"; becomes
         /// `SpeechQueue.voiceError` (debug card only, never spoken).
         let message: String
