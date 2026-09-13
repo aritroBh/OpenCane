@@ -390,6 +390,11 @@ final class HapticPlayer {
     private func fire(_ player: CHHapticPatternPlayer?) {
         do { try player?.start(atTime: CHHapticTimeImmediate) } catch {
             lastError = "Haptic play: \(error.localizedDescription)"
+            // A player can fail after a successful engine start (media-server reset, route or
+            // resource failure). Do not leave the published health bit true: AppModel reads it on
+            // every cue to mirror the warning to the watch and speech channel.
+            isHealthy = false
+            stopApproachLoop()
         }
     }
 
@@ -431,6 +436,8 @@ final class HapticPlayer {
             try tapPlayer.start(atTime: CHHapticTimeImmediate)
         } catch {
             lastError = "Haptic tap: \(error.localizedDescription)"
+            isHealthy = false
+            stopApproachLoop()
         }
     }
 

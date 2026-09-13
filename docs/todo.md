@@ -8,8 +8,8 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested · `[
 
 **This block is a dated snapshot, not the current state.** It was last rewritten on Fri 2026-09-11
 evening; CHANGELOG Steps 38–47 landed after it (Sat 2026-09-12). For where things stand now read the
-newest `CHANGELOG.md` entry (top of file — Step 47 as of Sat evening) and the "## Step 47" block near
-the end of this file; where this block and a newer section disagree, the newer one is right.
+newest `CHANGELOG.md` entry (top of file — Step 51 as of Sun 2026-09-13) and the latest numbered
+block near the end of this file; where this block and a newer section disagree, the newer one is right.
 
 Demo: Sat 2026-09-12. The app runs untethered on Aritro's iPhone 17 Pro Max (iOS 27), clamped to a
 cane, with AirPods Pro.
@@ -220,12 +220,13 @@ none blocks the demo — but they are real, and several need the phone to judge.
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
       transition. If the input is still absent, sound alerts fail loudly and navigation continues.
-- [x] **"Degrades to the back camera alone" is documented but not implemented** (copy corrected
-      earlier — `BothCameras.unsupported`; confirmed by the Step 34 audit) — on a phone without
-      multi-cam the mode shows no picture. Implement the single-session fallback or correct the
-      header and the card copy.
-- [ ] **Backgrounding enqueues the camera teardown**, so if the system suspends first the app can
-      hold both cameras in the background. Tear down best-effort with a timeout before pausing depth.
+- [ ] **"Degrades to the back camera alone" remains unimplemented** (`BothCameras.unsupported`;
+      confirmed by the Step 34 audit). On a phone without multi-cam the mode shows no picture and
+      the card now says so honestly; implement a single-session fallback only as a separately tested
+      feature.
+- [x] **Backgrounding enqueued the camera teardown.** `AppModel` now requests a short background
+      execution budget, serializes `bothCameras.stop()`, and records an expiration if iOS suspends
+      before release. The safety path is paused only after the teardown request is queued.
 - [ ] **Debug-only:** launching with both the sensor-probe and demo-route flags guides a route for
       ~40 s with no depth, and the probe's 40 s announcement queues ahead of route lines with a 20 s
       TTL.
@@ -757,6 +758,16 @@ for 60 s so a weak network can never stall a cue.
 - [x] Muse compact review: 8 findings, 5 taken, rest moot after the rework; 630 / 630 tests
 - [ ] On the phone: type "Oab" — no Australia / Rio; tab bar gone while typing, back after Done / Go; walk a torch-lit route into a lit lobby — the torch goes off within a minute; in a dark hallway it blinks off for 1 s once a minute and comes back
 
+## Step 51 — Adversarial safety hardening (Sun Sep 13)
+- [x] GPS stream liveness: `NavigationHealth` rejects stale/future fixes after 5 s; `LocationService` reports stream termination or permission revocation; `NavigationEngine` withdraws target/bearing cues and resumes only on a fresh fix.
+- [x] Terminal AR failure: retained frames are dropped, `HazardScanner` and face-yaw tracking stop, and late callbacks are generation-fenced. Deferred mesh, frame-rate and face settings apply only after the route ends.
+- [x] Audio/haptics lifecycle: runtime haptic errors mark the engine unhealthy; SpeechQueue and VoiceInput clean up in safe order; interruption, route, permission, analyzer and decode failures use the existing speech/watch fallback channels.
+- [x] Async race fencing: arrival summaries, HealthKit step refreshes and Live Activity operations cannot write or speak for a replaced route/activity.
+- [x] Safety UI and privacy: Stop route is two-tap/three-second confirmed; People detection is off by default and labelled experimental/unverified; Profile starts without seeded PII; cloud mirroring requires explicit consent and can be disabled (queued uploads are dropped, local data remains).
+- [x] Profile accessibility and simulator gate: metric tiles use Dynamic Type and combined labels; unavailable hazard controls explain why; `sim-grant` checks boot/privacy failures and seeds GPS.
+- [x] Logic gate: **654 tests in 12 suites passed**; simulator build succeeded. New pure coverage includes navigation freshness, People detection, Stop confirmation and trip-generation fencing.
+- [ ] Device checks: AirPods HFP/disconnect during sound recognition and push-to-talk; AR interruption/resume; location revocation and stale GPS; forced haptic/audio failure; dark-room and wall proximity; accidental Stop taps; People detection false-positive/false-negative/latency measurements; cloud consent and remote-row deletion policy.
+
 ## Step 49 — Low light: notice the dark for the walker, say what still works (Sat Sep 12, late)
 - [x] Owner's question 22:50 ("we have the flashlight and LiDAR doesn't need light — what else?"). Honest answer: LiDAR, gyro gate, GPS, compass, haptics unaffected; ARKit tracking, signs, scene words, people, "Where am I", hazard watch degrade silently — and a blind walker cannot tell it is dark
 - [x] `LowLightPolicy` (CaneKitLogic, 11 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity` (`LaneReport.ambientLux`), dark after 3 s under 40 lux, lit after 5 s over 120, unknown before the first estimate, 60 s minimum on-time for an app-lit torch (the torch raises the reading), 60 s backoff after a thermal cut-out, no auto-torch at ≤ 20 % battery (`FamilyAlertLimits.lowBatteryPct`) — **all [H]**
@@ -783,14 +794,14 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Known gap (Codex): a glossy / absorptive surface at 0.35 m–a few metres returns finite *low-confidence* samples — neither valid nor blind — so the cell can read CLEAR; needs an "unknown" tile state, not a guess (Step 38 boundary)
 - [ ] Known gap: toggling "Mirror left / right" mid-session swaps lane indices under the hold's per-lane memory; the next sweep disarms it
 
-## Step 47 — Dynamic Island redesign from its first pictures, Guide tile pair, real emergency phone (Sat Sep 12, evening)
+## Step 47 — Dynamic Island redesign from its first pictures, Guide tile pair, privacy-safe Medical ID (Sat Sep 12, evening)
 - [x] Evidence first: the newest phone logs say `live_activity {action: start, active: true}` — the activity exists; nobody had ever seen what it drew
 - [x] `CaneKitIslandTour` + `make island`: compact, expanded, walking, after-Stop pictures of the island from the simulator (before and after)
 - [x] `NavLiveActivity.swift` redesigned: manoeuvre glyphs that cannot be mistaken for the OS location arrow (`arrow.up` retired), glance glyph-only when clear, instruction full-width in the expanded bottom region, stale state ("No update"), one VoiceOver sentence per presentation
 - [x] `LiveActivityCoalescer.staleAfter` (300 s, `staleAfterOutlivesACrossingWait`) → `staleDate` on every request / update
 - [x] `LocationService.setNavigating`: `showsBackgroundLocationIndicator` pinned false; the blue pill during a route is the OS's background-location indicator (design.md §6.7 says so)
 - [x] `CKBigButton.Layout.tile` for the two-up "Where am I" / "Talk to OpenCane" pair (equal shapes and heights); row label made flexible so "Simulate walk" no longer stacks alone
-- [x] Medical ID: emergency phone +1 (925) 791-8082 by default, and the seeded 555 placeholder migrated on phones that already saved a profile
+- [x] Medical ID: the default profile is privacy-safe (no seeded identity, date of birth, address or phone); older seeded 555 placeholders are cleared. A walker/helper enters real values locally, and cloud mirroring is a separate explicit opt-in (Step 51).
 - [x] Cue levels differ on the cane (cue-v2 #41, implementation agent): `TorsoHapticPolicy` + 21 tests; Quiet no torso taps, Standard onset tap (< 1.5 m closing) + strong triple (< 0.6 m, proximity only after Muse), Detailed today minus shoreline re-taps, Indoors / crossing settle hold; Settings caption tells the truth
 - [x] Details tab "Scene engine" card (implementation agent): who answered the last Where am I, why, how long, when, from what; hazard-watch plan / last check / failure; cues in effect; `SceneEngineSummary` + 17 tests; `describe_result` / `hazard_watch` carry `trigger` / `source` / `cloud_ms` / `fallback_reason`
 - [x] "Announce Medical ID" moved from `.obstacle` to `.scene` (design audit)
@@ -799,17 +810,17 @@ for 60 s so a weak network can never stall a cue.
 - [x] docs: design.md §6.7 rewritten, §10 raw-kind gap closed, CODE_REFERENCE, AGENTS.md `make island` + two new traps (no concurrent builders; `--disable-xctest`)
 - [x] Second round from the phone pictures: Always location at route start (no blue pill → the Live Activity owns the island like Apple / Google Maps), background session only without Always, `location_auth` log; expanded row de-cramped (route name off the island, pill priority, 3-line instruction) + route progress bar
 - [ ] Pre-existing (Codex round 2): a Detailed centre Geiger loop that loses haptics mid-approach (engine down, Silence haptics) sends no wrist / speech fallback until the next decider fire — `.updateCenter` has been haptics-only since Step 3
-- [ ] On the phone: first route start → answer **Always** to the location prompt; lock → island shows walking figure + metres and one green check (no blue arrow in the pill); long-press → instruction in full; Profile shows the 925 number; Settings → Cues → Standard, walk at a wall: one tap at 1.5 m, strong triple at 0.6 m, no side taps; Quiet: nothing but head height; Details → Scene engine after one Where am I with and without network
+- [ ] On the phone: first route start → answer **Always** to the location prompt; lock → island shows walking figure + metres and one green check (no blue arrow in the pill); long-press → instruction in full; Profile shows the locally entered Medical ID (blank-safe on a fresh install); Settings → Cues → Standard, walk at a wall: one tap at 1.5 m, strong triple at 0.6 m, no side taps; Quiet: nothing but head height; Details → Scene engine after one Where am I with and without network
 
 ## Cross-cutting
-- [x] Four icon-only root tabs (Guide / Sense / Settings / Profile; Profile added in Step 44) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab (no test opens Profile yet)
+- [x] Four icon-only root tabs (Guide / Sense / Settings / Profile; Profile added in Step 44) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab including Profile and assert its metric tile
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
 - [x] TripLogger JSONL (Documents folder; AirDrop from Files)
 - [x] Simulator build + run on the iOS 27 simulator (now the iPhone 17 Pro Max, the demo phone) — UI verified by screenshot
 - [ ] Go/no-go checklist rehearsed before any blindfolded walk
-- [ ] Open (not fixed, from the review's unverified list): accidental taps on the clamped screen (Stop / Mirror have no
-      lock), the screen-lock safety trade-off (the app now speaks that obstacle warnings are paused, but the ARKit
+- [ ] Open (not fixed, from the review's unverified list): accidental taps on the clamped screen (Mirror and other
+      toggles remain unprotected; phone Stop now requires two taps), the screen-lock safety trade-off (the app now speaks that obstacle warnings are paused, but the ARKit
       path still requires Guided Access + keeping the screen on for a blindfolded walk), compass readings dropped while
       iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on frequently-updating
       pills, MapKit route build waits only 15 s for a first fix
@@ -837,7 +848,7 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
 - [x] **cue-v2 #36** (= CHANGELOG Step 36) `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
 - [x] **cue-v2 #37** (= CHANGELOG Step 37) Talk floor (owner: "directions and obstacle alerts interrupt each other"): a line cut by a warning resumes from its clause (`SpeechResume`), 0.35 s pause between bands, `speech_end` + `resume_from` logged, `cue_audit` resume / pause metrics. Rejected before building (Muse): holding "Head height." behind a direction (a walker reaches a 1.5 m overhang before the words)
   - [ ] Device: route intro cut by a head cue resumes mid-line in both voices; tune `mp3MarginUTF16` / `clipLead` from `resume_from`
-  - [ ] Later (review, not fixed): a system-voice line resumed from a cached mp3 maps an exact word offset to a proportional clip time; the interruption resume retry Task is not cancelled by a new `.began` (pre-existing)
+  - [x] Later review: interruption resume retries are generation-fenced and cancelled by a newer `.began`; cached-mp3 resume still uses the measured proportional `SpeechResume.clipTime` approximation and remains a device-tuning item.
 - [ ] **cue-v2 #38** (not CHANGELOG Step 38, which is point-blank wall safety) Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
 - [ ] **cue-v2 #39** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
 - [ ] **cue-v2 #40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s

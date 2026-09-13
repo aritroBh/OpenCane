@@ -339,6 +339,20 @@ import Testing
 
 // MARK: - Microphone start (input-format settling)
 
+/// Recovery stays bounded while giving a route a few seconds to settle; an unbounded retry would
+/// keep a failed microphone lease alive forever.
+@Test func microphoneSessionRecoveryIsBounded() {
+    #expect(MicrophoneSessionRecovery.retryAttempts == 3)
+    #expect(MicrophoneSessionRecovery.retryDelay > 0)
+    #expect(Double(MicrophoneSessionRecovery.retryAttempts) * MicrophoneSessionRecovery.retryDelay <= 5)
+}
+
+/// A slow classifier may drop input, but it must never retain an unbounded stream of PCM buffers.
+@Test func microphoneAnalysisBacklogIsBounded() {
+    #expect(MicrophoneAnalysisLimits.maxPendingBuffers > 0)
+    #expect(MicrophoneAnalysisLimits.maxPendingBuffers <= 16)
+}
+
 /// The format check is what stands between the app and an `AVAudioEngine` trap, so it must reject
 /// exactly the two shapes a not-yet-settled input node reports and nothing else.
 /// ⚠ Pins `MicrophoneStart.isUsableInputFormat`, called by `SoundWatcher.startEngine`.

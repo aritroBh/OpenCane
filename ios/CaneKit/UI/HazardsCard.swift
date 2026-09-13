@@ -62,7 +62,7 @@ struct HazardsCard: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// Top to bottom: Detect drop-offs (off by default), Read signs (on), Hazard watch (off), Name
-    /// people ahead (on); provider + "N mapped" pills; the last LiDAR / sign / watch lines; error;
+    /// people ahead (off until cane validation); provider + "N mapped" pills; the last LiDAR / sign / watch lines; error;
     /// Share hazard map (once a file exists); Listen for sirens and horns + its status; Nod to talk;
     /// Head tracking without AirPods (+ refusal caption during a route or route start); Live
     /// camera view + the view + the front-camera readout; Both cameras + its block; Flashlight
@@ -82,7 +82,8 @@ struct HazardsCard: View {
                 .accessibilityHint("While walking a route, checks the path for cones, barriers and scooters every 8 seconds")
             Toggle("Name people ahead", isOn: $model.namePeopleEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("When you ask where am I, says how many people are ahead, which way and how far")
+                .accessibilityHint("Experimental and not validated on the cane. When you ask where am I, says how many people are ahead, which way and how far")
+            liveCaption(PeopleDetection.state(enabled: model.namePeopleEnabled).userFacingDescription)
 
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: model.hazards.watchProvider, tone: .neutral, systemImage: "eye",
@@ -112,6 +113,9 @@ struct HazardsCard: View {
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!SoundWatcher.isAvailable)
                 .accessibilityHint("Uses the microphone to warn about sirens, horns and vehicle sounds. Needs the microphone, so it is off by default.")
+            if !SoundWatcher.isAvailable {
+                liveCaption("Siren and horn listening is unavailable on this phone's sound classifier.")
+            }
             soundStatus
 
             // Off by default and not persisted (`AppModel.nodToTalkEnabled`): the gesture is untuned.
@@ -120,12 +124,17 @@ struct HazardsCard: View {
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!model.head.isAvailable)
                 .accessibilityHint("Nod twice with AirPods on while walking a route to start talking to OpenCane. Off by default.")
+            if !model.head.isAvailable {
+                liveCaption("Nod to talk is unavailable because AirPods head motion is not connected.")
+            }
 
             Toggle("Head tracking without AirPods", isOn: $model.faceHeadTrackingEnabled)
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!DepthEngine.supportsFrontCameraWithLiDAR)
                 .accessibilityHint("Uses the front camera to follow your head direction, so the beacon works without AirPods. Cannot change while a route is guiding you.")
-            if model.nav.isNavigating {
+            if !DepthEngine.supportsFrontCameraWithLiDAR {
+                liveCaption("Head tracking without AirPods is unavailable: this phone cannot run the front camera with LiDAR.")
+            } else if model.nav.isNavigating {
                 liveCaption("Head tracking without AirPods cannot change while a route is guiding you.")
             } else if model.routeStartWaiting {
                 liveCaption("Head tracking without AirPods cannot change while a route is starting.")
@@ -141,6 +150,9 @@ struct HazardsCard: View {
                 .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .disabled(!DualCameraSession.isSupported || model.routeStartWaiting)
                 .accessibilityHint("Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you.")
+            if !DualCameraSession.isSupported {
+                liveCaption("Both cameras are unavailable: this phone does not support simultaneous camera capture.")
+            }
             bothCameras
             Toggle("Flashlight", isOn: Binding(get: { model.torchEnabled },
                                                set: { model.setTorch($0) }))

@@ -31,24 +31,24 @@ public struct CKMedicalProfile: Codable, Sendable, Equatable {
     public var caneType: String
     public var organDonor: Bool
 
+    /// A privacy-safe first-run profile. Real identity, medical and contact values are entered by
+    /// the walker (or a trusted helper) in the editor; no person's PII is shipped in the binary.
+    /// Existing profiles remain on-device and are never overwritten by this default.
     public static let standardDefault = CKMedicalProfile(
-        name: "Aritro Bhattacharjee",
-        emergencyNotes: "OpenCane White Cane User · Legally Blind · Severe Visual Field Loss",
-        dateOfBirth: "May 14, 2002",
-        bloodType: "A-",
-        height: "5' 11\" (180 cm)",
-        weight: "165 lbs (75 kg)",
-        allergies: "No known drug allergies (NKDA)",
-        medications: "None",
-        homeAddress: "Urbana, IL",
-        emergencyContactName: "Emergency Contact",
-        // The owner's real number (owner, 2026-09-12: "my phone number is actually 925 791 8082");
-        // the 555 placeholder it replaces is migrated away in `init` for phones that already saved
-        // a profile. Filter in `ProfilePage` keeps digits and "+" for the tel: link.
-        emergencyContactPhone: "+1 (925) 791-8082",
-        emergencyContactRelation: "Family",
-        caneType: "130 cm · Standard Tip",
-        organDonor: true
+        name: "Not set",
+        emergencyNotes: "White cane user — add emergency notes",
+        dateOfBirth: "Not set",
+        bloodType: "Not set",
+        height: "Not set",
+        weight: "Not set",
+        allergies: "Not set",
+        medications: "Not set",
+        homeAddress: "Not set",
+        emergencyContactName: "Not set",
+        emergencyContactPhone: "",
+        emergencyContactRelation: "Not set",
+        caneType: "Not set",
+        organDonor: false
     )
 }
 
@@ -67,8 +67,8 @@ public struct CKMobilityStats: Sendable, Equatable {
 public final class MedicalProfileStore {
     private static let profileKey = "opencane_medical_profile"
     private static let tripsKey = "opencane_completed_trips_count"
-    /// The fake number the Step 44 default shipped with; `init` migrates it (and only it) to the
-    /// real one. ⚠ Keep byte-identical to what Step 44 wrote, or the migration never matches.
+    /// The fake number an earlier build shipped with; `init` clears it rather than copying a
+    /// contact into a new binary. A number the walker typed is left untouched.
     private static let placeholderPhone = "+1 (555) 234-5678"
 
     public var profile: CKMedicalProfile {
@@ -100,11 +100,9 @@ public final class MedicalProfileStore {
             if decoded.caneType.contains("Rolling Ball") {
                 decoded.caneType = "130 cm · Standard Tip"
             }
-            // Step 47: the seeded 555 placeholder was still on the card of every phone that had
-            // launched before the real number landed (`profile` is only seeded when nothing is
-            // saved). Replace exactly that placeholder; a number the owner typed is kept.
+            // Remove only the old seeded placeholder. A number the walker typed is kept.
             if decoded.emergencyContactPhone == Self.placeholderPhone {
-                decoded.emergencyContactPhone = CKMedicalProfile.standardDefault.emergencyContactPhone
+                decoded.emergencyContactPhone = ""
             }
             self.profile = decoded
         } else {

@@ -168,6 +168,9 @@ final class HazardScanner {
     /// True from the tick that launches `runWatch` until it returns (`defer`): at most one hazard
     /// request in flight, however slow the network is.
     @ObservationIgnored private var watchInFlight = false
+    /// Changes whenever the camera-backed scanner starts or stops. Async Vision/model work captures
+    /// this generation and must not publish a sign or hazard after ARKit has failed or been paused.
+    @ObservationIgnored private var lifecycleGeneration = 0
     /// Reference-date seconds of the last sign scan that had a frame; −∞ so the first tick scans,
     /// and reset to −∞ when a scan found no frame so the next 500 ms tick retries.
     @ObservationIgnored private var lastSignScan: TimeInterval = -.infinity
@@ -211,6 +214,7 @@ final class HazardScanner {
     /// The task holds `self` weakly, so a released scanner ends its own loop.
     func start() {
         guard loop == nil else { return }
+        lifecycleGeneration &+= 1
         isRunning = true
         loop = Task { [weak self] in
             while !Task.isCancelled {
@@ -221,12 +225,15 @@ final class HazardScanner {
     }
 
     /// Cancels the loop. Callers: `AppModel.scenePhaseChanged(.background)` (no scanning a frozen
-    /// last frame) and "Both cameras" on (ARKit paused, no frames). A hazard-watch request already
-    /// in flight is not cancelled; its reply is dropped only if `watchEnabled` / `paused` say so.
+    /// last frame), "Both cameras" on (ARKit paused, no frames), and AR terminal-failure recovery.
+    /// A request already in flight is not force-canceled, but its generation-bound reply is dropped
+    /// after this call, even if the settings switches themselves remain on.
     func stop() {
+        lifecycleGeneration &+= 1
         loop?.cancel()
         loop = nil
         isRunning = false
+        watchInFlight = false
     }
 
     // MARK: Loop
@@ -239,15 +246,16 @@ final class HazardScanner {
     ///     with or without a route).
     private func tick() async {
         let now = Date().timeIntervalSinceReferenceDate
+        let generation = lifecycleGeneration
         guard !paused else { return }
         if watchEnabled, isNavigating(), !watchInFlight,
            watchPolicy.shouldAsk(now: now, speed: currentSpeed()) {
             watchInFlight = true
-            Task { [weak self] in await self?.runWatch() }
+            Task { [weak self] in await self?.runWatch(generation: generation) }
         }
         if signsEnabled, now - lastSignScan >= signPeriod {
             lastSignScan = now
-            await scanSigns(now: now)
+            await scanSigns(now: now, generation: generation)
         }
     }
 
@@ -255,8 +263,9 @@ final class HazardScanner {
     /// text only → `SignPolicy.line(for: seenTexts)` → `onHazard(.sign)` when a phrase is due.
     /// Always emits one `scan` diagnostic when it had a frame, even when nothing was said.
     /// - Parameter now: the tick's reference-date seconds (the policy's repeat clock).
-    private func scanSigns(now: TimeInterval) async {
+    private func scanSigns(now: TimeInterval, generation: Int) async {
         let frameName = FrameReplay.shared.currentName ?? ""
+        guard isRunning, generation == lifecycleGeneration else { return }
         guard let jpeg = await Self.snapshot(processor, maxDimension: 1280, quality: 0.8) else {
             // No fresh frame (just unlocked, ARKit stalled): don't spend the 3 s slot on nothing;
             // retry on the next 500 ms tick (Muse camera review).
@@ -272,6 +281,7 @@ final class HazardScanner {
         // so storefront words across the street stay quiet (Muse + Antigravity, Step 12).
         let d = await OnDeviceVision.detect(jpeg: jpeg, readText: true, classify: false,
                                             minTextHeight: 1.0 / 128)
+        guard isRunning, generation == lifecycleGeneration else { return }
         let line = signPolicy.line(for: d.seenTexts, now: now)
         if let line {
             lastSign = line
@@ -290,8 +300,14 @@ final class HazardScanner {
     /// off or the phone got hot while it was in flight; a reply older than `maxAge` is logged
     /// `dropped: "stale"` and not spoken; older than `distanceFreshFor` it loses its metres.
     /// Clears `watchInFlight` on every exit.
-    private func runWatch() async {
-        defer { watchInFlight = false }
+    private func runWatch(generation: Int) async {
+        // A stopped scanner can be started again before an old network request returns. Only the
+        // request that owns the current lifecycle may clear the in-flight bit; otherwise the old
+        // defer would make a new generation launch overlapping watch requests.
+        defer {
+            if lifecycleGeneration == generation { watchInFlight = false }
+        }
+        guard isRunning, generation == lifecycleGeneration else { return }
         guard let jpeg = await Self.snapshot(processor, maxDimension: 768) else {
             watchPolicy.refund(now: Date().timeIntervalSinceReferenceDate)   // no frame: retry in 2 s
             return
@@ -301,6 +317,7 @@ final class HazardScanner {
         let frameName = FrameReplay.shared.currentName ?? ""
         do {
             var reply = try await watchClient.describe(jpeg: jpeg, prompt: HazardPrompt.text)
+            guard isRunning, generation == lifecycleGeneration else { return }
             let age = Date().timeIntervalSince(started)
             lastWatchMs = Int(age * 1000)
             lastError = nil
@@ -341,6 +358,7 @@ final class HazardScanner {
                 onHazard?(line, .vision, jpeg)
             }
         } catch {
+            guard isRunning, generation == lifecycleGeneration else { return }
             lastWatchMs = nil                  // a failed request has no round trip to show
             lastWatchSource = nil              // nobody answered
             lastWatchReason = nil

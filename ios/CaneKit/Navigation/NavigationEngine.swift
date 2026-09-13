@@ -50,7 +50,9 @@
 //    · Repeat speaks the last line actually spoken, via `onRepeat` (bypasses queue coalescing).
 //    · Arrival is irreversible.
 //    · A route started with no fix at all says "GPS weak…" after `noFixAfter` (20 s) instead of
-//      going silent (cc04946: the demo run sheet starts the route indoors).
+//      going silent (cc04946: the demo run sheet starts the route indoors). A retained fix also
+//      stops driving the route once `NavigationHealth.maxFixAge` elapses, even if the stream
+//      fails without delivering a diagnostic.
 //  Tests: ⚠ no unit test covers this class (app target). The decisions it delegates are pinned by
 //  `GeoMathTests` (GeofenceTracker, OffCourseDetector incl. `aStopMidDriftRestartsTheHold`),
 //  `NavSupportTests` (TurnSettle), `CourseSmootherTests`; the class itself only end to end, by
@@ -305,6 +307,14 @@ final class NavigationEngine {
     /// - Parameter fix: accuracy / speed −1 = invalid; `timestamp` on the wall clock.
     func update(fix: GeoFix) {
         guard isNavigating, let tracker else { return }
+        let wallNow = Date().timeIntervalSinceReferenceDate
+        guard NavigationHealth.isFresh(timestamp: fix.timestamp, now: wallNow) else {
+            // A delayed callback must not get to run the geofence with its own old timestamp.
+            // Withdraw the route target immediately; the ticker remains the independent gate for
+            // a stream that simply goes quiet.
+            markLocationUnavailable(at: wallNow)
+            return
+        }
         lastFix = fix
         let now = fix.timestamp
         smoothedCourse = courseSmoother.update(fix)
@@ -373,7 +383,42 @@ final class NavigationEngine {
             }
             return
         }
+        // CoreLocation can stop yielding updates without throwing (background suspension,
+        // revoked authorization, radio failure). The ticker is the independent liveness clock:
+        // after the bounded age, clear every live navigation output so the beacon cannot keep
+        // pointing at a place the walker may have left. A new good fix clears `gpsWeak` in
+        // `update(fix:)` and rebuilds the target.
+        guard NavigationHealth.isFresh(timestamp: f.timestamp, now: now) else {
+            markLocationUnavailable(at: now)
+            return
+        }
         checkArrivalHint(f, now: now)
+    }
+
+    /// Withdraw route guidance that depends on a location fix without ending the route itself.
+    /// The app adapter calls this immediately for a failed/revoked CoreLocation stream; `tick`
+    /// calls it when no such callback arrives and the retained fix ages out. The next fresh fix
+    /// resumes normally through `update(fix:)`.
+    /// - Parameters:
+    ///   - now: wall-clock timestamp used for the off-course evidence hole.
+    ///   - speak: whether to announce the standard GPS warning. Authorization failures use their
+    ///     more actionable Settings line instead, while still clearing these outputs.
+    func markLocationUnavailable(at now: TimeInterval = Date().timeIntervalSinceReferenceDate,
+                                 speak: Bool = true) {
+        guard isNavigating else { return }
+        let wasWeak = gpsWeak
+        gpsWeak = true
+        weakSince = now
+        distanceToNext = nil
+        targetBearing = nil
+        bearingError = nil
+        courseSmoother.reset()
+        smoothedCourse = nil
+        nearArrivalSince = nil
+        offCourse.gated(at: now)
+        if speak, !wasWeak {
+            onSpeak?("GPS weak. Waypoint cues paused until it recovers.", .nav)
+        }
     }
 
     /// Near the destination for 20 s but arrival has not fired (GPS too poor for the two-hit
@@ -474,7 +519,8 @@ final class NavigationEngine {
             offCourse.endEpisode()
             return
         }
-        guard fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy, now - fix.timestamp < 5 else {
+        guard fix.accuracy >= 0, fix.accuracy <= veerMaxAccuracy,
+              NavigationHealth.isFresh(timestamp: fix.timestamp, now: now) else {
             offCourse.gated(at: now)
             return
         }

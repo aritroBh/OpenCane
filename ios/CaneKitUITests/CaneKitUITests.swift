@@ -5,7 +5,7 @@
 //  Drives the real app in the simulator the way a person would: starts the demo route and checks
 //  the waypoint lines appear, exercises Next / Repeat / Recenter / Stop, "Where am I" without a
 //  key (and, opt-in, on a Street View frame), the haptic test buttons, the Mount toggles, the
-//  Cues pickers, the three root tabs, "Navigate to CIF from here", and the destination field's
+//  Cues pickers, the four root tabs, "Navigate to CIF from here", and the destination field's
 //  error line and campus suggestions. LiDAR, haptics and the watch need a phone; everything else
 //  here runs on `make uitest`.
 //
@@ -17,7 +17,7 @@
 //  string.
 //
 //  How to run: `cd ios && make uitest` (iPhone 17 Pro Max / iOS 27 simulator; `make sim17` once).
-//  That runs the whole target, so `CaneKitVisualTour.testTour` runs too: 11 tests, with the
+//  That runs the whole target, so `CaneKitVisualTour.testTour` runs too: 12 tests, with the
 //  Street View test skipping itself unless `make uitest-streetview` passes a frame folder.
 //  ⚠ Set a simulator location first (`xcrun simctl location <udid> set 40.1140,-88.2249`) or the
 //  route tests fail for want of a GPS fix (AGENTS.md "Commands"). `make sim-grant` pre-grants
@@ -78,6 +78,7 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(illinois.exists, "Repeat must not change the instruction")
 
         app.buttons["Recenter"].tap()
+        stop.tap()
         stop.tap()
         XCTAssertTrue(start.waitForExistence(timeout: 5), "Stop returns to the idle guide")
         XCTAssertFalse(app.buttons["Repeat"].exists, "No Repeat without a route")
@@ -224,17 +225,19 @@ final class CaneKitUITests: XCTestCase {
         return condition()
     }
 
-    /// Spot-checks the VoiceOver tree across the three root tabs: the tab buttons and two Guide
-    /// buttons on launch, "Head row" after opening Sense, "Write trip log" after opening Settings
-    /// (only the selected page is in the tree since Step 27).
+    /// Spot-checks the VoiceOver tree across all four root tabs: the tab buttons and two Guide
+    /// buttons on launch, "Head row" after opening Sense, "Write trip log" after opening Settings,
+    /// and Profile's Medical ID actions and metric tile (only the selected page is in the tree).
     ///
-    /// ⚠ test contract: tabs "Guide", "Sense", "Settings"; button "Start route to CIF",
+    /// ⚠ test contract: tabs "Guide", "Sense", "Settings", "Profile"; button "Start route to CIF",
     /// element "Head row" (LaneGridView row label), button "Where am I",
-    /// switch "Write trip log" (Settings Mount card).
+    /// switch "Write trip log" (Settings Mount card), buttons "Edit Medical ID" / "Announce Medical ID",
+    /// and the Profile metric label beginning "Steps Today:".
     func testAccessibilityLabelsExist() {
         XCTAssertTrue(app.buttons["Guide"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Sense"].exists)
         XCTAssertTrue(app.buttons["Settings"].exists)
+        XCTAssertTrue(app.buttons["Profile"].exists)
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Where am I"].exists)
         openTab("Sense")
@@ -242,12 +245,19 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["Head row"].waitForExistence(timeout: 5))
         openTab("Settings")
         XCTAssertTrue(app.switches["Write trip log"].waitForExistence(timeout: 5))
+        openTab("Profile")
+        XCTAssertTrue(app.switches["Share data with OpenCane cloud"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Edit Medical ID"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Announce Medical ID"].waitForExistence(timeout: 5))
+        let steps = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH[c] 'Steps Today:'")).firstMatch
+        XCTAssertTrue(steps.waitForExistence(timeout: 5), "Profile metric tile should be accessible")
     }
 
     /// Selects a root tab by its VoiceOver label (icon-only on screen). Fails the test if the tab
     /// is missing after 5 s (the tour's copy just skips instead).
     ///
-    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings" (`RootTab.title`).
+    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings", "Profile" (`RootTab.title`).
     private func openTab(_ name: String) {
         let tab = app.buttons[name]
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "tab \(name)")
@@ -267,6 +277,7 @@ final class CaneKitUITests: XCTestCase {
         app.buttons["Start route to CIF"].tap()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 10))
         XCTAssertFalse(cif.exists, "route controls replace the picker while navigating")
+        app.buttons["Stop route"].tap()
         app.buttons["Stop route"].tap()
         XCTAssertTrue(cif.waitForExistence(timeout: 10))
     }

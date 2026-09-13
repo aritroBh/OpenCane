@@ -829,8 +829,9 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
 **F10 Accidental screen taps**: bench + 2 min walking · Sagar, Aarav
 - **Inject.** 20 palm brushes plus 2 min walking with the cane brushing a jacket. Once without
   Guided Access, once with it (Touch off).
-- **Expect.** Without Guided Access, Stop route (no confirmation), Next, Silence haptics, Mirror and
-  the beacon toggle are all unprotected (open item in `todo.md`).
+- **Expect.** Without Guided Access, Next, Silence haptics, Mirror and the beacon toggle remain
+  unprotected; the phone's Stop route requires a second tap within three seconds, while Watch/Siri
+  stop commands remain direct. Record any accidental first-tap arming or confirmed stop.
 - **Pass.** With Guided Access: **0** state changes (no `route` stop, no waypoint jump, toggles
   unchanged). Without: record the count; that's the argument for keeping Guided Access mandatory.
 

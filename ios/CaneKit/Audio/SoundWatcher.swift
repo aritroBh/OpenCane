@@ -631,10 +631,11 @@ final class SoundWatcher {
     /// ⚠ One exception: for the startup settle (same output, input unavailable → usable)
     /// `SpeechQueue` keeps `.playAndRecord` and only moves its baseline. `lifecycle.routeChanged`
     /// usually continues then (same usable input as its own baseline, or still starting), and this
-    /// returns without touching the session. Unverified edge (read from the code, not reproduced):
-    /// if the guard is already `.running` and the settled input differs from the one it holds, it
-    /// stops while `SpeechQueue` still holds the session — and the `sessionHeld = false` below then
-    /// skips the restore, leaving the `.soundRecognition` lease on `.playAndRecord`.
+    /// returns without touching the session. If a restore fails, `SpeechQueue` retains the lease
+    /// and performs its bounded recovery retries; this owner clears its local `sessionHeld` marker
+    /// before stopping so it does not issue a duplicate blocking category transition. The queued
+    /// restore is the single owner of that uncertain audio state and releases it on success or
+    /// after the bounded window.
     /// - Parameters:
     ///   - before: the route snapshot when the microphone was granted.
     ///   - after: the route snapshot now.
@@ -930,6 +931,11 @@ private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
     /// True once `finish()` has run. **Only ever read or written inside `queue`**, which is what
     /// makes it race-free without a lock: the serial queue is the synchronisation.
     private var finished = false
+    /// Number of buffers currently queued or being analyzed. The tap must drop newest work when
+    /// analysis falls behind, otherwise a slow classifier retains an unbounded PCM backlog.
+    private var pendingBuffers = 0
+    /// Synchronizes the pending count between the realtime tap thread and the analysis queue.
+    private let pendingLock = NSLock()
 
     /// - Parameters:
     ///   - analyzer: already has its request added (on main, before any tap exists).
@@ -957,8 +963,20 @@ private nonisolated final class SoundAnalysisPump: @unchecked Sendable {
     ///   - buffer: the PCM buffer the tap delivered (SoundAnalysis only accepts PCM).
     ///   - position: `AVAudioTime.sampleTime`, the analyser's stream position.
     func feed(_ buffer: AVAudioPCMBuffer, at position: AVAudioFramePosition) {
+        pendingLock.lock()
+        guard pendingBuffers < MicrophoneAnalysisLimits.maxPendingBuffers else {
+            pendingLock.unlock()
+            return
+        }
+        pendingBuffers += 1
+        pendingLock.unlock()
         let box = SoundBufferBox(buffer)
         queue.async { [self] in
+            defer {
+                pendingLock.lock()
+                pendingBuffers -= 1
+                pendingLock.unlock()
+            }
             guard !finished else { return }
             analyzer.analyze(box.buffer, atAudioFramePosition: position)
         }

@@ -89,6 +89,7 @@ final class CaneKitIslandTour: XCTestCase {
         app.activate()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 5))
         app.buttons["Stop route"].tap()
+        app.buttons["Stop route"].tap()
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 5))
         pause(1.0)
         XCUIDevice.shared.press(.home)

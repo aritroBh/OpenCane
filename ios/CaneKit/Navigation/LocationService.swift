@@ -107,8 +107,14 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     /// walker must never follow stale guidance in silence (Codex review). Installed by
     /// `AppModel.wireNavigation`.
     @ObservationIgnored var onDiagnostic: ((String, [String]) -> Void)?
+    /// Called when the live fix stream fails or CoreLocation revokes authorization. The first
+    /// argument distinguishes a Settings-actionable denial from a transient stream failure; the
+    /// second is diagnostic text for the trip log. Installed by `AppModel.wireNavigation`.
+    @ObservationIgnored var onFailure: ((Bool, String) -> Void)?
     /// Last diagnostic flags reported by the update stream, deduplicated so a persisting state logs once.
     @ObservationIgnored private var lastUpdateFlags: [String] = []
+    /// Prevents one authorization failure from producing one app warning per stream status update.
+    @ObservationIgnored private var failureNotified = false
 
     /// Keeps location alive if the screen locks mid-walk (needs UIBackgroundModes: location).
     /// Armed by `setNavigating(true)` (an active route only, Step 40) **and only without Always
@@ -197,12 +203,13 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     /// Idempotent. Uses default live-updates when idle, switching to `.otherNavigation` only when
     /// actively navigating a route (`setNavigating(true)`).
     /// Called by `AppModel.start()` (launch), `scenePhaseChanged(.active)`, `buildRoute` and
-    /// `startRouteNow` — see the file header's lifecycle. A thrown sequence error lands in
-    /// `lastError` and ends the loop while `isRunning` stays true (so a later `start()` is a no-op
-    /// until `stop()`).
+    /// `startRouteNow` — see the file header's lifecycle. A thrown or ended sequence records
+    /// `lastError` (for thrown errors), marks the service stopped and notifies the app so active
+    /// navigation can withdraw its retained target.
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        failureNotified = false
         manager.requestWhenInUseAuthorization()
         if CLLocationManager.headingAvailable() { manager.startUpdatingHeading() }
         startUpdatesLoop()
@@ -287,6 +294,12 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         reconcileBackgroundSession()
         onAuthorizationChange?(authorizationName, backgroundSessionArmed)
+        if authorizationDenied {
+            denied = true
+            authorized = false
+            stop()
+            notifyFailure(authorizationDenied: true, message: "Location authorization was denied.")
+        }
         if alwaysWanted, isNavigating, manager.authorizationStatus == .authorizedWhenInUse {
             alwaysWanted = false
             manager.requestAlwaysAuthorization()
@@ -314,31 +327,53 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
                         self.lastUpdateFlags = flags
                         if !flags.isEmpty { self.onDiagnostic?("updates", flags) }
                     }
-                    if update.authorizationDenied {
+                    if update.authorizationDenied || update.authorizationRestricted {
                         self.denied = true
                         self.authorized = false
-                        self.setNavigating(false)
+                        self.stop()
+                        self.notifyFailure(authorizationDenied: true,
+                                           message: "Location authorization was denied or restricted.")
+                        return
                     }
                     if update.authorizationRequestInProgress { continue }
                     guard let loc = update.location else { continue }
                     self.authorized = true
                     self.ingest(loc)
                 }
+                guard !Task.isCancelled, let self else { return }
+                self.isRunning = false
+                self.notifyFailure(authorizationDenied: false, message: "Location updates ended.")
             } catch {
-                self?.lastError = "Location: \(error.localizedDescription)"
+                guard !Task.isCancelled, let self else { return }
+                let message = "Location: \(error.localizedDescription)"
+                self.lastError = message
+                self.isRunning = false
+                self.notifyFailure(authorizationDenied: false, message: message)
             }
         }
+    }
+
+    /// Deliver one stream-failure callback until a new `start()` or a valid fix re-establishes
+    /// location. This keeps a persistent CoreLocation diagnostic from repeatedly interrupting
+    /// speech or canceling a queued route.
+    private func notifyFailure(authorizationDenied: Bool, message: String) {
+        guard !failureNotified else { return }
+        failureNotified = true
+        onFailure?(authorizationDenied, message)
     }
 
     /// Stops fixes and heading, releases the background session and clears `fix`. Called only by
     /// `AppModel.scenePhaseChanged(.background)` when no route is running — not by `stopRoute()`
     /// or arrival any more (bf03253).
     func stop() {
+        // Mark the service stopped before changing the navigation mode. Otherwise
+        // `setNavigating(false)` sees `isRunning == true`, creates a replacement default stream,
+        // and `stop()` leaves that task alive behind an apparently-off GPS pill.
+        isRunning = false
         updatesTask?.cancel()
         updatesTask = nil
         manager.stopUpdatingHeading()
         setNavigating(false)
-        isRunning = false
         fix = nil                             // a stale fix must not seed the next MapKit route
     }
 
@@ -352,6 +387,7 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
                        accuracy: loc.horizontalAccuracy, speed: loc.speed,
                        timestamp: loc.timestamp.timeIntervalSinceReferenceDate)
         fix = f
+        failureNotified = false
         onFix?(f)
         // Course-over-ground beats the compass once we are actually walking.
         if loc.speed > 0.7, loc.course >= 0 {
