@@ -35,7 +35,7 @@ public struct CKMedicalProfile: Codable, Sendable, Equatable {
         name: "Aritro Bhattacharjee",
         emergencyNotes: "OpenCane White Cane User · Legally Blind · Severe Visual Field Loss",
         dateOfBirth: "May 14, 2002",
-        bloodType: "O+",
+        bloodType: "A-",
         height: "5' 11\" (180 cm)",
         weight: "165 lbs (75 kg)",
         allergies: "No known drug allergies (NKDA)",
@@ -44,7 +44,7 @@ public struct CKMedicalProfile: Codable, Sendable, Equatable {
         emergencyContactName: "Emergency Contact",
         emergencyContactPhone: "+1 (555) 234-5678",
         emergencyContactRelation: "Family",
-        caneType: "130 cm · Rolling Ball Tip",
+        caneType: "130 cm · Standard Tip",
         organDonor: true
     )
 }
@@ -78,7 +78,13 @@ public final class MedicalProfileStore {
 
     public init() {
         if let data = UserDefaults.standard.data(forKey: Self.profileKey),
-           let decoded = try? JSONDecoder().decode(CKMedicalProfile.self, from: data) {
+           var decoded = try? JSONDecoder().decode(CKMedicalProfile.self, from: data) {
+            if decoded.bloodType == "O+" {
+                decoded.bloodType = "A-"
+            }
+            if decoded.caneType.contains("Rolling Ball") {
+                decoded.caneType = "130 cm · Standard Tip"
+            }
             self.profile = decoded
         } else {
             self.profile = .standardDefault
