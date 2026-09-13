@@ -911,11 +911,11 @@ final class AppModel {
         observeLaunchHealth()
         logger.start()
         liveActivity.endAllOrphanedActivities()
-        Task { [watchPaired = watch.isPaired] in
+        Task { [watchPaired = watch.isPaired, airPodsPaired = audioRoute.headphonesConnected] in
             await SupabaseClient.shared.recordDevice(
                 hasLiDAR: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
                 watchPaired: watchPaired,
-                airPodsPaired: CMHeadphoneMotionManager().isDeviceMotionAvailable
+                airPodsPaired: airPodsPaired
             )
         }
         speech.onSuppressed = { [weak self] text, load, reason in
@@ -1862,16 +1862,20 @@ final class AppModel {
         if let severity { eventFields["severity"] = severity }
         logger.event("hazard", eventFields)
 
-        Task { [kind, text, whatItSaw, fix, distanceM, heightM, direction, headingDeg, speedMps, routeName, instruction, source, severity] in
+        let lat = fix?.coordinate.latitude
+        let lon = fix?.coordinate.longitude
+        let accuracyM = fix?.accuracy
+
+        Task { [kind, text, whatItSaw, lat, lon, accuracyM, distanceM, heightM, direction, headingDeg, speedMps, routeName, instruction, source, severity] in
             await SupabaseClient.shared.recordHazard(
                 kind: kind,
                 source: source.rawValue,
                 severity: severity ?? "warn",
                 spokenText: text,
                 whatItSaw: whatItSaw,
-                lat: fix?.coordinate.latitude,
-                lon: fix?.coordinate.longitude,
-                accuracyM: fix?.accuracy,
+                lat: lat,
+                lon: lon,
+                accuracyM: accuracyM,
                 distanceM: distanceM,
                 heightM: heightM,
                 direction: direction,

@@ -709,6 +709,14 @@ for 60 s so a weak network can never stall a cue.
 - [x] Hardware telemetry registration on `AppModel.start()` syncing device metadata to `devices`
 - [x] Verified PostgREST endpoints and views (`hazard_map`, `walker_dashboard`, `mobility_days`)
 
+## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
+- [x] Muse review findings resolved: C1 (secret key removed from client bundle), C2 (install_id data isolation), C3 (in-flight mutex on resolveWalkerID), C5 (Sendable primitive extraction in recordHazard), C7 (utsname dynamic hardware model), M1 (explicit on_conflict upserts), M5 (a11y labels + allergen symbol fix)
+- [x] Codex review findings resolved: aligned `mobility_days` date to local calendar day via `Calendar.current` date components (avoiding UTC timezone rollover discrepancy)
+- [x] Added `AritroProfile.imageset` to `Assets.xcassets` with user's campus portrait; rendered 56x56 circular avatar in ProfilePage
+- [x] Redesigned GuideCard buttons: added subtitle and chevron support to `CKBigButton`; replaced cramped 3-line wrapped HStack with clean full-width vertical hierarchy ("Campus Demo" vs "Live GPS")
+- [x] Verified unit tests (`make test`: 538 / 538 passing), simulator build (`make sim`), XCUITests (`make uitest`: 11 / 11 passing), and physical device install on iPhone 17 Pro Max (PID 6563)
+- [x] Refreshed knowledge graph (`graphify update .`) to 4,020 nodes, 9,423 edges, 205 communities
+
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen

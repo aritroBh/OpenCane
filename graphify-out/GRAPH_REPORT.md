@@ -1,16 +1,16 @@
 # Graph Report - 54FoundersHack  (2026-09-12)
 
 ## Corpus Check
-- 214 files · ~514,434 words
+- 215 files · ~530,969 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 4019 nodes · 9416 edges · 209 communities (199 shown, 10 thin omitted)
+- 4020 nodes · 9423 edges · 205 communities (196 shown, 9 thin omitted)
 - Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 1102 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `252152d2`
+- Built from commit: `29178956`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -44,9 +44,9 @@
 - DepthEngine
 - Coordinate
 - .say
-- SceneDescriber
+- .describe
 - Decodable
-- PhoneToWatch
+- WatchToPhone
 - Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI
 - GeoFix
 - DestinationField
@@ -90,10 +90,10 @@
 - SignPolicy
 - LaunchMode
 - Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity
-- NavLiveActivity.swift
+- SwiftUI
 - Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)
 - .directions
-- View
+- Text
 - LaneGrid
 - Team handoff: read this first after you pull
 - pitch_model.py
@@ -123,14 +123,14 @@
 - CodingKeys
 - LocationService
 - SightingKind
-- .wireNavigation
+- CueDecider
 - .handle
-- NavCue
+- Codable
 - SceneVocabularyTests.swift
 - StatusFacts
 - TorchSwitch
 - PeopleAheadTests.swift
-- WalkMarker
+- ConversationCoordinator
 - SoundWatcher
 - DangerSound
 - DepthReadiness
@@ -139,27 +139,27 @@
 - RootTab
 - SensorProbe
 - DualCameraSession
-- SensorProbe.swift
+- WatchModel.swift
 - .resumeOffset
-- Text
+- ProfilePage
 - TripLogger
 - ElevenLabsVoice
 - CallbackBox
 - ProbeSessionWatcher
-- OnDeviceVision.swift
+- sign_probe.swift
 - .probeCapture
 - CloudSceneGateTests.swift
 - SpeechLoadPolicy
 - cue_audit.py
 - DepthFrameContinuity
 - DualCameraFrameRelay
-- ConversationContext
+- ConversationTurn
 - OpenCane cue design v2: what blind travellers need, and how to make the cane calmer
 - LiveViewTests.swift
 - .make
 - .queue
 - SoundAnalysisPump
-- json
+- HapticCue
 - LiveCameraView
 - ios/CaneKit/UI/Theme.swift
 - Driving OpenCane without looking at the screen
@@ -167,9 +167,9 @@
 - QuestionPromptTests.swift
 - stl_tools.js
 - OpenCane Speech Load Design
-- .session
+- healthy
 - Global Constraints
-- ConversationTurn
+- LaneCell
 - SoundRecognitionFailure
 - LiveActivitySnapshot
 - 3D print files — the screwless phone mount
@@ -183,7 +183,7 @@
 - .setMicrophoneEnabled
 - Bolt's Journal - Critical Learnings
 - CodingKeys
-- Equatable
+- ConversationTool
 - CodingKeys
 - VLMError
 - PlayerRelay
@@ -193,7 +193,7 @@
 - ActionRateLimit
 - String
 - Module `family-alerts` — cane events → the Grok Bot routine (Step 39)
-- .describe
+- RouteSource.swift
 - .invalidateReadiness
 - .sighting
 - GrokBotClient
@@ -203,22 +203,18 @@
 - DepthSnapshotTests.swift
 - AppIntent
 - .model
-- ArrivalCardView
-- CameraControlInteraction
+- View
+- SensorProbe.swift
 - streetview_stim.py
-- Codable
-- DualPreviewHostView
+- FrameReplay
+- HazardsCard
 - CampusDestination
 - Settings
 - Module `depth-haptics` — `ios/CaneKit/Depth/*.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift`
-- .subscript
-- .string
+- CueKind
+- .portDescription
 - Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)
 - Step 16 — Emergency sirens + hands-free integrated (Sat Sep 12, uncommitted)
-- GrokBotResult
-- BothCameras
-- RouteTests.swift
-- HazardSource
 - .jpegSnapshot
 
 ## God Nodes (most connected - your core abstractions)
@@ -238,12 +234,12 @@
   ios/project.yml → ios/CaneKit/Trip/TripLogger.swift
 - `CaneKitUITests target` --references--> `CaneKitUITests`  [INFERRED]
   ios/project.yml → ios/CaneKitUITests/CaneKitUITests.swift
+- `rawEntrypointHonoursPaddedRowStrides()` --calls--> `scene`  [INFERRED]
+  ios/Logic/Tests/CaneKitLogicTests/LaneMathTests.swift → ios/CaneKit/Speech/SpeechQueue.swift
 - `CaneKitWidget Live Activity target` --conceptually_related_to--> `LiveActivityController`  [INFERRED]
   ios/project.yml → ios/CaneKit/Trip/LiveActivityController.swift
-- `.body` --calls--> `LaneGridView`  [INFERRED]
-  ios/CaneKit/UI/ContentView.swift → ios/CaneKit/UI/LaneGridView.swift
-- `nestedLocationFormDecodes()` --calls--> `OpenCaneGeo`  [INFERRED]
-  ios/Logic/Tests/CaneKitLogicTests/GrokBotEventTests.swift → ios/Logic/Sources/CaneKitLogic/GrokBotEvent.swift
+- `logic-tests job (Linux, swift:6.2)` --references--> `CaneKitLogic SwiftPM package`  [EXTRACTED]
+  .github/workflows/ci.yml → ios/project.yml
 
 ## Import Cycles
 - None detected.
@@ -255,23 +251,23 @@
 - **Phone-watch cue and command link over the WatchMessage wire contract** — ios_canekit_watch_phonewatchlink_phonewatchlink, ios_logic_sources_canekitlogic_watchmessage, ios_canekitwatch_watchmodel_watchmodel [EXTRACTED 1.00]
 - **Watch command round trip (button/crown to phone action)** — ios_canekitwatch_watchmodel_watchmodel_send, ios_logic_sources_canekitlogic_watchmessage_watchenvelope, ios_canekit_watch_phonewatchlink_sessionrelay, ios_canekit_watch_phonewatchlink_phonewatchlink, ios_canekit_app_appmodel_appmodel_handlewatchcommand, ios_canekit_navigation_navigationengine_navigationengine [EXTRACTED 1.00]
 
-## Communities (209 total, 10 thin omitted)
+## Communities (205 total, 9 thin omitted)
 
 ### Community 0 - "AppModel"
-Cohesion: 0.08
-Nodes (30): App, AppModel, .extendedRange, .hapticsEnabled, .mirrorLeftRight, .portraitMode, .speechEnabled, .urgentDistance (+22 more)
+Cohesion: 0.11
+Nodes (20): App, AppModel, .extendedRange, .hapticsEnabled, .mirrorLeftRight, .portraitMode, .speechEnabled, .urgentDistance (+12 more)
 
 ### Community 1 - "Foundation"
-Cohesion: 0.11
-Nodes (11): AVFoundation, CoreBluetooth, CoreHaptics, CoreMedia, CoreMotion, Foundation, HealthKit, Observation (+3 more)
+Cohesion: 0.12
+Nodes (8): ActivityKit, AVFoundation, CoreBluetooth, CoreHaptics, CoreMedia, Foundation, Observation, Speech
 
 ### Community 2 - "CaneKitUITests"
 Cohesion: 0.08
-Nodes (12): CaneKitUITests, Bool, TimeInterval, XCUIApplication, XCUIElement, CaneKitVisualTour, Data, TimeInterval (+4 more)
+Nodes (13): CaneKitUITests, Bool, TimeInterval, XCUIApplication, XCUIElement, CaneKitVisualTour, Data, TimeInterval (+5 more)
 
 ### Community 3 - "DepthEngine"
 Cohesion: 0.16
-Nodes (13): ARConfidenceLevel, DepthEngine, LaneReport, ARFrame, ARSession, ARWorldTrackingConfiguration, CVPixelBuffer, Double (+5 more)
+Nodes (14): ARConfidenceLevel, DepthEngine, LaneReport, ARFrame, ARSession, ARWorldTrackingConfiguration, CVPixelBuffer, Double (+6 more)
 
 ### Community 4 - "NavSupportTests.swift"
 Cohesion: 0.09
@@ -295,47 +291,47 @@ Nodes (21): CBCentralManager, CBCentralManagerDelegate, CBCharacteristic, CBPeri
 
 ### Community 9 - "LiveActivityController"
 Cohesion: 0.15
-Nodes (14): Activity, ActivityAttributes, LiveActivityController, Bool, Double, Int, Background modes (audio, location; workout-processing, mindfulness), CaneKit iPhone app target (+6 more)
+Nodes (14): Activity, ActivityAttributes, logic-tests job (Linux, swift:6.2), LiveActivityController, Bool, Double, Int, Background modes (audio, location; workout-processing, mindfulness) (+6 more)
 
 ### Community 10 - "Waypoint"
 Cohesion: 0.13
-Nodes (15): .current, GeoMath, Double, RouteBuilder, RouteStepInput, Bool, Decoder, Double (+7 more)
+Nodes (16): .current, NavEvent, reached, Int, Route, RouteBuilder, RouteStepInput, Bool (+8 more)
 
 ### Community 11 - "docs/README.md"
-Cohesion: 0.21
-Nodes (9): Hard rules, CaneKit — Claude Code project rules, CI workflow (manual trigger only), logic-tests job (Linux, swift:6.2), sim-build job (macOS, informational), Drafts (iOS 18, pre-hackathon), LaneMath, CaneKitLogic SwiftPM package (+1 more)
+Cohesion: 0.30
+Nodes (5): Hard rules, CaneKit — Claude Code project rules, CI workflow (manual trigger only), sim-build job (macOS, informational), gen.sh script
 
 ### Community 12 - "CKBigButton"
 Cohesion: 0.09
 Nodes (25): ButtonStyle, ColorSchemeContrast, Configuration, .selfTests, .body, CKBigButton, .body, .icon (+17 more)
 
 ### Community 13 - "HapticPlayer"
-Cohesion: 0.05
-Nodes (58): CHHapticEngine, CHHapticPattern, CHHapticPatternPlayer, HapticPlayer, .silenced, Float, Int, Never (+50 more)
+Cohesion: 0.14
+Nodes (12): CHHapticEngine, CHHapticPattern, CHHapticPatternPlayer, HapticPlayer, .silenced, Float, Int, Never (+4 more)
 
 ### Community 14 - "LaneTile"
-Cohesion: 0.21
-Nodes (11): LaneGridView, .body, LaneTile, .fill, .level, .levelWord, .text, Bool (+3 more)
+Cohesion: 0.19
+Nodes (12): .body, LaneGridView, .body, LaneTile, .fill, .level, .levelWord, .text (+4 more)
 
 ### Community 15 - "NavigationEngine"
-Cohesion: 0.15
-Nodes (11): .currentName, NavigationEngine, Bool, Date, Double, Int, TimeInterval, Void (+3 more)
+Cohesion: 0.16
+Nodes (9): Element, Array, NavigationEngine, Bool, Date, Double, Int, TimeInterval (+1 more)
 
 ### Community 16 - "VLMClient"
-Cohesion: 0.09
-Nodes (26): AnthropicClient, FallbackVLMClient, .cloudPrimary, .name, .onDeviceFallback, GeminiClient, OpenAICompatibleClient, post() (+18 more)
+Cohesion: 0.07
+Nodes (32): Secrets, .hasElevenLabs, Bool, AnthropicClient, FallbackVLMClient, .cloudPrimary, .name, .onDeviceFallback (+24 more)
 
 ### Community 17 - "VoiceInputEngine"
 Cohesion: 0.08
 Nodes (29): SpeechBufferBox, SpeechResultsRelay, Any, AVAudioFormat, AVAudioNode, AVAudioPCMBuffer, Bool, Double (+21 more)
 
 ### Community 18 - ".computeLanes"
-Cohesion: 0.17
-Nodes (22): LaneGrid, scene, LaneConfig, UInt8, UnsafeRawPointer, PublishGate, Double, groundBandIsSkipped() (+14 more)
+Cohesion: 0.18
+Nodes (21): LaneGrid, LaneConfig, UInt8, UnsafeRawPointer, PublishGate, Double, groundBandIsSkipped(), headRowIsTopBand() (+13 more)
 
 ### Community 19 - "AppModel"
-Cohesion: 0.07
-Nodes (23): AppModel, .beaconEnabled, .cueLevel, .cuePlace, .dangerSoundsEnabled, .fallbackToWatch, .fallDetectionEnabled, .familyAlertsAIContext (+15 more)
+Cohesion: 0.06
+Nodes (25): AppModel, .beaconEnabled, .cueLevel, .cuePlace, .fallbackToWatch, .fallDetectionEnabled, .familyAlertsAIContext, .familyAlertsEnabled (+17 more)
 
 ### Community 20 - "WKBigButton"
 Cohesion: 0.12
@@ -351,11 +347,11 @@ Nodes (6): HKWorkoutSession, Int, Never, Task, WatchModel, WKHapticType
 
 ### Community 23 - "SpeechQueue"
 Cohesion: 0.16
-Nodes (16): AVAudioSessionPortDescription, Int, Pending, SpeechPriority, nav, obstacle, safety, SpeechQueue (+8 more)
+Nodes (17): AVSpeechUtterance, Int, Pending, SpeechPriority, nav, obstacle, safety, scene (+9 more)
 
 ### Community 24 - "DepthFrameProcessor"
-Cohesion: 0.15
-Nodes (13): AsyncStream, DepthFrameProcessor, .hasCameraFrame, .rotationRate, ProcessorSettings, Bool, CGFloat, CVPixelBuffer (+5 more)
+Cohesion: 0.11
+Nodes (17): AsyncStream, DepthFrameProcessor, .hasCameraFrame, .rotationRate, ProcessorSettings, ARFrame, ARSession, Bool (+9 more)
 
 ### Community 25 - ".samples"
 Cohesion: 0.33
@@ -366,48 +362,48 @@ Cohesion: 0.14
 Nodes (12): DepthEngine, .arSession, .supportedFormats, .supportsFrontCameraWithLiDAR, ARWorldTrackingConfiguration, Double, Int, LaneReport (+4 more)
 
 ### Community 27 - "Coordinate"
-Cohesion: 0.16
-Nodes (26): Coordinate, GeofenceTracker, .isFinished, NavEvent, reached, Bool, Int, aGatedOutFixDoesNotBreakTheArrivalStreak() (+18 more)
+Cohesion: 0.23
+Nodes (22): Coordinate, GeofenceTracker, .isFinished, aGatedOutFixDoesNotBreakTheArrivalStreak(), arrivalStreakResetsOnAMiss(), cardinalBearings(), fix(), geofenceGatesOnAccuracyAndSpeedExceptArrival() (+14 more)
 
 ### Community 28 - ".say"
-Cohesion: 0.12
-Nodes (4): .faceHeadTrackingEnabled, AVCaptureDevice, Bool, Any
+Cohesion: 0.10
+Nodes (3): .dangerSoundsEnabled, Any, Int
 
-### Community 29 - "SceneDescriber"
-Cohesion: 0.22
-Nodes (10): OnDeviceVision, Data, Float, Set, TextDetections, SceneDescriber, Bool, Data (+2 more)
+### Community 29 - ".describe"
+Cohesion: 0.12
+Nodes (16): OnDeviceHazards, OnDeviceVision, OnDeviceVLMClient, SceneContext, Bool, Data, Float, Set (+8 more)
 
 ### Community 30 - "Decodable"
-Cohesion: 0.09
-Nodes (36): Decodable, Encodable, RouteError, destinationNotFound, .errorDescription, missingBundledRoute, noRoute, Candidate (+28 more)
+Cohesion: 0.10
+Nodes (30): Decodable, Encodable, Candidate, Content, DescribeError, badResponse, .errorDescription, http (+22 more)
 
-### Community 31 - "PhoneToWatch"
-Cohesion: 0.16
-Nodes (15): PhoneToWatch, nav, obstacle, status, Any, Int, WatchEnvelope, WatchToPhone (+7 more)
+### Community 31 - "WatchToPhone"
+Cohesion: 0.22
+Nodes (10): Any, WatchEnvelope, WatchToPhone, describe, nextWaypoint, recenter, repeatLast, phoneToWatchRoundTrips() (+2 more)
 
 ### Community 32 - "Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI"
 Cohesion: 0.07
 Nodes (27): docs/design.md — rules the UI code implements, .github/workflows/ci.yml, ios/CaneKit/Trip/MedicalProfileStore.swift (Step 44), ios/CaneKit/Trip/SupabaseClient.swift (Step 45), ios/CaneKit/UI/ArrivalCardView.swift, ios/CaneKit/UI/ContentView.swift, ios/CaneKit/UI/DestinationField.swift (Step 14), ios/CaneKit/UI/GuideCard.swift (+19 more)
 
 ### Community 33 - "GeoFix"
-Cohesion: 0.20
-Nodes (13): C, CourseSmoother, Double, Int, TimeInterval, GeoFix, aRealTurnShowsUpAfterTheBaseline(), at() (+5 more)
+Cohesion: 0.11
+Nodes (19): C, CourseSmoother, Double, Int, TimeInterval, GeoFix, GeoMath, Bool (+11 more)
 
 ### Community 34 - "DestinationField"
-Cohesion: 0.27
-Nodes (5): DestinationField, .body, .suggestionList, Bool, ScrollViewProxy
+Cohesion: 0.24
+Nodes (6): Binding, DestinationField, .body, .suggestionList, Bool, ScrollViewProxy
 
 ### Community 35 - "HazardScanner"
-Cohesion: 0.14
-Nodes (14): HazardScanner, .signAllowedPhrases, Any, Bool, CGFloat, Data, Double, Int (+6 more)
+Cohesion: 0.13
+Nodes (17): HazardScanner, .signAllowedPhrases, HazardSource, ground, sign, vision, Any, Bool (+9 more)
 
 ### Community 36 - "2. Device test matrix"
 Cohesion: 0.07
 Nodes (30): 0. Read this before testing: facts from the code that change how you test, 1.0 The next 24 hours, 1.1 Automated (Mac, no phone): run on every change, 1.2 Bench (indoors, phone plugged in, ISR lobby), 1.3 Outdoor walks, 1.4 Log toolkit (Aritro), 1. Test levels, 2. Device test matrix (+22 more)
 
 ### Community 37 - ".scenePhaseChanged"
-Cohesion: 0.21
-Nodes (4): .bothCamerasEnabled, MainActor, ScenePhase, Task
+Cohesion: 0.12
+Nodes (8): .bothCamerasEnabled, .faceHeadTrackingEnabled, AVCaptureDevice, Bool, Double, MainActor, ScenePhase, Task
 
 ### Community 38 - "e2e.py"
 Cohesion: 0.12
@@ -426,15 +422,15 @@ Cohesion: 0.19
 Nodes (27): GroundHazardDetector, GroundSample, aCurbDownIsADropOff(), aCurbUpIsAStepUp(), aCurbYouWalkTowardStillConfirms(), aDeepDropIsReportedAtItsNearEdge(), aDeskIsNotTheGround(), aHazardNeedsThreeAgreeingFrames() (+19 more)
 
 ### Community 42 - "HapticLogic"
-Cohesion: 0.14
-Nodes (16): Comparable, HapticLogic, Lane, center, left, .motorCode, right, .spoken (+8 more)
+Cohesion: 0.11
+Nodes (18): Comparable, HapticLogic, Lane, center, left, .motorCode, right, .spoken (+10 more)
 
 ### Community 43 - "FamilyAlerts"
 Cohesion: 0.17
 Nodes (9): FamilyAlerts, .canSummarize, .isConfigured, .summarizerName, Bool, Double, Int, MainActor (+1 more)
 
 ### Community 44 - "TripTracker"
-Cohesion: 0.20
+Cohesion: 0.21
 Nodes (9): HKObserverQuery, Date, Double, Int, Never, Task, TimeInterval, Void (+1 more)
 
 ### Community 45 - "SupabaseClient"
@@ -446,8 +442,8 @@ Cohesion: 0.25
 Nodes (8): `App/HandsFreeIntents.swift` — Siri status, questions, voice switches (Step 16), `AppIntents.swift` — Action button / Siri entry points, CaneKit code reference, `CaneKitApp.swift` — app entry point, Contents, Data flow, How to keep this file true, Module `app-core` — `ios/CaneKit/App/`
 
 ### Community 47 - "Float"
-Cohesion: 0.29
-Nodes (5): Box, Config, SeenText, ClosedRange, Float
+Cohesion: 0.24
+Nodes (4): Box, Config, ClosedRange, Float
 
 ### Community 48 - ".content"
 Cohesion: 0.18
@@ -458,8 +454,8 @@ Cohesion: 0.07
 Nodes (29): 0. Who looks at the screen, and what that forces, 10. Open design gaps (code ≠ intent, not yet fixed), 1. Typography, 2. Colour tokens, 3. Spacing and radius, 4. Motion, 5.1 Speech priorities (`SpeechQueue`, AGENTS.md hard rule 8), 5.2 Obstacle cues (phone Taptic Engine, felt through the cane) (+21 more)
 
 ### Community 50 - "ConversationAction"
-Cohesion: 0.12
-Nodes (17): ConversationAction, answerHistory, answerStatus, inspectScene, recordMarker, silenceCane, speakImmediate, startRoute (+9 more)
+Cohesion: 0.09
+Nodes (23): ConversationAction, answerHistory, answerStatus, inspectScene, recordMarker, silenceCane, speakImmediate, startRoute (+15 more)
 
 ### Community 51 - "CaneKit grip module firmware"
 Cohesion: 0.22
@@ -482,8 +478,8 @@ Cohesion: 0.10
 Nodes (20): GuideCard, .beaconWord, .body, .gpsTone, .gpsWord, .headSpoken, .headWord, Double (+12 more)
 
 ### Community 56 - "OpenCaneEvent"
-Cohesion: 0.10
-Nodes (28): ExpressibleByBooleanLiteral, ExpressibleByFloatLiteral, ExpressibleByIntegerLiteral, ExpressibleByStringLiteral, Date, OpenCaneEvent, OpenCaneEventType, OpenCaneGeo (+20 more)
+Cohesion: 0.09
+Nodes (35): ExpressibleByBooleanLiteral, ExpressibleByFloatLiteral, ExpressibleByIntegerLiteral, ExpressibleByStringLiteral, OpenCaneEvent, OpenCaneEventType, OpenCaneGeo, OpenCaneJSON (+27 more)
 
 ### Community 57 - "Module: logic — `ios/Logic` (SwiftPM package `CaneKitLogic`)"
 Cohesion: 0.07
@@ -498,15 +494,15 @@ Cohesion: 0.20
 Nodes (10): CodingKeys, bearingNextDeg, crossing, curved, id, lat, lon, name (+2 more)
 
 ### Community 60 - "LaneReport"
-Cohesion: 0.18
-Nodes (13): .body, LaneReport, .head, MeshHit, MountTilt, Bool, ClosedRange, Float (+5 more)
+Cohesion: 0.17
+Nodes (13): LaneReport, .head, MeshHit, MountTilt, Bool, ClosedRange, Float, LaneGrid (+5 more)
 
 ### Community 61 - "CaneKit — strict build checklist"
 Cohesion: 0.05
 Nodes (42): Branch state (updated 2026-09-12 morning), CaneKit — strict build checklist, Cross-cutting, Cue design v2 — Steps 35–45 (approved 2026-09-12 evening; talk floor inserted as 37 the same night, later steps renumbered +1 — CHANGELOG entries before Step 37 use the old numbers), ElevenLabs setup (2 minutes, Aritro only — nobody else can do this), Gemini setup (optional, 3 minutes, Aritro only), Hardware, later that evening (Windows machine) — see CHANGELOG Step 25, Hardware tonight (Sagar, Windows machine) (+34 more)
 
 ### Community 62 - "GroundHazard"
-Cohesion: 0.13
+Cohesion: 0.14
 Nodes (16): GroundHazard, GroundHazardKind, dropOff, .isDepression, .isElevation, lowObstacle, pothole, .shortNoun (+8 more)
 
 ### Community 63 - "Module `watch-widget-shared`"
@@ -514,8 +510,8 @@ Cohesion: 0.14
 Nodes (14): Cross-module map, `ios/CaneKit/Watch/PhoneWatchLink.swift` — phone side of WatchConnectivity, `ios/CaneKitWatch/CaneKitWatch.entitlements`, `ios/CaneKitWatch/WatchApp.swift` — watchOS entry point, `ios/CaneKitWatch/WatchContentView.swift` — the wrist screen, `ios/CaneKitWatch/WatchModel.swift` — watch side: haptics, commands, crown, keep-alive, `ios/CaneKitWatch/WatchTheme.swift` — watch design tokens (docs/design.md §6.6), `ios/CaneKitWidget/CaneKitWidgetBundle.swift` — widget extension entry (+6 more)
 
 ### Community 64 - "ObstacleClass"
-Cohesion: 0.11
-Nodes (18): MeshClassifier, ARFrame, Bool, Float, ObstacleNamer, Bool, Float, LaneReport (+10 more)
+Cohesion: 0.12
+Nodes (16): ARFrame, Float, ObstacleNamer, Bool, Float, LaneReport, TimeInterval, ObstacleClass (+8 more)
 
 ### Community 65 - "HazardRecord"
 Cohesion: 0.16
@@ -530,20 +526,20 @@ Cohesion: 0.12
 Nodes (24): CMHeadphoneMotionManager, CMHeadphoneMotionManagerDelegate, ConnectionRelay, HeadPoseTracker, Bool, Double, Void, HeadNodDetector (+16 more)
 
 ### Community 68 - "CompletionLine"
-Cohesion: 0.10
-Nodes (29): CampusPlaces, Set, CompletionLine, DestinationSuggestion, .detailLine, .searchQuery, .voiceOverHint, DestinationSuggestionKind (+21 more)
+Cohesion: 0.16
+Nodes (18): CompletionLine, .detailLine, DestinationSuggestions, Int, announcementCountsTheRows(), atMostThreeCampusRows(), campusMatchingIsPartialUnlikeTheGazetteerLookup(), campusPlacesRankFirst() (+10 more)
 
 ### Community 69 - "Sendable"
-Cohesion: 0.14
-Nodes (16): VoiceInputState, error, idle, listening, processing, recognizing, Frame, FrameReplay (+8 more)
+Cohesion: 0.09
+Nodes (30): Equatable, Identifiable, VoiceInputState, error, idle, listening, processing, recognizing (+22 more)
 
 ### Community 70 - "OffCourseDetector"
 Cohesion: 0.33
 Nodes (9): OffCourseDetector, TimeInterval, aGpsGapForgetsTheHoldSoThereIsNoInstantVeer(), aStopMidDriftRestartsTheHold(), endEpisodeRequiresAFullHoldAgain(), gatedMomentsInsideGoodTrackingKeepTheHold(), offCourseNeedsThreeSecondsThenCoolsDown(), offCourseResetsWhenBackOnBearing() (+1 more)
 
 ### Community 72 - "SignPolicy"
-Cohesion: 0.14
-Nodes (17): VisionDetections, .seenTexts, GroundHazardPolicy, SignPolicy, SignPhraseFilterTests, aPartialReadOfTheSameSignIsQuiet(), aSecondSignIsStillRead(), farLinesAreNotJoinedIntoAPhantomSign() (+9 more)
+Cohesion: 0.15
+Nodes (16): GroundHazardPolicy, SeenText, SignPolicy, SignPhraseFilterTests, aPartialReadOfTheSameSignIsQuiet(), aSecondSignIsStillRead(), farLinesAreNotJoinedIntoAPhantomSign(), farStackedSignLinesAreJoined() (+8 more)
 
 ### Community 73 - "LaunchMode"
 Cohesion: 0.18
@@ -553,6 +549,10 @@ Nodes (10): LaunchMode, normal, recovered, LaunchRecovery, Bool, Double, aComple
 Cohesion: 0.15
 Nodes (13): Data flow (who calls whom), `docs/route_isr_cif.md`, `ios/CaneKit/Navigation/DestinationSearch.swift` (Step 14), `ios/CaneKit/Navigation/LocationService.swift`, `ios/CaneKit/Navigation/NavigationEngine.swift`, `ios/CaneKit/Navigation/RouteSource.swift`, `ios/CaneKit/Resources/route_isr_cif.json` — schema and waypoints, `ios/CaneKit/Trip/HazardLog.swift` (Step 11) (+5 more)
 
+### Community 75 - "SwiftUI"
+Cohesion: 0.15
+Nodes (5): AVKit, SceneKit, SwiftUI, UIKit, WidgetKit
+
 ### Community 76 - "Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)"
 Cohesion: 0.11
 Nodes (18): Constants, Functions, `ios/CaneKit/Audio/AudioRouteMonitor.swift`, `ios/CaneKit/Audio/BeaconEngine.swift`, `ios/CaneKit/Audio/HeadPoseTracker.swift`, `ios/CaneKit/Audio/SoundWatcher.swift` — optional microphone sound recognition, `ios/CaneKit/Scene/CameraControlInteraction.swift`, `ios/CaneKit/Scene/HazardScanner.swift` (Step 11) (+10 more)
@@ -561,13 +561,13 @@ Nodes (18): Constants, Functions, `ios/CaneKit/Audio/AudioRouteMonitor.swift`, `
 Cohesion: 0.31
 Nodes (9): CLLocation, CLLocationCoordinate2D, PlannedRoute, RouteDestination, place, query, RouteSource, Double (+1 more)
 
-### Community 78 - "View"
-Cohesion: 0.11
-Nodes (29): .page, dismissKeyboard(), GuidePage, .body, MountAimRow, ObstaclesCard, .body, pageScroll() (+21 more)
+### Community 78 - "Text"
+Cohesion: 0.12
+Nodes (24): FamilyContactsEditor, .addressList, .body, .canAdd, .entryRow, .errorLine, .header, .saveRow (+16 more)
 
 ### Community 80 - "LaneGrid"
 Cohesion: 0.38
-Nodes (4): LaneGrid, Float, Int, .torso
+Nodes (4): LaneGrid, LaneMath, Float, Int
 
 ### Community 81 - "Team handoff: read this first after you pull"
 Cohesion: 0.10
@@ -578,7 +578,7 @@ Cohesion: 0.27
 Nodes (11): clearance(), convex_hull(), ground_hit(), outside(), pitch_table(), Where the cane shaft (toward the tip) appears in the wide camera's portrait…, z-depth and range where a ray alpha deg above the optical axis meets the ground., Smallest gap (mm) between the cradle box and the cane / collar / ear over phi =… (+3 more)
 
 ### Community 83 - "SpeechResume"
-Cohesion: 0.17
+Cohesion: 0.16
 Nodes (8): Character, SpeechResume, Bool, Int, Set, TimeInterval, Substring, UInt16
 
 ### Community 84 - "AlertContext"
@@ -646,20 +646,20 @@ Cohesion: 0.50
 Nodes (3): Step 12 findings (2026-09-11, afternoon) and fixes, Street View route frames (local test input), What the first 2026-09-11 run showed
 
 ### Community 100 - "ConversationLogicTests"
-Cohesion: 0.22
-Nodes (3): FastPathIntentClassifier, Bool, ConversationLogicTests
+Cohesion: 0.13
+Nodes (7): ConversationPrompt, ConversationResponseParser, ParsedConversationResponse, WireFormat, FastPathIntentClassifier, Bool, ConversationLogicTests
 
 ### Community 101 - "DepthSnapshot"
-Cohesion: 0.17
-Nodes (11): DepthSnapshot, .isEmpty, Bool, ClosedRange, Float, Int, UInt8, UnsafeRawPointer (+3 more)
+Cohesion: 0.19
+Nodes (15): DepthSnapshot, .isEmpty, Bool, ClosedRange, Float, Int, UInt8, UnsafeRawPointer (+7 more)
 
 ### Community 102 - "SpokenPhrases"
 Cohesion: 0.14
-Nodes (14): .spokenLine, SpokenPhrases, Float, Int, SpokenDistance, Float, aNonFiniteObstacleDistanceHasNoDistanceClause(), bucketSamplesReturnOneDistancePerDistinctPhrase() (+6 more)
+Nodes (14): .spokenLine, SpokenPhrases, Float, Int, Float, aNonFiniteObstacleDistanceHasNoDistanceClause(), bucketSamplesReturnOneDistancePerDistinctPhrase(), everyGroundHazardLineIsPrefetched() (+6 more)
 
 ### Community 103 - "CampusPlacesTests.swift"
-Cohesion: 0.16
-Nodes (17): DestinationPicker, PlaceCandidate, Double, Int, WalkingIntro, .voiceOverLabel, campusAliasesIgnoreCasePunctuationAndThe(), east() (+9 more)
+Cohesion: 0.10
+Nodes (25): CampusPlaces, DestinationPicker, PlaceCandidate, Double, Int, Set, WalkingIntro, .voiceOverLabel (+17 more)
 
 ### Community 106 - "CodingKeys"
 Cohesion: 0.09
@@ -670,43 +670,43 @@ Cohesion: 0.15
 Nodes (12): CLBackgroundActivitySession, CLHeading, CLLocationManager, CLLocationManagerDelegate, LocationService, .authorizationDenied, Bool, Double (+4 more)
 
 ### Community 108 - "SightingKind"
-Cohesion: 0.08
-Nodes (28): Group, Group, PeopleAhead, SightingBearing, ahead, left, .order, right (+20 more)
+Cohesion: 0.11
+Nodes (22): Group, Group, PeopleAhead, SightingBearing, ahead, left, .order, right (+14 more)
 
-### Community 109 - ".wireNavigation"
-Cohesion: 0.15
-Nodes (3): PendingRouteStart, Int, Route
+### Community 109 - "CueDecider"
+Cohesion: 0.23
+Nodes (22): CueDecider, Bool, LaneReport, TimeInterval, centerApproachFiresThenUpdatesDistance(), centerDistanceIsClampedToNearFloor(), centerLoopIsExemptFromTheFloor(), cueChangeNeeds400ms() (+14 more)
 
 ### Community 110 - ".handle"
 Cohesion: 0.24
-Nodes (5): CGFloat, Data, Double, LaneReport, TimeInterval
+Nodes (4): CGFloat, Data, LaneReport, TimeInterval
 
-### Community 111 - "NavCue"
-Cohesion: 0.33
-Nodes (6): NavCue, arrived, crossing, obstacle, turnLeft, turnRight
+### Community 111 - "Codable"
+Cohesion: 0.15
+Nodes (14): Codable, CKMedicalProfile, Bool, NavCue, arrived, crossing, obstacle, turnLeft (+6 more)
 
 ### Community 112 - "SceneVocabularyTests.swift"
-Cohesion: 0.15
-Nodes (17): Float, Int, detectedPeopleAreFaithfulWithoutSceneLabels(), blankWallsTeensAndMisreadsAreHandled(), crossingInformationComesFirst(), decimalsInTheFactsStayWhole(), faithfulnessUnderstandsSynonymsAndSpelledNumbers(), indoorSceneIsPlain() (+9 more)
+Cohesion: 0.14
+Nodes (18): Float, Int, detectedPeopleAreFaithfulWithoutSceneLabels(), blankWallsTeensAndMisreadsAreHandled(), crossingInformationComesFirst(), decimalsInTheFactsStayWhole(), factWordsAreAllowedAndDistanceIsANumber(), faithfulnessUnderstandsSynonymsAndSpelledNumbers() (+10 more)
 
 ### Community 113 - "StatusFacts"
-Cohesion: 0.15
-Nodes (21): StatusFacts, StatusSummary, Bool, Double, Int, aRunningDepthSessionWithNoFramesIsNotReportedAsOn(), everyStatusClauseIsOneFinishedSentence(), gpsClauseSeparatesDeniedFromNoFix() (+13 more)
+Cohesion: 0.28
+Nodes (5): StatusFacts, StatusSummary, Bool, Double, Int
 
 ### Community 114 - "TorchSwitch"
 Cohesion: 0.15
 Nodes (13): Configuration, Outcome, changedByDevice, confirmed, failed, none, .queueSeconds, .spokenLine (+5 more)
 
 ### Community 115 - "PeopleAheadTests.swift"
-Cohesion: 0.19
-Nodes (22): NormalizedBox, .midX, .midY, Sighting, animalAloneIsSpoken(), animalsComeAfterPeople(), aRealDistanceIsNeverDropped(), groupWithoutDepthSortsLast() (+14 more)
+Cohesion: 0.12
+Nodes (29): NormalizedBox, .midX, .midY, Sighting, animalAloneIsSpoken(), animalsComeAfterPeople(), aRealDistanceIsNeverDropped(), bearingBands() (+21 more)
 
-### Community 116 - "WalkMarker"
-Cohesion: 0.18
-Nodes (7): Identifiable, PostStore, .fileURL, Bool, URL, CampusPlace, WalkMarker
+### Community 116 - "ConversationCoordinator"
+Cohesion: 0.14
+Nodes (10): ConversationCoordinator, .markers, AppModel, Bool, PostStore, .fileURL, Bool, URL (+2 more)
 
 ### Community 117 - "SoundWatcher"
-Cohesion: 0.23
+Cohesion: 0.24
 Nodes (10): SoundWatcher, .ownsMicrophoneSession, Any, AVAudioSession, Bool, Int, Never, NSObjectProtocol (+2 more)
 
 ### Community 118 - "DangerSound"
@@ -714,8 +714,8 @@ Cohesion: 0.13
 Nodes (18): CaseIterable, DangerSound, horn, .minimumConfidence, .repeatInterval, .requiredWindows, .selectionRank, siren (+10 more)
 
 ### Community 119 - "DepthReadiness"
-Cohesion: 0.27
-Nodes (12): DepthReadiness, DepthReadinessState, idle, ready, timedOut, warming, TimeInterval, coldStartNeedsConsecutiveTrustedDepthFrames() (+4 more)
+Cohesion: 0.21
+Nodes (14): Configuration, DepthReadiness, DepthReadinessState, idle, ready, timedOut, warming, Bool (+6 more)
 
 ### Community 120 - "CueRules"
 Cohesion: 0.09
@@ -737,73 +737,73 @@ Nodes (9): SensorProbe, .applicationStateName, .isEnabled, .thermalName, Any, AR
 Cohesion: 0.15
 Nodes (14): AVCaptureDeviceInput, AVCaptureMultiCamSession, CaptureHandoff, DualCameraSession, .diagnostics, Any, AVCaptureDevice, AVCaptureSession (+6 more)
 
-### Community 125 - "SensorProbe.swift"
-Cohesion: 0.11
-Nodes (11): ARKit, CoreImage, CoreVideo, ImageIO, ObjectiveC, os, SceneKit, simd (+3 more)
+### Community 125 - "WatchModel.swift"
+Cohesion: 0.18
+Nodes (7): CoreImage, CoreMotion, CoreVideo, HealthKit, ImageIO, WatchConnectivity, WatchKit
 
 ### Community 126 - ".resumeOffset"
-Cohesion: 0.22
+Cohesion: 0.24
 Nodes (3): Double, SpeechResumeTests, Int
 
-### Community 127 - "Text"
-Cohesion: 0.14
-Nodes (21): Binding, Font, FamilyContactsEditor, .addressList, .body, .canAdd, .entryRow, .errorLine (+13 more)
+### Community 127 - "ProfilePage"
+Cohesion: 0.23
+Nodes (8): Font, EditMedicalIDSheet, .body, ProfilePage, .body, .medicalIDCard, .mobilityFitnessCard, CKFont
 
 ### Community 128 - "TripLogger"
-Cohesion: 0.18
-Nodes (11): FileHandle, Double, Float, Int, LaneReport, Never, Task, TimeInterval (+3 more)
+Cohesion: 0.16
+Nodes (12): FileHandle, Double, Float, Int, LaneReport, Never, Task, TimeInterval (+4 more)
 
 ### Community 129 - "ElevenLabsVoice"
-Cohesion: 0.19
-Nodes (12): ElevenLabsVoice, Failure, Bool, Data, Int, TimeInterval, URL, VoiceError (+4 more)
+Cohesion: 0.13
+Nodes (18): RouteError, destinationNotFound, .errorDescription, missingBundledRoute, noRoute, ElevenLabsVoice, Failure, Bool (+10 more)
 
 ### Community 130 - "CallbackBox"
-Cohesion: 0.16
-Nodes (9): AVSpeechSynthesisVoice, AVSpeechSynthesizer, AVSpeechSynthesizerDelegate, AVSpeechUtterance, CallbackBox, DelegateRelay, Speech, Bool (+1 more)
+Cohesion: 0.19
+Nodes (9): AVSpeechSynthesisVoice, AVSpeechSynthesizer, AVSpeechSynthesizerDelegate, MKPolyline, .coordinates, CallbackBox, DelegateRelay, NSRange (+1 more)
 
 ### Community 131 - "ProbeSessionWatcher"
 Cohesion: 0.21
 Nodes (8): Counts, ProbeSessionWatcher, ARAnchor, ARFrame, ARSession, Double, Error, Float
 
-### Community 132 - "OnDeviceVision.swift"
-Cohesion: 0.10
-Nodes (18): AppKit, CGImage, CGRect, CoreText, FoundationModels, far, composite(), metres() (+10 more)
+### Community 132 - "sign_probe.swift"
+Cohesion: 0.15
+Nodes (15): AppKit, CGImage, CoreText, far, composite(), Entry, metres(), normalize() (+7 more)
 
 ### Community 133 - ".probeCapture"
 Cohesion: 0.23
 Nodes (6): ProbeCaptureCounter, ProbeCaptureNotes, AVCaptureDevice, AVCaptureSession, Int, NSObjectProtocol
 
 ### Community 134 - "CloudSceneGateTests.swift"
-Cohesion: 0.23
-Nodes (14): clockFaceDirectionsAreRefused(), countsOfHazardsLoseTheirNumeral(), distancesMustBeTheLidarNumber(), namesTheCameraDidReadSurvive(), nothingTrustworthyLeftReturnsNil(), numeralsThatAreNotCountsAreNotSnippedOut(), ordinaryDescriptionsReachTheWalkerUntouched(), paceAndBlockEstimatesAreRefusedNotMangled() (+6 more)
+Cohesion: 0.21
+Nodes (15): clockFaceDirectionsAreRefused(), countsOfHazardsLoseTheirNumeral(), distancesMustBeTheLidarNumber(), groundedNumbersPredicateIsShared(), namesTheCameraDidReadSurvive(), nothingTrustworthyLeftReturnsNil(), numeralsThatAreNotCountsAreNotSnippedOut(), ordinaryDescriptionsReachTheWalkerUntouched() (+7 more)
 
 ### Community 135 - "SpeechLoadPolicy"
-Cohesion: 0.13
-Nodes (15): Configuration, SpeechLoadClass, ambientObstacleName, normal, SpeechLoadDecision, speak, suppress, SpeechLoadPolicy (+7 more)
+Cohesion: 0.28
+Nodes (5): Configuration, SpeechLoadPolicy, Bool, TimeInterval, SpeechLoadPolicyTests
 
 ### Community 136 - "cue_audit.py"
 Cohesion: 0.22
 Nodes (14): audit(), cross_band_short_pauses(), human(), load(), main(), pull_latest(), Path, The whole report as a dict (see the module docstring for what each part means). (+6 more)
 
 ### Community 137 - "DepthFrameContinuity"
-Cohesion: 0.27
-Nodes (6): Configuration, DepthFrameContinuity, Bool, Int, publishedFrameContinuityHonorsTransitionBoundary(), publishedFrameContinuityRejectsGapsAndRecovers()
+Cohesion: 0.57
+Nodes (4): DepthFrameContinuity, Int, publishedFrameContinuityHonorsTransitionBoundary(), publishedFrameContinuityRejectsGapsAndRecovers()
 
 ### Community 138 - "DualCameraFrameRelay"
 Cohesion: 0.19
 Nodes (11): DualCameraFrameRelay, .frameCount, .frameSize, .isPortrait, State, AVCaptureConnection, AVCaptureOutput, CMSampleBuffer (+3 more)
 
-### Community 139 - "ConversationContext"
-Cohesion: 0.29
-Nodes (8): ConversationContext, HazardFact, ObstacleFact, Bool, Double, Float, TimeInterval, UUID
+### Community 139 - "ConversationTurn"
+Cohesion: 0.23
+Nodes (11): ConversationContext, ConversationHistory, ConversationTurn, HazardFact, ObstacleFact, Bool, Double, Float (+3 more)
 
 ### Community 140 - "OpenCane cue design v2: what blind travellers need, and how to make the cane calmer"
 Cohesion: 0.14
 Nodes (14): 1. What blind travellers actually need, 2. Where OpenCane violates them today, 3.1 Design rules, 3.2 Head height: much calmer, never suppressed, 3.3 Everything else, by verbosity level, 3.4 Speech budget (`SpeechBudget`, generalising `SpeechLoadPolicy`), 3.5 Indoor and outdoor, 3.6 What the cane tip already covers, so we drop it (+6 more)
 
 ### Community 141 - "LiveViewTests.swift"
-Cohesion: 0.08
-Nodes (33): BothCamerasLayout, CameraRate, DualCameraRotation, LiveView, cameraOff, hot, live, off (+25 more)
+Cohesion: 0.07
+Nodes (42): BothCameras, blockedByRoute, live, off, unsupported, BothCamerasLayout, CameraRate, DualCameraRotation (+34 more)
 
 ### Community 142 - ".make"
 Cohesion: 0.25
@@ -817,20 +817,20 @@ Nodes (8): Bool, Int, VoicePrefetch, aCancelledWarmUpResumesInsteadOfStartingOve
 Cohesion: 0.24
 Nodes (8): AVAudioFramePosition, DispatchQueue, SoundAnalysisPump, SoundBufferBox, AVAudioFormat, AVAudioNode, AVAudioPCMBuffer, SNAudioStreamAnalyzer
 
-### Community 145 - "json"
-Cohesion: 0.29
-Nodes (10): extraCarriesArbitraryJSON(), nestedLocationFormDecodes(), nilFieldsAreOmittedNotNull(), Any, timestampIsISO8601UTC(), unknownEventTypeRoundTrips(), wire(), wireKeysMatchTheContract() (+2 more)
+### Community 145 - "HapticCue"
+Cohesion: 0.11
+Nodes (17): .logicPackageOK, CueOutput, fire, stop, updateCenter, CueThresholds, GeigerRate, HapticCue (+9 more)
 
 ### Community 146 - "LiveCameraView"
-Cohesion: 0.17
-Nodes (11): ARSCNView, ARSCNViewDelegate, Coordinator, LiveCameraView, ARAnchor, ARSession, Context, Coordinator (+3 more)
+Cohesion: 0.07
+Nodes (25): ARSCNView, ARSCNViewDelegate, AVCaptureEventInteraction, CGRect, CameraControlInteraction, Coordinator, Context, Coordinator (+17 more)
 
 ### Community 147 - "ios/CaneKit/UI/Theme.swift"
 Cohesion: 0.20
 Nodes (10): `enum CKColor` (namespace, no cases), `enum CKFont`, `enum CKMetrics`, `enum CKRadius`, `enum CKSpacing` (4 pt base), ios/CaneKit/UI/Theme.swift, `struct CKBigButton: View`, `struct CKBigButtonStyle: ButtonStyle` (+2 more)
 
 ### Community 148 - "Driving OpenCane without looking at the screen"
-Cohesion: 0.22
+Cohesion: 0.20
 Nodes (9): 1. The ten spoken commands, 2. What the status answer means, 3. Putting OpenCane on the Action button, 4. What does *not* work, and why, 5. Asking a question — what it will and will not do, 6. Still needs the screen, Driving OpenCane without looking at the screen, ⚠ The Action button and the lock screen (+1 more)
 
 ### Community 149 - "SoundResultsRelay"
@@ -849,17 +849,17 @@ Nodes (9): base(), [cmd, ...args], fs, gsupport(), overhang(), readTris(), shell
 Cohesion: 0.22
 Nodes (8): Content selection, Design, OpenCane Speech Load Design, Pacing, Problem, Research conclusion, Safety boundaries, Testing
 
-### Community 153 - ".session"
-Cohesion: 0.28
-Nodes (5): ARFrame, ARSession, Error, LaneReport, SIMD3
+### Community 153 - "healthy"
+Cohesion: 0.21
+Nodes (16): aRunningDepthSessionWithNoFramesIsNotReportedAsOn(), everyStatusClauseIsOneFinishedSentence(), gpsClauseSeparatesDeniedFromNoFix(), gpsWeakThresholdMatchesTheGeofenceGate(), healthy(), healthyStatusStillNamesEveryChannel(), losingHeadphonesSaysWhatStoppedWorking(), lowBatteryIsWordedAndUnknownBatteryIsOmitted() (+8 more)
 
 ### Community 154 - "Global Constraints"
 Cohesion: 0.25
 Nodes (7): Global Constraints, OpenCane Speech Load Implementation Plan, Task 1: Add the pure optional-speech admission policy, Task 2: Apply the policy at the speech boundary, Task 3: Make scene narration select useful facts, Task 4: Fix the known persistence honesty bug, Task 5: Safety regression and independent review
 
-### Community 155 - "ConversationTurn"
-Cohesion: 0.21
-Nodes (7): ConversationCoordinator, .markers, AppModel, Bool, ConversationHistory, ConversationTurn, Int
+### Community 155 - "LaneCell"
+Cohesion: 0.24
+Nodes (10): LaneCell, .background, .body, LaneFormat, LaneGrid, .body, Bool, Color (+2 more)
 
 ### Community 156 - "SoundRecognitionFailure"
 Cohesion: 0.25
@@ -870,12 +870,12 @@ Cohesion: 0.26
 Nodes (7): LiveActivityCoalescer, LiveActivitySnapshot, Bool, Decoder, Double, Int, LiveActivityCoalescerTests
 
 ### Community 158 - "3D print files — the screwless phone mount"
-Cohesion: 0.33
+Cohesion: 0.29
 Nodes (6): 3D print files — the screwless phone mount, Files, Not settled yet, Print in this order, Putting it together, Reading step 1
 
 ### Community 159 - "CaneKitLogic"
-Cohesion: 0.12
-Nodes (8): CaneKitLogic, CoreLocation, CryptoKit, nodToTalkSwitchesByVoice(), nodToTalkWithoutAVerbIsNotASetting(), MapKit, SwiftUI, Testing
+Cohesion: 0.15
+Nodes (6): CaneKitLogic, CryptoKit, nodToTalkSwitchesByVoice(), nodToTalkWithoutAVerbIsNotASetting(), os, Testing
 
 ### Community 160 - "WorkoutRelay"
 Cohesion: 0.20
@@ -898,20 +898,20 @@ Cohesion: 0.50
 Nodes (4): Auditory load: what the research says, what OpenCane does, Open questions (for walks with a blind / O&M-trained tester, not guesses), What OpenCane already does about each point, What the literature says
 
 ### Community 165 - "TileLevel"
-Cohesion: 0.29
-Nodes (6): TileLevel, clear, near, noData, urgent, tileLevels()
+Cohesion: 0.40
+Nodes (5): TileLevel, clear, near, noData, urgent
 
 ### Community 166 - ".setMicrophoneEnabled"
-Cohesion: 0.19
+Cohesion: 0.17
 Nodes (8): MicrophoneOwner, soundRecognition, voiceInput, MicrophoneSessionResult, failed, granted, revertedRouteChanged, AVAudioSession
 
 ### Community 171 - "CodingKeys"
-Cohesion: 0.12
-Nodes (17): CodingKeys, accuracy, direction, distanceM, headingDeg, heightM, instruction, kind (+9 more)
+Cohesion: 0.11
+Nodes (18): CodingKeys, accuracy, direction, distanceM, headingDeg, heightM, instruction, kind (+10 more)
 
-### Community 172 - "Equatable"
-Cohesion: 0.14
-Nodes (14): Equatable, ConversationTool, dropMarker, navigateTo, queryHistory, queryScene, queryStatus, setCaneSilenced (+6 more)
+### Community 172 - "ConversationTool"
+Cohesion: 0.20
+Nodes (9): ConversationTool, dropMarker, navigateTo, queryHistory, queryScene, queryStatus, setCaneSilenced, setSetting (+1 more)
 
 ### Community 173 - "CodingKeys"
 Cohesion: 0.12
@@ -919,7 +919,7 @@ Nodes (17): CodingKey, CodingKeys, distanceM, headClearanceM, instruction, kind,
 
 ### Community 174 - "VLMError"
 Cohesion: 0.11
-Nodes (23): ContentValue, ScenePrompt, Data, Decoder, Int, VLMError, emptyResponse, .errorDescription (+15 more)
+Nodes (25): Drafts (iOS 18, pre-hackathon), ScenePrompt, SpokenDistance, Data, Int, VLMError, emptyResponse, .errorDescription (+17 more)
 
 ### Community 175 - "PlayerRelay"
 Cohesion: 0.29
@@ -934,32 +934,32 @@ Cohesion: 0.16
 Nodes (15): Hashable, LiveActivityObstacleStatus, clear, dropOff, head, warning, ContentState, LiveActivityObstacleGlance (+7 more)
 
 ### Community 178 - "HazardWatchPolicy"
-Cohesion: 0.18
-Nodes (11): text, HazardWatchPolicy, Double, Set, TimeInterval, aCloserUpdateIsNotADuplicate(), hazardReplyKeepsDecimals(), hazardWatchAsksOnlyWhileWalkingAndRarely() (+3 more)
+Cohesion: 0.17
+Nodes (11): HazardWatchPolicy, Double, Set, TimeInterval, aCloserUpdateIsNotADuplicate(), aLateReplyLosesItsDistance(), hazardReplyKeepsDecimals(), hazardWatchAsksOnlyWhileWalkingAndRarely() (+3 more)
 
 ### Community 179 - "ActionRateLimit"
 Cohesion: 0.24
 Nodes (8): ActionRateLimit, Bool, Int, TimeInterval, actionsAreIndependent(), refusedAttemptsDoNotExtendTheWait(), repeatsAreSpacedByTheInterval(), secondsRemainingCountsDown()
 
 ### Community 180 - "String"
-Cohesion: 0.12
-Nodes (16): String, .sentenceCased, MKPolyline, .coordinates, CloudSceneGate, Int, Set, Verdict (+8 more)
+Cohesion: 0.17
+Nodes (10): String, .sentenceCased, CloudSceneGate, Int, Set, Verdict, Group, SceneVocabulary (+2 more)
 
 ### Community 181 - "Module `family-alerts` — cane events → the Grok Bot routine (Step 39)"
 Cohesion: 0.15
 Nodes (13): Call sites, `ios/CaneKit/Alerts/AlertSummarizer.swift` — the cheap model, `ios/CaneKit/Alerts/FallWatcher.swift` — CoreMotion → FallDetector (Step 43), `ios/CaneKit/Alerts/FamilyAlerts.swift` — the main-actor relay, `ios/CaneKit/Alerts/GrokBotClient.swift` — transport only, `Logic/Sources/CaneKitLogic/ActionRateLimit.swift` — webhook button spam guard (Step 43), `Logic/Sources/CaneKitLogic/AlertContext.swift` — what the phone knew, and the model's prompt, `Logic/Sources/CaneKitLogic/FallDetector.swift` — the cane went over (Step 43) (+5 more)
 
-### Community 182 - ".describe"
-Cohesion: 0.15
-Nodes (6): .namePeopleEnabled, OnDeviceHazards, OnDeviceVLMClient, SceneContext, Bool, SceneDescriber
+### Community 182 - "RouteSource.swift"
+Cohesion: 0.20
+Nodes (6): ARKit, CoreLocation, MeshClassifier, Bool, MapKit, simd
 
 ### Community 184 - ".sighting"
 Cohesion: 0.21
 Nodes (13): Double, ThreatSighting, ThreatWatch, aContrastResetsTheNegation(), aNegationCoversTheWholeList(), aWeaponIsReported(), benignCollocationsDoNotAlert(), emptyTextIsNotASighting() (+5 more)
 
 ### Community 185 - "GrokBotClient"
-Cohesion: 0.15
-Nodes (14): AlertSummarizer, Provider, anthropic, .name, openAICompatible, Data, TimeInterval, URL (+6 more)
+Cohesion: 0.09
+Nodes (22): AlertSummarizer, Provider, anthropic, .name, openAICompatible, Data, TimeInterval, URL (+14 more)
 
 ### Community 186 - "AudioRouteMonitor"
 Cohesion: 0.27
@@ -974,8 +974,8 @@ Cohesion: 0.23
 Nodes (10): AppIntents, AskSceneIntent, RecenterIntent, SetOptionIntent, SilenceHapticsIntent, StatusIntent, IntentModes, IntentResult (+2 more)
 
 ### Community 189 - "DepthSnapshotTests.swift"
-Cohesion: 0.26
-Nodes (16): box(), boxDepthClampsBoxesOffTheEdge(), boxDepthFlipsVisionsBottomLeftOrigin(), boxDepthFollowsTheBoxAcrossTheFrame(), boxDepthIgnoresEdgeSpikes(), boxDepthIsNilWhenUnknown(), boxDepthIsTheMedianOfItsMiddle(), boxDepthRefusesANonFiniteBox() (+8 more)
+Cohesion: 0.35
+Nodes (12): box(), boxDepthClampsBoxesOffTheEdge(), boxDepthFlipsVisionsBottomLeftOrigin(), boxDepthFollowsTheBoxAcrossTheFrame(), boxDepthIgnoresEdgeSpikes(), boxDepthIsNilWhenUnknown(), boxDepthIsTheMedianOfItsMiddle(), boxDepthRefusesANonFiniteBox() (+4 more)
 
 ### Community 190 - "AppIntent"
 Cohesion: 0.37
@@ -985,25 +985,25 @@ Nodes (14): AppIntent, AppShortcut, AppShortcutsProvider, CaneKitShortcuts, .app
 Cohesion: 0.21
 Nodes (7): CustomLocalizedStringResourceConvertible, Error, IntentSupport, NotReady, .localizedStringResource, AppModel, IntentResult
 
-### Community 192 - "ArrivalCardView"
-Cohesion: 0.36
-Nodes (4): ArrivalCardView, .body, Double, TimeInterval
+### Community 192 - "View"
+Cohesion: 0.17
+Nodes (15): ArrivalCardView, .body, Double, TimeInterval, .page, dismissKeyboard(), GuidePage, .body (+7 more)
 
-### Community 193 - "CameraControlInteraction"
-Cohesion: 0.23
-Nodes (8): AVCaptureEventInteraction, AVKit, CameraControlInteraction, Coordinator, Context, Coordinator, UIView, Void
+### Community 193 - "SensorProbe.swift"
+Cohesion: 0.20
+Nodes (6): FoundationModels, normalize(), ObjectiveC, SoundAnalysis, Synchronization, Vision
 
 ### Community 194 - "streetview_stim.py"
 Cohesion: 0.43
 Nodes (6): haversine(), main(), Generate Sundar Pichai / Astra-style natural multimodal narration., Run swift vision probe to extract on-device Vision labels and OCR texts., run_vision_on_frames(), synthesize_astra_commentary()
 
-### Community 195 - "Codable"
-Cohesion: 0.17
-Nodes (12): Codable, CKMedicalProfile, Bool, HistoryMetric, distanceWalked, hazardsEncountered, pastWaypoints, recentEvents (+4 more)
+### Community 195 - "FrameReplay"
+Cohesion: 0.31
+Nodes (7): Frame, FrameReplay, .currentName, State, Bool, Data, URL
 
-### Community 196 - "DualPreviewHostView"
-Cohesion: 0.29
-Nodes (6): BothCamerasView, DualPreviewHostView, AVSampleBufferDisplayLayer, Context, UIView, UIViewRepresentable
+### Community 196 - "HazardsCard"
+Cohesion: 0.46
+Nodes (6): HazardsCard, .body, .bothCameras, .frontCameraReadout, .liveView, .soundStatus
 
 ### Community 197 - "CampusDestination"
 Cohesion: 0.20
@@ -1013,29 +1013,13 @@ Nodes (10): CampusDestination, arc, cif, grainger, illiniUnion, isr, mainLibrary
 Cohesion: 0.25
 Nodes (8): `ios/CaneKit/Depth/DepthEngine.swift`, `ios/CaneKit/Depth/DepthFrameProcessor.swift`, `ios/CaneKit/Depth/DualCameraSession.swift` — both cameras at once (Step 14, off by default), `ios/CaneKit/Depth/FrameReplay.swift` (Step 11, simulator-only), `ios/CaneKit/Depth/GroundSampler.swift` (Step 11), `ios/CaneKit/Depth/MeshClassifier.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift`, Module `depth-haptics` — `ios/CaneKit/Depth/*.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift`
 
-### Community 201 - ".string"
-Cohesion: 0.25
-Nodes (6): Secrets, .hasElevenLabs, Bool, .apiKey, .baseURL, table
+### Community 200 - "CueKind"
+Cohesion: 0.33
+Nodes (6): CueKind, center, clear, head, left, right
 
 ### Community 202 - "Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)"
 Cohesion: 0.67
 Nodes (3): Found broken, fixed, New, all off by default, Step 14 — The night before: what was broken and what is new (Fri Sep 11, simulator only)
-
-### Community 204 - "GrokBotResult"
-Cohesion: 0.29
-Nodes (7): GrokBotResult, accepted, failed, notConfigured, rejected, .summary, Int
-
-### Community 205 - "BothCameras"
-Cohesion: 0.40
-Nodes (5): BothCameras, blockedByRoute, live, off, unsupported
-
-### Community 206 - "RouteTests.swift"
-Cohesion: 0.50
-Nodes (3): Data, routeFileDecodesSnakeCaseSchema(), shippedRouteFileIsConsistent()
-
-### Community 207 - "HazardSource"
-Cohesion: 0.50
-Nodes (4): HazardSource, ground, sign, vision
 
 ## Ambiguous Edges - Review These
 - `AGENTS.md` → `drafts/README.md`  [AMBIGUOUS]
@@ -1044,17 +1028,17 @@ Nodes (4): HazardSource, ground, sign, vision
 ## Knowledge Gaps
 - **908 isolated node(s):** `.name`, `.isSupported`, `.isConfigured`, `.canSummarize`, `.summarizerName` (+903 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **9 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `AGENTS.md` and `drafts/README.md`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `String` connect `String` to `AppModel`, `Foundation`, `CaneKitUITests`, `DepthEngine`, `NavSupportTests.swift`, `BeaconEngine`, `HandsFreeOption`, `CaneBLE`, `LiveActivityController`, `Waypoint`, `CKBigButton`, `HapticPlayer`, `LaneTile`, `NavigationEngine`, `VLMClient`, `VoiceInputEngine`, `AppModel`, `WKBigButton`, `NavLiveActivity`, `WatchModel`, `SpeechQueue`, `DepthEngine`, `.say`, `SceneDescriber`, `Decodable`, `PhoneToWatch`, `DestinationField`, `HazardScanner`, `FaceYawTracker`, `HapticLogic`, `FamilyAlerts`, `TripTracker`, `SupabaseClient`, `Float`, `ConversationAction`, `FamilyAlertPolicy`, `PhoneWatchLink`, `CKStatusPill`, `OpenCaneEvent`, `CodingKeys`, `LaneReport`, `GroundHazard`, `ObstacleClass`, `HazardRecord`, `MultiCamDepthFindings`, `HeadNodDetector`, `CompletionLine`, `Sendable`, `SignPolicy`, `LaunchMode`, `.directions`, `View`, `SpeechResume`, `AlertContext`, `SoundRecognitionGuard`, `FamilyContactsTests.swift`, `RuntimeRelay`, `SoundAlertsTests.swift`, `ConversationLogicTests`, `SpokenPhrases`, `CampusPlacesTests.swift`, `CodingKeys`, `LocationService`, `SightingKind`, `.wireNavigation`, `.handle`, `NavCue`, `SceneVocabularyTests.swift`, `StatusFacts`, `TorchSwitch`, `PeopleAheadTests.swift`, `WalkMarker`, `SoundWatcher`, `DangerSound`, `DepthReadiness`, `CueRules`, `RootTab`, `SensorProbe`, `DualCameraSession`, `.resumeOffset`, `Text`, `TripLogger`, `ElevenLabsVoice`, `CallbackBox`, `ProbeSessionWatcher`, `OnDeviceVision.swift`, `.probeCapture`, `CloudSceneGateTests.swift`, `SpeechLoadPolicy`, `DualCameraFrameRelay`, `ConversationContext`, `.make`, `.queue`, `json`, `SoundResultsRelay`, `QuestionPromptTests.swift`, `ConversationTurn`, `SoundRecognitionFailure`, `LiveActivitySnapshot`, `WorkoutRelay`, `DestinationSearch`, `ProbeIntrospection`, `.setMicrophoneEnabled`, `CodingKeys`, `Equatable`, `CodingKeys`, `VLMError`, `LiveActivityObstacleGlance`, `HazardWatchPolicy`, `ActionRateLimit`, `.describe`, `.invalidateReadiness`, `.sighting`, `GrokBotClient`, `AudioRouteMonitor`, `HandsFreeIntents.swift`, `AppIntent`, `ArrivalCardView`, `Codable`, `CampusDestination`, `Settings`, `.string`, `GrokBotResult`, `HazardSource`?**
-  _High betweenness centrality (0.540) - this node is a cross-community bridge._
-- **Why does `AppModel` connect `AppModel` to `TripLogger`, `NavSupportTests.swift`, `BeaconEngine`, `FallDetector`, `LiveActivityController`, `docs/README.md`, `HapticPlayer`, `NavigationEngine`, `VoiceInputEngine`, `SpeechQueue`, `DepthEngine`, `ConversationTurn`, `.say`, `CaneKitLogic`, `HazardScanner`, `.scenePhaseChanged`, `FaceYawTracker`, `FamilyAlerts`, `TripTracker`, `SupabaseClient`, `ActionRateLimit`, `String`, `PhoneWatchLink`, `.describe`, `AudioRouteMonitor`, `ObstacleClass`, `HazardRecord`, `HeadNodDetector`, `Settings`, `SignPolicy`, `AlertContext`, `FamilyContactsTests.swift`, `LocationService`, `.wireNavigation`, `.handle`, `TorchSwitch`, `SoundWatcher`, `CueRules`, `DualCameraSession`?**
-  _High betweenness centrality (0.173) - this node is a cross-community bridge._
+- **Why does `String` connect `String` to `AppModel`, `Foundation`, `CaneKitUITests`, `DepthEngine`, `NavSupportTests.swift`, `BeaconEngine`, `HandsFreeOption`, `CaneBLE`, `LiveActivityController`, `Waypoint`, `CKBigButton`, `HapticPlayer`, `LaneTile`, `NavigationEngine`, `VLMClient`, `VoiceInputEngine`, `AppModel`, `WKBigButton`, `NavLiveActivity`, `WatchModel`, `SpeechQueue`, `DepthEngine`, `Coordinate`, `.say`, `.describe`, `Decodable`, `WatchToPhone`, `DestinationField`, `HazardScanner`, `.scenePhaseChanged`, `FaceYawTracker`, `HapticLogic`, `FamilyAlerts`, `TripTracker`, `SupabaseClient`, `Float`, `ConversationAction`, `FamilyAlertPolicy`, `PhoneWatchLink`, `CKStatusPill`, `OpenCaneEvent`, `CodingKeys`, `LaneReport`, `GroundHazard`, `ObstacleClass`, `HazardRecord`, `MultiCamDepthFindings`, `HeadNodDetector`, `CompletionLine`, `Sendable`, `SignPolicy`, `LaunchMode`, `.directions`, `Text`, `SpeechResume`, `AlertContext`, `SoundRecognitionGuard`, `FamilyContactsTests.swift`, `RuntimeRelay`, `SoundAlertsTests.swift`, `ConversationLogicTests`, `SpokenPhrases`, `CampusPlacesTests.swift`, `CodingKeys`, `LocationService`, `SightingKind`, `.handle`, `Codable`, `SceneVocabularyTests.swift`, `StatusFacts`, `TorchSwitch`, `PeopleAheadTests.swift`, `ConversationCoordinator`, `SoundWatcher`, `DangerSound`, `DepthReadiness`, `CueRules`, `RootTab`, `SensorProbe`, `DualCameraSession`, `.resumeOffset`, `ProfilePage`, `TripLogger`, `ElevenLabsVoice`, `ProbeSessionWatcher`, `sign_probe.swift`, `.probeCapture`, `CloudSceneGateTests.swift`, `DualCameraFrameRelay`, `ConversationTurn`, `.make`, `.queue`, `SoundResultsRelay`, `QuestionPromptTests.swift`, `healthy`, `LaneCell`, `SoundRecognitionFailure`, `LiveActivitySnapshot`, `WorkoutRelay`, `DestinationSearch`, `ProbeIntrospection`, `.setMicrophoneEnabled`, `CodingKeys`, `ConversationTool`, `CodingKeys`, `VLMError`, `LiveActivityObstacleGlance`, `HazardWatchPolicy`, `ActionRateLimit`, `.invalidateReadiness`, `.sighting`, `GrokBotClient`, `AudioRouteMonitor`, `HandsFreeIntents.swift`, `AppIntent`, `View`, `SensorProbe.swift`, `FrameReplay`, `HazardsCard`, `CampusDestination`, `Settings`, `CueKind`, `.portDescription`?**
+  _High betweenness centrality (0.517) - this node is a cross-community bridge._
+- **Why does `AppModel` connect `AppModel` to `TripLogger`, `NavSupportTests.swift`, `BeaconEngine`, `FallDetector`, `LiveActivityController`, `docs/README.md`, `HapticPlayer`, `NavigationEngine`, `VoiceInputEngine`, `SpeechQueue`, `DepthEngine`, `.say`, `.describe`, `HazardScanner`, `.scenePhaseChanged`, `FaceYawTracker`, `FamilyAlerts`, `TripTracker`, `SupabaseClient`, `ActionRateLimit`, `String`, `PhoneWatchLink`, `RouteSource.swift`, `AudioRouteMonitor`, `ObstacleClass`, `HazardRecord`, `HeadNodDetector`, `Settings`, `CueKind`, `SignPolicy`, `AlertContext`, `FamilyContactsTests.swift`, `LocationService`, `CueDecider`, `.handle`, `TorchSwitch`, `ConversationCoordinator`, `SoundWatcher`, `CueRules`, `DualCameraSession`?**
+  _High betweenness centrality (0.179) - this node is a cross-community bridge._
 - **Why does `CaneKit code reference` connect `CaneKit code reference` to `Module: ui-tests-build — Phone UI, XCUITests, XcodeGen build, CI`, `Module `depth-haptics` — `ios/CaneKit/Depth/*.swift`, `ios/CaneKit/Haptics/HapticPlayer.swift``, `Module `navigation-trip` — GPS, waypoint engine, turn settling, route sources, trip log/tracker, Live Activity`, `docs/README.md`, `Module: speech-audio-scene (`ios/CaneKit/Speech`, `ios/CaneKit/Audio`, `ios/CaneKit/Scene`)`, `Module `family-alerts` — cane events → the Grok Bot routine (Step 39)`, `Module: logic — `ios/Logic` (SwiftPM package `CaneKitLogic`)`, `Module `watch-widget-shared``?**
   _High betweenness centrality (0.076) - this node is a cross-community bridge._
 - **Are the 24 inferred relationships involving `AppModel` (e.g. with `FallWatcher` and `FamilyAlerts`) actually correct?**
@@ -1062,4 +1046,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **What connects `.name`, `.isSupported`, `.isConfigured` to the rest of the system?**
   _908 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `AppModel` be split into smaller, more focused modules?**
-  _Cohesion score 0.08130081300813008 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.1111111111111111 - nodes in this community are weakly interconnected._

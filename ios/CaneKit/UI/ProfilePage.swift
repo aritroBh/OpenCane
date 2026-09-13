@@ -36,9 +36,25 @@ struct ProfilePage: View {
         return CKCard(title: "EMERGENCY MEDICAL ID") {
             // Profile Header
             HStack(spacing: CKSpacing.md) {
+                #if canImport(UIKit)
+                if let uiImage = UIImage(named: "AritroProfile") {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(CKColor.accent, lineWidth: 2))
+                        .accessibilityLabel("Profile photo of \(p.name)")
+                } else {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 52))
+                        .foregroundStyle(CKColor.accent)
+                }
+                #else
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 52))
                     .foregroundStyle(CKColor.accent)
+                #endif
 
                 VStack(alignment: .leading, spacing: CKSpacing.xs) {
                     Text(p.name)
@@ -94,7 +110,7 @@ struct ProfilePage: View {
                 infoRow(label: "Date of Birth", value: p.dateOfBirth, icon: "calendar")
                 infoRow(label: "Blood Type", value: p.bloodType, icon: "drop.fill")
                 infoRow(label: "Height & Weight", value: "\(p.height) · \(p.weight)", icon: "ruler.fill")
-                infoRow(label: "Allergies", value: p.allergies, icon: "allergens")
+                infoRow(label: "Allergies", value: p.allergies, icon: "exclamationmark.triangle.fill")
                 infoRow(label: "Medications", value: p.medications, icon: "pills.fill")
                 infoRow(label: "Residence", value: p.homeAddress, icon: "house.fill")
                 infoRow(label: "Cane Spec", value: p.caneType, icon: "figure.walk")
@@ -130,6 +146,7 @@ struct ProfilePage: View {
                             .background(CKColor.accent, in: Capsule())
                             .foregroundStyle(CKColor.ink)
                         }
+                        .accessibilityLabel("Call emergency contact \(p.emergencyContactName)")
                     }
                 }
                 .padding(CKSpacing.md)
@@ -268,6 +285,8 @@ struct ProfilePage: View {
         .padding(CKSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CKColor.surfaceRaised, in: RoundedRectangle(cornerRadius: CKRadius.button))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(value)")
     }
 }
 

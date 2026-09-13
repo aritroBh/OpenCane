@@ -212,6 +212,8 @@ struct CKBigButton: View {
 
     /// Visible word and VoiceOver label. ⚠ test contract for every title used by the XCUITests.
     let title: String
+    /// Optional subtitle rendered below the title for additional context.
+    var subtitle: String? = nil
     /// SF Symbol shown beside the word; hidden from VoiceOver (a companion, never the only cue).
     let systemImage: String
     /// Visual role; see `Role`.
@@ -229,11 +231,37 @@ struct CKBigButton: View {
         Button(action: action) {
             // At accessibility text sizes the row won't fit, so the label stacks under the icon.
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: CKSpacing.md) { icon; text; Spacer(minLength: 0) }
-                VStack(spacing: CKSpacing.xs) { icon; text }
+                HStack(spacing: CKSpacing.md) {
+                    icon
+                    VStack(alignment: .leading, spacing: 2) {
+                        text
+                        if let subtitle {
+                            Text(subtitle)
+                                .font(CKFont.secondary)
+                                .foregroundStyle(role == .primary ? CKColor.onAccent.opacity(0.75) : CKColor.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if role == .primary {
+                        Image(systemName: "chevron.right")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(CKColor.onAccent.opacity(0.6))
+                    }
+                }
+                VStack(spacing: CKSpacing.xs) {
+                    icon
+                    text
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(CKFont.secondary)
+                            .foregroundStyle(role == .primary ? CKColor.onAccent.opacity(0.75) : CKColor.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
             }
             .padding(.horizontal, CKSpacing.lg)
-            .padding(.vertical, CKSpacing.md)
+            .padding(.vertical, subtitle != nil ? CKSpacing.sm : CKSpacing.md)
             .frame(maxWidth: .infinity, minHeight: CKMetrics.bigButton)
             .contentShape(RoundedRectangle(cornerRadius: CKRadius.button))
         }

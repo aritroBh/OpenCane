@@ -55,10 +55,7 @@ public final class SupabaseClient: Sendable {
 
     private var apiKey: String? {
         let env = ProcessInfo.processInfo.environment
-        return env["SUPABASE_PUBLISHABLE_KEY"]
-            ?? Secrets.string("SUPABASE_PUBLISHABLE_KEY")
-            ?? env["SUPABASE_SECRET_KEY"]
-            ?? Secrets.string("SUPABASE_SECRET_KEY")
+        return env["SUPABASE_PUBLISHABLE_KEY"] ?? Secrets.string("SUPABASE_PUBLISHABLE_KEY")
     }
 
     // MARK: - PostgREST Helper
@@ -87,18 +84,41 @@ public final class SupabaseClient: Sendable {
 
     // MARK: - Walker Identity
 
-    /// Resolves the walker record for this phone. Queries by install ID / display name or registers a new walker.
+    /// In-flight task memoization to prevent duplicate walker registration races (Finding C3)
+    private let inFlightResolve = OSAllocatedUnfairLock<Task<String?, Never>?>(initialState: nil)
+
+    /// Resolves the walker record for this phone. Queries by install ID or registers a new walker.
     public func resolveWalkerID(displayName: String = "Aritro Bhattacharjee", caneID: String = "opencane-01") async -> String? {
         if let cached = cachedWalkerID.withLock({ $0 }), !cached.isEmpty {
             return cached
         }
 
+        if let existing = inFlightResolve.withLock({ $0 }) {
+            return await existing.value
+        }
+
+        let task = Task<String?, Never> {
+            await performResolveWalkerID(displayName: displayName, caneID: caneID)
+        }
+        inFlightResolve.withLock { $0 = task }
+        let result = await task.value
+        inFlightResolve.withLock { $0 = nil }
+        return result
+    }
+
+    private func performResolveWalkerID(displayName: String, caneID: String) async -> String? {
         guard isConfigured else { return nil }
 
-        // 1. Try to find existing walker
+        let installID = UserDefaults.standard.string(forKey: "opencane_install_id") ?? {
+            let newID = UUID().uuidString
+            UserDefaults.standard.set(newID, forKey: "opencane_install_id")
+            return newID
+        }()
+
+        // 1. Try to find walker specifically matching THIS device's install_id (Finding C2)
         let query = [
+            URLQueryItem(name: "install_id", value: "eq.\(installID)"),
             URLQueryItem(name: "select", value: "id,install_id,display_name"),
-            URLQueryItem(name: "order", value: "created_at.asc"),
             URLQueryItem(name: "limit", value: "1")
         ]
         if let req = makeRequest(endpoint: "walkers", method: "GET", query: query) {
@@ -110,7 +130,6 @@ public final class SupabaseClient: Sendable {
                    let id = first["id"] as? String {
                     cachedWalkerID.withLock { $0 = id }
                     UserDefaults.standard.set(id, forKey: "opencane_supabase_walker_id")
-                    // Touch last_seen_at
                     await touchWalker(id: id)
                     return id
                 }
@@ -119,10 +138,7 @@ public final class SupabaseClient: Sendable {
             }
         }
 
-        // 2. Register walker if not found
-        let installID = UserDefaults.standard.string(forKey: "opencane_install_id") ?? UUID().uuidString
-        UserDefaults.standard.set(installID, forKey: "opencane_install_id")
-
+        // 2. Register walker if not found for this install_id
         let payload: [String: Any] = [
             "install_id": installID,
             "display_name": displayName,
@@ -188,7 +204,8 @@ public final class SupabaseClient: Sendable {
         ]
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return false }
-        guard let req = makeRequest(endpoint: "medical_profiles", method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: body) else {
+        let query = [URLQueryItem(name: "on_conflict", value: "walker_id")]
+        guard let req = makeRequest(endpoint: "medical_profiles", method: "POST", query: query, prefer: "resolution=merge-duplicates,return=representation", body: body) else {
             return false
         }
 
@@ -213,7 +230,8 @@ public final class SupabaseClient: Sendable {
     public func syncMobilityStats(_ stats: CKMobilityStats, date: Date = Date()) async -> Bool {
         guard let walkerID = await resolveWalkerID() else { return false }
 
-        let dayString = date.formatted(.iso8601.year().month().day().dateSeparator(.dash))
+        let comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        let dayString = String(format: "%04d-%02d-%02d", comps.year ?? 2026, comps.month ?? 1, comps.day ?? 1)
         let payload: [String: Any] = [
             "walker_id": walkerID,
             "day": dayString,
@@ -226,7 +244,8 @@ public final class SupabaseClient: Sendable {
         ]
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return false }
-        guard let req = makeRequest(endpoint: "mobility_days", method: "POST", prefer: "resolution=merge-duplicates,return=representation", body: body) else {
+        let query = [URLQueryItem(name: "on_conflict", value: "walker_id,day")]
+        guard let req = makeRequest(endpoint: "mobility_days", method: "POST", query: query, prefer: "resolution=merge-duplicates,return=representation", body: body) else {
             return false
         }
 
@@ -378,13 +397,19 @@ public final class SupabaseClient: Sendable {
         let vendorID = "unknown-vendor"
         #endif
 
+        var sysInfo = utsname()
+        uname(&sysInfo)
+        let modelIdentifier = withUnsafeBytes(of: &sysInfo.machine) { raw in
+            raw.split(separator: 0).first.flatMap { String(decoding: $0, as: UTF8.self) }
+        } ?? "iPhone"
+
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
 
         let payload: [String: Any] = [
             "walker_id": walkerID,
             "vendor_id": vendorID,
             "device_name": deviceName,
-            "model": "iPhone 17 Pro Max",
+            "model": modelIdentifier,
             "system_version": systemVersion,
             "app_version": appVersion,
             "has_lidar": hasLiDAR,
@@ -393,8 +418,9 @@ public final class SupabaseClient: Sendable {
             "last_seen_at": OpenCaneEvent.iso8601(Date())
         ]
 
+        let query = [URLQueryItem(name: "on_conflict", value: "vendor_id")]
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return false }
-        guard let req = makeRequest(endpoint: "devices", method: "POST", prefer: "return=representation", body: body) else {
+        guard let req = makeRequest(endpoint: "devices", method: "POST", query: query, prefer: "resolution=merge-duplicates,return=representation", body: body) else {
             return false
         }
 
