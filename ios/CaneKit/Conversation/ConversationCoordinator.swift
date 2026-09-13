@@ -245,6 +245,19 @@ final class ConversationCoordinator {
 
     /// Latest wins: drop the cloud turn in flight, if any. Its task sees the cancellation (or a
     /// refused `budget.finished`) and logs `conv_turn {superseded: true}` without speaking.
+    /// The app went to the background (lock, switch away): drop the cloud turn in flight so its
+    /// answer — built from the frame before the lock — can never speak after the unlock (Codex review
+    /// 2026-09-13). The budget refuses the turn, so `runCloudTurn` neither speaks nor runs a tool.
+    /// Logs `conv_error {reason: backgrounded}` only when a turn was actually live.
+    /// Caller: `AppModel.scenePhaseChanged(.background)`.
+    func cancelForBackground() {
+        let wasLive = cloudTask != nil
+        supersedeCloudTurn()
+        queryGeneration += 1
+        isProcessing = false
+        if wasLive { appModel?.logger.event("conv_error", ["reason": "backgrounded"]) }
+    }
+
     private func supersedeCloudTurn() {
         budget.cancel()
         cloudTask?.cancel()
