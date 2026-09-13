@@ -651,7 +651,7 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
 - **test on device:** see CHANGELOG Step 39
 
-## Step 41 — Falls, weapons, trip bookends, webhook spam guard (Sat Sep 12)
+## Step 43 — Falls, weapons, trip bookends, webhook spam guard (Sat Sep 12)
 - [x] `ActionRateLimit` (Logic): 10 s between repeats of a webhook action; a refused tap never
       extends the wait; `secondsRemaining` so the refusal can be spoken
 - [x] Contacts editor redesigned: no fake placeholder, card rows + 44 pt trash, `+` disabled until
@@ -669,7 +669,21 @@ for 60 s so a weak network can never stall a cue.
 - [ ] XCUITest for the contacts editor and the rate-limited buttons
 - [ ] Grok Bot side (not app code): show reasoning while it works, and send a separate
       "sending test email" message rather than one silent email
-- **test on device:** see CHANGELOG Step 41
+- **test on device:** see CHANGELOG Step 43
+
+## Step 40 — Dynamic Island idle state & obstacle radar pill (Sat Sep 12)
+- [x] Scoped `.otherNavigation` and `CLBackgroundActivitySession` to active navigation (`setNavigating`)
+- [x] `LiveActivityCoalescer.swift` (Logic): non-linear distance bands, 0.2s flap-guard, immediate emergency emissions
+- [x] `NavLiveActivity.swift`: leading turn glyph + distance, trailing obstacle radar pill, expanded radar banner
+- [x] Surfaced Live Activity errors in `GuideCard`
+
+## Step 41 — Enriched hazard telemetry for Grok Bot & anti-flapping (Sat Sep 12)
+- [x] Enriched `HazardRecord` and `HazardGeoJSON` with distance, height delta, direction, heading, speed, route, instruction, source, and severity
+- [x] Added `asGrokBotEvent(user:caneID:)` for direct Grok Bot ingestion
+- [x] Anti-flapping in `GroundHazardPolicy`: `isSameFamily` suppresses rapid depression toggling (pothole vs drop-off)
+- [x] 3-second temporal/spatial debounce in `HazardLog.record`
+- [x] Dynamic centered navigation title (`OpenCane`, `Sense`, `Settings` with `.inline` display mode)
+- [x] Added startup cleanup of orphaned `CLBackgroundActivitySession` in `LocationService.init()`
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
