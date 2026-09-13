@@ -2,9 +2,9 @@
 //  ContentView.swift
 //  CaneKit
 //
-//  Root screen. Three icon-only pages under a sliding tab bar (docs/design.md §6):
+//  Root screen. Four icon-only pages under a sliding tab bar (docs/design.md §6):
 //    Guide    — instruction, buttons, route picker, trip / arrival
-//    Sense    — depth status, 3×2 obstacle grid, Hazards
+//    Sense    — depth status, Scene engine (Step 47: who answered "Where am I" and why), 3×2 obstacle grid, Hazards
 //    Settings — Cues (Step 36), Haptics, Watch, Mount (tilt + fps + toggles), This phone
 //  Styled only with Theme.swift tokens. No debug footer (removed in Step 11).
 //
@@ -14,7 +14,7 @@
 //  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
 //  Mount toggle labels are XCUITest `app.switches[...]` keys: "Mirror left / right" and
 //  "Write trip log" are ⚠ test contract (AGENTS.md rule 9). Tab buttons are ⚠ "Guide",
-//  "Sense", "Settings" (`RootTab.title`). Cues picker segments are ⚠ "Standard", "Detailed",
+//  "Sense", "Settings", "Profile" (`RootTab.title`; the tests drive the first three). Cues picker segments are ⚠ "Standard", "Detailed",
 //  "Indoors", "Outdoors" (`CueLevel.title` / `CuePlace.title`).
 //
 //  Owner / caller: `CaneKitApp` (the app entry) shows it with `AppModel` in the environment.
@@ -38,7 +38,7 @@ struct ContentView: View {
     /// The app-wide owner of every engine. Used here only for the Camera Control press; each page
     /// reads its own copy from the environment (Settings makes it `@Bindable` for the toggles).
     @Environment(AppModel.self) private var model
-    /// Which of the three pages is showing. Starts on Guide so the idle walk controls are first.
+    /// Which of the four pages is showing. Starts on Guide so the idle walk controls are first.
     @State private var tab: RootTab = .guide
     /// Instant page swap when the user asked for less motion.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -129,10 +129,11 @@ private struct SensePage: View {
     /// Read for `lidarSupported` and `status` (the depth engine's status sentence).
     @Environment(AppModel.self) private var model
 
-    /// Status card, obstacle grid, Hazards card, top to bottom.
+    /// Status card, Scene engine card (Step 47), obstacle grid, Hazards card, top to bottom.
     var body: some View {
         pageScroll {
             statusCard
+            SceneEngineCard()
             ObstaclesCard()
             HazardsCard()
         }
@@ -381,7 +382,7 @@ private struct SettingsPage: View {
             .pickerStyle(.segmented)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Cue detail")
-            .accessibilityHint("How much OpenCane says on its own. Quiet names nothing and reads only safety signs. Obstacle haptics are the same at every level for now.")
+            .accessibilityHint("How much OpenCane says and taps on its own. Quiet names nothing, reads only safety signs and taps only for head height. Standard taps once at 1.5 meters and a strong triple at 0.6, with no side taps. Detailed taps continuously ahead and for the sides. Head height warnings are the same at every level.")
             Text("Place").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .accessibilityHidden(true)
             Picker("Place", selection: model.cuePlace) {
@@ -390,7 +391,7 @@ private struct SettingsPage: View {
             .pickerStyle(.segmented)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Place")
-            .accessibilityHint("Indoors warns about head height from 1.2 meters instead of 1.5, names nothing and reads only safety signs.")
+            .accessibilityHint("Indoors warns about head height from 1.2 meters instead of 1.5, names nothing, reads only safety signs and taps only for head height.")
             Text(cueLevelCaption)
                 .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -399,23 +400,25 @@ private struct SettingsPage: View {
         .foregroundStyle(CKColor.textPrimary)
     }
 
-    /// What the selected level × place changes **today** (Step 36 changes speech only; haptics are
-    /// the same at every level until Step 41 — the Step 36 review caught a caption promising more),
-    /// plus a reminder when names are switched off, which Standard and Detailed depend on.
+    /// What the selected level × place changes: names and signs (Step 36) and, since Step 41, the
+    /// cane taps for torso obstacles (`TorsoHapticPolicy`: Quiet none, Standard two onset taps,
+    /// Detailed the continuous centre taps and side taps; Indoors none at any level) — every
+    /// sentence here must stay true to that policy (the Step 36 review caught a caption promising
+    /// more than the code did), plus a reminder when names are switched off, which Standard and
+    /// Detailed depend on. Head height is never mentioned as changing: it does not.
     private var cueLevelCaption: String {
         var parts: [String]
         switch model.cueLevel {
-        case .quiet: parts = ["Quiet: no obstacle names; safety signs only."]
-        case .standard: parts = ["Standard: door names on a route; every sign."]
-        case .detailed: parts = ["Detailed: every obstacle name except walls; every sign."]
+        case .quiet: parts = ["Quiet: no obstacle names; safety signs only. No cane taps for torso obstacles; head height and ground hazards still warn."]
+        case .standard: parts = ["Standard: door names on a route; every sign. One tap at 1.5 meters when closing, a strong triple at 0.6, no side taps."]
+        case .detailed: parts = ["Detailed: every obstacle name except walls; every sign. Continuous centre taps and side taps."]
         }
         if model.cuePlace == .indoors {
-            parts.append("Indoors: head height from 1.2 meters, no names, safety signs only.")
+            parts.append("Indoors: head height from 1.2 meters, no names, safety signs only, no torso taps (head height and ground hazards still warn).")
         }
         if !model.obstacleNamesEnabled, model.cueLevel != .quiet, model.cuePlace == .outdoors {
             parts.append("Names are off: turn on Speak obstacle names below to hear them.")
         }
-        parts.append("Haptics are the same at every level for now.")
         return parts.joined(separator: " ")
     }
 
@@ -559,6 +562,103 @@ func pageScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View
 private func dismissKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                     to: nil, from: nil, for: nil)
+}
+
+/// "Scene engine" card on the Details (Sense) page, Step 47: which model actually answered the
+/// last "Where am I", why the cloud was or was not used, how long it took, when and what asked
+/// for it; the same for the hazard watch; and the cue profile in one line.
+///
+/// Why: the owner asked for the Details tab to say *when Muse is triggered* rather than only name
+/// the chain ("Muse + On-device" on the Hazards card). Every sentence here is built by
+/// `SceneEngineSummary` (CaneKitLogic) from `SceneEngineFacts`, so the wording is unit-tested
+/// (`SceneEngineSummaryTests`) and the two numbers in it (the 8 s watch interval, the 2.5 s cloud
+/// deadline) come from `HazardScanner.watchInterval` / `hazardCloudDeadlineS`, not literals here.
+///
+/// Rows, top to bottom: the provider-chain pill ("MUSE → ON-DEVICE" / "ON-DEVICE ONLY"); "WHERE
+/// AM I" — who answered and how fast, with the age and trigger under it; "GATE" — what
+/// `CloudSceneGate` did to a cloud sentence (only when the cloud answered); "WATCH" — the hazard
+/// watch's plan or last answer; "CUES" — "Detailed · Outdoors · names off".
+///
+/// Accessibility: every row is words, never colour; each row is one VoiceOver element whose label
+/// is the row's full `spoken` sentence ("Muse answered the last Where am I in 1.9 seconds."); the
+/// age row carries `.updatesFrequently`. A `TimelineView` re-renders every 10 s so "just now"
+/// becomes "2 min ago" without a new run (the model publishes nothing while idle).
+/// Owner: `SensePage` (between the status card and the obstacle grid). Reads `model.describer`,
+/// `model.hazards`, `model.hazardWatchEnabled`, `model.cueLevel` / `cuePlace` / `obstacleNamesEnabled`.
+private struct SceneEngineCard: View {
+    /// Source of every fact on the card.
+    @Environment(AppModel.self) private var model
+    /// How often the relative ages are redrawn (s). 10 s matches the "just now" window in
+    /// `SceneEngineSummary.age`, so the first change the reader sees is real.
+    static let ageRefresh: TimeInterval = SceneEngineSummary.justNowWindow
+
+    /// Gathers `SceneEngineFacts` at `now` from the describer, the scanner and the settings.
+    /// - Parameter now: the timeline's date, so the ages tick without a model change.
+    private func facts(at now: Date) -> SceneEngineFacts {
+        let d = model.describer
+        let h = model.hazards
+        return SceneEngineFacts(
+            cloudName: d.cloudName, onDeviceName: d.onDeviceName,
+            lastSource: d.lastSource, lastCloudMs: d.lastCloudMs,
+            lastLatencyMs: d.lastAt == nil ? nil : d.lastLatencyMs,
+            lastFallbackReason: d.lastFallbackReason, lastGate: d.lastGate, lastError: d.lastError,
+            secondsSinceLast: d.lastAt.map { max(0, now.timeIntervalSince($0)) },
+            lastTrigger: d.lastTrigger,
+            hazardWatchOn: model.hazardWatchEnabled, hazardWatchIntervalS: h.watchInterval,
+            hazardCloudDeadlineS: h.hazardCloudDeadlineS,
+            lastWatchSource: h.lastWatchSource, lastWatchMs: h.lastWatchMs,
+            lastWatchReason: h.lastWatchReason,
+            secondsSinceWatch: h.lastWatchAt.map { max(0, now.timeIntervalSince($0)) },
+            lastWatchError: h.lastError,
+            cueLevelTitle: model.cueLevel.title, cuePlaceTitle: model.cuePlace.title,
+            namesOn: model.obstacleNamesEnabled)
+    }
+
+    /// The card. Only the two age-bearing rows ("2 min ago", "· 30 s ago") sit inside the
+    /// `TimelineView`, so the 10 s tick redraws those lines and nothing else — a periodic redraw of
+    /// the whole card could move VoiceOver focus off the headline row a blind walker is reading
+    /// (Muse review, Step 47). The other rows follow model changes as usual.
+    var body: some View {
+        let f = facts(at: Date())
+        let chain = SceneEngineSummary.chain(f)
+        CKCard(title: "Scene engine") {
+            HStack(spacing: CKSpacing.sm) {
+                CKStatusPill(text: chain.text, tone: .neutral, systemImage: "brain",
+                             spoken: chain.spoken)
+                Spacer(minLength: 0)
+            }
+            row("Where am I", SceneEngineSummary.lastAnswer(f))
+            TimelineView(.periodic(from: .now, by: Self.ageRefresh)) { timeline in
+                let live = facts(at: timeline.date)
+                if let when = SceneEngineSummary.when(live) {
+                    Text(when.text)
+                        .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+                        .accessibilityLabel(when.spoken)
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+            }
+            if let gate = SceneEngineSummary.gate(f) { row("Gate", gate) }
+            TimelineView(.periodic(from: .now, by: Self.ageRefresh)) { timeline in
+                row("Watch", SceneEngineSummary.hazardWatch(facts(at: timeline.date)))
+            }
+            row("Cues", SceneEngineSummary.cues(f))
+        }
+    }
+
+    /// One row: a small uppercased caption and the sentence, the same shape as the Hazards
+    /// card's detection rows. One VoiceOver element labelled with `line.spoken`.
+    /// - Parameters:
+    ///   - caption: the row's word, drawn uppercased in `CKFont.pill`.
+    ///   - line: the visible text and its VoiceOver sentence.
+    private func row(_ caption: String, _ line: SceneEngineLine) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
+            Text(caption.uppercased()).font(CKFont.pill).foregroundStyle(CKColor.textSecondary)
+            Text(line.text).font(CKFont.body).foregroundStyle(CKColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(line.spoken)
+    }
 }
 
 /// Obstacles card wrapper, isolated into a leaf subview so 30 Hz depth frame updates

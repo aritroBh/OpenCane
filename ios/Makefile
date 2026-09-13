@@ -13,6 +13,7 @@
 #   make sim17               create the iPhone 17 Pro Max (iOS 27) simulator once
 #   make sim-grant           boot SIM and pre-grant location + motion (a prerequisite of the sim tests)
 #   make uitest-streetview   "Where am I" XCUITest over Street View frames (needs the local JPEGs)
+#   make island              Dynamic Island screenshots (CaneKitIslandTour) → build/shots
 #   make audit               cue load of one walk from its trip log (LOG=path, or pulled off the phone)
 #   make clean               delete build/, CaneKit.xcodeproj and Logic/.build (next build needs `make gen`)
 #
@@ -55,7 +56,7 @@ APP     = $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/CaneKit.app
 BUNDLE  = com.aritro.canekit
 XCB     = xcodebuild -project CaneKit.xcodeproj -scheme $(SCHEME) -configuration $(CONFIG) -derivedDataPath $(DERIVED)
 
-.PHONY: gen test build install launch run sim devices clean check-env uitest tour sim17 sim-grant e2e uitest-streetview audit
+.PHONY: gen test build install launch run sim devices clean check-env uitest tour island sim17 sim-grant e2e uitest-streetview audit
 
 # Regenerate the Xcode project from project.yml (see scripts/gen.sh for WATCH=0 / PATCH_WATCH_EMBED).
 gen:
@@ -127,6 +128,15 @@ tour: sim-grant
 	TEST_RUNNER_CANEKIT_SHOTS=$(abspath $(SHOTS)) \
 	  $(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO \
 	  -only-testing:CaneKitUITests/CaneKitVisualTour test
+
+# Dynamic Island pictures (CaneKitIslandTour, Step 47): route start → background → compact island,
+# long-press → expanded, a few seconds of simulated walk, then Stop and the island after it. PNGs
+# land in SHOTS as NN-island-*.png. Same prerequisites as `make tour` (location set, sim-grant).
+island: sim-grant
+	mkdir -p $(SHOTS)
+	TEST_RUNNER_CANEKIT_SHOTS=$(abspath $(SHOTS)) \
+	  $(XCB) -destination "platform=iOS Simulator,name=$(SIM)" CODE_SIGNING_ALLOWED=NO \
+	  -only-testing:CaneKitUITests/CaneKitIslandTour test
 
 # End-to-end GPS replay through the real app (scripts/e2e.py): clean, missed_fence, gps_jitter,
 # wrong_turn (SCENARIO=all). SCENARIO=streetview reruns clean with Street View frames as the

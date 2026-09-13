@@ -95,17 +95,20 @@ Nothing in OpenCane talks to the Mac at runtime. The Mac only signs and installs
    on, set a passcode. To arm it: in OpenCane (route started) triple-click the side button →
    **Options**: **Touch Off, Side Button Off, Volume Buttons Off, Keyboards Off, Motion On** →
    **Start**. While armed the watch (Repeat / Next / Describe / Recenter) is the only input.
-   "Where am I" from the Action button may be blocked as well (it is a hardware button; stress plan
-   D16 records whether it works), so ask from the watch's Describe. Exit: triple-click + passcode.
+   "Talk to OpenCane" from the Action button (the binding since Step 29, `handsfree.md` §3) may be
+   blocked as well — it is a hardware button, and Guided Access with Side Button Off may swallow it;
+   stress plan D16 records whether it works — so ask "Where am I" from the watch's Describe. Exit:
+   triple-click + passcode.
    Low Power Mode **off** (it throttles GPS and ARKit). Battery > 40 %, power bank on the strap.
 5. **Secrets ride inside the app.** `ios/CaneKit/Resources/Secrets.plist` is copied into the .app at build
-   time, so fill in the ElevenLabs / Muse keys *before* `make run`.
+   time, so fill in the ElevenLabs / Muse / Grok Bot webhook / Supabase keys (`ios/Secrets.example.plist`
+   lists them all; without the webhook pair the Family alerts card is disabled) *before* `make run`.
 6. **Logs come off the phone without the Mac.** The Files app shows OpenCane's Documents under
    **Files → On My iPhone → OpenCane**: the trip logs (`canekit-*.jsonl`, one per launch, while
    "Write trip log" is on) and the hazard map (`hazards/hazards-<session>.geojson` plus its photos).
    AirDrop them after the walk; the Hazards card's **Share hazard map** button shares the current map.
-7. **Set the mount angle by reading the phone.** With OpenCane open and the cane held the way the
-   walker holds it, the Mount card's first line reads "Camera tilt N° down · N fps". Turn the
+7. **Set the mount angle by reading the phone.** With OpenCane open on the **Settings** tab and the
+   cane held the way the walker holds it, the Mount card's first line reads "Camera tilt N° down · N fps". Turn the
    mount's hinge until it says **good** (3–8° below the horizon; hardware/mount/DESIGN.md). Steeper
    than ~10° and the lanes see bare pavement near 2 m and the cane buzzes on an empty sidewalk;
    level or up and the drop-off detector loses its ground reference. fps should sit near 30.

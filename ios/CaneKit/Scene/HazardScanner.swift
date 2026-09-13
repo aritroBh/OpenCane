@@ -76,6 +76,25 @@ final class HazardScanner {
     /// Round-trip of the last hazard-watch request (ms), measured from just before
     /// `watchClient.describe` to its return (excludes the JPEG encode). nil after a failure.
     private(set) var lastWatchMs: Int?
+    /// Who answered the last hazard-watch request ("Muse" / "On-device"), from the client's
+    /// `lastHazardOutcome` (a bare client answers for itself). nil before the first reply and
+    /// after a failure. Shown on the Scene engine card (Step 47).
+    private(set) var lastWatchSource: String?
+    /// Why the cloud did not answer the last hazard-watch request ("The request timed out." after
+    /// `FallbackVLMClient.hazardDeadline`); nil when it did, or with no cloud. Scene engine card.
+    private(set) var lastWatchReason: String?
+    /// When the last hazard-watch reply landed (any client); nil before the first. The Scene
+    /// engine card turns it into "30 s ago".
+    private(set) var lastWatchAt: Date?
+    /// `HazardWatchPolicy.interval` (8 s): how often the watch asks while a route guides. Exposed
+    /// so the Scene engine card's words come from the policy's number, not a second literal.
+    var watchInterval: TimeInterval { watchPolicy.interval }
+    /// `FallbackVLMClient.hazardDeadline` in seconds (2.5), or nil when the client has no cloud —
+    /// the same number the card says as "on-device after 2.5 s".
+    var hazardCloudDeadlineS: TimeInterval? {
+        guard let d = watchClient.hazardCloudDeadline else { return nil }
+        return Double(d.components.seconds) + Double(d.components.attoseconds) * 1e-18
+    }
     /// "Hazard watch: <localized error>" from the last failed request; cleared by the next reply.
     /// Shown in red on `HazardsCard`. Sign scans never set it (Vision failures yield no text).
     private(set) var lastError: String?
@@ -110,7 +129,10 @@ final class HazardScanner {
     /// reply (reply, latency, and why it was dropped). Without these a walk log, or the Street
     /// View mock, only shows what was spoken, never what the camera saw.
     /// Fields: `scan {texts (first 8), said ("" when silent), frame}`; `hazard_watch {reply, ms,
-    /// provider, frame, said | dropped: "stale"}` or `hazard_watch {error, provider}`. `frame` is
+    /// provider, source, cloud_ms, fallback_reason, frame, said | dropped: "stale"}` or
+    /// `hazard_watch {error, provider}`. `source` is who answered ("Muse" / "On-device"),
+    /// `cloud_ms` how long the cloud took or was given (−1 without a cloud), `fallback_reason` the
+    /// cloud's error when on-device answered ("" otherwise) — Step 47. `frame` is
     /// the `FrameReplay` file name in the simulator, "" on the phone. Never name a field `t` or
     /// `kind` (`TripLogRecord` owns those; e2e.py fails a run on `field_kind`).
     @ObservationIgnored var onDiagnostic: ((String, [String: Any]) -> Void)?
@@ -275,13 +297,22 @@ final class HazardScanner {
             let age = Date().timeIntervalSince(started)
             lastWatchMs = Int(age * 1000)
             lastError = nil
+            // Provenance for the Scene engine card: a `FallbackVLMClient` says who won the race and
+            // why the cloud lost; a bare client answered for itself.
+            let outcome = watchClient.lastHazardOutcome
+            lastWatchSource = outcome?.answeredBy ?? watchClient.name
+            lastWatchReason = outcome?.fallbackReason
+            lastWatchAt = Date()
             // Switched off (or paused hot) while the request was in flight: say nothing
             // (Antigravity review: a reply arrived seconds after the toggle went off).
             guard watchEnabled, !paused else { return }
             // A slow round trip describes where the walker *was*: drop it rather than announce a
             // hazard that is now behind them, and drop a stale distance from a late-but-usable one.
             var fields: [String: Any] = ["reply": reply, "ms": lastWatchMs ?? -1, "provider": watchProvider,
-                                         "frame": frameName]
+                                         "frame": frameName,
+                                         // Who actually answered and why the cloud did not (Step 47).
+                                         "source": lastWatchSource ?? "", "cloud_ms": outcome?.cloudMs ?? -1,
+                                         "fallback_reason": lastWatchReason ?? ""]
             guard age <= maxAge else {
                 fields["dropped"] = "stale"
                 onDiagnostic?("hazard_watch", fields)
@@ -303,6 +334,9 @@ final class HazardScanner {
             }
         } catch {
             lastWatchMs = nil                  // a failed request has no round trip to show
+            lastWatchSource = nil              // nobody answered
+            lastWatchReason = nil
+            lastWatchAt = Date()
             lastError = "Hazard watch: \(error.localizedDescription)"
             onDiagnostic?("hazard_watch", ["error": error.localizedDescription, "provider": watchProvider])
         }

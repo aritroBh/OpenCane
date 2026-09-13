@@ -20,7 +20,9 @@
 //  shared `VLMClientFactory.resolved(context:)` client and `AppModel.sceneContext`. Callers:
 //  `AppModel.describeScene()` (button, watch, Action button, Camera Control) and
 //  `AppModel.askAboutScene(_:)` (Siri / Shortcuts, `ConversationCoordinator` scene questions).
-//  UI: `GuideCard` ("Where am I" / "Describing…", `lastDescription`, `lastError`).
+//  UI: `GuideCard` ("Where am I" / "Describing…", `lastDescription`, `lastError`); `SceneEngineCard`
+//  on the Details tab (Step 47: `lastSource`, `lastCloudMs`, `lastFallbackReason`, `lastGate`,
+//  `lastAt`, `lastTrigger`, `cloudName` — who actually answered, why the cloud was skipped, when).
 //  Tests: `CloudSceneGateTests`, `QuestionPromptTests`, `PeopleAheadTests`, `SceneVocabularyTests`
 //  (CaneKitLogic, the rules this class applies); `CaneKitUITests.testWhereAmIWithoutKeyReportsGracefully`
 //  (no frame in the simulator → "Camera warming up", button comes back) and
@@ -81,6 +83,32 @@ final class SceneDescriber {
     /// Still declared optional for its callers' `?? "none"`, but never nil in practice.
     let providerName: String?
 
+    // MARK: Provenance of the last run (Step 47, the Scene engine card on the Details tab)
+
+    /// Display name of the client whose sentence was spoken last ("Muse", "On-device"); nil before
+    /// the first run and after a failed one. For a question this is the cloud client's name.
+    private(set) var lastSource: String?
+    /// Cloud round trip of the last run in ms when the cloud was tried (answered, or failed after
+    /// this long); nil when it was not tried or the run failed. From `VLMAnswer.cloudMs`.
+    private(set) var lastCloudMs: Int?
+    /// Why the cloud did not answer the last run ("The request timed out.", "HTTP 429: …"), from
+    /// `VLMAnswer.fallbackReason`; nil when it answered, was not tried, or the run failed.
+    private(set) var lastFallbackReason: String?
+    /// The `CloudSceneGate` verdict of the last run exactly as logged in `describe_result.gate`:
+    /// "spoken", "edited: …", "refused: …", "on-device", "error", "no frame". nil before the first run.
+    private(set) var lastGate: String?
+    /// When the last run finished (any outcome); nil before the first.
+    private(set) var lastAt: Date?
+    /// What asked for the last run; set when the run is accepted, so the trip log's
+    /// `describe_result` (read in `onResult`) and the card agree. nil before the first run.
+    private(set) var lastTrigger: DescribeTrigger?
+    /// The cloud model's display name ("Muse", "Gemini", …) = `client.cloudPrimary?.name`; nil when
+    /// the app runs on-device only. The Scene engine card names the chain with it.
+    var cloudName: String? { client.cloudPrimary?.name }
+    /// The on-device client's display name ("On-device") = `client.onDeviceFallback?.name`, or the
+    /// client's own name when it *is* the on-device client.
+    var onDeviceName: String { client.onDeviceFallback?.name ?? client.name }
+
     /// The client, injected by AppModel from `VLMClientFactory.resolved(context:)`; never nil.
     @ObservationIgnored private let client: any VLMClient
     /// Source of camera frames (`hasCameraFrame`, `jpegSnapshot`); shared with `DepthEngine`.
@@ -130,11 +158,14 @@ final class SceneDescriber {
     /// line when the cloud answered, speak it (20 s TTL).
     /// Failures speak "Camera warming up. Try again." or "Scene description failed."; a press while
     /// one is running speaks "Still describing the previous scene." and is dropped.
-    /// Caller: `AppModel.describeScene()` (button, watch, Action button, Camera Control).
+    /// Caller: `AppModel.describeScene(trigger:)` (button, watch, Action button, Camera Control,
+    /// the waypoint hook).
+    /// - Parameter trigger: who asked (default the Guide button); kept as `lastTrigger` for the
+    ///   Scene engine card and the `describe_result` log record.
     /// - Returns: true when a run was started, false when one was already in flight.
     @discardableResult
-    func describe() -> Bool {
-        run(question: nil)
+    func describe(trigger: DescribeTrigger = .button) -> Bool {
+        run(question: nil, trigger: trigger)
     }
 
     /// "Ask OpenCane …": one question about the frame in front of the cane, one sentence back.
@@ -162,7 +193,7 @@ final class SceneDescriber {
             speech.say("I did not catch a question.", .scene, ttl: 6)
             return false
         }
-        return run(question: cleaned)
+        return run(question: cleaned, trigger: .question)
     }
 
     /// The shared body of "Where am I" (`question == nil`) and "Ask OpenCane" (a question).
@@ -170,10 +201,12 @@ final class SceneDescriber {
     /// One run at a time for both, because they share the one camera frame and the one voice: a
     /// question fired while a description is in flight is dropped, exactly as a double press on the
     /// watch already was.
-    /// - Parameter question: the cleaned question, or nil for a plain scene description.
+    /// - Parameters:
+    ///   - question: the cleaned question, or nil for a plain scene description.
+    ///   - trigger: who asked; recorded as `lastTrigger` once the run is accepted.
     /// - Returns: true when the run's Task was started (`isDescribing` is then true until it ends).
     @discardableResult
-    private func run(question: String?) -> Bool {
+    private func run(question: String?, trigger: DescribeTrigger) -> Bool {
         guard !isDescribing else {
             speech.say("Still describing the previous scene.", .scene, ttl: 6)
             return false
@@ -199,6 +232,7 @@ final class SceneDescriber {
         // back afterwards — and the no-cloud downgrade is precisely the run somebody will be trying
         // to explain.
         lastQuestion = requested ?? ""
+        lastTrigger = trigger
         Task { [weak self] in
             guard let self else { return }
             defer { self.isDescribing = false }
@@ -214,6 +248,7 @@ final class SceneDescriber {
             let frameName = FrameReplay.shared.currentName ?? ""
             guard let (jpeg, depth) = await Self.snapshot(processor) else {
                 self.lastError = "No camera frame"
+                self.recordOutcome(source: nil, cloudMs: nil, reason: nil, gate: "no frame")
                 self.speech.say("Camera warming up. Try again.", .scene)
                 self.onResult?(nil, "No camera frame", nil, frameName, "no frame", "")
                 return
@@ -235,6 +270,9 @@ final class SceneDescriber {
                                                        prompt: QuestionPrompt.text(for: question))
                     self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                     let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg, lidar: capturedLidar)
+                    // A question is always the cloud's answer (no fallback on this path).
+                    self.recordOutcome(source: cloud.name, cloudMs: self.lastLatencyMs, reason: nil,
+                                       gate: gate)
                     self.lastDescription = text
                     // ttl 10, not 20 like a plain description: the frame is already one cloud
                     // round-trip old when this line is spoken, and the walker may have kept
@@ -252,6 +290,13 @@ final class SceneDescriber {
                 var (text, gate) = answer.source == .cloud
                     ? await self.grounded(answer.text, jpeg: jpeg, lidar: capturedLidar)
                     : (answer.text, "on-device")
+                // Who really answered, and why the cloud did not: the Scene engine card's headline.
+                // A refused cloud sentence was spoken by the on-device client (`grounded`): the
+                // card must not say "Muse answered" over "On-device spoke instead" (Codex review).
+                let spokeOnDevice = gate.hasPrefix("refused")
+                self.recordOutcome(source: spokeOnDevice ? self.onDeviceName
+                                                         : (answer.answeredBy.isEmpty ? nil : answer.answeredBy),
+                                   cloudMs: answer.cloudMs, reason: answer.fallbackReason, gate: gate)
                 // People come AFTER the gate, deliberately. A cloud primary answers without ever
                 // reaching the on-device client, so the body detectors would not have run — the
                 // fact belongs to the description, not to one provider. And it is added after
@@ -268,6 +313,7 @@ final class SceneDescriber {
                                answer.source == .cloud ? answer.text : "")
             } catch {
                 self.lastError = error.localizedDescription
+                self.recordOutcome(source: nil, cloudMs: nil, reason: nil, gate: "error")
                 // A failed question says so as a question. "Scene description failed" after
                 // "is there a bench?" reads as an answer about the bench.
                 self.speech.say(question == nil ? "Scene description failed."
@@ -276,6 +322,22 @@ final class SceneDescriber {
             }
         }
         return true
+    }
+
+    /// Writes the provenance of a finished run (`lastSource`, `lastCloudMs`, `lastFallbackReason`,
+    /// `lastGate`, `lastAt`) in one place, **before** `onResult` fires so `AppModel.wireDescriber`
+    /// logs the same values the Scene engine card shows. Called once per accepted run.
+    /// - Parameters:
+    ///   - source: who wrote the spoken sentence; nil for a failure or a missing frame.
+    ///   - cloudMs: the cloud round trip when the cloud was tried.
+    ///   - reason: the cloud's error when the on-device client answered instead.
+    ///   - gate: the `CloudSceneGate` note, or "on-device" / "error" / "no frame".
+    private func recordOutcome(source: String?, cloudMs: Int?, reason: String?, gate: String) {
+        lastSource = source
+        lastCloudMs = cloudMs
+        lastFallbackReason = reason
+        lastGate = gate
+        lastAt = Date()
     }
 
     /// Turns a cloud sentence into something the sensors can back, and says what happened.

@@ -2,15 +2,16 @@
 //  TabBar.swift
 //  CaneKit
 //
-//  Three icon-only root tabs under ContentView: Guide (walk), Sense (obstacles + hazards),
-//  Settings (haptics, watch, mount). The visible control is an SF Symbol; the word is the
+//  Four icon-only root tabs under ContentView: Guide (walk), Sense (obstacles + hazards; nav title
+//  "Details"), Settings (cues, haptics, watch, mount, family alerts), Profile (Medical ID +
+//  mobility, Step 44). The visible control is an SF Symbol; the word is the
 //  VoiceOver label and the XCUITest `app.buttons[...]` key (docs/design.md §6, §9).
 //
 //  The sliding ivory/ink capsule and the icon scale honour Reduce Motion (instant swap).
 //  Tab changes do not speak through SpeechQueue — VoiceOver already announces the selected
 //  button; a spoken cue would double-speak (design.md §7).
 //
-//  Accessibility contract: ⚠ test contract labels "Guide", "Sense", "Settings"
+//  Accessibility contract: ⚠ test contract labels "Guide", "Sense", "Settings", "Profile"
 //  (CaneKitUITests + CaneKitVisualTour). Hit target ≥ `CKMetrics.touchTarget` (60 pt).
 //
 //  Owner / caller: `ContentView.body` (`CKTabBar(selection: $tab)` under the page).
@@ -20,7 +21,7 @@
 
 import SwiftUI
 
-/// The three pages of the phone app. Raw value is the left-to-right order and the `ForEach`
+/// The four pages of the phone app. Raw value is the left-to-right order and the `ForEach`
 /// identity; the pill's travel comes from `matchedGeometryEffect`, not from the raw value.
 enum RootTab: Int, CaseIterable, Identifiable, Hashable {
     /// Walk a route: Guide card + the trip / arrival card.

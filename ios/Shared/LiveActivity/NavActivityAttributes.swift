@@ -54,6 +54,9 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
         public var headClearanceM: Double
         /// Optional status badge, e.g. "±3m GPS" (capped at 120 chars)
         public var statusDetail: String
+        /// Route progress 0…1 (waypoints passed / waypoints total) for the island's progress bar
+        /// (Step 47, the Google Maps reference). 0 when unknown; 1 on arrival.
+        public var progress: Double
 
         public init(
             instruction: String,
@@ -62,7 +65,8 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
             obstacleStatus: LiveActivityObstacleGlance = .clear,
             obstacleDistanceM: Double = 0.0,
             headClearanceM: Double = 0.0,
-            statusDetail: String = ""
+            statusDetail: String = "",
+            progress: Double = 0
         ) {
             self.instruction = instruction
             self.distanceM = distanceM
@@ -71,6 +75,7 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
             self.obstacleDistanceM = obstacleDistanceM
             self.headClearanceM = headClearanceM
             self.statusDetail = String(statusDetail.prefix(120))
+            self.progress = min(1, max(0, progress))
         }
 
         public init(from decoder: Decoder) throws {
@@ -83,10 +88,11 @@ nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable {
             self.headClearanceM = try container.decodeIfPresent(Double.self, forKey: .headClearanceM) ?? 0.0
             let rawDetail = try container.decodeIfPresent(String.self, forKey: .statusDetail) ?? ""
             self.statusDetail = String(rawDetail.prefix(120))
+            self.progress = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .progress) ?? 0))
         }
 
         private enum CodingKeys: String, CodingKey {
-            case instruction, distanceM, kind, obstacleStatus, obstacleDistanceM, headClearanceM, statusDetail
+            case instruction, distanceM, kind, obstacleStatus, obstacleDistanceM, headClearanceM, statusDetail, progress
         }
     }
 
