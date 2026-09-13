@@ -236,10 +236,20 @@ final class AppModel {
     /// `applyCueRules` writes `decider.thresholds.head` (Indoors shortens it to 1.2 m), and every
     /// ARKit pause (`scenePhaseChanged(.background)`, both cameras on) calls `reset()`.
     @ObservationIgnored private let decider = CueDecider()
+    /// Which of the decider's torso decisions the walker's Cue detail level × place renders
+    /// (CaneKitLogic `TorsoHapticPolicy`, Step 41): Quiet none, Standard two centre onset taps,
+    /// Detailed today's loop and side taps minus shoreline re-taps; Indoors and a crossing settle
+    /// hold every torso cue; the head cue always passes. Stepped in `handle(_:)` right after the
+    /// decider with `rules: cueRules` and `crossingSettle: nav.isCrossingSettle`; `reset()`
+    /// wherever the decider is reset and in `applyCueRules` (a level / place change also stops
+    /// the player, so a loop never outlives the level that started it). `TorsoHapticPolicyTests`.
+    @ObservationIgnored private var torsoPolicy = TorsoHapticPolicy()
     /// "Two meters ahead, door" from the mesh classification (step 4). Consulted only while
     /// `obstacleNamesEnabled`; `reset()` wherever the decider is reset.
     @ObservationIgnored private let namer = ObstacleNamer()
-    /// Kind currently decided as active (for the UI and the `lanes` log line); `.clear` when
+    /// Kind currently *rendered* (for the UI and the `lanes` log line): the decider's active cue
+    /// after `TorsoHapticPolicy` — a torso cue the level, place or crossing settle suppressed shows
+    /// `.clear`, a Standard onset tap shows `.center` until the decider's `.stop`. `.clear` when
     /// nothing is in range or after any ARKit pause.
     private(set) var activeCue: CueKind = .clear
 
@@ -337,12 +347,19 @@ final class AppModel {
     }
 
     /// Push `cueRules` into the engines that hold a copy: the head distance into `CueDecider`, the
-    /// allowed sign phrases into `HazardScanner`. Obstacle names read `cueRules` per report in
-    /// `handle(_:)`. Called from `init` (stored values) and `cueProfileChanged`.
+    /// allowed sign phrases into `HazardScanner`. Obstacle names and `TorsoHapticPolicy` read
+    /// `cueRules` per report in `handle(_:)`; the policy is reset here and the player stopped, so a
+    /// Geiger loop started under Detailed never keeps running after a switch to Standard or Quiet
+    /// (the decider itself is not reset: its zones are still true). Called from `init` (stored
+    /// values, before the engine starts — `stopAll()` on an idle player is a no-op) and
+    /// `cueProfileChanged`.
     private func applyCueRules() {
         let rules = cueRules
         decider.thresholds.head = rules.headEnterM
         hazards.signAllowedPhrases = rules.allowedSignPhrases
+        torsoPolicy.reset()
+        haptics.stopAll()
+        activeCue = .clear
     }
 
     /// Spatial click toward the next waypoint while navigating. Mirrored into `beacon.enabled`.
@@ -799,16 +816,20 @@ final class AppModel {
     }
 
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
-    /// Logs a `describe` event with the provider name, then hands off to `SceneDescriber`
-    /// (which waits for a camera frame and speaks at `.scene` priority).
+    /// Logs a `describe` event with the provider name and the trigger, then hands off to
+    /// `SceneDescriber` (which waits for a camera frame and speaks at `.scene` priority).
+    /// - Parameter trigger: who asked (`DescribeTrigger`, default `.button`); the Scene engine
+    ///   card shows it ("from the watch") and `describe_result` logs it.
     /// - Returns: false when a description is already in flight (spoken "Still describing the
     ///   previous scene."); the result itself arrives later through `describe_result`.
-    /// Callers: `GuideCard` "Where am I", `WhereAmIIntent`, `handleWatchCommand(.describe)`,
-    /// `cameraControlPressed`, and the `describeEveryWaypoint` automation hook.
+    /// Callers: `GuideCard` "Where am I" (`.button`), `WhereAmIIntent` (`.actionButton`),
+    /// `handleWatchCommand(.describe)` (`.watch`), `cameraControlPressed` (`.cameraControl`), and
+    /// the `describeEveryWaypoint` automation hook (`.waypoint`).
     @discardableResult
-    func describeScene() -> Bool {
-        logger.event("describe", ["provider": describer.providerName ?? "none"])
-        return describer.describe()
+    func describeScene(trigger: DescribeTrigger = .button) -> Bool {
+        logger.event("describe", ["provider": describer.providerName ?? "none",
+                                  "trigger": trigger.rawValue])
+        return describer.describe(trigger: trigger)
     }
 
     /// Toggles push-to-talk voice recording: first press listens, second press submits what was
@@ -854,17 +875,26 @@ final class AppModel {
     /// Logs every "Where am I" / "Ask OpenCane" outcome (sentence or error, latency, replay frame)
     /// as `describe_result`, so a walk log shows what was actually said. Wired once in `start()`.
     /// Fields: `text`, `error`, `ms` (−1 unknown), `gate`, `cloud_text`, `question`, `provider`,
-    /// `frame`, `labels`, `vision_error`, `people` (the last three read from `OnDeviceVision`'s
-    /// `Mutex`es, so they describe the most recent on-device pass).
+    /// `trigger`, `source`, `cloud_ms`, `fallback_reason`, `frame`, `labels`, `vision_error`,
+    /// `people` (the last three read from `OnDeviceVision`'s `Mutex`es, so they describe the most
+    /// recent on-device pass).
     /// `gate` is the `CloudSceneGate` verdict ("spoken", "edited: dropped count …", "refused: …",
     /// "on-device") and `cloud_text` the cloud model's raw reply, so a refusal can be read back
-    /// against what the model wanted to say. Neither field may be called `kind` or `t`
+    /// against what the model wanted to say. `trigger` (Step 47) is who asked
+    /// (`DescribeTrigger.rawValue`), `source` who actually answered ("Muse" / "On-device", "" on
+    /// failure), `cloud_ms` the cloud's round trip when it was tried (−1 otherwise) and
+    /// `fallback_reason` the cloud's error when on-device answered instead ("" otherwise) — the
+    /// same values the Scene engine card shows. No field may be called `kind` or `t`
     /// (`TripLogRecord` owns those).
     private func wireDescriber() {
         describer.onResult = { [weak self] text, error, ms, frame, gate, cloudText in
             self?.logger.event("describe_result", [
                 "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
                 "gate": gate, "cloud_text": cloudText,
+                "trigger": self?.describer.lastTrigger?.rawValue ?? "",
+                "source": self?.describer.lastSource ?? "",
+                "cloud_ms": self?.describer.lastCloudMs ?? -1,
+                "fallback_reason": self?.describer.lastFallbackReason ?? "",
                 // "" for a plain "Where am I"; the walker's words for an "Ask OpenCane" run, so a
                 // walk log shows which question an answer belonged to (an answer with no question
                 // beside it cannot be read back). Never `kind` or `t` — `TripLogRecord` owns those.
@@ -1312,6 +1342,7 @@ final class AppModel {
             depth.pause()
             haptics.stopAll()
             decider.reset()
+            torsoPolicy.reset()              // its closing / shoreline history is as stale as the zones
             cueSpeech.cleared()              // a new foreground is a new episode: speak the first head cue
             namer.reset()
             activeCue = .clear
@@ -1379,8 +1410,10 @@ final class AppModel {
     // MARK: Report routing (the "cue router")
 
     /// Every depth report lands here (~30 Hz normal / up to 60 Hz high-rate): decide → render on the phone (step 3);
-    /// step 4 adds the ObstacleNamer, step 5 the watch mirror.
-    /// In order: cue decision (haptics, wrist mirror, cue speech, `cue` log) → obstacle name if
+    /// step 4 adds the ObstacleNamer, step 5 the watch mirror, Step 41 the level filter.
+    /// In order: cue decision (`CueDecider`, then `TorsoHapticPolicy` for the walker's level ×
+    /// place × crossing settle: haptics, wrist mirror, cue speech, `cue` log — a suppressed torso
+    /// cue reaches none of the first three, only the log) → obstacle name if
     /// `obstacleNamesEnabled` and `cueRules.allowsName` (spoken with load class
     /// `.ambientObstacleName`, so `SpeechLoadPolicy` may suppress it; logged `speech` only when it
     /// was accepted) → ground hazard if enabled and `groundPolicy` agrees → `sceneContext` line →
@@ -1392,24 +1425,38 @@ final class AppModel {
     /// (`cueChangeNeeds400ms`, `hysteresisHoldsUntilPlusFifteenCentimetres`,
     /// `centerApproachFiresThenUpdatesDistance`).
     private func handle(_ report: LaneReport) {
-        if let output = decider.update(report, now: report.timestamp) {
-            switch output {
-            case .fire(let cue):
+        // The decider runs on every report (its zones and gates must see every trusted frame);
+        // the policy then says what this level renders. Both share the AR clock.
+        let output = decider.update(report, now: report.timestamp)
+        if let action = torsoPolicy.update(output, report: report, rules: cueRules,
+                                           crossingSettle: nav.isCrossingSettle, now: report.timestamp) {
+            switch action {
+            case .render(let cue):
+                // A head fire outranks the centre, so under a torso hold (crossing settle, a level
+                // change) no centre update would arrive to end a running Geiger loop: stop it
+                // first, then render the head (Codex review, Step 47). `stopAll` never touches the
+                // head pattern that follows.
+                if cue.kind == .head, activeCue == .center,
+                   torsoPolicy.torsoIsHeld(rules: cueRules, crossingSettle: nav.isCrossingSettle) {
+                    haptics.stopAll()
+                }
                 activeCue = cue.kind
                 haptics.play(cue)
-                // Wrist mirror: whenever the phone cannot buzz (engine down *or* silenced), or
-                // the user asked for both.
-                let phoneCannotBuzz = !haptics.isHealthy || haptics.silenced
-                if phoneCannotBuzz || fallbackToWatch {
-                    watch.send(obstacle: cue.kind, now: report.timestamp)
-                }
-                speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: report.timestamp)
+                mirrorAndSpeak(cue, now: report.timestamp)
                 // Field "cue", not "kind": "kind" is the record type (TripLogRecord reserves it).
                 var fields: [String: Any] = ["cue": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
                 logger.event("cue", fields)
+            case .centerOnset(let strong, let d):
+                // Standard: one tap (< 1.5 m, closing) or the strong triple (< 0.6 m, closing),
+                // once per approach; the wrist / speech fallback treats it as a centre cue.
+                activeCue = .center
+                haptics.playCenterOnset(strong: strong)
+                mirrorAndSpeak(.centerApproach(distance: d), now: report.timestamp)
+                logger.event("cue", ["cue": CueKind.center.rawValue, "ar_t": report.timestamp,
+                                     "distance": Double(d), "render": strong ? "center_strong" : "center_onset"])
             case .updateCenter(let d):
-                // Continuous approach ramp: haptics only (no watch, no speech).
+                // Continuous approach ramp (Detailed): haptics only (no watch, no speech).
                 activeCue = .center
                 haptics.setApproach(distance: d)
             case .stop:
@@ -1417,6 +1464,14 @@ final class AppModel {
                 haptics.stopAll()
                 cueSpeech.cleared()              // the next head cue is a new episode
                 logger.event("cue", ["cue": "clear"])
+            case .suppressed(let cue, let reason):
+                // The level, place or crossing settle renders nothing for this torso cue: no
+                // pattern, no wrist mirror, no spoken fallback (Quiet means nothing for torso).
+                // `stopAll` ends a loop the hold interrupted; the record keeps the audit honest.
+                activeCue = .clear
+                haptics.stopAll()
+                logger.event("cue", ["cue": cue.kind.rawValue, "ar_t": report.timestamp,
+                                     "suppressed": reason.rawValue])
             }
         }
         let rules = cueRules
@@ -1449,6 +1504,18 @@ final class AppModel {
         faceHead.refresh(now: report.timestamp)
         // Every report; the logger throttles `lanes` records to `laneRate` (2 Hz).
         logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)
+    }
+
+    /// Wrist mirror and spoken fallback for a cue the phone is rendering (`.render` and
+    /// `.centerOnset` in `handle`; never a suppressed one). Mirror whenever the phone cannot buzz
+    /// (engine down *or* silenced), or the user asked for both (`fallbackToWatch`); then
+    /// `speakCueIfNeeded`. `now` is the AR clock.
+    private func mirrorAndSpeak(_ cue: HapticCue, now: TimeInterval) {
+        let phoneCannotBuzz = !haptics.isHealthy || haptics.silenced
+        if phoneCannotBuzz || fallbackToWatch {
+            watch.send(obstacle: cue.kind, now: now)
+        }
+        speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: now)
     }
 
     /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
@@ -1589,6 +1656,7 @@ final class AppModel {
                 self.depth.pause()              // the AR session must let the cameras go
                 self.haptics.stopAll()
                 self.decider.reset()
+                self.torsoPolicy.reset()
                 self.cueSpeech.cleared()
                 self.namer.reset()
                 self.activeCue = .clear
@@ -2141,6 +2209,10 @@ final class AppModel {
                 }
                 let acc = Int((fix.accuracy).rounded())
                 let detail = acc > 0 && acc <= 50 ? "±\(acc)m GPS" : ""
+                // Route progress for the island's bar: waypoints passed over waypoints total
+                // (a step per waypoint, like a transit line; the metres countdown is the fine grain).
+                let total = self.nav.route?.waypoints.count ?? 0
+                let progress = total > 0 ? Double(self.nav.waypointIndex) / Double(total) : 0
 
                 self.liveActivity.update(
                     instruction: self.nav.instruction,
@@ -2149,7 +2221,8 @@ final class AppModel {
                     obstacleStatus: obsStatus,
                     obstacleDistanceM: obsDist,
                     headClearanceM: headM,
-                    statusDetail: detail
+                    statusDetail: detail,
+                    progress: progress
                 )
                 // The link dedups (same text and < 5 m change), so this is ~1 message / 5 s.
                 self.pushStatusToWatch()
@@ -2161,6 +2234,14 @@ final class AppModel {
             self.family.location(lat: fix.coordinate.latitude, lng: fix.coordinate.longitude,
                                  accuracyM: fix.accuracy, heading: self.location.heading,
                                  speedMps: Double(fix.speed), now: fix.timestamp)
+        }
+        location.onDiagnostic = { [weak self] source, flags in
+            // "updates" = the fix stream's flags, "always_session" = the route's Always session.
+            self?.logger.event("location_diag", ["source": source, "flags": flags.joined(separator: ",")])
+        }
+        location.onAuthorizationChange = { [weak self] status, armed in
+            // Evidence for the island question: "always" + false means OpenCane owns the island.
+            self?.logger.event("location_auth", ["status": status, "background_session": armed, "at": "change"])
         }
         location.onHeading = { [weak self] h, fromCourse in
             guard let self else { return }
@@ -2188,8 +2269,15 @@ final class AppModel {
         nav.onWaypointAdvanced = { [weak self] in
             guard let self else { return }
             self.logger.event("waypoint", ["index": self.nav.waypointIndex])
-            if Self.describeEveryWaypoint { self.describeScene() }
+            if Self.describeEveryWaypoint { self.describeScene(trigger: .waypoint) }
             self.pushStatusToWatch()
+            // Manual Next at a stationary crossing brings no GPS fix, so the island would keep
+            // the old line and progress until the walker moves (Codex review): refresh it now.
+            let total = self.nav.route?.waypoints.count ?? 0
+            self.liveActivity.refreshNavigation(instruction: self.nav.instruction,
+                                                distanceM: self.nav.distanceToNext ?? 0,
+                                                kind: self.lastNavKind,
+                                                progress: total > 0 ? Double(self.nav.waypointIndex) / Double(total) : 0)
             // The head reference is re-zeroed on the new leg, but only once the user is
             // demonstrably walking it straight (never on a timer: at a curb they are stopped
             // with their head turned toward traffic).
@@ -2202,7 +2290,7 @@ final class AppModel {
             self.family.tripEnded(destination: self.activeRouteName, arrived: true,
                                   lat: self.location.fix?.coordinate.latitude,
                                   lng: self.location.fix?.coordinate.longitude)
-            if Self.describeEveryWaypoint { self.describeScene() }
+            if Self.describeEveryWaypoint { self.describeScene(trigger: .waypoint) }
             self.beacon.stop()
             self.head.stop()
             self.location.setNavigating(false)
@@ -2888,6 +2976,13 @@ final class AppModel {
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
         location.setNavigating(true)
+        // Step 47: Always lets the route run with the screen locked without the blue location pill
+        // that otherwise takes the Dynamic Island from our Live Activity (LocationService doc).
+        if ProcessInfo.processInfo.environment["CANEKIT_UITEST"] != "1" {
+            location.requestAlwaysAuthorization()
+        }
+        logger.event("location_auth", ["status": location.authorizationName,
+                                       "background_session": location.backgroundSessionArmed, "at": "route_start"])
         nav.start(route)
         activeRouteName = route.name
         fallWatcher.reset()
@@ -2903,6 +2998,7 @@ final class AppModel {
         recenterPending = true               // first straight stretch zeroes the head reference
         straightWalk.reset()
         cueSpeech = CueSpeechPolicy()
+        torsoPolicy.reset()                  // a new walk starts with both Standard onsets armed (Codex review)
         startTicker()
         trip.start()
         lastNavKind = "straight"
@@ -2924,7 +3020,7 @@ final class AppModel {
         cloud.uploadRoute(route, source: Self.bundledRouteName == route.name ? "bundled" : "mapkit")
         pushStatusToWatch()
         announceChannels()
-        if Self.describeEveryWaypoint { describeScene() }   // the start (ISR) is a corner too
+        if Self.describeEveryWaypoint { describeScene(trigger: .waypoint) }   // the start (ISR) is a corner too
     }
 
     // MARK: Cloud mirror
@@ -3030,7 +3126,7 @@ final class AppModel {
         logger.event("watch", ["command": cmd.rawValue])
         switch cmd {
         case .nextWaypoint: nextWaypoint()
-        case .describe: describeScene()
+        case .describe: describeScene(trigger: .watch)
         case .recenter: recenter()
         case .repeatLast: repeatInstruction()
         }
@@ -3058,8 +3154,9 @@ final class AppModel {
     /// then treated like "Where am I" (so one press writes two `describe` records).
     /// Caller: `ContentView`'s `CameraControlInteraction` background.
     func cameraControlPressed() {
-        logger.event("describe", ["source": "cameraControl"])
-        describeScene()
+        // One `describe` record per press: `describeScene` logs `trigger: cameraControl` itself
+        // (the separate `source` record it used to write here double-counted a press — review).
+        describeScene(trigger: .cameraControl)
     }
 
     // MARK: Private

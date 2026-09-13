@@ -27,6 +27,8 @@
 //    · Any new `kind` string must also be handled by the widget's glyph switch.
 //    · Needs `NSSupportsLiveActivities: true` (ios/project.yml); failures are recorded in
 //      `lastError`, never thrown — guidance never depends on the Live Activity.
+//    · Every request / update carries `staleDate = now + LiveActivityCoalescer.staleAfter` (5 min):
+//      an activity the app can no longer update (killed mid-route) dims instead of lying.
 //
 
 import ActivityKit
@@ -108,7 +110,7 @@ final class LiveActivityController {
         )
         do {
             activity = try Activity.request(attributes: NavActivityAttributes(routeName: routeName),
-                                            content: .init(state: state, staleDate: nil),
+                                            content: .init(state: state, staleDate: Self.staleDate()),
                                             pushType: nil)
             lastState = state
             isActive = true
@@ -129,6 +131,7 @@ final class LiveActivityController {
         obstacleDistanceM: Double = 0.0,
         headClearanceM: Double = 0.0,
         statusDetail: String = "",
+        progress: Double = 0,
         now: Double = Date().timeIntervalSinceReferenceDate
     ) {
         guard let activity else { return }
@@ -151,11 +154,35 @@ final class LiveActivityController {
             obstacleStatus: obstacleStatus,
             obstacleDistanceM: obstacleDistanceM,
             headClearanceM: headClearanceM,
-            statusDetail: statusDetail
+            statusDetail: statusDetail,
+            progress: progress
         )
         lastState = state
         nonisolated(unsafe) let act = activity
-        Task.detached { await act.update(.init(state: state, staleDate: nil)) }
+        let stale = Self.staleDate()
+        Task.detached { await act.update(.init(state: state, staleDate: stale)) }
+    }
+
+    /// `LiveActivityCoalescer.staleAfter` from now: past it the widget dims the distance and says
+    /// "No update" (`context.isStale`). Set on every request and update, never on `end` (an ended
+    /// activity is already final). Why: ActivityKit keeps an activity in the island for hours after
+    /// the app is killed mid-route; without a stale date a spotter would read a frozen "120 m" as
+    /// live (Step 47, first island pictures).
+    private static func staleDate() -> Date {
+        Date(timeIntervalSinceNow: LiveActivityCoalescer.staleAfter)
+    }
+
+    /// Navigation-only refresh (waypoint advanced by Next / the crown / skip-ahead, with no fix to
+    /// carry the obstacle fields): keeps the last obstacle glance and GPS detail and pushes the new
+    /// line, distance, glyph and progress through the same coalescer.
+    func refreshNavigation(instruction: String, distanceM: Int, kind: String, progress: Double) {
+        let last = lastState
+        update(instruction: instruction, distanceM: distanceM, kind: kind,
+               obstacleStatus: last?.obstacleStatus ?? .clear,
+               obstacleDistanceM: last?.obstacleDistanceM ?? 0,
+               headClearanceM: last?.headClearanceM ?? 0,
+               statusDetail: last?.statusDetail ?? "",
+               progress: progress)
     }
 
     /// Ends the activity with an "arrived" glyph and `instruction`.
@@ -169,7 +196,11 @@ final class LiveActivityController {
             obstacleStatus: .clear,
             obstacleDistanceM: 0.0,
             headClearanceM: 0.0,
-            statusDetail: ""
+            statusDetail: "",
+            // Only arrival passes a final line (`AppModel` `onArrived` → `end(final: nav.instruction)`);
+            // Stop / restart call `end()` / `end(immediate: true)` with nil. Full bar on arrival,
+            // the last known progress on an abandoned route — never a full bar for a cancelled walk.
+            progress: instruction == nil ? (lastState?.progress ?? 0) : 1
         )
         nonisolated(unsafe) let act = activity
         let policy: ActivityUIDismissalPolicy = immediate ? .immediate : .after(.now + 60)

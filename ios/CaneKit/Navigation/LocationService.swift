@@ -92,8 +92,31 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     @ObservationIgnored private let manager = CLLocationManager()
     /// The `liveUpdates` iteration (a main-actor Task, so `ingest` runs on main); cancelled by `stop()`.
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    /// The route's explicit Always session (iOS 18+ `CLServiceSession(authorization: .always)`,
+    /// Codex review, Step 47): on the modern API an app's *implicit* session is When In Use, so an
+    /// Always-authorized app still needs this to be sure of background delivery without a
+    /// `CLBackgroundActivitySession`. Created by `setNavigating(true)`, invalidated by
+    /// `setNavigating(false)`; its diagnostics are logged through `onDiagnostic`. The background
+    /// activity session stays armed until the status reports Always (`reconcileBackgroundSession`).
+    @ObservationIgnored private var alwaysSession: CLServiceSession?
+    /// Reads `alwaysSession.diagnostics`; cancelled with the session.
+    @ObservationIgnored private var alwaysDiagnosticsTask: Task<Void, Never>?
+    /// CoreLocation diagnostics worth a trip-log line (`location_diag {source, flags}`): the update
+    /// stream's `authorizationDenied` / `authorizationRestricted` / `insufficientlyInUse` /
+    /// `serviceSessionRequired` / `locationUnavailable`, and the Always session's own flags. A
+    /// walker must never follow stale guidance in silence (Codex review). Installed by
+    /// `AppModel.wireNavigation`.
+    @ObservationIgnored var onDiagnostic: ((String, [String]) -> Void)?
+    /// Last diagnostic flags reported by the update stream, deduplicated so a persisting state logs once.
+    @ObservationIgnored private var lastUpdateFlags: [String] = []
+
     /// Keeps location alive if the screen locks mid-walk (needs UIBackgroundModes: location).
-    /// Created by `start()`, invalidated by `stop()`.
+    /// Armed by `setNavigating(true)` (an active route only, Step 40) **and only without Always
+    /// authorization** (`reconcileBackgroundSession`, Step 47); released by `setNavigating(false)` —
+    /// which `stopRoute`, arrival, a denied authorization and `stop()` all call — or the moment
+    /// Always is granted. While it is armed and the app is in the background, iOS draws its blue
+    /// location pill in the Dynamic Island and demotes the Live Activity to the minimal bubble;
+    /// that pill is this session's, not the widget's.
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
 
     /// Configures the heading manager: 2° filter, portrait orientation (phone clamped upright on
@@ -126,6 +149,50 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     /// True while actively guiding along a route. Gates `.otherNavigation` and `CLBackgroundActivitySession`.
     @ObservationIgnored private var isNavigating = false
 
+    /// True while a `CLBackgroundActivitySession` is armed — i.e. the route runs on When-In-Use
+    /// authorization and iOS is drawing its blue location pill in the Dynamic Island (which demotes
+    /// the Live Activity to the minimal bubble). False with Always authorization, where background
+    /// fixes need no session and the island belongs to OpenCane. Read by the Scene engine / trip log.
+    private(set) var backgroundSessionArmed = false
+
+    /// "always" / "whenInUse" / "denied" / "restricted" / "notDetermined", for the trip log and the UI.
+    var authorizationName: String {
+        switch manager.authorizationStatus {
+        case .authorizedAlways: return "always"
+        case .authorizedWhenInUse: return "whenInUse"
+        case .denied: return "denied"
+        case .restricted: return "restricted"
+        case .notDetermined: return "notDetermined"
+        @unknown default: return "unknown"
+        }
+    }
+
+    /// Called on the main actor whenever CoreLocation reports an authorization change, with
+    /// `authorizationName` and whether a background session is now armed. Installed by
+    /// `AppModel.wireNavigation` (logs `location_auth`).
+    @ObservationIgnored var onAuthorizationChange: ((String, Bool) -> Void)?
+
+    /// Ask for Always on top of When In Use (Step 47). Why: a route runs with the screen locked;
+    /// a When-In-Use app keeps receiving fixes only through a `CLBackgroundActivitySession`, and
+    /// that session makes iOS draw the blue location pill in the Dynamic Island — which is what
+    /// pushed OpenCane's own Live Activity into the minimal bubble on the owner's phone (pictures
+    /// 2026-09-12 21:48: a blue arrow in the pill, our head-height glance in a detached circle).
+    /// Apple Maps and Google Maps own the island because they hold Always. iOS shows the upgrade
+    /// prompt once (and may grant provisional Always first); a walker who declines keeps today's
+    /// behaviour (session + pill). Idempotent; a no-op once answered. Caller: `AppModel.startRouteNow`
+    /// (not under `CANEKIT_UITEST=1`: the prompt would race the first XCUITest tap).
+    func requestAlwaysAuthorization() {
+        alwaysWanted = true
+        guard manager.authorizationStatus == .authorizedWhenInUse else { return }   // else: deferred below
+        manager.requestAlwaysAuthorization()
+    }
+
+    /// A route asked for Always while the status was still `.notDetermined` (the launch prompt not
+    /// yet answered — a first route right after install). `locationManagerDidChangeAuthorization`
+    /// finishes the request the moment When In Use is granted (Muse review, Step 47), so the first
+    /// walk gets the upgrade prompt, not the second.
+    @ObservationIgnored private var alwaysWanted = false
+
     /// Requests when-in-use authorization (first call prompts) and starts fixes + heading.
     /// Idempotent. Uses default live-updates when idle, switching to `.otherNavigation` only when
     /// actively navigating a route (`setNavigating(true)`).
@@ -149,17 +216,80 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     func setNavigating(_ navigating: Bool) {
         guard navigating != isNavigating else { return }
         isNavigating = navigating
-        manager.showsBackgroundLocationIndicator = navigating
-        if isNavigating {
-            if backgroundSession == nil {
-                backgroundSession = CLBackgroundActivitySession()
-            }
-        } else {
-            backgroundSession?.invalidate()
-            backgroundSession = nil
-        }
+        // Deliberately NOT `= navigating` (Step 47): the blue location pill iOS draws around the
+        // Dynamic Island while a route runs in the background comes from the
+        // `CLBackgroundActivitySession` itself — that indicator is what lets a When-In-Use app
+        // keep receiving fixes in the background (WWDC23 "Discover streamlined location updates")
+        // and no flag on our side removes it. Leaving this manager flag off keeps the legacy
+        // indicator path out of the picture so there is exactly one system pill, never two; it is
+        // the OS's, not the Live Activity's, and docs/design.md §6.7 says so for the spotter.
+        manager.showsBackgroundLocationIndicator = false
+        reconcileAlwaysSession()
+        reconcileBackgroundSession()
         if isRunning {
             startUpdatesLoop()
+        }
+    }
+
+    /// Hold an explicit `.always` service session for the route, and none while idle (an idle app
+    /// must not ask for background location). Its diagnostics stream tells the trip log why Always
+    /// is not in effect (`alwaysAuthorizationDenied`, `insufficientlyInUse`, …).
+    private func reconcileAlwaysSession() {
+        if isNavigating, alwaysSession == nil {
+            let session = CLServiceSession(authorization: .always)
+            alwaysSession = session
+            alwaysDiagnosticsTask = Task { [weak self] in
+                // The stream ends by throwing when the session is invalidated; that is not a diagnostic.
+                do {
+                    for try await d in session.diagnostics {
+                        guard let self, !Task.isCancelled else { return }
+                        var flags: [String] = []
+                        if d.authorizationDenied { flags.append("authorizationDenied") }
+                        if d.authorizationDeniedGlobally { flags.append("authorizationDeniedGlobally") }
+                        if d.authorizationRestricted { flags.append("authorizationRestricted") }
+                        if d.insufficientlyInUse { flags.append("insufficientlyInUse") }
+                        if d.fullAccuracyDenied { flags.append("fullAccuracyDenied") }
+                        if d.alwaysAuthorizationDenied { flags.append("alwaysAuthorizationDenied") }
+                        if d.authorizationRequestInProgress { flags.append("authorizationRequestInProgress") }
+                        self.onDiagnostic?("always_session", flags)
+                    }
+                } catch {}
+            }
+        } else if !isNavigating, let session = alwaysSession {
+            alwaysDiagnosticsTask?.cancel()
+            alwaysDiagnosticsTask = nil
+            session.invalidate()
+            alwaysSession = nil
+        }
+    }
+
+    /// Arm the background session only when a route runs AND the app lacks Always authorization.
+    /// With Always, `liveUpdates` keeps flowing in the background on the `location` background
+    /// mode alone, and no session means no blue pill — the Live Activity keeps the island (Step 47).
+    /// Re-run on every authorization change, so the Always grant mid-route drops the session (and
+    /// the pill) at once, and a downgrade re-arms it so the walk never loses GPS. Idempotent.
+    private func reconcileBackgroundSession() {
+        // Denied / restricted get no session: it could deliver nothing and would only keep the
+        // pill (and a misleading `background_session: true`) alive (Muse review).
+        let status = manager.authorizationStatus
+        let wantSession = isNavigating && (status == .authorizedWhenInUse || status == .notDetermined)
+        if wantSession, backgroundSession == nil {
+            backgroundSession = CLBackgroundActivitySession()
+        } else if !wantSession, let session = backgroundSession {
+            session.invalidate()
+            backgroundSession = nil
+        }
+        backgroundSessionArmed = backgroundSession != nil
+    }
+
+    /// Authorization changed (the launch prompt, the Always upgrade prompt, a Settings change):
+    /// re-decide the background session and tell the app so the trip log records it.
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        reconcileBackgroundSession()
+        onAuthorizationChange?(authorizationName, backgroundSessionArmed)
+        if alwaysWanted, isNavigating, manager.authorizationStatus == .authorizedWhenInUse {
+            alwaysWanted = false
+            manager.requestAlwaysAuthorization()
         }
     }
 
@@ -171,6 +301,19 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
                 let stream = navigating ? CLLocationUpdate.liveUpdates(.otherNavigation) : CLLocationUpdate.liveUpdates()
                 for try await update in stream {
                     guard let self, !Task.isCancelled else { return }
+                    // Diagnostics first: a stopped stream must never be silent (Codex review).
+                    var flags: [String] = []
+                    if update.authorizationDenied { flags.append("authorizationDenied") }
+                    if update.authorizationDeniedGlobally { flags.append("authorizationDeniedGlobally") }
+                    if update.authorizationRestricted { flags.append("authorizationRestricted") }
+                    if update.insufficientlyInUse { flags.append("insufficientlyInUse") }
+                    if update.serviceSessionRequired { flags.append("serviceSessionRequired") }
+                    if update.locationUnavailable { flags.append("locationUnavailable") }
+                    if update.accuracyLimited { flags.append("accuracyLimited") }
+                    if flags != self.lastUpdateFlags {
+                        self.lastUpdateFlags = flags
+                        if !flags.isEmpty { self.onDiagnostic?("updates", flags) }
+                    }
                     if update.authorizationDenied {
                         self.denied = true
                         self.authorized = false

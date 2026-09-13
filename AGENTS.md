@@ -24,7 +24,7 @@ Added 2026-09-11. The two names are **not** a half-finished rename; keeping them
 
 | | Name | Where it is set |
 |---|---|---|
-| What a person **sees and hears** | **OpenCane** | `CFBundleDisplayName` on all three targets (`ios/project.yml` → `make gen`); the nav title in `ContentView`; the watch nav title; every spoken line (`AppModel`, `SoundWatcher`, `AppIntents`); the `NS*UsageDescription` purpose strings; the Siri App Shortcut phrases, which interpolate `\(.applicationName)` and therefore follow the display name with no edit |
+| What a person **sees and hears** | **OpenCane** | `CFBundleDisplayName` on all three targets (`ios/project.yml` → `make gen`); the nav title on the Guide tab in `ContentView` (Sense / Settings / Profile carry their own titles "Details" / "Settings" / "Profile"); the watch nav title; every spoken line (`AppModel`, `SoundWatcher`, `AppIntents`); the `NS*UsageDescription` purpose strings; the Siri App Shortcut phrases, which interpolate `\(.applicationName)` and therefore follow the display name with no edit |
 | What the **code** is called | **CaneKit** | Xcode project and `CaneKit.xcodeproj`, target names, scheme, `PRODUCT_NAME` (so the build product is `CaneKit.app`), the `CaneKitLogic` SwiftPM module, every `ios/CaneKit…/` path and file name, `Makefile` targets, the `CANEKIT_*` environment variables, the `canekit-*.jsonl` trip-log filenames |
 | Frozen either way | `com.aritro.canekit`, `.watchkitapp`, `.widget` | hard rule 6 |
 
@@ -54,11 +54,11 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 | Path | What lives there |
 |---|---|
 | `ios/Logic/` | `CaneKitLogic` SwiftPM package: pure, Foundation-only decisions (lane math, cue state machine, geofences, route schema, watch message codec, VLM request/response codec) + Swift Testing tests |
-| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Conversation/` (voice assistant: `ConversationCoordinator`, `VoiceInputEngine`, `PostStore`), `Trip/`, `UI/`, `Resources/` |
+| `ios/CaneKit/` | The iOS app: `App/` (AppModel = owner of every engine), `Depth/`, `Haptics/`, `Speech/`, `Watch/`, `Navigation/`, `Audio/`, `Scene/`, `Conversation/` (voice assistant: `ConversationCoordinator`, `VoiceInputEngine`, `PostStore`), `Alerts/` (family alerts, Steps 39/43: `FamilyAlerts`, `GrokBotClient`, `FallWatcher`, `AlertSummarizer`), `Trip/` (trip log + tracker, `LiveActivityController`, `MedicalProfileStore` (Step 44), `SupabaseClient` (Step 45)), `UI/` (incl. `ProfilePage`, the 4th tab), `Resources/` |
 | `ios/CaneKitWatch/` | watchOS app |
 | `ios/CaneKitWidget/` | Live Activity widget (Dynamic Island / lock screen) |
 | `ios/Shared/` | Types compiled into more than one target (Live Activity attributes) |
-| `ios/CaneKitUITests/` | XCUITests + the screenshot tour |
+| `ios/CaneKitUITests/` | XCUITests + the screenshot tour (`CaneKitVisualTour`, `make tour`) + the Dynamic Island tour (`CaneKitIslandTour`, `make island`) |
 | `ios/project.yml`, `ios/scripts/gen.sh`, `ios/Makefile` | XcodeGen project + CLI build/test/install |
 | `ios/scripts/` | `test.sh` (`make test`), `e2e.py` (`make e2e`, asserts on the trip log), `cue_audit.py` (`make audit`, cue load of one walk), `sign_probe.swift` / `vision_probe.swift` (measure what Vision reads), `streetview/` (`frames.json` + git-ignored JPEGs for `SCENARIO=streetview`), `streetview_stim.py` (run by hand: a demo / dataset visualiser over the Street View frames with its own nav approximation and template narration — runs no CaneKit code, no Makefile target, no tests), `appicon.py`, `gen.sh` |
 | `ios/stretch/`, `ios/drafts/` | Not in any target. Old ESP32 BLE code and iOS 18 drafts. Leave alone. |
@@ -114,8 +114,9 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
    left/center/right/head haptic, Silence haptics, Mirror left / right, Write trip log, Head row,
-   Type a destination first, Destination, the root tabs Guide / Sense / Settings, the Cues picker
-   segments Standard / Detailed / Indoors / Outdoors (`CueLevel.title` / `CuePlace.title`), and a campus
+   Type a destination first, Destination, Simulate walk (`CaneKitIslandTour`), the root tabs Guide / Sense /
+   Settings / Profile (`RootTab.title`; the tests drive the first three), the Cues picker
+   segments Quiet / Standard / Detailed / Indoors / Outdoors (`CueLevel.title` / `CuePlace.title`), and a campus
    suggestion's label "Grainger Engineering Library, campus place" —
    `DestinationSuggestion.voiceOverLabel`) must not change without updating the tests in the same
    commit.
@@ -173,6 +174,8 @@ make test            # CaneKitLogic unit tests (Swift Testing; works with Comman
 make sim             # build the app for the iOS simulator (no LiDAR / haptics / watch there)
 make uitest          # XCUITests on the iPhone 17 Pro Max simulator
 make tour            # screenshot every screen state → ios/build/shots
+make island          # photograph the Live Activity in the Dynamic Island (compact, expanded, walking,
+                     #   after Stop) → ios/build/shots/NN-island-*.png (CaneKitIslandTour, Step 47)
 make sim17           # create the iPhone 17 Pro Max (iOS 27) simulator once
 make e2e             # GPS-replay end-to-end scenarios through the real app (SCENARIO=all = clean, missed_fence,
                      #   gps_jitter, wrong_turn; streetview is opt-in); report + logs in ios/build/e2e/
@@ -195,7 +198,23 @@ Traps that have already cost a run (the first two produced a false green in Step
   captures the value immutably, so `#expect(continuity.accepts(11))` fails to compile
   ("cannot use mutating member on immutable value: '$0' is immutable"). `#expect(d.update(…) == v)` is
   fine — a comparison expands differently. Hoist the call into a local first (`DepthReadinessTests`).
-- ⚠ `make uitest` / `make tour` need a location on the simulator first
+- ⚠ **"Operation not permitted" from swift-frontend / xcodebuild / git on files under the repo is
+  macOS, not the code.** The repo lives in `~/Downloads`, a folder guarded by Privacy & Security →
+  Files and Folders. On Sat 2026-09-12 ~21:30 Xcode's grant for the Downloads folder was lost (a
+  prompt raised by concurrent agent builds went unanswered): Xcode-signed tools (`swift-frontend`,
+  `xcodebuild`, `/usr/bin/git` → Xcode's git) could no longer open files they had not created
+  themselves — incremental builds failed on their own `.swiftmodule` / `.swiftdeps`, `swift test`
+  could not load the xctest bundle, and `git status` said "unable to access '.git/config'" while
+  `head .git/config` worked. Fix: `tccutil reset SystemPolicyDownloadsFolder com.apple.dt.Xcode`
+  (then Allow), or System Settings → Privacy & Security → Files and Folders → Xcode → Downloads.
+  Workaround meanwhile: `make sim DERIVED=/private/tmp/…/dd` (a derived-data dir outside Downloads).
+- ⚠ **Never run two builders in the same tree.** The same evening a Codex review ran `make test` /
+  `make sim` in the real repo (48 times) while the gate ran. Point external reviewers (Codex,
+  Antigravity) at a *copy* with a read-only sandbox, and give subagents their own `-derivedDataPath`.
+- ⚠ `scripts/test.sh` passes `--disable-xctest`: on a fresh `Logic/.build` under Xcode 27, `swift test`
+  passes all Swift Testing suites and then fails "No test bundle found" in the (empty) XCTest pass.
+  Add an XCTest test and you must remove the flag on purpose.
+- ⚠ `make uitest` / `make tour` / `make island` need a location on the simulator first
   (`xcrun simctl location <udid> set 40.1140,-88.2249`), or the route tests fail for want of a GPS fix.
 
 ## Hardware / OpenSCAD — traps that have already cost us a night
@@ -367,6 +386,14 @@ bench has *disproved* must never sit in the file as though it were settled — m
   screen the app never reached. The flashlight (`torchEnabled`) is not persisted either (a pocketed
   torch is a dead battery and a burn risk).
 
+- **Always location is asked at the first route start, and the background session is armed only
+  without it** (Step 47, `LocationService.requestAlwaysAuthorization` / `reconcileBackgroundSession`).
+  A When-In-Use app keeps GPS through the screen lock only via `CLBackgroundActivitySession`, and
+  that session puts iOS's blue location pill *in* the Dynamic Island, demoting our Live Activity to
+  the minimal bubble; Apple Maps and Google Maps own the island because they hold Always. Do not
+  "simplify" back to always-arm-the-session, and do not remove the session either: a walker who
+  declines Always still needs fixes with the screen locked. `location_auth` records are the evidence.
+
 ### Steps 34–37 and the rotation fix (Sat 2026-09-12) — do not "simplify" these
 
 - **The flashlight switch trusts KVO, never a read right after setting.** `AppModel.setTorch` sets
@@ -407,7 +434,11 @@ bench has *disproved* must never sit in the file as though it were settled — m
   (`CueRules.allowsName`: `cls != .wall`) — the cane trails walls. Quiet and Indoors name nothing and
   read only `CueRules.safetySignPhrases`; Standard names doors only while a route guides; Indoors
   shortens the head distance to 1.2 m [H]. Head-height and ground-hazard warnings are identical at
-  every level (the safety floor), and haptics do not change by level yet (Step 41). The raw values
+  every level (the safety floor). Since Step 41 the levels also change the **torso** haptics
+  (`TorsoHapticPolicy`, layered over an untouched `CueDecider`): Quiet none, Standard two centre onset
+  taps (< 1.5 m closing, strong triple < 0.6 m, once per approach), Detailed today's loop and side taps
+  minus shoreline re-taps (known blind spot: a post standing at exactly the hedge's distance is masked until the reading moves — the cane tip covers it); Indoors and a crossing settle hold every torso cue; the head cue is never
+  gated (`headIsNeverSuppressed`). The raw values
   persisted under `cueLevel` / `cuePlace` must never be renamed (`rawValuesAreStable`). Pinned by
   `CueProfileTests`.
 - **Two-camera rotation is fixed per camera, for the portrait-only UI — never unify it.**
@@ -447,11 +478,11 @@ bench has *disproved* must never sit in the file as though it were settled — m
 
 - **Original plan:** `~/.claude/plans/phone-is-king-glittery-bee.md` (approved plan, deviations, test
   strategy) — outside the repo, on the owner's Mac only.
-- **Build log:** `CHANGELOG.md`, one entry per step (newest first; Step 37 at `076fcaa`), each with
+- **Build log:** `CHANGELOG.md`, one entry per step (newest first; Step 47 is this evening's — island redesign, torso haptics by level, scene engine card; Step 46 at `891f558`, Step 37 at `076fcaa`), each with
   why, what changed, every review finding fixed or rejected with evidence, verification output, and a
   `test on device:` list. Entries before Step 37 use the old cue-v2 step numbers (the talk floor was
   inserted as 37 and later steps renumbered +1).
-- **Open work:** `docs/todo.md` — "Cue design v2 — Steps 35–45" is the current plan (38–45 open);
+- **Open work:** `docs/todo.md` — "Cue design v2 — Steps 35–45" is the cue plan (its item 41, torso haptics by level, shipped in CHANGELOG Step 47; items 38–40 and 42–45 are open). ⚠ Those item numbers are **not** CHANGELOG step numbers: CHANGELOG Steps 38–46 are a separate stream (point-blank wall, Grok Bot family alerts, Dynamic Island, hazard telemetry, GPS fallback + walk simulator, falls / weapons, the Medical ID Profile tab, Supabase, review fixes);
   `docs/TEAM_HANDOFF.md` §10 is how an agent resumes it. Both status blocks are dated snapshots.
 - **Cue design research:** `docs/cue_design_v2.md` (Step 35: 4 researchers + 4 source fact-checkers,
   74 kept findings, [H] marks hypotheses, not measurements; §3 is the design, §4 the ranked change

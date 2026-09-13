@@ -12,6 +12,14 @@ import Testing
 @Suite("LiveActivityCoalescer tests")
 struct LiveActivityCoalescerTests {
 
+    /// The stale deadline must outlive a normal crossing wait (≤ 2 min of no GPS fixes while
+    /// standing still) and still catch a dead app inside the demo's attention span (≤ 10 min).
+    @Test("staleAfter outlives a crossing wait and catches a dead app within ten minutes")
+    func staleAfterOutlivesACrossingWait() {
+        #expect(LiveActivityCoalescer.staleAfter >= 120)
+        #expect(LiveActivityCoalescer.staleAfter <= 600)
+    }
+
     @Test("First snapshot always emits")
     func firstSnapshotAlwaysEmits() {
         var coalescer = LiveActivityCoalescer()

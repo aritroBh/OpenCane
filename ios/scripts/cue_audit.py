@@ -34,7 +34,8 @@ Read-only: never writes into the log or the repo.
 # on a mounted walk (CHANGELOG.md Step 35). Step 37 added the resume / cross-band pause metrics.
 # Tests: `selftest()` below (fixture asserts, no device). It is NOT part of `make test` or CI.
 # Inputs it depends on (renaming any of these in the app silently zeroes a section): record kinds
-# `lanes` (`head`, `torso`, `depth`, `tilt` from TripLogger.lanes), `cue` (field `cue`), `speech`
+# `lanes` (`head`, `torso`, `depth`, `tilt` from TripLogger.lanes), `cue` (field `cue`; Step 41 adds
+# `suppressed` = a torso cue the level did not render, `render` = a Standard onset tap), `speech`
 # (`text`, `priority`), `speech_suppressed` (`reason`, `load`), `speech_dispatch` (`text`,
 # `priority`, `replays`, `resume_from`), `speech_end` (`priority`), and for the hazard sections
 # `hazard` (`type`, `source`), `hazard_watch` (`reply`, `error`, `dropped`, `ms`) and `describe_result`
@@ -180,8 +181,16 @@ def audit(records: list[dict]) -> dict:
     # Only frames inside the mount window say anything about what the cane will feel.
     rep["head_band_mounted_frames"] = head_band([r for r in lanes if in_aim(r)])
 
-    cues = Counter(r.get("cue") for r in records if r.get("kind") == "cue")
+    # Step 41: a `cue` record with `suppressed` is a decider decision the walker's level, place
+    # or crossing settle did NOT render (TorsoHapticPolicy) — it must not count as felt load.
+    # `render` (center_onset / center_strong) marks a Standard-level onset tap that was felt.
+    cue_recs = [r for r in records if r.get("kind") == "cue"]
+    cues = Counter(r.get("cue") for r in cue_recs if not r.get("suppressed"))
     rep["cues_per_min"] = {k: round(v / minutes, 1) for k, v in cues.items() if k and k != "clear"}
+    rep["torso_suppressed_per_min"] = {
+        k: round(v / minutes, 1)
+        for k, v in Counter(r.get("suppressed") for r in cue_recs if r.get("suppressed")).items()}
+    rep["center_onsets"] = dict(Counter(r.get("render") for r in cue_recs if r.get("render")))
 
     spoken = [r for r in records if r.get("kind") == "speech"]
     by_pri = Counter(r.get("priority", "?") for r in spoken)
@@ -278,6 +287,9 @@ def human(rep: dict) -> str:
                      f"torso dropout {hb['torso_dropout']}"
                      + (f" ({int(hb['overhang_share'] * 100)}% overhang)" if hb["overhang_share"] is not None else ""))
     lines.append(f"cues/min {rep['cues_per_min']}")
+    if rep["torso_suppressed_per_min"] or rep["center_onsets"]:
+        lines.append(f"torso cues held by the level/min {rep['torso_suppressed_per_min']}; "
+                     f"Standard onset taps {rep['center_onsets']}")
     lines.append(f"speech/min {rep['speech_per_min']}, unsolicited {rep['unsolicited_per_min']}/min "
                  f"({rep['unsolicited_non_route_per_min']}/min excluding route lines); "
                  f"suppressed {rep['suppressed']}")
@@ -353,6 +365,9 @@ def selftest() -> None:
         # Handheld frame (tilt 40°), head beyond enter → no cells.
         {"t": 3.0, "kind": "lanes", "depth": True, "tilt": 40.0, "head": [2.0, 2.0, 2.0], "torso": [2.0, 2.0, 2.0]},
         {"t": 4.0, "kind": "cue", "cue": "head"},
+        # Step 41: a torso cue the level held is not felt load; a Standard onset tap is.
+        {"t": 4.2, "kind": "cue", "cue": "left", "ar_t": 4.2, "suppressed": "quiet"},
+        {"t": 4.4, "kind": "cue", "cue": "center", "ar_t": 4.4, "distance": 1.4, "render": "center_onset"},
         {"t": 5.0, "kind": "speech", "priority": "safety", "text": "Head height."},
         {"t": 5.5, "kind": "speech", "priority": "scene", "text": "Flashlight on."},
         {"t": 6.0, "kind": "speech_dispatch", "text": "Head height.", "priority": "safety", "replays": 0},
@@ -399,6 +414,9 @@ def selftest() -> None:
     assert rep["unsolicited_non_route_per_min"] == 1.0, rep    # Head height.; Flashlight asked for; route excluded
     assert rep["field_collisions"] == 1, rep
     assert rep["suppressed"] == {"by_reason": {"busy": 1}, "by_load": {"ambientObstacleName": 1}}, rep
+    assert rep["cues_per_min"] == {"head": 1.0, "center": 1.0}, rep      # the held left tap is not counted
+    assert rep["torso_suppressed_per_min"] == {"quiet": 1.0}, rep
+    assert rep["center_onsets"] == {"center_onset": 1}, rep
     assert audit([{"t": 0, "kind": "session"}])["tilt"] is None
     print("cue_audit selftest: ok")
 

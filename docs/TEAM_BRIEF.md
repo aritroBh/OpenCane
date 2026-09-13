@@ -48,7 +48,9 @@ resume from its §10.
 - **Settings → Cues** is new and first on the Settings tab: **Quiet / Standard / Detailed** and
   **Outdoors / Indoors**, default Detailed + Outdoors. Changing it speaks once ("Quiet cues.",
   "Indoor mode."). Quiet and Indoors name nothing and read only safety signs; Indoors warns about
-  head height at 1.2 m instead of 1.5 m. Haptics are the same at every level for now.
+  head height at 1.2 m instead of 1.5 m. Since Step 41 the level also changes the cane's torso taps:
+  Quiet none, Standard one tap at 1.5 m and a strong triple at 0.6 m, Detailed today's loop and
+  side taps; head height is the same at every level.
 - **Warnings say the distance first:** "Two meters ahead, door", not "door ahead, two meters".
 - **"Head height." still cuts in at once.** The direction it cut now continues from its phrase
   after a short pause, instead of starting over.

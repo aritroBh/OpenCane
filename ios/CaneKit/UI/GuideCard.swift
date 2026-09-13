@@ -99,21 +99,27 @@ struct GuideCard: View {
             // returning to "Where am I" and on a static text containing "camera" (the no-frame
             // error) or starting "Scene:" (a description).
             // Conversational assistant push-to-talk (Step 23): paired beside Where am I.
-            HStack(spacing: CKSpacing.md) {
+            // Both are `tile` layout and the row is `fixedSize` vertically, so the two are the
+            // same shape and height whatever their words do (Step 47: before this, `ViewThatFits`
+            // kept "Where am I" in a row and stacked "Talk to OpenCane" — one pair, two shapes).
+            HStack(alignment: .top, spacing: CKSpacing.md) {
                 CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
-                            systemImage: "eye", role: .secondary,
+                            subtitle: "Camera · what is ahead",
+                            systemImage: "eye", role: .secondary, layout: .tile,
                             hint: "Takes a photo and reads out hazards and landmarks ahead",
                             value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
                     .disabled(model.describer.isDescribing)
 
                 CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
+                            subtitle: model.voiceInput.isListening ? "Tap again to send" : "Voice · ask or command",
                             systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
-                            role: model.voiceInput.isListening ? .destructive : .secondary,
+                            role: model.voiceInput.isListening ? .destructive : .secondary, layout: .tile,
                             hint: "Tap to speak a command, ask a question, or set a post",
                             value: model.voiceInput.isListening ? "listening" : nil) {
                     model.toggleVoiceInput()
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             if !model.describer.lastDescription.isEmpty {
                 Text(model.describer.lastDescription)
                     .font(CKFont.body)
@@ -201,7 +207,7 @@ struct GuideCard: View {
                     .disabled(model.isBuildingRoute || model.routeStartWaiting)
 
                 CKBigButton(title: "Simulate walk",
-                            subtitle: "Indoor demo mode · test route without moving",
+                            subtitle: "Indoor demo · walks the route for you",
                             systemImage: "play.circle.fill",
                             role: .secondary,
                             hint: "Simulates walking the demo route indoors step by step without moving") {

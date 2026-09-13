@@ -31,6 +31,7 @@
 
 import CaneKitLogic
 import Foundation
+import Synchronization
 
 /// Which kind of model wrote a scene sentence. `SceneDescriber` must know, because a cloud
 /// sentence has to pass `CloudSceneGate` while an on-device sentence was already vetted by
@@ -44,11 +45,52 @@ nonisolated enum VLMAnswerSource: Sendable {
 }
 
 /// One scene sentence and who wrote it.
+///
+/// The three defaulted fields (Step 47) are provenance for the Details tab's "Scene engine" card:
+/// a walker (or the owner) can read *which* model answered, how long the cloud took and why it was
+/// skipped. They default so every existing `VLMAnswer(text:source:)` call still compiles.
 nonisolated struct VLMAnswer: Sendable {
     /// The sentence as the model (or template) produced it, before any gate.
     let text: String
     /// Who produced it; decides whether `SceneDescriber` runs `CloudSceneGate`.
     let source: VLMAnswerSource
+    /// Display name of the client that actually wrote `text` ("Muse", "Gemini", "On-device").
+    /// "" only if a client forgot to fill it; the default `describeScene` always does.
+    var answeredBy: String = ""
+    /// Wall-clock ms the cloud call took when the cloud was tried — until it answered, or until it
+    /// failed and the on-device client took over. nil when no cloud was tried (on-device only).
+    var cloudMs: Int? = nil
+    /// Why the cloud did not answer (`localizedDescription` of the primary's error: "The request
+    /// timed out.", "HTTP 429: …"), set only by `FallbackVLMClient` when it fell back. nil when the
+    /// cloud answered or was never tried.
+    var fallbackReason: String? = nil
+}
+
+/// Who answered the last hazard-watch request through a `FallbackVLMClient`, and why. The hazard
+/// path returns a bare `String` (`describe(jpeg:prompt:)`), so this record is the side channel that
+/// carries its provenance to `HazardScanner.lastWatchSource` / `lastWatchReason` for the Scene
+/// engine card. Plain value; read and written under `VLMHazardOutcomeBox`'s lock.
+nonisolated struct VLMHazardOutcome: Sendable, Equatable {
+    /// Display name of the client whose reply was used ("Muse" / "On-device").
+    let answeredBy: String
+    /// ms the cloud took to answer, or to fail / hit `hazardDeadline` before the fallback ran.
+    let cloudMs: Int
+    /// The cloud's error when it did not answer ("The request timed out." after `hazardDeadline`);
+    /// nil when the cloud answered.
+    let fallbackReason: String?
+}
+
+/// A lock-guarded slot for the last `VLMHazardOutcome`. A class, not a struct field, because
+/// `FallbackVLMClient` is an immutable `Sendable` struct shared by `SceneDescriber`,
+/// `HazardScanner` and `ConversationCoordinator`: the one instance the factory builds must be the
+/// one the scanner reads. `Mutex` (Synchronization) keeps it `Sendable` without `@unchecked`.
+nonisolated final class VLMHazardOutcomeBox: Sendable {
+    /// The slot; nil until the first hazard-watch request completes.
+    private let slot = Mutex<VLMHazardOutcome?>(nil)
+    /// The last outcome, or nil before the first request.
+    var last: VLMHazardOutcome? { slot.withLock { $0 } }
+    /// Records `outcome` (called by `FallbackVLMClient.describe` on the hazard path).
+    func record(_ outcome: VLMHazardOutcome) { slot.withLock { $0 = outcome } }
 }
 
 /// A vision-language provider that turns one JPEG into one short spoken sentence.
@@ -61,6 +103,14 @@ nonisolated protocol VLMClient: Sendable {
     /// `FallbackVLMClient` has one). `SceneDescriber` speaks it when the gate refuses the cloud
     /// sentence, so a refusal still answers the walker.
     var onDeviceFallback: (any VLMClient)? { get }
+    /// Provenance of the last hazard-watch reply, or nil for a client that has no cloud → on-device
+    /// choice to report (only `FallbackVLMClient` records one). `HazardScanner.runWatch` reads it
+    /// right after `describe(jpeg:prompt: HazardPrompt.text)` returns.
+    var lastHazardOutcome: VLMHazardOutcome? { get }
+    /// How long the cloud gets for a hazard prompt before the on-device client answers instead
+    /// (`FallbackVLMClient.hazardDeadline`), or nil when there is no cloud to wait for. Shown on the
+    /// Scene engine card ("on-device after 2.5 s").
+    var hazardCloudDeadline: Duration? { get }
     /// The cloud client inside this one, or nil when there is none.
     ///
     /// Used by "Ask OpenCane" (`SceneDescriber.run`) and by `ConversationCoordinator` (a free-form
@@ -99,6 +149,10 @@ nonisolated extension VLMClient {
     var onDeviceFallback: (any VLMClient)? { nil }
     /// A bare client is its own cloud client, unless it is the on-device one (which has none).
     var cloudPrimary: (any VLMClient)? { isOnDevice ? nil : self }
+    /// A bare client makes no cloud → on-device choice, so it has nothing to report.
+    var lastHazardOutcome: VLMHazardOutcome? { nil }
+    /// Only `FallbackVLMClient` races the cloud against a deadline.
+    var hazardCloudDeadline: Duration? { nil }
 
     /// "Where am I": the scene prompt. Callers: the default `describeScene(jpeg:)` below and
     /// `SceneDescriber.grounded` / `groundedAnswer` (re-asking the on-device fallback after the
@@ -107,9 +161,14 @@ nonisolated extension VLMClient {
         try await describe(jpeg: jpeg, prompt: ScenePrompt.text)
     }
 
-    /// Default: this client answered for itself, so the source is its own kind.
+    /// Default: this client answered for itself, so the source is its own kind and `answeredBy` is
+    /// its own name; a bare cloud client also reports its round trip as `cloudMs`.
     func describeScene(jpeg: Data) async throws -> VLMAnswer {
-        VLMAnswer(text: try await describe(jpeg: jpeg), source: isOnDevice ? .onDevice : .cloud)
+        let started = Date()
+        let text = try await describe(jpeg: jpeg)
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        return VLMAnswer(text: text, source: isOnDevice ? .onDevice : .cloud, answeredBy: name,
+                         cloudMs: isOnDevice ? nil : ms)
     }
 }
 
@@ -134,9 +193,18 @@ nonisolated struct FallbackVLMClient: VLMClient {
     /// a place the walker has left. For `HazardPrompt.text` the cloud gets this long, then the
     /// on-device client answers instead (review round 5).
     var hazardDeadline: Duration = .seconds(2.5)
+    /// Who answered the last hazard-watch request and why (Step 47). A `let` with a default, so
+    /// it stays out of the memberwise `init(primary:fallback:)` and every copy of this struct
+    /// shares the one box the factory created.
+    let hazardOutcomes = VLMHazardOutcomeBox()
+    /// `hazardOutcomes.last`, for `HazardScanner`.
+    var lastHazardOutcome: VLMHazardOutcome? { hazardOutcomes.last }
+    /// `hazardDeadline`, for the Scene engine card.
+    var hazardCloudDeadline: Duration? { hazardDeadline }
 
     /// Hazard prompt: the cloud races `hazardDeadline`; any failure or timeout falls back to
-    /// on-device unless this task itself was cancelled (then `CancellationError`). Any other
+    /// on-device unless this task itself was cancelled (then `CancellationError`), and the outcome
+    /// (who answered, cloud ms, the cloud's error) is recorded in `hazardOutcomes`. Any other
     /// prompt: the cloud with its full timeouts; `CancellationError` is rethrown (a cancelled
     /// request must not trigger the fallback), every other error falls back with the same prompt —
     /// which the on-device client ignores, so callers that need *their* prompt answered use
@@ -144,14 +212,25 @@ nonisolated struct FallbackVLMClient: VLMClient {
     func describe(jpeg: Data, prompt: String) async throws -> String {
         if prompt == HazardPrompt.text {
             let primary = self.primary
+            let started = Date()
+            let reason: String
             do {
-                return try await Self.first(within: hazardDeadline) {
+                let reply = try await Self.first(within: hazardDeadline) {
                     try await primary.describe(jpeg: jpeg, prompt: prompt)
                 }
+                hazardOutcomes.record(VLMHazardOutcome(answeredBy: primary.name,
+                                                       cloudMs: Self.ms(since: started),
+                                                       fallbackReason: nil))
+                return reply
             } catch {
                 if Task.isCancelled { throw CancellationError() }
+                reason = error.localizedDescription
             }
-            return try await fallback.describe(jpeg: jpeg, prompt: prompt)
+            let cloudMs = Self.ms(since: started)
+            let reply = try await fallback.describe(jpeg: jpeg, prompt: prompt)
+            hazardOutcomes.record(VLMHazardOutcome(answeredBy: fallback.name, cloudMs: cloudMs,
+                                                   fallbackReason: reason))
+            return reply
         }
         do { return try await primary.describe(jpeg: jpeg, prompt: prompt) }
         catch is CancellationError { throw CancellationError() }
@@ -160,11 +239,25 @@ nonisolated struct FallbackVLMClient: VLMClient {
 
     /// Same fallback order as `describe`, but the answer carries who wrote it: when the cloud
     /// failed (no network, bad key, quota) the on-device sentence comes back marked `.onDevice`,
-    /// so `SceneDescriber` speaks it whole instead of running it through the cloud gate.
+    /// so `SceneDescriber` speaks it whole instead of running it through the cloud gate — and
+    /// carries `fallbackReason` (the cloud's error text) and `cloudMs` (how long the cloud was
+    /// given before it failed), so the Scene engine card can say why Muse did not answer.
     func describeScene(jpeg: Data) async throws -> VLMAnswer {
+        let started = Date()
         do { return try await primary.describeScene(jpeg: jpeg) }
         catch is CancellationError { throw CancellationError() }
-        catch { return try await fallback.describeScene(jpeg: jpeg) }
+        catch {
+            let cloudMs = Self.ms(since: started)
+            var answer = try await fallback.describeScene(jpeg: jpeg)
+            answer.cloudMs = cloudMs
+            answer.fallbackReason = error.localizedDescription
+            return answer
+        }
+    }
+
+    /// Whole milliseconds since `started`.
+    private static func ms(since started: Date) -> Int {
+        Int(Date().timeIntervalSince(started) * 1000)
     }
 
     /// Runs `op`, but gives up after `limit` (throws `URLError(.timedOut)` and cancels `op`).

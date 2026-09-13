@@ -8,14 +8,17 @@ Code twins: `ios/CaneKit/UI/Theme.swift` (phone tokens + components), `ios/CaneK
 **Audited against the code on 2026-09-12 (after Step 28); §5 (speech, obstacle, navigation and control
 cues), §6 (the Settings page and its Cues card, §6.5) and §9 re-audited after Step 37 (HEAD `076fcaa`:
 `SpeechQueue`, `SpeechResume`, `CueRules`, `TorchSwitch`, `HapticsCard`, `HazardsCard`,
-`ContentView.SettingsPage`, `CaneKitUITests`).** Every rule below describes what ships.
+`ContentView.SettingsPage`, `CaneKitUITests`); §0, §3, §4, §5.1, §5.3, §6 (four tabs, the inline
+per-tab titles, the Family alerts card, the new §6.8 Profile page), §6.3, §6.6, §8 and §9 re-audited
+at Step 47 (Sat 2026-09-12 evening: `TabBar`, `ContentView`, `GuideCard`, `ProfilePage`, `Theme`,
+`AppModel`'s spoken lines, `AppIntents`, `WatchTheme`, the three XCUITest suites).** Every rule below describes what ships.
 Where the original spec (Sep 10) and the Swift disagreed, the Swift won and this file changed; the parts
 of the original spec that were never built are kept, marked **Not built**, so nobody "fixes" the code back
 toward them by accident. From now on change a rule here and in the Swift in the same commit. Two things
 outrank both: `AGENTS.md` hard rule 8 (speech priorities, §5.1) and rule 9 (accessibility labels are a
 test contract, §9).
 
-Section numbers are referenced from code comments (`§1`–`§8`, `§6.1`–`§6.7`); keep them stable.
+Section numbers are referenced from code comments (`§1`–`§8`, `§6.1`–`§6.8`); keep them stable.
 
 **Added after the audit, from the code:** the hazards layer (`CaneKitLogic/Hazards.swift`,
 `Depth/GroundSampler.swift`, `Scene/HazardScanner.swift`, `Scene/OnDeviceVision.swift`,
@@ -31,7 +34,7 @@ of it below says so.
 
 | Viewer | Situation | What it forces |
 |---|---|---|
-| **The blind user** | Never looks. Phone is clamped to the cane; they use speech, the cane's buzz, the watch, or the Action button ("Where am I"). | Every state has words: speech via `SpeechQueue`, and a VoiceOver label / value on screen. VoiceOver order is the selected tab's cards, then the tab bar (Guide / Sense / Settings). Our own buttons are ≥ 60 pt (big buttons 72 pt). Nothing is colour-only. |
+| **The blind user** | Never looks. Phone is clamped to the cane; they use speech, the cane's buzz, the watch, or the Action button ("Where am I"). | Every state has words: speech via `SpeechQueue`, and a VoiceOver label / value on screen. VoiceOver order is the selected tab's cards, then the tab bar (Guide / Sense / Settings / Profile). Our own buttons are ≥ 60 pt (big buttons 72 pt). Nothing is colour-only. |
 | **The sighted judge / teammate** | Glances at the phone on the cane from ~1 m, in a dark room (demo) or in sunlight (walk). | The Guide instruction, the distance and the depth tiles must be readable at arm's length: tile numerals 28 pt bold, hero distance 64 pt, fills ≥ 6.5:1 against their `ink` text, no thin type, no mid-grey. Dark surfaces for the demo (a bright screen in a dark room blinds the room). |
 | **The developer** | Reads engine health, speech backend, watch link and the hazard detections while walking behind. | The debug cards on the **Sense** tab (Hazards) and the **Settings** tab (Haptics, Watch, This phone). There is no debug footer any more (removed): fps is not shown anywhere, and thermal and battery are only in the trip log's `lanes` records. |
 
@@ -43,8 +46,9 @@ measurement, a state, or a button. No marketing surfaces.
 1. Words first. Speech is the primary channel; the screen mirrors it, never replaces it.
 2. Redundancy on every hazard: a depth tile has a fill colour **and** a level word (CLEAR / FAR / NEAR /
    STOP) **and** a number; a pill is always a word on a fill (the SF Symbol is a companion).
-3. Big and few. While a route runs the Guide card has five big buttons (Where am I, Repeat, Next,
-   Recenter, Stop route), never more than two per row; everything else lives in the cards below it.
+3. Big and few. While a route runs the Guide card has seven big buttons in five rows (Where am I +
+   Talk to OpenCane, Repeat + Next, Recenter, Simulate walk / Stop simulation, Stop route), never
+   more than two per row; everything else lives in the cards below it.
 4. Ivory on near-black. The white cane is the brand; the accent is *cane white on ink*, not a hue.
 5. Nothing animates that carries meaning. The grid updates at 30 Hz with no transitions.
 
@@ -168,8 +172,10 @@ the two dangerous states are also the two darkest fills.
 
 All shapes use `.continuous` corners. Watch buttons use radius 14.
 
-Touch targets (`CKMetrics`): `CKBigButton` is ≥ 72 pt tall, full width or half width (two per row with
-`lg` between them). Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
+Touch targets (`CKMetrics`): `CKBigButton` is ≥ 72 pt tall (`bigButton`), full width or half width (two per row with
+`lg` between them); a `layout: .tile` big button in a two-up pair (the Guide's Where am I / Talk to
+OpenCane, Step 47) is ≥ 108 pt tall (`CKMetrics.tile`), and the pair's `HStack` stretches both tiles to
+the taller one. Every other button we draw (Go, the four haptic test buttons, the four wrist-cue
 buttons, Share hazard map) is ≥ 60 pt tall (`touchTarget`). System `Toggle`s keep their system size (≥ 44 pt, HIG); the destination search field
 and every destination suggestion row are `touchTarget` (60 pt) like the buttons beside them. Tiles are not tappable (they are a display). Watch buttons are ≥ 44 pt
 (`WKSpacing.touchTarget`: 48 pt pushed the bottom row off a 46 mm screen). Pills are 32 pt tall and not
@@ -188,7 +194,7 @@ Motion never carries information. The app owns two animations, and both honour R
 | Event | Normal | Reduce Motion |
 |---|---|---|
 | Depth grid update (30 Hz) | **None.** Fill, word and number change instantly. | Same |
-| Big button press (`CKBigButtonStyle`, also Go and the test buttons) | Scale 0.97 on a 0.12 s spring; `.sensoryFeedback(.impact(weight: .light))` on release | Opacity 0.85 only; haptic kept |
+| Big button press (`CKBigButtonStyle`, also Go and the test buttons) | Scale 0.97 on a 0.12 s spring; `.sensoryFeedback(.impact(weight: .light))` on **press-down** (`trigger: isPressed` with the condition `$0 == false && $1`, i.e. the not-pressed → pressed edge; an earlier revision of this file said "on release" — the code is the truth) | Opacity 0.85 only; haptic kept |
 | Root tab switch (`CKTabBar` + `ContentView` page) | Incoming page **fades in** over 0.16 s (`.transition(.asymmetric(insertion: .opacity, removal: .identity))`); the accent capsule slides between icons (`matchedGeometryEffect`, 0.16 s spring) so pill and page land together; `.sensoryFeedback(.selection)` | Instant page swap; capsule jumps; selection haptic kept |
 | Everything else (pills, distance, instruction, cards appearing) | Instant | Instant |
 
@@ -222,10 +228,10 @@ taps by level are a later step, `CueLevel` doc comment). The flashlight's spoken
 
 | Priority | What speaks at it (literal lines from the code) | TTL while queued |
 |---|---|---|
-| `.safety` (3, top) | "Head height." (`CueSpeechPolicy`); LiDAR ground hazards "Two meters ahead, drop-off." / "… hole." / "… step up." / "… low obstacle."; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane."; "Obstacle detection did not restart. Close and reopen OpenCane." (2 s after Both cameras off, only if depth is not delivering) | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure and the depth-did-not-restart line |
-| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "Route start canceled."; "No route running."; "OpenCane ready."; "Obstacle detection warming up. Route will start when it is ready."; **refusals** "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; "Both cameras cannot run while a route is guiding you. Stop the route first."; "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first." / "… while a route is starting. Wait for obstacle detection to be ready." (all four prefetched in `AppModel.commonLines`); "This phone cannot show two cameras at once."; **Both cameras** "Both cameras on. Obstacle detection, distance warnings and sign reading are paused." / "Both cameras off. Obstacle detection is restarting." / "Obstacle detection is back." / a failed start "<why> Obstacle detection is back on."; **Cues card** "Quiet cues." / "Standard cues." / "Detailed cues." / "Outdoor mode." / "Indoor mode." (`CueLevel` / `CuePlace.spokenLine`, spoken once per change, prefetched via `CueRules.allSpokenLines`); **voice feature switches** (Shortcuts "Turn a feature on or off") "Obstacle names on." plus `CueRules.namesLimitLine` when the level or place limits names ("Quiet cues name nothing." / "Standard cues name only doors, on a route." / "Indoor mode names nothing."), or "<feature> off. <consequence>"; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 15 s "Both cameras on…", 12 s failed-start line, 10 s refusals, "Both cameras off…", "…cannot show two cameras…", voice feature switches and "Phone is hot…", 8 s "Obstacle detection is back." / warm-up / default, 6 s Cues card changes |
-| `.obstacle` (1) | Mesh names "Two meters ahead, door" (door / seat / window / table; never "wall"; only with "Speak obstacle names" on **and** `CueRules.allowsName`, and load-limited, see rules); "Left." / "Right." / "One meter ahead." when the phone cannot buzz; signs "Sign: sidewalk closed." (Quiet / Indoors: only `CueRules.safetySignPhrases`); hazard watch "Caution: 3 meters ahead, cones." | 4 s names, 6 s cue and caution lines, 8 s sign lines |
-| `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed."; flashlight (`TorchSwitch.Outcome.spokenLine`, all six prefetched) "Flashlight on." / "Flashlight off." when the device confirms, "The flashlight did not switch on." / "… off." at the 2 s settle deadline (or at once on a thrown device error), "The flashlight turned on." / "… off." when it changes unasked; "This phone has no flashlight." | 3 s "Describing.", 20 s description, 4 s flashlight confirmations, 12 s flashlight failures / device changes (`Outcome.queueSeconds`), 6 s "no flashlight", 8 s default |
+| `.safety` (3, top) | "Head height." (`CueSpeechPolicy`); LiDAR ground hazards "Two meters ahead, drop-off." / "… hole." / "… step up." / "… low obstacle."; route-start failure "Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane."; "Obstacle detection did not restart. Close and reopen OpenCane." (2 s after Both cameras off, only if depth is not delivering); **GPS fallback** (Step 42, `failQueuedRouteStart`) "Obstacle detection warming up. Guiding with GPS." when the depth interlock times out and the route starts on GPS alone (§5.3) | 6 s "Head height.", 3 s ground hazards, 30 s route-start failure and the depth-did-not-restart line, 15 s the GPS fallback |
+| `.nav` (2) | Waypoint `say` lines; "Route started. <route>. First: …"; "Passed <place>. <Next place> in N meters." / "Passed one waypoint."; "Veer left." / "Veer right."; "GPS weak. Waypoint cues paused until it recovers." / "GPS back."; "You are close to <place>. Keep going toward it, or press Next to finish."; the arrival trip summary; "Recentered."; "Route stopped."; "Route start canceled."; "No route running."; "OpenCane ready."; "Obstacle detection warming up. Route will start when it is ready."; "Screen locked. Obstacle warnings are paused until you unlock." (ARKit stops with the screen); **family alerts** "Possible fall detected. Telling your family." (`FallWatcher` episode with "Detect the cane falling" and "Send cane events to family" both on) and the webhook spam guard "Just a moment. Try again in N seconds." (`ActionRateLimit`, 10 s between repeats of Save family emails / Send test event); **refusals** "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready."; "Both cameras cannot run while a route is guiding you. Stop the route first."; "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first." / "… while a route is starting. Wait for obstacle detection to be ready." (all four prefetched in `AppModel.commonLines`); "This phone cannot show two cameras at once."; **Both cameras** "Both cameras on. Obstacle detection, distance warnings and sign reading are paused." / "Both cameras off. Obstacle detection is restarting." / "Obstacle detection is back." / a failed start "<why> Obstacle detection is back on."; **Cues card** "Quiet cues." / "Standard cues." / "Detailed cues." / "Outdoor mode." / "Indoor mode." (`CueLevel` / `CuePlace.spokenLine`, spoken once per change, prefetched via `CueRules.allSpokenLines`); **voice feature switches** (Shortcuts "Turn a feature on or off") "Obstacle names on." plus `CueRules.namesLimitLine` when the level or place limits names ("Quiet cues name nothing." / "Standard cues name only doors, on a route." / "Indoor mode names nothing."), or "<feature> off. <consequence>"; headphone and channel lines ("<AirPods> connected.", "Headphones disconnected. Beacon paused.", "No headphones. Beacon paused until AirPods connect.", "Watch not reachable. Open OpenCane on the watch.", "Haptics unavailable. Obstacle cues will be spoken."); "Phone is hot. Door and wall names and sign reading paused."; "Location access is off. Turn on Location for OpenCane in Settings to navigate."; "Camera access is off, so obstacle warnings cannot work. Turn on Camera for OpenCane in Settings."; MapKit route lines | 12 s waypoint lines and the arrival hint, 30 s arrival summary, 20 s channel, Location and Camera lines, 15 s "Both cameras on…", 12 s failed-start line, 10 s refusals, "Both cameras off…", "…cannot show two cameras…", voice feature switches and "Phone is hot…", 8 s "Obstacle detection is back." / warm-up / default, 6 s Cues card changes, 10 s "Screen locked…" and the fall line, 4 s "Just a moment…" |
+| `.obstacle` (1) | Mesh names "Two meters ahead, door" (door / seat / window / table; never "wall"; only with "Speak obstacle names" on **and** `CueRules.allowsName`, and load-limited, see rules); "Left." / "Right." / "One meter ahead." when the phone cannot buzz; signs "Sign: sidewalk closed." (Quiet / Indoors: only `CueRules.safetySignPhrases`); hazard watch "Caution: 3 meters ahead, cones."; **threat watch** (Step 43, `ThreatWatch` over the vision reply) "Careful. The camera described a possible <term> ahead." — it quotes the camera, never asserts, at most one per 2 min | 4 s names, 6 s cue and caution lines, 8 s sign lines and the threat line |
+| `.scene` (0, bottom) | "Describing."; the one-sentence description (cloud model, or on-device when there is no key or no network); "Camera warming up. Try again."; "Scene description failed."; flashlight (`TorchSwitch.Outcome.spokenLine`, all six prefetched) "Flashlight on." / "Flashlight off." when the device confirms, "The flashlight did not switch on." / "… off." at the 2 s settle deadline (or at once on a thrown device error), "The flashlight turned on." / "… off." when it changes unasked; "This phone has no flashlight."; **Talk to OpenCane** "Still working on your last question." (a second transcript lands while the first is still processing); **Profile → Announce Medical ID** "<name>. White cane user, legally blind. Blood type <type>. Allergies: <list>. Emergency contact: <name>, <phone>." (`ProfilePage`; moved from `.obstacle` to `.scene` in the Step 47 audit — a user-requested paragraph never sits in the hazard band, so an obstacle name or a route line can cut it and never the reverse) | 3 s "Describing.", 20 s description and the Medical ID summary, 4 s flashlight confirmations, 12 s flashlight failures / device changes (`Outcome.queueSeconds`), 6 s "no flashlight" and "Still working…", 8 s default |
 
 The flashlight's lines are the lowest band on purpose (it is a convenience, not guidance): a confirmation
 that waits behind a long route line for more than 4 s is dropped; the switch itself still settles.
@@ -254,8 +260,23 @@ Old comments that say "P0 / P1 / P2" refer to the original spec: P0 ≈ `.safety
 Decided by `CueDecider` on every trusted depth report (~30 Hz). One cue at a time, priority **head >
 centre > left > right**. A zone switches on below its threshold and off only 0.15 m beyond it
 (hysteresis); cue *changes* are ≥ 400 ms apart; a discrete cue (left / right / head) re-fires at most
-once per second while it stays active. The Cues card changes only the head distance here (Place:
-Indoors) and which names and signs are spoken; the patterns are the same at every Cue detail level.
+once per second while it stays active. The Cues card changes the head distance here (Place: Indoors),
+which names and signs are spoken, and — since Step 41 — which **torso** cues the cane renders
+(`TorsoHapticPolicy`, CaneKitLogic, layered over the decider; the head cue is never touched):
+
+| Cue detail × Place | Centre torso (`centerApproach`) | Left / right torso | Head |
+|---|---|---|---|
+| **Detailed + Outdoors** (default = today) | Geiger loop as below | taps as below, **except** while that side's distance has held within ±0.1 m for ≥ 2 s (shorelining a wall or hedge: `suppressed: shoreline`) | as below |
+| **Standard + Outdoors** | **no loop**: one transient (intensity 0.8, sharpness 0.6) when the centre distance is < 1.5 m **and closing**; a strong triple (3 transients 80 ms apart, 1.0 / 0.6) when < 0.6 m — proximity only, closing or not, so a walker inching in at under 0.1 m/s is still told (Muse review); each once per approach, both re-armed by 1.5 s of clear (`playCenterOnset(strong:)`; log `render: center_onset` / `center_strong`) | nothing (`suppressed: standard_side`) | as below |
+| **Quiet + Outdoors** | nothing (`suppressed: quiet`) | nothing | as below |
+| **Indoors, any level** | nothing (`suppressed: indoors`) | nothing | as below, from 1.2 m |
+| **Crossing settle** (standing at a curb, `NavigationEngine.isCrossingSettle`), Standard or Detailed | nothing (`suppressed: crossing_settle`) | nothing | as below |
+
+"Closing" = the centre distance is ≥ 0.1 m less than it was ≥ 1 s earlier over trusted frames. A
+suppressed torso cue is neither mirrored to the watch nor spoken (Quiet means nothing for torso, even
+with haptics silenced); it is logged as a `cue` record with `suppressed: <reason>` so
+`ios/scripts/cue_audit.py` can tell held load from felt load. A Standard onset is mirrored and spoken
+like a centre cue. The rows below are the Detailed patterns.
 
 | Cue | Trigger | Felt (`HapticPlayer`) | Heard (`CueSpeechPolicy`, `.obstacle` unless noted) | Shown (phone) | Wrist (mirror) |
 |---|---|---|---|---|---|
@@ -283,7 +304,7 @@ A reply about a frame older than about 4 m of walking (min(5 s, 4 m ÷ speed)) i
 
 | Cue | Heard (`.nav`) | Wrist (`WatchModel`) | Beacon (AirPods) | Shown (phone) |
 |---|---|---|---|---|
-| Route start | If LiDAR + camera are available, "Obstacle detection warming up. Route will start when it is ready."; then "Route started. <route name>. First: <WP1 say>" + any channel warnings only after the trusted-depth gate clears. No-LiDAR / camera-denied devices keep the documented GPS-only start with an explicit warning. | — while queued; normal route cues after start | Starts only after 3 fresh same-frame trusted depth reports on the LiDAR path | While queued, the Guide card shows the warm-up / timeout status, keeps Start disabled, and exposes **Cancel route start**; after start, instruction = next waypoint's `say`; Repeat / Next / Recenter / Stop appear |
+| Route start | If LiDAR + camera are available, "Obstacle detection warming up. Route will start when it is ready."; then "Route started. <route name>. First: <WP1 say>" + any channel warnings only after the trusted-depth gate clears. No-LiDAR / camera-denied devices keep the documented GPS-only start with an explicit warning, and since Step 42 a depth interlock that times out (7 s) no longer refuses the route: `failQueuedRouteStart` says "Obstacle detection warming up. Guiding with GPS." at **`.safety`** (15 s), logs `route_readiness {state: timed_out_fallback_gps}` and starts GPS guidance at once (the watch shows "Guiding with GPS"). | — while queued; normal route cues after start | Starts only after 3 fresh same-frame trusted depth reports on the LiDAR path | While queued, the Guide card shows the warm-up / timeout status, keeps Start disabled, and exposes **Cancel route start**; after start, instruction = next waypoint's `say`; Repeat / Next / Recenter / Stop appear |
 | Waypoint reached (turn > 30°) | Its `say` line | `.directionDown` (right) / `.directionUp` (left), once | Holds the previous leg's bearing until the turn is made (`TurnSettle`) | Instruction advances to the next `say` |
 | Waypoint reached (crossing) | Its `say` line ("… Crossing. … Listen for traffic …") | `.notification` (a crossing beats a turn; a skipped crossing still taps) | **Silent** until you stop at the curb or have turned | Instruction advances |
 | Waypoint passed without entering | "Passed <place>. <Next place> in N meters." | none | Live at once | Instruction advances |
@@ -317,7 +338,7 @@ Recenter) it ignores head yaw.
 
 | Event | Felt | Heard | Shown (phone) | Watch |
 |---|---|---|---|---|
-| Where am I (phone button, watch Describe, Action button shortcut, Camera Control if it fires) | light impact on release (phone button) | "Describing." then the one-sentence description (`.scene`); without a key or network the on-device describer answers (Vision + Apple's on-device model, or a template). It waits up to 3 s for a camera frame; the frame from before a screen lock or backgrounding is dropped, so after unlocking it waits for a fresh one ("Camera warming up. Try again." if none comes) | Button reads "Describing…" (value "in progress", disabled); result text under it; error line in red | `.click` confirm on send |
+| Where am I (phone button, watch Describe, Action button shortcut, Camera Control if it fires) | light impact on press-down (phone button, §4) | "Describing." then the one-sentence description (`.scene`); without a key or network the on-device describer answers (Vision + Apple's on-device model, or a template). It waits up to 3 s for a camera frame; the frame from before a screen lock or backgrounding is dropped, so after unlocking it waits for a fresh one ("Camera warming up. Try again." if none comes) | Button reads "Describing…" (value "in progress", disabled); result text under it; error line in red | `.click` confirm on send |
 | Repeat (phone, watch, "Repeat in OpenCane") | light impact | The last line actually spoken + " Next, <place>, in N meters." | Instruction unchanged | `.click` |
 | Next (phone, watch button, crown 3 detents in 1 s) | light impact | The skipped waypoint's own line; "No route running." when idle | Instruction advances | `.click` |
 | Recenter (phone, watch) | light impact | "Recentered." | — | `.click` |
@@ -368,33 +389,42 @@ carry `.updatesFrequently` so touching them reads the current state.
 
 ## 6. Screens
 
-The phone app is **three icon-only pages** (`ContentView`: `NavigationStack` titled "OpenCane" >
-selected page `ScrollView` + `CKTabBar`). Tabs are Guide · Sense · Settings. Card order *inside
-the selected page* is the VoiceOver order; the tab bar is last on every page.
+The phone app is **four icon-only pages** (`ContentView`: `NavigationStack` > selected page
+`ScrollView` + `CKTabBar`). Tabs are Guide · Sense · Settings · Profile (`RootTab`; Profile since
+Step 44). The navigation title is **inline and centred, one per tab** (Steps 41–42:
+`.navigationBarTitleDisplayMode(.inline)` plus a bold `.title2` principal `Text`, hidden from
+VoiceOver because the bar already reads it): Guide = "OpenCane", Sense = **"Details"**, Settings =
+"Settings", Profile = "Profile". Card order *inside the selected page* is the VoiceOver order; the
+tab bar is last on every page.
 
 ```
-OpenCane                                  ← large navigation title
-Guide page                                Sense page                         Settings page
-┌ Guide ──────────────────────────────┐   ┌ ✓ Depth OK ─────────────────┐   ┌ Cues ───────────────┐
-┌ This trip  |  Arrived ──────────────┐   ┌ Obstacles ──────── (TRUSTED)┐   ┌ Haptics ────────────┐
-  (§6.1 / §6.3 / §6.4; trip only while    ┌ Hazards ────────────────────┐   ┌ Watch ──────────────┐
-   navigating or after arrival)             (§6.2 / §6.5)                     ┌ Mount ──────────────┐
+OpenCane · Details · Settings · Profile                                       ← inline, centred navigation title, one per tab
+Guide page                                Sense page                         Settings page              Profile page
+┌ Guide ──────────────────────────────┐   ┌ ✓ Depth OK ─────────────────┐   ┌ Cues ───────────────┐   ┌ EMERGENCY MEDICAL ID ─┐
+┌ This trip  |  Arrived ──────────────┐   ┌ Scene engine (MUSE → ON-DEV)┐   ┌ Haptics ────────────┐   ┌ MOBILITY & FITNESS ───┐
+  (§6.1 / §6.3 / §6.4; trip only while    ┌ Obstacles ──────── (TRUSTED)┐   ┌ Watch ──────────────┐     (§6.8)
+   navigating or after arrival)           ┌ Hazards ────────────────────┐   ┌ Mount ──────────────┐
+                                            (§6.2 / §6.5)                     ┌ Family alerts ──────┐
                                                                               ┌ This phone ─────────┐
                                                                               (§6.5)
-[ walk ]  [ 3×3 grid ]  [ gear ]          ← CKTabBar, icon-only; VoiceOver "Guide" / "Sense" / "Settings"
+[ walk ]  [ 3×3 grid ]  [ gear ]  [ person ]   ← CKTabBar, icon-only; VoiceOver "Guide" / "Sense" / "Settings" / "Profile"
 ```
 
 Card titles are `.isHeader`, so the headings rotor jumps the cards of the *current* page (Guide →
-This trip / Arrived on Guide; Obstacles → Hazards on Sense; Cues → Haptics → Watch → Mount → This
-phone on Settings — `ContentView.SettingsPage`, Cues first since Step 36 because it is the setting a
-walker changes most). Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
+This trip / Arrived on Guide; Scene engine → Obstacles → Hazards on Sense; Cues → Haptics → Watch →
+Mount → **Family alerts** → This phone on Settings — `ContentView.SettingsPage`, Cues first since
+Step 36 because it is the setting a walker changes most; Emergency Medical ID → Mobility & Fitness on
+Profile). Legend for the wireframes: `[ ]` button · `( )` pill · `┌┐` card.
 
 The tab bar is the one icon-only control: the word is the VoiceOver label and the XCUITest key
-(§9), never the only cue for a hazard. Hit target ≥ 60 pt.
+(§9), never the only cue for a hazard. Hit target ≥ 60 pt. Tab symbols: `figure.walk`,
+`square.grid.3x3.fill`, `gearshape.fill`, `person.crop.circle`; each tab also carries a one-sentence
+VoiceOver hint (`RootTab.hint`).
 
-**Not built** (original spec): a fourth Route tab, a separate Depth screen with Mirror / Export
-buttons, the route picker screen, a Settings provider picker and a "Show debug footer" toggle, the
-obstacle banner on Guide, the arrival sheet.
+**Not built** (original spec): a fourth *Route* tab (the fourth tab that shipped is Profile, §6.8 —
+the bar is full, do not add a fifth), a separate Depth screen with Mirror / Export buttons, the route
+picker screen, a Settings provider picker and a "Show debug footer" toggle, the obstacle banner on
+Guide, the arrival sheet.
 
 ### 6.1 Guide
 
@@ -402,22 +432,33 @@ obstacle banner on Guide, the arrival sheet.
 While a route runs                                  Idle (before a route / after Stop / after arrival)
 ┌ Guide ─────────────────────────────────┐          ┌ Guide ─────────────────────────────────┐
 │ Goodwin Avenue. Intersection. Turn     │          │ No route                               │
-│ right to face north and stay on this   │          │ (⌖ OFF)   GPS runs only during a route │
-│ side. No crossing needed. Listen for … │          │ [ ◉ Where am I                       ] │
-│ 120 m                (↱ VEER RIGHT 40°)│          │ [ ⟲ Repeat                           ] │ ← only after arrival
-│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ [ ▶ Start route to CIF               ] │
-│ [ ◉ Where am I                       ] │          │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
-│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
-│ [ ⌖ Recenter                         ] │          │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
-│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Grainger Industrial Supply        ] │
-│ [ ■ Stop route                       ] │          │ ⚠ Type a destination first             │ ← only after a
-└────────────────────────────────────────┘          └────────────────────────────────────────┘   failed attempt
+│ right to face north and stay on this   │          │ (⌖ ±5 M)                               │
+│ side. No crossing needed. Listen for … │          │ ┌ ◉ ─────────┐ ┌ 🎙 ────────┐          │ ← two-up TILES,
+│ 120 m                (↱ VEER RIGHT 40°)│          │ │ Where am I │ │ Talk to    │          │   same height
+│ (⌖ ±6 M) (⚠ GPS WEAK)                  │          │ │ Camera ·   │ │ OpenCane   │          │
+│ ┌ ◉ ─────────┐ ┌ 🎙 ────────┐          │          │ │ what is    │ │ Voice · ask│          │
+│ │ Where am I │ │ Talk to    │          │          │ │ ahead      │ │ or command │          │
+│ │ Camera ·…  │ │ OpenCane   │          │          │ └────────────┘ └────────────┘          │
+│ └────────────┘ └────────────┘          │          │ [ ⟲ Repeat                           ] │ ← only after arrival
+│ [ ⟲ Repeat       ] [ ⏭ Next          ] │          │ [ 🚶 Start route to CIF             › ] │ ← primary, subtitle
+│ [ ⌖ Recenter                         ] │          │ [   Campus Demo · Townsend Hall to CIF ] │
+│ (BEACON 40%) (HEAD TRACKED)            │          │ [ ◎ Navigate to CIF from here          ] │ ← secondary, subtitle
+│ [ ▶ Simulate walk                    ] │          │ [   Live GPS · Apple Maps walking route] │
+│ [ ■ Stop route                       ] │          │ [ ▶ Simulate walk                      ] │ ← secondary, subtitle
+└────────────────────────────────────────┘          │ [   Indoor demo · walks the route for you] │
+                                                    │ [ ⌕ grainger             ⓧ] [ Go ]     │ ← 60 pt field
+                                                    │ [ ▣ Grainger Engineering Library      ] │ ← suggestions,
+                                                    │ [   On campus · 400 m       (CAMPUS)  ] │   campus first
+                                                    │ ⚠ Type a destination first             │ ← only after a
+                                                    └────────────────────────────────────────┘   failed attempt
 ```
 
 - Instruction: the *upcoming* waypoint's `say` ("Arrived: <say>" after arrival, "No route" when idle), `instruction` font, wraps without limit — the spotter reads it over the walker's shoulder.
 - Distance row: only with a GPS-derived distance (never in the simulator without a fix): hero integer metres + "m", and the bearing pill when there is a heading and a target (hidden on a curved leg and while silent at a crossing).
-- Button rows while navigating: Repeat (primary) + Next (secondary) share a row; Recenter (secondary) has its own row (three-up hyphenated "Recenter" on a 17 Pro Max); the beacon / head pills sit between Recenter and **Stop route (destructive, last)**, so Stop is the furthest control from Repeat / Next. Stop has no confirmation — use Guided Access on the walk.
-- Where am I is always present (idle and navigating), above the route controls.
+- **The two-up pair is a pair of tiles** (`CKBigButton(layout: .tile)`, Step 47): icon over a centred word over a caption ("Camera · what is ahead" / "Voice · ask or command"), both in one `HStack` that is `fixedSize` vertically so they are the same shape and height however their words wrap. Before Step 47 they were row buttons and `ViewThatFits` stacked the long one while the short one stayed a row — one pair, two shapes. While listening the Talk tile turns destructive red, reads "Listening…" with the caption "Tap again to send".
+- **Route buttons are full-width rows with a subtitle** (Step 46): Start route to CIF (primary, chevron), Navigate to CIF from here and Simulate walk (secondary). A subtitle wraps to a second line rather than forcing the stacked shape (Step 47: the row's text column is flexible width).
+- Button rows while navigating: Repeat (primary) + Next (secondary) share a row; Recenter (secondary) has its own row; the beacon / head pills sit between Recenter and Simulate walk / Stop simulation; **Stop route (destructive, last)**, so Stop is the furthest control from Repeat / Next. Stop has no confirmation — use Guided Access on the walk.
+- Where am I and Talk to OpenCane are always present (idle and navigating), above the route controls.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
 |---|---|---|---|---|
@@ -427,13 +468,16 @@ While a route runs                                  Idle (before a route / after
 | 4 | GPS pill | "GPS: ±N m" / "GPS: Searching" / "GPS: Denied" / "GPS: Off" | — | `.updatesFrequently` |
 | 5 | GPS weak pill | "GPS weak" | — | — |
 | 6 | Where am I | "Where am I" ("Describing…" while busy) | value "in progress" while busy; hint "Takes a photo and reads out hazards and landmarks ahead" | button; disabled while busy |
+| 6b | Talk to OpenCane | "Talk to OpenCane" ("Listening…" / "Thinking…" while busy) | value "listening" while listening; hint "Tap to speak a command, ask a question, or set a post" | button |
 | 7 | Scene text / describer error | "Scene: <description>" / the error text | — | — |
 | 8 | Repeat | "Repeat" | hint "Says the current instruction again" ("Says the arrival line again" after arrival) | button |
 | 9 | Next | "Next" | hint "Skips to the next instruction" | button |
 | 10 | Recenter | "Recenter" | hint "Sets straight ahead as the beacon's forward direction" | button |
 | 11 | Beacon pill | "Beacon: Beacon N%" / "Beacon: Beacon paused" / "Beacon: Beacon off" / "Beacon: Beacon idle" | — | `.updatesFrequently` |
 | 12 | Headphone pill | "<output name>, head tracking on" / "<output name>, no head tracking" / "No headphones connected; beacon paused" | — | — |
+| 12b | Simulate walk / Stop simulation (navigating, between the pills and Stop route) | "Simulate walk" / "Stop simulation" (`AppModel.isSimulatingWalk`) | hint "Simulates walking along the active route indoors" / "Pauses the walk simulation" | button; **no test uses either label** |
 | 13 | Stop route | "Stop route" | hint "Ends guidance" | button |
+| — | Cancel route start (idle, only while a route start waits for the depth interlock) | "Cancel route start" | hint "Stops waiting for obstacle detection and does not start guidance"; the status line under the route buttons says why the route has not started | button (destructive); **no test uses it** (§9) |
 | — | Start route to CIF (idle) | "Start route to CIF" | hint "Starts the recorded ISR Townsend Hall to CIF route" | button |
 | — | Destination field (idle) | "Destination" (placeholder "Or type a destination") | hint "Type a place name. Matching places appear below as you type."; return key "Go" submits | text field |
 | — | Clear (x), only with text in the box | "Clear destination" | hint "Empties the destination box" | button |
@@ -475,6 +519,35 @@ label + metres + level word; no glyph. ≥ 4.5 m or no return shows "clear"; bef
 | Torso row (one element) | "Torso row" | same format | `.updatesFrequently` |
 
 Rows are one VoiceOver element each on purpose: reading three cells is slower than one sentence.
+
+**Scene engine card** (Step 47, `SceneEngineCard`, between the status card and Obstacles). The owner
+asked the Details tab to say *when Muse is used* rather than only name the chain. Every string is
+`SceneEngineSummary` (CaneKitLogic, tested); the 8 s and 2.5 s in it are the scanner's own constants.
+
+```
+┌ Scene engine ────────────────────────────┐
+│ (🧠 MUSE → ON-DEVICE)                     │   pill: "ON-DEVICE ONLY" without a cloud key
+│ WHERE AM I  Muse answered in 1.9 s        │   or "On-device answered — Muse: The request timed out. (after 18 s)"
+│             2 min ago · from the watch    │   secondary; "Not asked yet." before the first run
+│ GATE        Muse's sentence passed the gate.  │  only when the cloud answered ("… was edited: dropped count." /
+│                                           │   "… was refused: invented distance. On-device spoke instead.")
+│ WATCH       Hazard watch off — when on, asks Muse every 8 s while a route guides, on-device after 2.5 s │
+│ CUES        Detailed · Outdoors · names off │
+└──────────────────────────────────────────┘
+```
+
+| Element | Label (VoiceOver) | Traits |
+|---|---|---|
+| Card title | "Scene engine" | `.isHeader` |
+| Chain pill | "Where am I asks Muse first, then the on-device model when Muse fails." / "Where am I uses the on-device model only. No cloud key is set." | — |
+| Where am I row (one element) | "Muse answered the last Where am I in 1.9 seconds." / "On-device answered the last Where am I, because Muse failed: The request timed out. It gave up after 18 seconds." / "Where am I has not been asked yet." / "The last Where am I failed: <error>" | — |
+| When row | "2 minutes ago, from the watch." | `.updatesFrequently` (a 10 s `TimelineView` redraws the age) |
+| Gate row | the sentence as drawn | — |
+| Watch row | "Hazard watch is off. When on, it asks Muse every 8 seconds while a route guides, and the on-device model answers if Muse takes more than 2.5 seconds." / "Hazard watch: Muse answered the last check in 1.2 seconds. 30 seconds ago." | — |
+| Cues row | "Cues: Detailed, Outdoors, obstacle names off." | — |
+
+Words, never colour: the card has no tint that carries state. Triggers are `DescribeTrigger.spoken`
+("the Guide button", "the watch", "the Action button or Siri", "Camera Control", "a waypoint", "a question").
 
 ### 6.3 Route choice (inside the Guide card)
 
@@ -518,7 +591,7 @@ fix yet. Try again outside."; nothing within 3 km: "Could not find "…" within 
 Every control here is also a Siri phrase, because the walker this card is for cannot see it
 (`AppIntents.swift`): "Start route to CIF / Take me to Grainger / Take me
 somewhere / Repeat the last instruction / Next waypoint / Stop the route **in OpenCane**", plus "Where am I
-in OpenCane" and "Talk to OpenCane". Six of the ten App Shortcuts an app may register, all `.foreground(.immediate)` — ARKit
+in OpenCane" and "Talk to OpenCane". Seven of the ten App Shortcuts an app may register (`TakeMeToIntent` carries both the "Take me to" and "Take me somewhere" phrases; the other three slots are Status, Ask and Cane haptics, `HandsFreeIntents.swift`), all `.foreground(.immediate)` — ARKit
 obstacle warnings only run with the app frontmost, so guidance must never start in the background.
 ("Navigate to CIF from here" stays a Guide card button and a Shortcuts-app action, but its Siri
 phrase moved to "Take me to CIF in OpenCane" — same route-file waypoint via the gazetteer — when
@@ -548,9 +621,10 @@ the walk). **Not built**: the checkmark hero, "Describe where I am" and "Done" b
 
 ### 6.5 Settings and debug cards
 
-Two pages hold the controls. **Settings** (`ContentView.SettingsPage`) is, top to bottom: **Cues**
-(two segmented pickers), **Haptics**, **Watch**, **Mount**, **This phone**. **Sense** carries the
-**Hazards** card (`HazardsCard`) under the status card and the Obstacles grid. Every switch is a system
+Three pages hold the controls. **Settings** (`ContentView.SettingsPage`) is, top to bottom: **Cues**
+(two segmented pickers), **Haptics**, **Watch**, **Mount**, **Family alerts** (Step 39), **This phone**.
+**Sense** carries the **Hazards** card (`HazardsCard`) under the status card, the Scene engine card and
+the Obstacles grid. **Profile** holds the Medical ID editor and the mobility refresh (§6.8). Every switch is a system
 `Toggle` (visible label = VoiceOver label, plus a hint; VoiceOver announces "switch button, on / off"
 for free). Persistence is per control, in the Default column: the persisted ones are `UserDefaults`
 (`Settings` in `AppModel`); the ones marked **not persisted** are off at every launch on purpose (each
@@ -560,8 +634,8 @@ there — `AppModel` doc comments). Separately, after a launch that never report
 
 | Card (page) | Control (visible label = VoiceOver label) | Default | Hint (exact, from the code) |
 |---|---|---|---|
-| Cues (Settings) | "Cue detail" segmented **Quiet / Standard / Detailed** (`CueLevel.title`) | **Detailed**, persisted `cueLevel` (= today's behaviour until a trip log from the mounted cane tunes the calmer levels; owner decision 2026-09-12) | "How much OpenCane says on its own. Quiet names nothing and reads only safety signs. Obstacle haptics are the same at every level for now." |
-| Cues (Settings) | "Place" segmented **Outdoors / Indoors** (`CuePlace.title`) | **Outdoors**, persisted `cuePlace` | "Indoors warns about head height from 1.2 meters instead of 1.5, names nothing and reads only safety signs." |
+| Cues (Settings) | "Cue detail" segmented **Quiet / Standard / Detailed** (`CueLevel.title`) | **Detailed**, persisted `cueLevel` (= today's behaviour until a trip log from the mounted cane tunes the calmer levels; owner decision 2026-09-12) | "How much OpenCane says and taps on its own. Quiet names nothing, reads only safety signs and taps only for head height. Standard taps once at 1.5 meters and a strong triple at 0.6, with no side taps. Detailed taps continuously ahead and for the sides. Head height warnings are the same at every level." |
+| Cues (Settings) | "Place" segmented **Outdoors / Indoors** (`CuePlace.title`) | **Outdoors**, persisted `cuePlace` | "Indoors warns about head height from 1.2 meters instead of 1.5, names nothing, reads only safety signs and taps only for head height." |
 | Haptics (Settings) | "Silence haptics" | off, persisted | "The phone stops vibrating; obstacle cues go to the watch and are spoken instead" |
 | Haptics (Settings) | "Speak obstacle names" | **off** since Step 36, persisted (a walker who had turned it on keeps `true`) | "Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place." |
 | Watch (Settings) | "Mirror obstacle cues to the watch" | off, persisted | "Also taps the wrist for every obstacle; automatic when the phone's haptic engine fails" |
@@ -580,19 +654,33 @@ there — `AppModel` doc comments). Separately, after a launch that never report
 | Hazards (Sense) | "Live camera view" | off, **not persisted** | "Shows what the camera sees, for a sighted helper" |
 | Hazards (Sense) | "Both cameras (pauses obstacle detection)" | off, **not persisted**; disabled without multi-cam and while a route start waits for depth | "Shows the front and back cameras at the same time for a sighted helper. While it is on, obstacle warnings, depth and hazard detection stop. It cannot be used while a route is guiding you." Refused while a route guides (§5.4) |
 | Hazards (Sense) | "Flashlight" | off, **not persisted** (off at every launch) | "Turns the back-camera flashlight on or off. Works while a route guides and while both cameras are on. Off at every launch." Bound to `AppModel.setTorch`: shows the request at once, settles on the device's report (§5.4) |
+| Family alerts (Settings) | "Send cane events to family" | **off**, persisted `familyAlertsEnabled` (in `LaunchRecovery.optionalFeatureKeys`); **disabled** without the webhook key, with the red caption "No webhook key. Add OPENCANE_GROKBOT_WEBHOOK_URL and _KEY to Secrets.plist." | "Sends falls, close obstacles, low battery and a position every few minutes to the OpenCane Grok Bot, which decides whether to text your family" |
+| Family alerts (Settings) | "Detect the cane falling" | **on**, persisted `fallDetectionEnabled` (Step 43; the thresholds are a guess shipped on — `docs/todo.md`); **disabled** without a motion sensor, grey caption "This device has no motion sensor, so falls cannot be detected." | "Reports to your family when the cane goes over and stays down. Thresholds are not tuned yet, so turn this off if it cries wolf." |
+| Family alerts (Settings) | "Add AI context" | **on**, persisted `familyAlertsAIContext`; **disabled** without a model key (grey caption "No model key, so alerts carry facts only."; with one, "Context written by <model>.") | "A small model writes one sentence of context for your family from what the phone knew. The facts are sent either way." |
+| Family alerts (Settings) | "Send test event" (`CKBigButton`, secondary) | works while the switch is **off** (checking the wiring is the point); one press per 10 s (`ActionRateLimit`, refusal spoken "Just a moment. Try again in N seconds.", §5.1) | "Posts one sample fall event to the Grok Bot routine and reports what it answered". The line under it is the last answer, read as "Last family alert: <status>" |
+| Family alerts (Settings) | **Family emails** (`FamilyContactsEditor`): header, one row per address with a trash button, an add field + "+", an error line, "Save family emails" (`CKBigButton`) | list persisted `familyContactEmails` (`FamilyContacts.normalize`: trim / lowercase / dedupe / cap 10); Save is **primary** while an edit is unregistered (caption "Not registered yet — press Save."), otherwise secondary; disabled without the webhook key; one Save per 10 s | Header reads "Family emails, none yet" / "Family emails, N on the list"; field "Family email", hint "Type an address, then Add. Press Save to register the list."; "Add", hint "Adds the typed address to the list" (disabled until something is typed; no fake address as placeholder); each row's button is "Remove <address>" so four rows never read as four identical "Remove"s; Save's hint "Registers the list with the OpenCane Grok Bot, which emails your family when the cane reports a fall or SOS" |
+
+⚠ **Wording contract for the Family alerts card** (`SettingsPage.familyAlertsCard` and
+`FamilyContactsEditor` headers, not decoration): an HTTP 200 from the webhook means the Grok Bot
+routine **started a run**, never that anyone was texted or that mail arrived — the bot decides that
+afterwards from the event's `severity` and `type`. No string on this card, in `FamilyAlerts.lastStatus`
+or in a spoken line may say "family notified" / "family texted"; say what the *bot* did ("Grok Bot
+accepted…"). The app sends no email of its own.
 
 **The Cues card** (Step 36, `SettingsPage.cueSettings`). Each picker has a visible `secondary`-font
 label above it ("Cue detail", "Place") that is hidden from VoiceOver, and the picker itself is a
 VoiceOver container labelled with that word — a segmented `Picker` neither shows nor speaks its own
 title on iOS, and without the container a swipe heard "Quiet, button" with no context. Each change is
 spoken once by the model at `.nav` ("Quiet cues.", "Indoor mode."; §5.4). Under the pickers a caption
-(`cueLevelCaption`) says what the selection does **today**, built from these sentences in order:
-- the level: "Quiet: no obstacle names; safety signs only." / "Standard: door names on a route; every
-  sign." / "Detailed: every obstacle name except walls; every sign.";
-- with Indoors: "Indoors: head height from 1.2 meters, no names, safety signs only.";
+(`cueLevelCaption`) says what the selection does, built from these sentences in order (Step 41 replaced
+the closing "Haptics are the same at every level for now." with the true torso-haptic sentence per level):
+- the level: "Quiet: no obstacle names; safety signs only. No cane taps for torso obstacles, head height
+  only." / "Standard: door names on a route; every sign. One tap at 1.5 meters, a strong triple at 0.6,
+  no side taps." / "Detailed: every obstacle name except walls; every sign. Continuous centre taps and
+  side taps.";
+- with Indoors: "Indoors: head height from 1.2 meters, no names, safety signs only, no torso taps.";
 - when "Speak obstacle names" is off and the level is not Quiet and the place is Outdoors: "Names are
-  off: turn on Speak obstacle names below to hear them.";
-- always last: "Haptics are the same at every level for now."
+  off: turn on Speak obstacle names below to hear them."
 
 What the rules are (`CueRules`, pinned by `CueProfileTests`): names — Detailed + Outdoors every speakable
 class but wall, Standard + Outdoors doors only while a route guides, Quiet or Indoors nothing; signs —
@@ -606,6 +694,7 @@ Debug controls (sighted teammate / developer):
 - **Hazards card**: two neutral pills, the hazard watch backend (the provider name, e.g. "ON-DEVICE"; spoken "Hazard watch uses …") and "N MAPPED" (spoken "N hazards on the map"); one detection row per source that has spoken, LIDAR / SIGN / WATCH / SOUND in the `pill` font and `textSecondary` followed by the last line in `body` (one VoiceOver element per row); an error line in red; "Share hazard map" (60 pt, secondary style, a `ShareLink` of this session's GeoJSON, shown once the file exists, hint "Shares a GeoJSON map of every hazard found on this walk"); the sound watch's status rows; under "Live camera view" ARKit's own frames on the GPU (`LiveCameraView`, 3:4, at the camera's frame rate — 30, or 60 with the Mount switch; hidden from VoiceOver; captions "Live view paused: phone is hot" / "Camera off"); the front-camera readout while head tracking without AirPods is on ("Front camera is detecting …. Head direction only; no front camera picture."); the two-camera picture and its red caption (§5.4); the grey captions that explain a refused mode, read by VoiceOver. "Both cameras self test" / "Front camera self test" appear only under the `--sensor-selftest` launch flag.
 - **Watch card**: link pill REACHABLE / ASLEEP / APP NOT INSTALLED / NOT PAIRED / UNSUPPORTED and the last watch command; the link error in red; "Mirror obstacle cues to the watch"; four buttons "Send left / right / cross / arrive cue to the watch" (disabled when unreachable).
 - **Mount card**: first row the live aim, e.g. "Camera tilt 5° down, good · 30 fps" (`MountTilt.status`; "Camera tilt: hold the cane still for a reading" before a trusted frame), then the five switches above.
+- **Family alerts card**: the four controls and the emails editor in the table above; no pills. Its captions are the only red text on Settings ("No webhook key…" and an Add refusal), and both are words, never a red border alone (§7).
 - **This phone**: "LiDAR depth", "Mesh classification (door / wall / seat)", "Logic package linked", each read as "<name>: available / not available".
 - **Debug footer**: removed (`DebugFooter.swift` is gone). Depth fps is only on the Mount card's aim row; thermal and battery are in the trip log's `lanes` records; the log file is found in the Files app.
 
@@ -635,7 +724,7 @@ fire). The watch is always dark: black ground (OLED, wrist-down power).
 
 Tokens (`WatchTheme.swift`): `WKColor` background black, surface `#26231F`, text / accent `#F4F1EA`,
 ink `#17140F`, trusted `#4ADE80`, danger `#F87171` (warning `#FBBF24` and secondary `#B5AFA3` are defined
-but unused); `WKFont` instruction `.title3` semibold, button `.headline` rounded semibold, footnote;
+but unused); `WKFont` instruction `.title3` semibold, button `.headline` rounded semibold, footnote, plus `distance` (`.title` rounded heavy, tabular digits) and `pill` (`.caption` rounded bold), both defined but unused — the distance is drawn by the inline navigation title in the system font and no pill is drawn on the watch face;
 `WKSpacing` 4 / 8 / 12, touch target 44 pt; `WKBigButton` radius 14, roles primary / secondary /
 destructive, `compact` = half width.
 
@@ -671,21 +760,141 @@ wrist-down. **Not built**: the two-page `TabView`, the TRUSTED pill and the "cro
 
 ### 6.7 Live Activity / Dynamic Island
 
+Redesigned in Step 47 from the first automated pictures of the island (`make island` →
+`ios/build/shots/NN-island-*.png`, `CaneKitIslandTour`). Before them, every change to the widget
+had been verified by a person looking at a phone, and the owner reported it "weird" three times.
+
 ```
 Lock screen / banner
-┌───────────────────────────────────────────────────────┐
-│  ↱   Goodwin Avenue. Intersection. Turn right…   120 m │  glyph .title bold; instruction .headline ≤ 2 lines;
-│      ISR Townsend Hall to CIF                          │  route name .caption secondary; distance .title rounded heavy, tabular
-└───────────────────────────────────────────────────────┘
-Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction (bottom, ≤ 2 lines)
-                compact = glyph + distance · minimal = glyph only (never the distance)
+┌────────────────────────────────────────────────────────────────┐
+│ ↱        Goodwin Avenue. Intersection. Turn right…        120 m │  glyph 30 pt bold over its word ("Turn right");
+│ Turn     ● Obstacle 1.2 m   ISR Townsend Hall to CIF    to next │  instruction .headline ≤ 2 lines; glance pill + route
+│ right                                                            │  name; distance 28 pt rounded heavy, tabular, "to next"
+└────────────────────────────────────────────────────────────────┘
+Dynamic Island
+  expanded : leading = glyph + word · trailing = distance + "to next · ±5m GPS" · bottom = instruction (full
+             width, 2 lines) then one row: [glance pill] + the route progress bar filling the rest; the GPS fact is the trailing caption ("to next · ±5m GPS")
+  compact  : leading = glyph + distance · trailing = glance glyph only when clear, glyph + metres /
+             HEAD / CURB when not
+  minimal  : the glance glyph when not clear, else the manoeuvre glyph — never the distance
 ```
 
-- Glyph from the last wrist cue: `arrow.turn.up.left` / `arrow.turn.up.right` (turns and veers), `figure.walk` (crossing), `flag.checkered` (arrived / ended), `arrow.up` (straight, at route start).
-- Colours are fixed, not `CKColor`: ink ground (`activityBackgroundTint` ≈ `#171410`) with ivory text (≈ `#F5F2EB`). No pill, no colour meaning.
-- Update rate: on every GPS fix, coalesced — only when the instruction or glyph changes or the distance moves ≥ 10 m (ActivityKit budget). The island is a summary, not a gauge.
-- Ends on arrival or Stop with the arrival glyph, dismissed 60 s later. Tapping opens the app. No interactive buttons: "Next" from the lock screen is too easy to hit by accident with the phone on a cane.
-- **Not built**: the TRUSTED pill and the "14 min left · 820 steps" line; VoiceOver currently reads the glyph by its raw kind ("turnLeft"), see §10.
+- **OpenCane owns the island, like Apple Maps / Google Maps — which needs Always location.** On
+  When-In-Use authorization a route that runs with the screen locked needs a
+  `CLBackgroundActivitySession`, and iOS then draws its blue location pill *in* the island and
+  demotes the Live Activity to the minimal bubble (owner's phone, 2026-09-12 21:48: a blue arrow in
+  the pill, our head-height glance in a detached circle — "why is the blue location thing the
+  main thing"). The first route start now asks for Always
+  (`LocationService.requestAlwaysAuthorization`, `NSLocationAlwaysAndWhenInUseUsageDescription`);
+  with Always no session is armed (`reconcileBackgroundSession`), no pill is drawn, and the compact
+  island is ours. A walker who declines keeps the session (GPS survives the lock) and the pill.
+  Trip log: `location_auth {status, background_session}` at route start and on every change.
+- **Glyphs never look like the system's location arrow.** Straight = `figure.walk`, turns =
+  `arrow.turn.up.left` / `.right`, crossing = `figure.walk.diamond.fill` (yellow), arrived =
+  `flag.checkered` (green). `arrow.up` is retired: two arrows side by side read as one broken icon.
+- **Progress bar** (the Google Maps reference): a thin ivory bar with the walker's dot, waypoints
+  passed over total (`ContentState.progress`, 1 on arrival), under the expanded island's pills and
+  the lock-screen row. The metres countdown is the fine grain; the bar is the whole walk.
+- **The glance says nothing when there is nothing to say.** Clear = one small green check in the
+  compact trailing bubble, no word; the word "Path clear" appears only in the pill of the expanded
+  and lock-screen layouts. Obstacle / head / drop-off get a glyph, a tint (orange / red / purple)
+  and a word or a distance — never colour alone.
+- **The instruction owns the full width.** Expanded bottom region, two lines (a third pushed the pills off the region), `fixedSize`
+  vertical; the leading column holds only the glyph and its word, the trailing column the
+  distance. (Before: the instruction sat in the leading column and truncated to "Leaving
+  Townsend…".) The glance pill has first claim on the pill row (`layoutPriority(1)`); the route
+  name is on the lock screen only — beside the pill in the island it truncated both ("Head heig…",
+  "ISR Tow…ll to CIF").
+- **Stale after 5 minutes** (`LiveActivityCoalescer.staleAfter`, set as `staleDate` on every
+  request and update): the distance dims and the caption reads "No update" — an app killed
+  mid-route leaves an island iOS keeps up for hours, and a frozen "120 m" must not look live.
+- Colours are fixed, not `CKColor`: ink ground (`activityBackgroundTint` ≈ `#171410`) with ivory
+  text (≈ `#F5F2EB`); glance tints ≈ `#4ADE80` / `#FB923C` / `#F87171` / `#BF8CFA`.
+- Update rate: on every GPS fix, coalesced by `LiveActivityCoalescer` (instruction or glyph
+  change, distance bands 2 / 5 / 10 m, hazard transitions at once with a 0.2 s flap guard, 0.8 s
+  floor otherwise). The island is a summary, not a gauge.
+- Ends on arrival with the arrival glyph and a 60 s lock-screen dismissal; Stop ends it immediately (`end(immediate: true)`); the island
+  itself drops an ended activity at once (`04-island-after-stop.png` is empty). `start` ends any
+  previous activity immediately (Step 20) and launch ends orphans (Step 42). Tapping opens the
+  app. No interactive buttons: "Next" from the lock screen is too easy to hit by accident with
+  the phone on a cane.
+- VoiceOver reads one sentence per presentation ("OpenCane, on route ISR Townsend Hall to CIF: in
+  120 meters, turn right. Goodwin Avenue. Path is clear."), never a raw kind — the old
+  "turnLeft" label in §10 is gone.
+- **Not built**: the "14 min left · 820 steps" line; a lock-screen picture in `make island` (no
+  public API locks the simulator from XCUITest).
+
+### 6.8 Profile (Medical ID + Mobility)
+
+The fourth tab (`ProfilePage.swift`, Step 44; avatar Step 46; real emergency number and the `.scene`
+announce band Step 47). Navigation title "Profile". It is for a **first responder or a sighted helper**
+reading the phone on the cane, and for the walker hearing it: an Apple Health-style Medical ID plus
+today's mobility numbers. Two cards, both titled in **capitals** — the only upper-case card titles in
+the app, on purpose: they must read as an emergency document, not a settings group. Data is
+`MedicalProfileStore` (persisted on the phone and mirrored to Supabase when the keys are set, Step 45).
+
+```
+┌ EMERGENCY MEDICAL ID ──────────────────────┐
+│ (◯ 56 pt photo)  Aritro …          [ Edit ] │  photo: bundled `AritroProfile`, accent ring; else person.crop.circle.fill
+│                  ✚ EMERGENCY ID             │  `pill` font, danger red
+│ ┌ ⛨ WHITE CANE USER / BLIND ─────────────┐  │  banner: raised surface, danger glyph + `pill` word,
+│ │   <emergencyNotes>                      │  │  then the notes in `secondary`
+│ └─────────────────────────────────────────┘  │
+│ 📅 Date of Birth ………………………… <value>          │  seven info rows: Date of Birth, Blood Type,
+│ 🩸 Blood Type ……………………………… <value>          │  Height & Weight, Allergies, Medications,
+│ …                                           │  Residence, Cane Spec (label secondary, value medium)
+│ EMERGENCY CONTACT                           │
+│ ┌ <name>                        [📞 Call] ┐  │  `Link(tel:)`, accent capsule, ink text
+│ │ <relation> · <phone>                    │  │
+│ └─────────────────────────────────────────┘  │
+│ [ 🔊 Announce Medical ID                  ] │  CKBigButton secondary
+└─────────────────────────────────────────────┘
+┌ MOBILITY & FITNESS ────────────────────────┐
+│ Today's Cane Mobility                  (⟳) │  refresh glyph button
+│ ┌ Steps Today ┐ ┌ Distance     ┐            │  four metric tiles, `hero(28)` numerals on raised
+│ │ 4 812       │ │ 3.2 km       │            │  surface (the same 28 pt bold rule as the depth tiles, §0)
+│ ┌ Trips Fin.  ┐ ┌ Average Pace ┐            │
+│ │ 3           │ │ 1.2 m/s      │            │
+│ ┌ ACTIVE ROUTE ── <route name> · N min ──┐  │  only while a route runs
+└─────────────────────────────────────────────┘
+```
+
+- **Edit** opens `EditMedicalIDSheet`: a system `Form` in a `NavigationStack` titled "Edit Medical ID"
+  (inline), sections Identity / Medical Vitals / Emergency Contact / Cane Equipment, one `TextField`
+  per profile field, Cancel and a bold Save in the toolbar. Save writes the whole profile back to the
+  store; Cancel discards.
+- **Call** is a `Link` to `tel:` with the digits (and a leading `+`) of the stored number; nothing else
+  in the app dials.
+- **Announce Medical ID** speaks one paragraph at **`.scene`, 20 s TTL** (§5.1): "<name>. White cane
+  user, legally blind. Blood type <type>. Allergies: <list>. Emergency contact: <name>, <phone>." The
+  Step 47 audit moved it down from `.obstacle`: a user-requested paragraph must be cut by an obstacle
+  name or a route line, never the reverse (AGENTS.md rule 8).
+- **Mobility tiles** read `MobilityStats` (`CMPedometer`, today): steps and distance fall back to the
+  live trip's `steps` / `distanceM` when today's totals are zero; average pace shows 1.2 m/s when
+  nothing has been measured (a placeholder, not a measurement — do not quote it as one). The refresh
+  glyph re-reads the pedometer.
+- No switch on this page persists a setting; the page reads the store and the model, nothing else.
+
+| # | Element | VoiceOver label | Value / hint | Traits |
+|---|---|---|---|---|
+| 1 | Card title | "EMERGENCY MEDICAL ID" | — | `.isHeader` |
+| 2 | Photo | "Profile photo of <name>" (the SF Symbol fallback is unlabelled) | — | image |
+| 3 | Name, "EMERGENCY ID", banner and notes | the texts themselves | — | static text |
+| 4 | Edit | "Edit Medical ID" | — | button; presents the sheet |
+| 5 | Info rows | "<label>" then "<value>" (two elements per row, in order) | — | static text |
+| 6 | Emergency contact | "EMERGENCY CONTACT", "<name>", "<relation> · <phone>" | — | static text |
+| 7 | Call | "Call emergency contact <name>" | — | link |
+| 8 | Announce Medical ID | "Announce Medical ID" | hint "Reads emergency medical identification aloud" | button |
+| 9 | Card title | "MOBILITY & FITNESS" | — | `.isHeader` |
+| 10 | Refresh | "Refresh mobility stats" | — | button |
+| 11 | Metric tile (×4) | "Steps Today: 4,812" / "Distance: 3.2 km" / "Trips Finished: 3" / "Average Pace: 1.2 m/s" (`.combine`, one element each) | — | — |
+| 12 | Active route block (navigating) | "ACTIVE ROUTE", the route name, "N min elapsed" | — | static text |
+| — | Edit sheet | "Edit Medical ID" title; fields by placeholder ("Full Name", "Blood Type", "Phone Number", …); "Cancel" / "Save" | — | text fields, buttons |
+
+**No XCUITest opens this tab** (§9): the "Profile" tab label and every label above are free to
+improve, but keep this table in step. Open design gaps: the photo is a bundled asset of one person,
+not a picked photo; the info rows are two VoiceOver elements each rather than one combined "Blood
+Type, A negative"; the tiles' 1.2 m/s placeholder is indistinguishable from a measurement.
 
 ---
 
@@ -700,8 +909,8 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 - No shadows. Elevation is a fill change and a hairline.
 - No icon-only **action** buttons. Guide / route / haptic controls still carry a visible word; the
   SF Symbol is a companion (the watch's half-width buttons put the word under the symbol). The
-  **root tab bar is the exception**: three icons, words only in VoiceOver (`Guide` / `Sense` /
-  `Settings`). A tab never encodes a hazard.
+  **root tab bar is the exception**: four icons, words only in VoiceOver (`Guide` / `Sense` /
+  `Settings` / `Profile`). A tab never encodes a hazard.
 - No custom fonts. SF Pro / SF Rounded / SF Mono only.
 - No haptics for decoration. The Taptic Engine is a safety channel; the big-button press confirm,
   the tab-bar `.selection` tick, the watch's `.click` send confirm and the system crown detents
@@ -721,7 +930,7 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 - `CKColor.*` are `Color(uiColor:)` dynamic providers that read `userInterfaceStyle` and `accessibilityContrast` from the trait collection (`nonisolated` helper: UIKit may resolve them off-main). No phone view constructs a `Color` literal; the watch (`WKColor`) and the widget use fixed colours on purpose.
 - Hero distance: `@ScaledMetric(relativeTo: .largeTitle) private var hero = 64`, then `.font(CKFont.hero(min(hero, 80)))`. There is no `.dynamicTypeSize` clamp anywhere.
 - Border width: `CKMetrics.border(for: colorSchemeContrast)` returns 1 or 3; secondary buttons add 1.
-- `CKBigButton(title:systemImage:role:hint:value:action:)` is the big button (Guide, Haptics "Speech test"). The smaller buttons (Go, haptic / wrist test buttons) are plain `Button`s styled with `CKBigButtonStyle` and set their own labels. System `Toggle`s and the `TextField` are unstyled.
+- `CKBigButton(title:subtitle:systemImage:role:layout:hint:value:action:)` is the big button (Guide, Haptics "Speech test", Family alerts "Send test event" / "Save family emails", Profile "Announce Medical ID"). `subtitle` (Step 46) is the second line under the word on the route rows; `layout` is `.row` (default: icon, word, subtitle and chevron across the button, restacking only at accessibility sizes) or `.tile` (Step 47: icon over a centred word over the subtitle, ≥ `CKMetrics.tile` tall, for a side-by-side pair). The smaller buttons (Go, haptic / wrist test buttons) are plain `Button`s styled with `CKBigButtonStyle` and set their own labels. System `Toggle`s and the `TextField` are unstyled.
 - `CKStatusPill(text:tone:systemImage:spoken:updatesFrequently:)` is the only pill: one VoiceOver element, label `spoken ?? text` (use `spoken` when the visible text is terse: "±6 M" → "GPS: ±6 m").
 - `CKCard(title:) { }` is a `.contain` container labelled by its title; untitled cards set their own label.
 - Watch: `WKBigButton`, `WKFont`, `WKColor`, `WKSpacing` in `WatchTheme.swift`; the watch is always dark.
@@ -731,16 +940,19 @@ Dynamic Island: expanded = glyph (leading) · distance (trailing) · instruction
 
 ## 9. Accessibility contract (what the XCUITests depend on)
 
-`ios/CaneKitUITests/CaneKitUITests.swift` and `CaneKitVisualTour.swift` find elements by these exact
-strings. AGENTS.md rule 9: none of them may change without updating the tests in the same commit.
-Both suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt and mutes `SpeechQueue`).
-Today that is 11 XCUITests (10 in `CaneKitUITests`, the tour's `testTour`); the Street View "Where am I"
-test skips itself unless `make uitest-streetview` passes a frame folder. Set a simulator location first
+`ios/CaneKitUITests/CaneKitUITests.swift`, `CaneKitVisualTour.swift` and `CaneKitIslandTour.swift` find
+elements by these exact strings. AGENTS.md rule 9: none of them may change without updating the tests in
+the same commit. All three suites launch with `CANEKIT_UITEST=1` (skips the launch location prompt and
+mutes `SpeechQueue`). Today that is 12 XCUITests (10 in `CaneKitUITests`, `CaneKitVisualTour.testTour`,
+`CaneKitIslandTour.testDynamicIsland`); `make uitest` runs the whole `CaneKitUITests` target, so all 12,
+while `make tour` and `make island` run one suite each. The Street View "Where am I" test skips itself
+unless `make uitest-streetview` passes a frame folder. Set a simulator location first
 (AGENTS.md "Commands") or the route tests fail for want of a GPS fix.
 
 | Query | Exact string | Where it comes from | Used by |
 |---|---|---|---|
 | `buttons[…]` | "Guide", "Sense", "Settings" | `RootTab.title` / `CKTabBar` (icon-only) | labels test (all three); haptics, mount and cue picker tests open Settings; tour |
+| `buttons[…]` | "Profile" | `RootTab.title` / `CKTabBar` (the fourth tab, Step 44) | **no test uses it** (`testAccessibilityLabelsExist` asserts only the first three); a free label, listed so nobody assumes it is covered |
 | `buttons[…]` | "Start route to CIF" | `GuideCard`, idle | every test waits for it first; tour |
 | `buttons[…]` | "Navigate to CIF from here" | `GuideCard`, idle (its label is its text) | `testNavigateToCIFButtonIsOnTheIdleGuide`: exists and is enabled when idle, gone while a route runs, back after Stop (never tapped: it would request real Apple Maps directions) |
 | — | "Cancel route start" | `GuideCard`, only while a route start waits for the depth interlock | **no test uses it** (the simulator has no LiDAR, so a route starts at once); a free label, listed so nobody assumes it is covered |
@@ -779,7 +991,7 @@ free to improve, but keep them in step with §6.
 - Error lines use `laneUrgent` as text colour: fine on dark cards (6.4:1) but 2.8:1 on the white light-mode card, below WCAG AA. **Fixed for the Guide's route error line** (Step 14: `textPrimary` text plus a `danger` warning glyph); the describer error line on Guide and the Hazards card's error line still use red text.
 - The lane-ladder contrast ratios quoted in `Theme.swift` / `CODE_REFERENCE.md` comments (11.4 / 15.2 / 8.9 / 7.1) are overstated; the recomputed values are in §2.
 - The watch cuts a long instruction after two lines (≈ 70 % scale) — Repeat is the recovery.
-- The Live Activity glyph's VoiceOver label is the raw kind string ("turnLeft", "straight").
+- ~~The Live Activity glyph's VoiceOver label is the raw kind string ("turnLeft", "straight").~~ Fixed in Step 47: every presentation reads one natural sentence (§6.7).
 - "GPS: Denied" is a neutral pill; a denied permission arguably deserves `danger`.
 - Stop route has no lock or confirmation (Guided Access is the mitigation; `docs/todo.md` open item).
 - `.updatesFrequently` pills may be read repeatedly by VoiceOver while focused (`docs/todo.md` open item).

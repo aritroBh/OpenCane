@@ -63,7 +63,9 @@ struct WhereAmIIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         let model = try await IntentSupport.model()
-        model.describeScene()
+        // `.actionButton`: this intent cannot tell the Action button from Siri, so the Scene engine
+        // card says "from the Action button or Siri" (`DescribeTrigger.spoken`).
+        model.describeScene(trigger: .actionButton)
         return .result()
     }
 }

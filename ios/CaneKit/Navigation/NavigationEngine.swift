@@ -111,6 +111,13 @@ final class NavigationEngine {
     /// course smoother is kept empty while a fix is inside its fence). Kept by `stop()`, cleared by
     /// `start`.
     private(set) var lastReached: Waypoint?
+    /// True while the walker is settling at a street crossing: the waypoint just reached is a
+    /// crossing and `TurnSettle` has not released (no curb stop yet, no turn, not live). The cue
+    /// router (`AppModel.handle`) passes it to `TorsoHapticPolicy` so no torso tap interrupts
+    /// "Listen for traffic" (cue design v2 §3.4, Step 41); the head cue is not affected. False
+    /// after `stop()` (`isSettling` is cleared there) and for a passed-by / manual advance (an
+    /// immediate settle is live at once, so `isSettling` never turns on).
+    var isCrossingSettle: Bool { isSettling && (lastReached?.crossing ?? false) }
 
     // Outputs, all invoked synchronously on the main actor; all installed by
     // `AppModel.wireNavigation()`.
