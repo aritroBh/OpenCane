@@ -56,6 +56,16 @@ final class LiveActivityController {
     /// Idle until `start`.
     init() {}
 
+    /// Terminates any stale activities left by previous app crashes or Xcode rebuilds.
+    func endAllOrphanedActivities() {
+        for a in Activity<NavActivityAttributes>.activities {
+            nonisolated(unsafe) let stale = a
+            Task.detached {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+    }
+
     /// Requests a new activity with initial navigation and obstacle clearance state.
     func start(
         routeName: String,

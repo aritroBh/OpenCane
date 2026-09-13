@@ -103,6 +103,7 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         manager.delegate = self
         manager.headingFilter = 2
         manager.headingOrientation = .portrait
+        manager.showsBackgroundLocationIndicator = false
         // Tear down any orphaned background navigation session from previous runs or crashes.
         let orphan = CLBackgroundActivitySession()
         orphan.invalidate()
@@ -151,6 +152,7 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
     func setNavigating(_ navigating: Bool) {
         guard navigating != isNavigating else { return }
         isNavigating = navigating
+        manager.showsBackgroundLocationIndicator = navigating
         if isNavigating {
             if backgroundSession == nil {
                 backgroundSession = CLBackgroundActivitySession()
@@ -215,6 +217,17 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         if loc.speed > 0.7, loc.course >= 0 {
             heading = loc.course
             onHeading?(loc.course, true)
+        }
+    }
+
+    /// Ingests a simulated or replay fix and heading directly into the pipeline, bypassing CoreLocation.
+    /// Used by walk simulation on real devices and deterministic testing.
+    func ingest(fix f: GeoFix, course: Double? = nil) {
+        fix = f
+        onFix?(f)
+        if let c = course, f.speed > 0.7, c >= 0 {
+            heading = c
+            onHeading?(c, true)
         }
     }
 
