@@ -29,6 +29,8 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
     case sense
     /// Kit configuration: haptics, watch, mount, this phone.
     case settings
+    /// Medical ID card, emergency profile and mobility fitness stats.
+    case profile
 
     /// Stable `ForEach` identity; matches `rawValue`.
     var id: Int { rawValue }
@@ -39,6 +41,7 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
         case .guide: "Guide"
         case .sense: "Sense"
         case .settings: "Settings"
+        case .profile: "Profile"
         }
     }
 
@@ -48,6 +51,7 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
         case .guide: "figure.walk"
         case .sense: "square.grid.3x3.fill"
         case .settings: "gearshape.fill"
+        case .profile: "person.crop.circle"
         }
     }
 
@@ -57,13 +61,14 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
         case .guide: "Walk a route and hear the next instruction"
         case .sense: "Obstacles, depth and hazards ahead"
         case .settings: "Haptics, watch, mount and this phone"
+        case .profile: "Medical ID card, emergency identification and mobility fitness"
         }
     }
 }
 
 /// Icon-only bottom bar: a sliding accent capsule behind the selected symbol.
 ///
-/// Implements docs/design.md §4 (tab switch) and §6 (three pages). The capsule uses `matchedGeometryEffect`
+/// Implements docs/design.md §4 (tab switch) and §6 (four pages). The capsule uses `matchedGeometryEffect`
 /// so it travels between icons on a short spring; Reduce Motion skips the travel and the icon scale.
 struct CKTabBar: View {
     /// Pill travel animation. Same landing time as the page fade (`ContentView.pageFade`)
@@ -73,7 +78,7 @@ struct CKTabBar: View {
         .spring(duration: 0.16, bounce: 0.08)
     }
     /// Width of the selected capsule (chrome only; the 60 pt hit area is wider).
-    private static let pillWidth: CGFloat = 72
+    private static let pillWidth: CGFloat = 64
     /// Height of the selected capsule. Deliberately under `CKMetrics.touchTarget`: this is the
     /// drawn pill, not the tappable area, so the bar stays a standard height.
     private static let pillHeight: CGFloat = 40

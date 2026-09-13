@@ -130,6 +130,8 @@ final class AppModel {
     let trip = TripTracker()
     /// Dynamic Island / lock screen (step 9).
     let liveActivity = LiveActivityController()
+    /// Medical ID card, emergency profile and mobility fitness tracking (step 43).
+    let medicalProfile = MedicalProfileStore()
     /// LiDAR facts handed to the on-device describer ("1.4 meters ahead, obstacle."). A
     /// `Sendable` lock-guarded box: written here on the main actor (`contextLine` per report),
     /// read off-main by the on-device VLM client. Built in `init` (the VLM client needs it).
@@ -2162,6 +2164,8 @@ final class AppModel {
             Task { [weak self] in
                 guard let self else { return }
                 await self.trip.stop()
+                self.medicalProfile.recordCompletedTrip()
+                self.medicalProfile.refreshMobilityStats()
                 let destination = self.nav.route?.waypoints.last?.say ?? "Arrived"
                 let summary = self.trip.spokenSummary(destination: destination)
                 self.nav.appendToLastSpoken(summary)     // Repeat at the door includes the numbers

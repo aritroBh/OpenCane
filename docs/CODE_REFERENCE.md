@@ -2377,14 +2377,14 @@ All members are `static let … : Color` built by `dynamic(...)`, so every colou
 
 ### ios/CaneKit/UI/TabBar.swift
 
-Purpose: three icon-only root tabs and the sliding bar under `ContentView`. Words live in VoiceOver / XCUITest only.
+Purpose: four icon-only root tabs and the sliding bar under `ContentView`. Words live in VoiceOver / XCUITest only.
 
-- `enum RootTab: Int, CaseIterable, Identifiable, Hashable` — `guide` / `sense` / `settings` (left → right). `title` is the ⚠ test-contract label (`"Guide"`, `"Sense"`, `"Settings"`); `systemImage` is `figure.walk` / `square.grid.3x3.fill` / `gearshape.fill`; `hint` is one sentence for VoiceOver.
-- `struct CKTabBar: View` — `@Binding var selection: RootTab`; sliding `Capsule` via `matchedGeometryEffect(id: "tab-pill")` filled with `CKColor.accent`; selected icon `onAccent` at 1.06 scale, unselected `textSecondary`. Pill travel is `pillTravel()` (0.16 s spring, bounce 0.08), landing with the page fade. Reduce Motion skips the spring and the scale. Each control is ≥ `CKMetrics.touchTarget`, labelled `tab.title`, hint `tab.hint`, `.isSelected` when current. Bar surface `CKColor.surface` with a top hairline. `.sensoryFeedback(.selection, trigger: selection)`. Container label `"OpenCane tabs"`.
+- `enum RootTab: Int, CaseIterable, Identifiable, Hashable` — `guide` / `sense` / `settings` / `profile` (left → right). `title` is the ⚠ test-contract label (`"Guide"`, `"Sense"`, `"Settings"`, `"Profile"`); `systemImage` is `figure.walk` / `square.grid.3x3.fill` / `gearshape.fill` / `person.crop.circle`; `hint` is one sentence for VoiceOver.
+- `struct CKTabBar: View` — `@Binding var selection: RootTab`; sliding `Capsule` via `matchedGeometryEffect(id: "tab-pill")` filled with `CKColor.accent`; selected icon `onAccent` at 1.06 scale, unselected `textSecondary`. Pill width 64 pt, height 40 pt. Pill travel is `pillTravel()` (0.16 s spring, bounce 0.08), landing with the page fade. Reduce Motion skips the spring and the scale. Each control is ≥ `CKMetrics.touchTarget`, labelled `tab.title`, hint `tab.hint`, `.isSelected` when current. Bar surface `CKColor.surface` with a top hairline. `.sensoryFeedback(.selection, trigger: selection)`. Container label `"OpenCane tabs"`.
 
 ### ios/CaneKit/UI/ContentView.swift
 
-Purpose: root screen — a `NavigationStack` titled **"OpenCane"** around the selected `RootTab` page plus `CKTabBar`. Pages: **Guide** (`GuidePage`: `GuideCard` + `ArrivalCardView` while navigating or after arrival), **Sense** (`SensePage`: `statusCard`, `ObstaclesCard`, `HazardsCard`), **Settings** (`SettingsPage`: `cueSettings`, `HapticsCard`, `WatchCard`, `mountSettings`, `capabilityCard`). Only the visible page is in the tree, so 30 Hz depth updates stay on Sense. Page chrome is `pageScroll` (gutter, `xl` between cards, tap-to-dismiss keyboard). Tab switch: incoming page fades in over `ContentView.pageFade` (0.16 s ease-out), outgoing page removed instantly (`.asymmetric(insertion: .opacity, removal: .identity)` — a symmetric cross-fade dropped frames holding two pages alive); Reduce Motion is instant. A `.background(CameraControlInteraction { model.cameraControlPressed() })` routes Camera Control / volume presses to "Where am I". VoiceOver order is the selected page's cards, then the tab bar.
+Purpose: root screen — a `NavigationStack` titled with dynamic centered title (`"OpenCane"`, `"Details"`, `"Settings"`, `"Profile"`) around the selected `RootTab` page plus `CKTabBar`. Pages: **Guide** (`GuidePage`: `GuideCard` + `ArrivalCardView` while navigating or after arrival), **Sense** (`SensePage`: `statusCard`, `ObstaclesCard`, `HazardsCard`), **Settings** (`SettingsPage`: `cueSettings`, `HapticsCard`, `WatchCard`, `mountSettings`, `capabilityCard`), **Profile** (`ProfilePage`: Emergency Medical ID card + mobility fitness tracking). Only the visible page is in the tree, so 30 Hz depth updates stay on Sense. Page chrome is `pageScroll` (gutter, `xl` between cards, tap-to-dismiss keyboard). Tab switch: incoming page fades in over `ContentView.pageFade` (0.16 s ease-out), outgoing page removed instantly (`.asymmetric(insertion: .opacity, removal: .identity)` — a symmetric cross-fade dropped frames holding two pages alive); Reduce Motion is instant. A `.background(CameraControlInteraction { model.cameraControlPressed() })` routes Camera Control / volume presses to "Where am I". VoiceOver order is the selected page's cards, then the tab bar.
 
 - `struct ContentView: View` — `@Environment(AppModel.self) private var model`; `@State private var tab: RootTab = .guide`.
 - Page change: `.id(tab)` + `.transition(.opacity)` + `.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: tab)`. ⚠ Pages **cross-fade, never slide** (design.md §4): a horizontal slide read as "going forward" even when moving left, so the earlier direction-tracking state was removed.
@@ -2510,6 +2510,34 @@ Purpose: trip summary — distance, minutes, steps — shown while walking ("Thi
 - `private func stat(value:label:)` — value in `CKFont.tile` (`lineLimit 1`, `minimumScaleFactor 0.6`), label in `secondary`.
 - `private func distanceText(_ m: Double) -> String` — `≥ 950` m → `"%.1f km"`, else `"\(Int(m.rounded())) m"`. **950 m is the km switch-over.**
 - `private func minutesText(_ s: TimeInterval) -> String` — `Int((s / 60).rounded())`.
+
+---
+
+### ios/CaneKit/UI/ProfilePage.swift (Step 43)
+
+Purpose: 4th root tab — Apple Health-style Emergency Medical ID card and daily mobility fitness tracking for blind cane users.
+
+- `struct ProfilePage: View` — `@Environment(AppModel.self) private var model`. Hosts `medicalIDCard` and `mobilityFitnessCard`.
+- `medicalIDCard: some View` — `CKCard(title: "EMERGENCY MEDICAL ID")`:
+  - Profile header with user avatar, name, and `staroflife.fill` emergency badge, plus an "Edit" button opening `EditMedicalIDSheet`.
+  - Prominent emergency safety banner: `"WHITE CANE USER / BLIND"` (`exclamationmark.shield.fill`, `danger` fill).
+  - Medical vitals grid: Date of Birth, Blood Type, Height & Weight, Allergies & Reactions, Medications, Home Residence, Cane equipment specification.
+  - Emergency contact card with direct tap-to-call button (`tel:<phone>`).
+  - `"Announce Medical ID"` button: reads the emergency identification summary aloud via `model.speech.say(summary, .obstacle)`.
+- `mobilityFitnessCard: some View` — `CKCard(title: "MOBILITY & FITNESS")`:
+  - Daily cane mobility metrics: Today's Steps, Distance Walked Today (km), Completed Walks Count, Average Walking Pace (m/s), and active route telemetry.
+  - Refresh button querying `CMPedometer` for today's steps and walking distance from midnight to now.
+- `struct EditMedicalIDSheet: View` — modal form allowing editing all identity, vitals, contact and cane fields with instant persistence to `UserDefaults`.
+
+---
+
+### ios/CaneKit/Trip/MedicalProfileStore.swift (Step 43)
+
+Purpose: persistence and telemetry bridge for emergency Medical ID card and mobility fitness metrics.
+
+- `struct CKMedicalProfile: Codable, Sendable, Equatable` — user identity, emergency notes, date of birth, blood type, height, weight, allergies, medications, home address, emergency contacts, cane specification, organ donor status. Defaulted to `CKMedicalProfile.standardDefault`.
+- `struct CKMobilityStats: Sendable, Equatable` — today's steps, distance in meters, active duration, completed trips count, average walking pace.
+- `final class MedicalProfileStore: @MainActor @Observable` — owner `AppModel.medicalProfile`. Persists `CKMedicalProfile` under `"opencane_medical_profile"` in `UserDefaults.standard`. Queries `CMPedometer` data since `startOfDay` via `refreshMobilityStats()`. Tracks completed trips via `recordCompletedTrip()`.
 
 ---
 

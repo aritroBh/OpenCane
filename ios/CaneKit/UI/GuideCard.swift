@@ -98,11 +98,22 @@ struct GuideCard: View {
             // and the button is disabled; testWhereAmIWithoutKeyReportsGracefully relies on it
             // returning to "Where am I" and on a static text containing "camera" (the no-frame
             // error) or starting "Scene:" (a description).
-            CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
-                        systemImage: "eye", role: .secondary,
-                        hint: "Takes a photo and reads out hazards and landmarks ahead",
-                        value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
-                .disabled(model.describer.isDescribing)
+            // Conversational assistant push-to-talk (Step 23): paired beside Where am I.
+            HStack(spacing: CKSpacing.md) {
+                CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
+                            systemImage: "eye", role: .secondary,
+                            hint: "Takes a photo and reads out hazards and landmarks ahead",
+                            value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
+                    .disabled(model.describer.isDescribing)
+
+                CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
+                            systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
+                            role: model.voiceInput.isListening ? .destructive : .secondary,
+                            hint: "Tap to speak a command, ask a question, or set a post",
+                            value: model.voiceInput.isListening ? "listening" : nil) {
+                    model.toggleVoiceInput()
+                }
+            }
             if !model.describer.lastDescription.isEmpty {
                 Text(model.describer.lastDescription)
                     .font(CKFont.body)
@@ -112,18 +123,6 @@ struct GuideCard: View {
             // Describer error, e.g. "No camera frame" (the no-key UI test accepts "camera" or "Scene:").
             if let err = model.describer.lastError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
-            }
-
-            // Conversational assistant push-to-talk (Step 23): first tap listens, second submits
-            // (`AppModel.toggleVoiceInput`; listening also ends after 1.5 s of silence). The title
-            // follows the state — "Listening…" (destructive fill, value "listening") → "Thinking…"
-            // while `ConversationCoordinator` works → "Talk to OpenCane". Not an XCUITest contract.
-            CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
-                        systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
-                        role: model.voiceInput.isListening ? .destructive : .secondary,
-                        hint: "Tap to speak a command, ask a question, or set a post",
-                        value: model.voiceInput.isListening ? "listening" : nil) {
-                model.toggleVoiceInput()
             }
             if let response = model.conversation.lastResponse, !response.isEmpty {
                 Text(response)
@@ -188,19 +187,22 @@ struct GuideCard: View {
                 CKBigButton(title: "Start route to CIF", systemImage: "figure.walk",
                             hint: "Starts the recorded ISR Townsend Hall to CIF route") { model.startDemoRoute() }
                     .disabled(model.routeStartWaiting)
-                // Apple Maps walking directions from the live GPS fix to the CIF east entrance,
-                // for when the walker is not at ISR. Label = its text (CKBigButton).
-                CKBigButton(title: "Navigate to CIF from here", systemImage: "location.north.circle",
-                            role: .secondary,
-                            hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
-                            value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
-                    .disabled(model.isBuildingRoute || model.routeStartWaiting)
-                CKBigButton(title: "Simulate walk to CIF", systemImage: "figure.walk.motion",
-                            role: .secondary,
-                            hint: "Simulates walking the demo route indoors step by step without moving") {
-                    model.startSimulatedWalk()
+                // Secondary navigation actions paired side by side:
+                // ⚠ test contract: "Navigate to CIF from here" (its label is its text).
+                HStack(spacing: CKSpacing.md) {
+                    CKBigButton(title: "Navigate to CIF from here", systemImage: "location.north.circle",
+                                role: .secondary,
+                                hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
+                                value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
+                        .disabled(model.isBuildingRoute || model.routeStartWaiting)
+
+                    CKBigButton(title: "Simulate walk", systemImage: "figure.walk.motion",
+                                role: .secondary,
+                                hint: "Simulates walking the demo route indoors step by step without moving") {
+                        model.startSimulatedWalk()
+                    }
+                    .disabled(model.routeStartWaiting || model.isBuildingRoute)
                 }
-                .disabled(model.routeStartWaiting || model.isBuildingRoute)
                 // Why a route has not started yet (waiting for depth, or timed out); not an error,
                 // so primary text, spoken as written.
                 if let status = model.routeStartStatus {

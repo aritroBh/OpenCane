@@ -2,6 +2,48 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 44 — Medical ID Profile tab, mobility fitness tracking, streamlined Guide buttons, Dynamic Island indicator fix, and Grok Bot webhook integration (Sat Sep 12)
+
+**Why:** The user requested:
+1. "WHY THERE THERE SOMANY OF THE SAME BUTTON THING lets make it a little bit mote simple": GuideCard stacked 6 vertical buttons on top of each other (Where am I, Talk to OpenCane, Start route to CIF, Navigate to CIF from here, Simulate walk to CIF, Destination search + Go) — including 3 separate buttons saying "... to CIF".
+2. "also also the dynamic island thing is still there... when I try to hold it usually the dynamic island gets bigger and there's more information but for me it's just like not doing anything": In `LocationService.init()`, `let orphan = CLBackgroundActivitySession(); orphan.invalidate()` was instantiating a background activity session on every app launch, causing iOS locationd to display the system background navigation indicator (cyan arrow) in the Dynamic Island while idle. Because it was a system location indicator rather than an active Live Activity, holding/expanding did nothing.
+3. "also the 4th button thing after settings should be your profile thing include like basic information such as your medical card, like you know how Apple ID has that medical card... name, height, weight, birthday, where you live... and track fitness stuff": Add a 4th root tab "Profile" with an Apple Health-style Emergency Medical ID Card (white cane / legally blind safety alert banner, blood type, allergies, medications, emergency contacts with tap-to-call, home address, cane specs, announce medical ID button, edit sheet) and daily Mobility & Fitness tracking (today's steps, distance walked, completed trips, average pace via CMPedometer and TripTracker).
+4. Configured real Grok Bot webhook credentials (`OPENCANE_GROKBOT_WEBHOOK_URL` and `OPENCANE_GROKBOT_WEBHOOK_KEY`) in `Secrets.plist` for family alerts.
+
+**What changed:**
+- `LocationService.swift`:
+  - Removed `CLBackgroundActivitySession` instantiation from `init()`. Scoped `CLBackgroundActivitySession` and `manager.showsBackgroundLocationIndicator` strictly to `isNavigating == true`. When idle, no background activity session exists and the Dynamic Island location pill is completely clear.
+- `GuideCard.swift`:
+  - Streamlined idle button layout: paired `Where am I` and `Talk to OpenCane` into a clean 2-column `HStack(spacing: CKSpacing.md)`; kept `Start route to CIF` as the full-width primary hero button; paired `Navigate to CIF from here` and `Simulate walk` into an `HStack(spacing: CKSpacing.md)`.
+  - Preserved all exact test contract accessibility labels (`"Start route to CIF"`, `"Navigate to CIF from here"`, `"Where am I"`, `"Go"`, `"Destination"`).
+- `TabBar.swift`:
+  - Added `RootTab.profile` (case 3, title: `"Profile"`, icon: `"person.crop.circle"`, hint: `"Medical ID card, emergency identification and mobility fitness"`).
+  - Adjusted `pillWidth` to 64 pt for balanced 4-tab spacing across iPhone screen widths.
+- `ContentView.swift`:
+  - Added `"Profile"` to `navigationTitleText` switch.
+  - Added `ProfilePage()` to `page` switch.
+  - Made `pageScroll` internal for shared use by `ProfilePage`.
+- `MedicalProfileStore.swift` (`ios/CaneKit/Trip/MedicalProfileStore.swift`):
+  - Created `@MainActor @Observable` store with `CKMedicalProfile` and `CKMobilityStats`.
+  - Pre-seeded with complete default profile for Aritro Bhattacharjee, persisted to `UserDefaults.standard` under `"opencane_medical_profile"`.
+  - Integrates `CMPedometer` querying from midnight to now for real-time daily steps, distance, and walking cadence.
+- `ProfilePage.swift` (`ios/CaneKit/UI/ProfilePage.swift`):
+  - Emergency Medical ID Card: prominent `"WHITE CANE USER / BLIND"` emergency banner, medical vitals grid (DOB, blood type, height, weight, allergies, medications, residence, cane specs), tap-to-call emergency contact button, `"Announce Medical ID"` button via speech queue.
+  - Interactive `EditMedicalIDSheet` modal to update all fields with instant persistence.
+  - Mobility & Fitness Card: large glanceable tiles for today's steps, total distance walked (km), completed walks count, and average walking pace, plus live active route telemetry.
+- `AppModel.swift`:
+  - Added `let medicalProfile = MedicalProfileStore()`.
+  - Route arrival automatically invokes `medicalProfile.recordCompletedTrip()` and `medicalProfile.refreshMobilityStats()`.
+- `Secrets.plist`:
+  - Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `OPENCANE_GROKBOT_WEBHOOK_KEY`.
+  - Verified endpoint with `curl`: returned `HTTP 200` with `runUuid: 9fb7c4a4-ce12-4eea-8608-c3166b50721a`.
+- Verification:
+  - `make test`: all 535 unit tests passing in CaneKitLogic.
+  - `make uitest`: all 11 XCUITests passing on iPhone 17 Pro Max simulator (0 unexpected failures).
+  - `make run`: generated, built, signed, installed, and launched cleanly on Aritro's physical iPhone 17 Pro Max (`00008150-001A698C1108401C`).
+
+test on device: open OpenCane on your iPhone; verify Dynamic Island is completely clean when idle (no blue location arrow). Tap the 4th tab "Profile": verify Emergency Medical ID card displays your info, blind user safety alert, tap-to-call button, and today's mobility steps. Tap Edit to change any fields or tap Announce Medical ID to hear it read aloud. Return to Guide tab: verify streamlined buttons (Where am I & Talk side-by-side, Start route to CIF hero button, Navigate to CIF & Simulate walk side-by-side).
+
 ## Step 43 — Falls, weapons, trip bookends, and a spam guard on the webhook buttons (Sat Sep 12)
 
 Five things the owner asked for after walking with Step 39 on the phone.

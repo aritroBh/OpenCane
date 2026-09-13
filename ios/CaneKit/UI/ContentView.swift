@@ -49,6 +49,7 @@ struct ContentView: View {
         case .guide: "OpenCane"
         case .sense: "Details"
         case .settings: "Settings"
+        case .profile: "Profile"
         }
     }
 
@@ -94,6 +95,7 @@ struct ContentView: View {
         case .guide: GuidePage()
         case .sense: SensePage()
         case .settings: SettingsPage()
+        case .profile: ProfilePage()
         }
     }
 
@@ -536,7 +538,7 @@ private struct SettingsPage: View {
 ///
 /// - Parameter content: the page's cards, top to bottom.
 @ViewBuilder
-private func pageScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+func pageScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
     ScrollView {
         VStack(alignment: .leading, spacing: CKSpacing.xl) {
             content()
