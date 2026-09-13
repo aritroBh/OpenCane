@@ -13,7 +13,9 @@
 //  `AppModel.cueLevel` / `cuePlace` / `cueRules` (persisted, spoken on change, lines prefetched via
 //  `AppModel.commonLines`), which applies `headEnterM` to `CueDecider.thresholds.head`, passes
 //  `allowsName` to `ObstacleNamer` and `allowedSignPhrases` to `HazardScanner.signAllowedPhrases`
-//  (→ `SignPolicy.allowedPhrases`); `HandsFreeIntents` sets them by voice. Uses the public API only
+//  (→ `SignPolicy.allowedPhrases`) and feeds `cueRules` to `TorsoHapticPolicy` (Step 41: torso
+//  haptics by level — `defaultRulesRenderTodaysHaptics` here, the rest in `TorsoHapticPolicyTests`);
+//  `HandsFreeIntents` sets them by voice. Uses the public API only
 //  (`import CaneKitLogic`, not `@testable`).
 //
 
@@ -117,6 +119,28 @@ struct CueProfileTests {
         #expect(CueRules(level: .standard, place: .outdoors).namesLimitLine == "Standard cues name only doors, on a route.")
         for level in CueLevel.allCases {
             #expect(CueRules(level: level, place: .indoors).namesLimitLine == "Indoor mode names nothing.")
+        }
+    }
+
+    /// Step 41: the levels now change the torso haptics too, so the default must still render every
+    /// cue the decider fires (owner decision 2026-09-12: Detailed + Outdoors = today).
+    @Test("the default rules render today's haptics: centre loop, left, right and head pass through")
+    func defaultRulesRenderTodaysHaptics() {
+        var policy = TorsoHapticPolicy()
+        let clear = LaneReport(grid: LaneGrid(head: [.infinity, .infinity, .infinity],
+                                              torso: [.infinity, .infinity, .infinity], centerDepth: .infinity),
+                               isTrusted: true, depthAvailable: true)
+        let fires: [(CueOutput, TorsoHapticAction)] = [
+            (.fire(.centerApproach(distance: 1.5)), .render(.centerApproach(distance: 1.5))),
+            (.updateCenter(distance: 1.2), .updateCenter(distance: 1.2)),
+            (.fire(.left), .render(.left)),
+            (.fire(.right), .render(.right)),
+            (.fire(.head), .render(.head)),
+            (.stop, .stop),
+        ]
+        for (i, (output, expected)) in fires.enumerated() {
+            let action = policy.update(output, report: clear, rules: .default, crossingSettle: false, now: Double(i))
+            #expect(action == expected)
         }
     }
 

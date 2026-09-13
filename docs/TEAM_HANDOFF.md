@@ -1,23 +1,27 @@
 # Team handoff: read this first after you pull
 
-State of OpenCane / CaneKit at **HEAD `076fcaa`** (Sat 2026-09-12 evening), with the Step 31
-voice-input safety merge being rebased onto it: Steps 26–37 plus the
-per-camera rotation fix are on `main`. Written for Aritro, Aarav, Tejas, Sagar and Tommy, and for
-AI agents picking the work up. It says what exists, what is proven, what is not, what is open, and
-which decisions are already made so nobody re-litigates them at 2 a.m. Every sentence marked
-**historical** was true when it was written and is kept for context; everything else was checked
-against the code, `git log` and `CHANGELOG.md` at `076fcaa`. The commits after it (`e459b3a`,
-`c706856`, `d775d4b`) are documentation passes plus the new `ios/scripts/streetview_stim.py`; they
-change no Swift code outside comments, so every behaviour and test count here still holds.
+State of OpenCane / CaneKit at **Step 47** (Sat 2026-09-12 evening; Step 46 is commit `891f558`,
+followed by the profile-data fix `ba28e40` and the Codex-audit fix `0c7372b`, with Step 47 in the
+working tree on top): Steps 26–47 plus the per-camera rotation fix are on `main`. Written for Aritro,
+Aarav, Tejas, Sagar and Tommy, and for AI agents picking the work up. It says what exists, what is
+proven, what is not, what is open, and which decisions are already made so nobody re-litigates them
+at 2 a.m. Every sentence marked **historical** was true when it was written and is kept for context;
+everything else was re-checked against the code, `git log` and `CHANGELOG.md` at Step 47 (the
+first version of this file was written at `076fcaa` / Step 37, and the trip-log evidence in §2.3
+still dates from then).
+
+The current merged tree additionally carries the route-time `SensorModeInterlock` and the
+generation-fenced `VoiceInputGuard` safety work (see `CHANGELOG.md` Steps 29 and 31). Re-run the
+Logic/build gates after resolving any merge; do not treat the historical counts below as current.
 
 > **The 2-minute version: [`TEAM_BRIEF.md`](TEAM_BRIEF.md). Open work: [`todo.md`](todo.md) →
-> "Cue design v2 — Steps 35–45".** AI agents: read §10 ("How an agent resumes") before touching
-> anything. The code wins over every doc, this one included; fix the doc when they disagree.
+> "Cue design v2 — items cue-v2 #35–#45" (plan numbers, not CHANGELOG steps — §3) and its "## Step 47"
+> block.** AI agents: read §10 ("How an agent resumes") before touching anything. The code wins over
+> every doc, this one included; fix the doc when they disagree.
 
 ## 0. Start here (5 minutes)
 
-1. `git pull`, then `cd ios && make test` (567 Logic tests after the Step 31 merge; the historical
-   076fcaa snapshot was 457, Swift 6 / Xcode 27). Check the exit
+1. `git pull`, then `cd ios && make test` (575 `@Test` annotations in 44 files at Step 47, Swift 6 / Xcode 27). Check the exit
    code of `make test` itself, never through `| tail` (§10.4).
 2. Read the "Still needs the phone" list in §2.4. Most of the last day's work is built and
    simulator-green but not yet checked on the phone.
@@ -38,37 +42,56 @@ is retired as `pole_d` in both mount models and survives only as the alternate-c
 (Core Haptics), GPS walks a 9-waypoint route from ISR Townsend Hall to the CIF east entrance (or
 any destination through the campus gazetteer and MapKit), AirPods Pro play a spatial click from the
 direction to walk and speak the instructions, and an Apple Watch taps turns and crossings onto the
-wrist. The phone UI is three icon-only tabs: **Guide**, **Sense** (depth status, Obstacles,
-Hazards) and **Settings** (Cues, Haptics, Watch, Mount, This phone). Voice control runs through
-Siri App Shortcuts and "Talk to OpenCane" on the Action Button. Since Step 35 the work is **cue
-design v2**: making the cane calmer, because the owner found the voice choppy and overstimulating.
+wrist. The phone UI is four icon-only tabs: **Guide**, **Sense** (nav title "Details": depth
+status, Scene engine, Obstacles, Hazards), **Settings** (Cues, Haptics, Watch, Mount, Family alerts,
+This phone) and **Profile** (Emergency Medical ID + Mobility & Fitness, Step 44). Voice control runs
+through Siri App Shortcuts and "Talk to OpenCane" on the Action Button. Since Step 35 one line of work
+is **cue design v2** (making the cane calmer, because the owner found the voice choppy and
+overstimulating); Steps 39–47 added a second line — family alerts through the Grok Bot webhook, fall
+and threat detection, the Medical ID tab, the Supabase mirror and the Dynamic Island redesign.
 The demo runs **untethered on the phone**; the Mac only signs and installs. Pitch and hardware:
 the root [`README.md`](../README.md).
 
 ## 2. What is proven, and what is not
 
-### 2.1 Automated gates at HEAD (Mac, simulator)
+### 2.1 Automated gates (Mac, simulator)
 
-Recorded in `CHANGELOG.md` Step 37 and the `076fcaa` / `dd65c6b` commit messages; rerun them
-yourself before claiming anything (AGENTS.md "How we engineer" 1).
+The last fully recorded run is `CHANGELOG.md` Step 46 (`891f558`); Step 47 added tests and a third
+XCUITest suite, so rerun them yourself before claiming anything (AGENTS.md "How we engineer" 1) and
+read the Step 47 entry for its own run.
 
-| Check | Result at `076fcaa` | How to rerun (from `ios/`) |
+| Check | Last recorded result | How to rerun (from `ios/`) |
 |---|---|---|
-| Logic tests (every rule with a number in it) | **567/567** passed after the Step 31 merge (the historical 076fcaa snapshot was 457) | `make test` |
-| App + watch + widget build, Swift 6 strict | green | `make sim` |
-| XCUITests on the iPhone 17 Pro Max / iOS 27 simulator | **11 run, 10 passed, 1 skipped, 0 failures**. The 11 are the 10 in `CaneKitUITests.swift` (including Step 36's `testCuePickersChangeAndRestore`) plus `CaneKitVisualTour.testTour`. The skip is `testWhereAmIDescribesAStreetViewFrame`: CHANGELOG and the commits say "needs a key", but the code's `XCTSkip` fires when `CANEKIT_FRAME_DIR` is unset, so it only runs under `make uitest-streetview` with the local Street View frames | `make uitest` (set a simulator location first, §10.4) |
-| GPS replay through the real app | **PASS** (266 s) | `make e2e` (silent: the app mutes itself) |
+| Logic tests (every rule with a number in it) | **538/538** at Step 46; the target now holds **575 `@Test` annotations in 44 files** (Step 47: `SceneEngineSummaryTests`, `TorsoHapticPolicyTests`, more coalescer tests) — recount with `grep -rc '@Test' ios/Logic/Tests`, never copy a number from a doc | `make test` |
+| App + watch + widget build, Swift 6 strict | green at Step 46 | `make sim` |
+| XCUITests on the iPhone 17 Pro Max / iOS 27 simulator | **11/11** at Step 46. Since Step 47 the `CaneKitUITests` target holds **12** test functions and `make uitest` runs the whole target: the 10 in `CaneKitUITests.swift` (including Step 36's `testCuePickersChangeAndRestore`), `CaneKitVisualTour.testTour` and `CaneKitIslandTour.testDynamicIsland` (the Dynamic Island pictures, also alone as `make island`). One skips: `testWhereAmIDescribesAStreetViewFrame` — its `XCTSkip` fires when `CANEKIT_FRAME_DIR` is unset, so it only runs under `make uitest-streetview` with the local Street View frames | `make uitest` (set a simulator location first, §10.4) |
+| GPS replay through the real app | **historical:** PASS (266 s) at `076fcaa` / Step 37 | `make e2e` (silent: the app mutes itself) |
 | Cue audit script fixtures | `cue_audit.py --selftest` ok | `python3 scripts/cue_audit.py --selftest` |
 
 Steps 34, 36, 37 and the rotation fix each had their own adversarial review (multi-agent
 workflow, Muse, Antigravity). Step 35 had Muse only: its Antigravity run returned no output and was
-retried on Step 36. The findings, fixes
+retried on Step 36. Step 46 was reviewed by Muse and Codex; Step 47 by three read-only audit agents
+on the docs and by Muse, Codex, OpenCode and Antigravity on the diff. The findings, fixes
 and rejections with evidence are in each CHANGELOG entry. A review is not a device test.
 
-### 2.2 What landed on the app line, Steps 26–37
+### 2.2 What landed on the app line, Steps 26–47
+
+One line per step; the CHANGELOG entry is the full account. ⚠ Commit subjects for Steps 39–44 lag
+the CHANGELOG numbering by one in places (a subject reading "Step 39 — Dynamic Island" is CHANGELOG
+Step 40; "Step 43 — Medical ID Profile tab" is Step 44): read the CHANGELOG heading, not the subject.
 
 | Step | What exists now | Commit |
 |---|---|---|
+| 47 | The Dynamic Island redesigned from its first pictures (`CaneKitIslandTour` + `make island`, manoeuvre glyphs, stale state, one VoiceOver sentence per presentation, `LiveActivityCoalescer.staleAfter`); torso haptics by cue level (`TorsoHapticPolicy`, cue-v2 #41); the Details tab's Scene engine card says which model answered (`SceneEngineSummary`); the Guide two-up tile pair (`CKBigButton.Layout.tile`); "Announce Medical ID" moved to `.scene`; the real emergency phone number | working tree at the time of writing (Sat evening), not yet committed |
+| 46 | Muse / Codex review fixes (secret key out of the client bundle, `install_id` isolation, `resolveWalkerID` mutex, `mobility_days` on the local calendar day), `CKBigButton` subtitle + chevron route rows, the profile avatar | `891f558` (+ `ba28e40` profile data, `0c7372b` Codex follow-ups) |
+| 45 | Supabase cloud backend (`SupabaseClient`: walkers, medical_profiles, mobility_days, hazards, family_alerts, devices) for the Medical ID, mobility stats, hazard map and family-alert feeds; the `CMPedometer` `@Sendable` crash fix | `2917895` (+ docs / graph refresh `252152d`) |
+| 44 | The fourth root tab **Profile** (`ProfilePage`, `MedicalProfileStore`): Emergency Medical ID card, mobility fitness from `CMPedometer`; streamlined Guide buttons; Dynamic Island indicator fix; webhook keys configured | `d0c7964` |
+| 43 | Falls (`FallDetector` / `FallWatcher`, "Detect the cane falling"), weapons in vision replies (`ThreatWatch`), `trip_start` / `trip_end` bookends, the 10 s spam guard on the webhook buttons (`ActionRateLimit`) | arrived via `pull --rebase` (remote head `610d71d`, by reflog order; `git log --grep "Step 43"` to confirm) |
+| 42 | Graceful GPS fallback at route start ("Obstacle detection warming up. Guiding with GPS." at `.safety` when the 7 s depth interlock times out), orphan Live Activity cleanup, centred per-tab titles ("Details" on Sense), the on-device walk simulator (Simulate walk / Stop simulation) | `ba2349e` |
+| 41 | Enriched sidewalk hazard telemetry for the Grok Bot (`HazardRecord` / `HazardGeoJSON` → `asGrokBotEvent`), anti-flapping in `GroundHazardPolicy` and `HazardLog`, dynamic navigation titles | `c11f6ca` |
+| 40 | Dynamic Island: clean idle state (session scoped to the active route), real-time obstacle radar pill, ActivityKit coalescing (`LiveActivityCoalescer`), Live Activity errors surfaced on Guide | `14bc387`, `8a0a9df` |
+| 39 | Cane events reach the family: `GrokBotClient` (bearer POST, one retry on transport failure only), `FamilyAlerts`, `FamilyAlertPolicy`, `AlertContext` / `AlertSummarizer` ("Add AI context"), `FamilyContacts` + the emails editor, Settings → **Family alerts** (off by default, needs `OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY`) | arrived via `pull --rebase` (remote head `dbfe2a9`, by reflog order; `git log --grep "Step 39"` to confirm) |
+| 38 | Point-blank wall safety: near-field low-confidence override and the urgent proximity latch | `154da13` |
 | 26 | Team credits: software is Aritro, Aarav and Tejas; hardware is Sagar and Tommy (docs only) | `1724a74`, `2f4e37d` |
 | 27 | Three icon-only root tabs (`CKTabBar`, `ios/CaneKit/UI/TabBar.swift`); `make test` compile fix for `#expect` + `mutating` | `e1c2c93` / `a4b4ed0`, `073fc5e` |
 | 28 | Sound recognition ("Listen for sirens and horns", off by default) fails safe across its whole microphone lifetime (`SoundRecognitionGuard`) | `a428d66` |
@@ -127,7 +150,7 @@ In the order it unblocks the most. Each item is the "test on device" line of its
 
 1. **Mounted cue baseline (Step 35), blocks all cue tuning.** Walk 2 minutes with the phone **on
    the mount**, plug in, `cd ios && make audit`. It must print "ON THE MOUNT"; its head-band and
-   per-minute numbers are the baseline Steps 38–42 are judged against.
+   per-minute numbers are the baseline cue-v2 items #38–#42 are judged against.
 2. **Talk floor (Step 37).** Installed on the phone Sat evening; not yet checked. Start the route,
    point the phone at a wall at head height 1 m away mid-sentence: "Head height.", a short pause,
    then the intro continues from its phrase, not "Route started." again. `make audit`:
@@ -180,25 +203,32 @@ still stand; the "Tonight" column is from before Steps 26–37.
 | **Sagar**, **Tommy** (hardware) | Render and print the mount (`hardware/README.md` quick start). Bench tests D1–D5 and D16 with the clamp. Set the tilt by reading the phone (§5). | Spotter on every walk. Power bank, sun shade, heat checks. |
 | **Aarav** (software, walker) | Feel the haptic patterns (D2), wear the watch (D11). | Survey walk W1, reference walk W2, blindfolded rehearsal W4. |
 
-**Open work at `076fcaa`** (source: `todo.md`; tick it there, not here):
+**Open work at Step 47** (source: `todo.md`; tick it there, not here):
 
-- **Device checks** in §2.4, the mounted `make audit` walk first.
-- **Cue design v2, Steps 38–45** (not started):
-  - **38** Head speech episode ends after 2 s of trusted clear frames; no new head speech while
+- **Device checks** in §2.4, the mounted `make audit` walk first, then the Step 39–47 "test on
+  device" lines in `CHANGELOG.md` (family alerts end to end, the fall thresholds, the Profile tab's
+  number, the Dynamic Island pictures on a locked phone).
+- **Cue design v2, items cue-v2 #38–#45.** ⚠ These are the *plan's* numbers from
+  `todo.md` → "Cue design v2"; CHANGELOG Steps 38–46 are unrelated shipped work that reused the same
+  digits (38 wall safety, 39 webhook, 40 Dynamic Island, 41 hazard telemetry, 42 GPS fallback, 43
+  falls / weapons, 44 Profile tab, 45 Supabase, 46 review fixes). Open: #38, #39, #40, #42–#45;
+  **#41 shipped in CHANGELOG Step 47**.
+  - **cue-v2 #38** Head speech episode ends after 2 s of trusted clear frames; no new head speech while
     still (`MotionState`, net displacement < 0.3 m in 2 s, so a cane swinging in place is still).
-  - **39** Speech de-chop: interrupted `.obstacle` / `.scene` lines dropped (kept for Repeat), late
+  - **cue-v2 #39** Speech de-chop: interrupted `.obstacle` / `.scene` lines dropped (kept for Repeat), late
     optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's
     Spoken Content setting.
-  - **40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a
+  - **cue-v2 #40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a
     crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s.
-  - **41** Torso haptics by level (Standard onset taps, Detailed = today + shoreline suppression,
-    Quiet none).
-  - **42** "Calm head alerts (test on the cane first)", **default off**: per-cell sample validity,
+  - **cue-v2 #41** — done (CHANGELOG Step 47): torso haptics by level, `TorsoHapticPolicy` over an
+    untouched `CueDecider` (Standard onset taps, Detailed = today + shoreline suppression, Quiet
+    none; Indoors none). Still to feel on the cane (todo sub-item).
+  - **cue-v2 #42** "Calm head alerts (test on the cane first)", **default off**: per-cell sample validity,
     overhang signature, band re-fire, same-overhang dedup; a hanging-sign rig test 10/10 before it
     can default on.
-  - **43** Hush (Watch double tap + app button + Siri, 60 s, never touches safety cues).
-  - **44** "What's ahead?" from LiDAR lanes + mesh class + ground hazard, no vision model.
-  - **45** Indoor suggestion after 20 s of GPS accuracy > 30 m, never switching by itself.
+  - **cue-v2 #43** Hush (Watch double tap + app button + Siri, 60 s, never touches safety cues).
+  - **cue-v2 #44** "What's ahead?" from LiDAR lanes + mesh class + ground hazard, no vision model.
+  - **cue-v2 #45** Indoor suggestion after 20 s of GPS accuracy > 30 m, never switching by itself.
   - Safety floor for every one of them: the head haptic at every onset, "Head height." spoken at a
     moving onset, ground hazards (when on) speak their first confirmation, hush never touches them.
 - **Deferred, not scheduled:** gravity-corrected metric head band; speed-scaled head distance;
@@ -222,7 +252,7 @@ still stand; the "Tonight" column is from before Steps 26–37.
 ```sh
 git pull
 cd ios
-make test          # 567 Logic tests; requires the Swift 6 toolchain
+make test          # Logic tests (575 @Test annotations at Step 47); requires the Swift 6 toolchain
 make gen           # generates CaneKit.xcodeproj (git-ignored) and Secrets.plist from the template
 make sim17         # once per Mac: the iPhone 17 Pro Max / iOS 27 simulator
 make sim           # simulator build
@@ -282,9 +312,10 @@ Every field log so far was handheld, so the mount is now what unblocks cue tunin
 
 ## 6. What is on, what is off, and why
 
-Defaults read from `AppModel` at `076fcaa`. Toggles that persist keep the walker's last choice; the
+Defaults read from `AppModel` at Step 47. Toggles that persist keep the walker's last choice; the
 flashlight, both cameras, face tracking, sound recognition, nod to talk and live camera view start
-off at every launch.
+off at every launch. "Send cane events to family" is also in `LaunchRecovery.optionalFeatureKeys`,
+so a crash loop clears it back to off.
 
 | Setting (tab → card) | Default | Why |
 |---|---|---|
@@ -298,6 +329,9 @@ off at every launch.
 | 60 fps camera (warmer) (Settings → Mount) | off | Heat untested over a long walk |
 | Audio beacon while navigating (Settings → Mount) | on | Plays only into headphones |
 | Write trip log (Settings → Mount) | on | Every test needs a log; Files → On My iPhone → OpenCane |
+| **Send cane events to family** (Settings → Family alerts) | **off** (Step 39) | Opt-in: posts falls, close obstacles, low battery and a breadcrumb every few minutes to the Grok Bot webhook, which decides whether to text anyone. Disabled (with the reason on the card) until `OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY` are in `Secrets.plist`. ⚠ An HTTP 200 means the routine started a run, never that family was texted |
+| Detect the cane falling (Settings → Family alerts) | **on** (Step 43) | `FallWatcher` (CoreMotion, 20 Hz): free fall → impact → still and tilted. The hint says it: "Thresholds are not tuned yet, so turn this off if it cries wolf" — the numbers are a guess shipped on, to be re-derived from dropped-cane logs (`todo.md` Step 43). Disabled on a phone without a motion sensor; only reaches the family while the switch above is on |
+| Add AI context (Settings → Family alerts) | **on** (Step 43) | One sentence for the family from a cheap text model (`ALERT_MODEL`, effort `minimal`); the facts go either way. Disabled with the caption "No model key, so alerts carry facts only." when no provider key is set |
 | **Detect drop-offs** (Sense → Hazards) | **off** | Untuned on a real cane |
 | Read signs (Sense → Hazards) | on | On-device, offline, once a minute per phrase; Quiet and Indoors read only safety phrases |
 | **Hazard watch** (Sense → Hazards) | **off** | Every 8 s while walking; on-device labels are weak (§8), the cloud needs a key and network |
@@ -369,10 +403,10 @@ first thing** (stress plan D17): it should name what is there.
 
 - **Install the graph tool once:** `uv tool install graphifyy` (or `pipx install graphifyy`); the
   command is `graphify`. The graph is committed in `graphify-out/`, so queries work right after a
-  pull. The committed `graphify-out/GRAPH_REPORT.md` (refreshed in `e459b3a`) says it was built
-  from `076fcaa8`, so it includes `TorchSwitch`, `CueRules`, `DualCameraRotation` and
-  `SpeechResume`; compare it with `git rev-parse HEAD` and run `graphify update .` after any code
-  change.
+  pull. The committed `graphify-out/GRAPH_REPORT.md` was rebuilt at Step 47 (Sat 2026-09-12
+  evening): 4,681 nodes, 10,872 edges, 216 communities (Step 49), so it knows every Step 47 file
+  (`SceneEngineSummary`, `TorsoHapticPolicy`, `CaneKitIslandTour`). Compare it with
+  `git rev-parse HEAD` and run `graphify update .` after any code change.
 - **Ask the knowledge graph first:** from the repo root, `graphify query "how does a curb warning reach
   the speech queue"`, `graphify path "HazardScanner" "SpeechQueue"`, `graphify explain "TurnSettle"`.
   Communities are listed in `graphify-out/GRAPH_REPORT.md`; `graphify-out/graph.html` opens in a
@@ -380,8 +414,8 @@ first thing** (stress plan D17): it should name what is there.
 - **Every file, type and function:** [`CODE_REFERENCE.md`](CODE_REFERENCE.md).
 - **Every doc and when to read it:** [`docs/README.md`](README.md).
 - **What landed when, and each step's device test list:** [`CHANGELOG.md`](../CHANGELOG.md).
-- **What is still open:** [`todo.md`](todo.md) → "Cue design v2" (Steps 35–45) and the open
-  findings list near the top.
+- **What is still open:** [`todo.md`](todo.md) → "Cue design v2" (items cue-v2 #35–#45), the
+  "## Step 47" block near its end, and the open findings list in its historical top block.
 - **Why the cues are changing:** [`cue_design_v2.md`](cue_design_v2.md) (74 source-checked
   findings, the violations table V1–V9, the ranked change list, the field-log addendum) and
   [`auditory-load.md`](auditory-load.md).
@@ -399,7 +433,7 @@ checklist version for picking up the next cue v2 step.
 2. `docs/CODE_REFERENCE.md` for the module you will touch.
 3. This file, then `docs/todo.md` → "Cue design v2" for the step you are taking, and its research
    in `docs/cue_design_v2.md` (§3 is the design, §4 the ranked list with the test names it expects).
-4. The newest `CHANGELOG.md` entries (Step 37 at the top), for what the last step deferred.
+4. The newest `CHANGELOG.md` entries (top of file; newest first), for what the last step deferred.
 5. `graphify update .`, then `graphify query "…"` to find every caller of what you change.
 
 ### 10.2 Measure first
@@ -421,8 +455,11 @@ constant moves in `CaneKitLogic`, move it in `cue_audit.py` too.
    Swift Testing test written before or with the code; a bug fix starts with a failing test. The
    app types (`SpeechQueue`, `AppModel`, `HapticPlayer`) stay thin owners of state and timing.
 3. **Build and verify silently:** `make test`, `make sim`, `make uitest` (and `make tour`) for UI
-   changes, `make e2e` (plus `SCENARIO=streetview` when the camera path changed), all on the iPhone
-   17 Pro Max / iOS 27 simulator. Automation is muted (`CANEKIT_MUTE=1` / `CANEKIT_UITEST=1`).
+   changes, `make island` when the Live Activity or Dynamic Island changes (it photographs every
+   presentation — compact, expanded, walking, after Stop — and is the only visual check the widget
+   has; Step 47 was driven by those pictures), `make e2e` (plus `SCENARIO=streetview` when the
+   camera path changed), all on the iPhone 17 Pro Max / iOS 27 simulator. Automation is muted
+   (`CANEKIT_MUTE=1` / `CANEKIT_UITEST=1`).
 4. **Adversarial review, three independent reviewers, then verify every finding yourself:**
    a multi-agent workflow (finders + skeptics), **Muse** (`muse exec … --workspace <scratch>`,
    read-only), and **Antigravity** (`agy -p …`) pointed at a **copy** of the repo, because it has
@@ -456,7 +493,7 @@ constant moves in `CaneKitLogic`, move it in `cue_audit.py` too.
 - **No cue number has been tuned on the mounted cane.** Every field log is handheld. "Head height."
   still fires on walls, doors and people inside 1.5 m (`cue_design_v2.md` V1: the head band is
   image rows with no gravity correction and no torso check); the friend's 37-minute handheld walk
-  heard it 45 times. Steps 38–42 address it.
+  heard it 45 times. Cue-v2 items #38–#42 address it (#41, torso haptics by level, shipped in Step 47).
 - Drop-off warnings and the hazard watch are extras until the D-tests pass; the lanes, haptics,
   route and watch are the product.
 - Ramps steeper than ~11 % can read as a drop-off or step (the price of catching curb faces that

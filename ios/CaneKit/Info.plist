@@ -30,6 +30,8 @@
 	<string>OpenCane reads your step count for the arrival summary.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>OpenCane records the guided walk as a workout so the watch can keep giving cues.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>OpenCane keeps guiding you with the screen locked. Always lets it do that without the blue location banner covering its own route card.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenCane uses your location and heading to guide you along the route.</string>
 	<key>NSMicrophoneUsageDescription</key>

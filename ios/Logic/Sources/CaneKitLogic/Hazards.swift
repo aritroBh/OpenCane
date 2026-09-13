@@ -556,7 +556,7 @@ public enum HazardPrompt {
     cones, barrier, open trench, pothole, scooter or bike on the sidewalk, low branch, pole, \
     parked car on the path, stairs), reply with ONE short phrase under 8 words naming the \
     distance FIRST in meters, then the hazard and where (for example: "3 meters ahead, cones"). \
-    Otherwise reply exactly NONE.
+    Otherwise reply exactly NONE. If the image is too dark to see, reply exactly NONE.
     """
 }
 

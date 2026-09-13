@@ -2,72 +2,415 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
-
-**Why:** The user requested:
-1. "can u make th ebuttons and tsuff look better we still have the same thigns like satrt ruote to cif and naigate t cif form here and its now jsut good looking": GuideCard had two buttons mentioning "CIF" in awkward layouts — "Start route to CIF" as a giant white slab, and "Navigate to CIF from here" squeezed into a half-width square next to "Simulate walk", wrapping 27 characters across 3 cramped lines.
-2. "can u add a pfp to my thing as well /Users/aritro/Pictures/Photos Library... use this as my pciuture": Add the user's photo to the Emergency Medical ID card in the Profile tab.
-3. "alos how did u get all my health data form the health app right???": Clarify Apple CoreMotion/HealthKit local querying architecture.
-4. "pull all changes and then go crazy... give me the full handoff to my other agenet session": Integrate multi-agent audit recommendations from Muse and Codex, ensure 100% clean test passes (`make test`, `make sim`, `make uitest`), verify physical device installation on iPhone 17 Pro Max, update knowledge graph, and prepare complete session handoff.
-
-**What changed:**
-- `Theme.swift` (`CKBigButton`):
-  - Added optional `subtitle: String? = nil` to `CKBigButton` with responsive horizontal/vertical layout.
-  - Added subtle trailing chevron on primary action buttons.
-  - Kept accessibility labels strictly identical to `title` (preserving AGENTS.md Hard Rule 9).
-- `GuideCard.swift`:
-  - Replaced cramped half-width HStack layout with clean, full-width vertical hierarchy:
-    - Primary Hero: `Start route to CIF` with subtitle `"Campus Demo · Townsend Hall to CIF"` (`role: .primary`).
-    - Secondary: `Navigate to CIF from here` with subtitle `"Live GPS · Apple Maps walking route"` (`role: .secondary`, full width with ample room).
-    - Secondary: `Simulate walk` with subtitle `"Indoor demo mode · test route without moving"` (`role: .secondary`).
-- `Assets.xcassets` & `ProfilePage.swift`:
-  - Created `AritroProfile.imageset` in `ios/CaneKit/Resources/Assets.xcassets/` with the user's campus portrait.
-  - Replaced generic SF Symbol in `ProfilePage` header with a 56x56 circular avatar framed by an accent ring.
-  - Fixed SF Symbol for allergies (`"exclamationmark.triangle.fill"`).
-  - Added combined accessibility elements to `metricTile` and full descriptive label to the emergency call link.
-- `SupabaseClient.swift` (Audit Fixes):
-  - **Security (C1):** Removed `SUPABASE_SECRET_KEY` fallback; client uses `SUPABASE_PUBLISHABLE_KEY` exclusively.
-  - **Data Isolation (C2):** Filtered walker lookup strictly by device `install_id`.
-  - **Race Guard (C3):** Added `inFlightResolve` unfair lock task memoization to prevent duplicate walker registrations on launch.
-  - **Dynamic Hardware (C7):** Queried POSIX `utsname` for machine hardware model instead of hardcoded string.
-  - **PostgREST Upsert (M1):** Added explicit `on_conflict` parameters to `medical_profiles` (`walker_id`), `mobility_days` (`walker_id,day`), and `devices` (`vendor_id`).
-  - **Timezone Alignment (Codex Finding):** Keyed `mobility_days` date using `Calendar.current` local date components rather than UTC ISO8601, ensuring evening steps in Central Time match the local calendar day.
-- `AppModel.swift`:
-  - Extracted `lat`, `lon`, `accuracyM` primitive values before `Task` boundary in `recordHazard` to avoid capturing non-Sendable `CLLocation` (C5).
-  - Used `audioRoute.headphonesConnected` instead of instantiating `CMHeadphoneMotionManager`.
-- Verification:
-  - `make test`: all 538 unit tests pass in CaneKitLogic.
-  - `make sim`: clean build with 0 errors.
-  - `make uitest`: 11 / 11 tests passed with 0 failures on iPhone 17 Pro Max simulator.
-  - `make build install`: successfully installed and launched on Aritro's iPhone 17 Pro Max (PID 6563).
-  - Live Supabase verification: verified live sync of `mobility_days` (`2026-09-12`: 6,567 steps, 4,710 m).
-  - `graphify update .`: updated knowledge graph (4,020 nodes, 9,423 edges, 205 communities).
-
-test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab features full-width buttons with clear subtitles ("Campus Demo" vs "Live GPS"), open the Profile tab to view the custom circular profile avatar and verified emergency card details.
-
 ## Step 31 — Voice input fails safe for its full microphone lifetime (Sat Sep 12)
 
-Push-to-talk voice capture now has the same fail-closed treatment as the optional sound watcher.
-`VoiceInputGuard` in `CaneKitLogic` is a pure, route-aware state machine: it rejects HFP or missing
-input, stops on output replacement, interruption, recognizer/engine failure or permission revocation,
-and ignores late callbacks after cancellation. `VoiceInputEngine` requests microphone and Speech
-permissions before activation, generation-fences callbacks and recognition results, observes audio
-engine configuration for the entire run, polls permission and engine health while listening, drops
-partial transcripts on failure, restores the shared `.playback` session and beacon, and sends the
-existing speech queue a clear OpenCane failure line. The Guide card exposes a cancellable
-“Starting…” state so a pending permission request cannot silently resurrect a microphone after the
-user turns it off. `SpeechQueue` forwards route and interruption edges to the active voice owner
-without adding another audio-session owner or requesting Bluetooth HFP.
+Push-to-talk now uses a generation-fenced, route-aware lifecycle. `VoiceInputEngine` and the shared
+`SpeechQueue` observe route and interruption changes for the entire capture, poll permission and
+engine health, discard stale transcripts, and tear down cleanly on HFP/input loss, analyzer/engine
+failure, cancellation, or a permission race. Navigation and LiDAR continue while this optional
+voice feature degrades. `VoiceInputGuard` and its Logic tests cover the pure state transitions.
 
-Added Logic coverage for cold-start settling, HFP/input loss, output replacement and late callbacks,
-recognizer/interruption failure, permission revocation and cancellation. This is graceful degradation:
-only push-to-talk stops; navigation, LiDAR, haptics and route speech continue.
+test on device: start Talk to OpenCane, disconnect AirPods or trigger a phone-call interruption,
+revoke microphone permission while listening, and cancel during the permission prompt; each case
+must stop capture, explain the failure, restore playback and leave navigation running.
 
-**Verification:** Swift 6 Logic and changed app sources type-check/parse with the available toolchain;
-full `make test`, simulator/UI/tour/device, Muse, Antigravity and graphify checks remain host-gated
-until the Xcode 27/iOS 26–27 environment is available.
+## Step 29 — Refuse AR sensor-mode restarts during navigation (Sat Sep 12)
 
-test on device: start push-to-talk with AirPods connected, disconnect or force an HFP route change, and confirm capture stops within one route notification, the app says why, playback/beacon return to normal and navigation keeps running. Trigger a phone call or Siri while speaking and confirm the partial transcript is discarded. Revoke microphone permission in Settings while listening and confirm the button leaves “Listening…” with no orange recording dot. Cancel an open permission prompt, then grant access and confirm no microphone starts until the next explicit tap.
+Face-tracking and high-frame-rate changes now pass through the pure `SensorModeInterlock`: they are
+refused while a route is starting or active, while serialized camera teardown is pending, and are
+applied only after the route ends. Thermal mesh downgrades stop processor lookups immediately but
+defer the AR session restart until it is safe. Interruption/failure clears stale obstacle cues and
+announces the degraded channel until a trusted frame proves recovery.
+
+test on device: start a route, toggle face tracking and 60-fps mode, and confirm each request is
+refused without a depth gap; stop the route and confirm the deferred setting applies then.
+
+## Step 49 — Low light: the app notices the dark for a walker who cannot (Sat Sep 12, late)
+
+**Why.** Owner, 22:50: "In a low-light situation, how are we taking care of that? LiDAR doesn't
+depend on light, we have the flashlight — what else?" The honest inventory (a research agent read
+every subsystem; report in the session scratchpad): LiDAR depth, the gyro gate, GPS, compass,
+haptics, the watch and the island are light-independent; ARKit's *visual* tracking, sign reading,
+on-device scene words and people detection, the cloud "Where am I" and the hazard watch degrade or
+fail silently — and a blind walker cannot tell it is dark. Worse, a real bug: in a dark hallway
+ARKit sits in `.limited(.insufficientFeatures)`, the route-start gate never qualifies, and Step 42's
+timeout line said "Obstacle detection warming up. Guiding with GPS." while `sceneDepth` was arriving
+and the lane cues were live (`CueDecider` never reads `trackingNormal`).
+
+**What changed** (implementation agent, torch-loop fix by the orchestrator):
+- `LowLightPolicy` (CaneKitLogic, 12 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity`
+  (carried as `LaneReport.ambientLux`); dark after 3 s under 40 lux, lit after 5 s over 120, `unknown`
+  first. Torch-aware: an app-lit torch stays ≥ 60 s; **while app-lit the exit needs 400 lux
+  (`litWithTorchLux`)** — the reading is an auto-exposure proxy the torch itself raises, and without
+  this the torch switched itself off by its own glow every minute (`appLitTorchGlowDoesNotEndTheEpisode`);
+  a device cut-out backs the auto-torch off 60 s; never at ≤ 20 % battery. All numbers [H].
+- `AppModel`: setting "Flashlight on in the dark (routes)" (`autoTorchInDark`, **default ON** — a
+  deliberate exception to "ships off": the walker cannot see the dark, and the light both helps the
+  cameras and makes them visible to drivers; reasoning in code and AGENTS.md). The torch is lit only
+  while a route guides, through the KVO-confirmed `setTorch`; released on lit / Stop / arrival; a
+  torch the walker lit is never touched. One line per episode at `.nav`: "Low light. Obstacle
+  detection still works." (+ " Flashlight on."). `light {state, lux, torch, torch_by_app}`.
+- Readiness honesty: `DepthReadiness.TimeoutReason`; a timeout with depth live but tracking never
+  normal speaks "Camera tracking is limited, probably low light. Obstacle detection is running on
+  LiDAR." (`.safety`, 15 s) and starts the route; `route_readiness {state: timed_out_tracking_limited}`.
+- Vision honesty: "It is dark, so this may miss things. " before a description when dark with the
+  torch off; the prompts may answer "It is too dark to see." and `CloudSceneGate` passes it; `scan` /
+  `hazard_watch` records carry `light: dark`; `centerHit = nil` under limited tracking (no mesh
+  *name* from a drifting pose; distances stay LiDAR).
+- UI: "Light" row on the Scene engine card, a DARK pill beside the GPS pill on the Guide.
+- Docs: design.md §5.1 / §5.4 / §6.5 / Scene engine; CODE_REFERENCE; AGENTS.md (two deliberate
+  bullets); todo.md Step 49 device checklist (dark room, torch-lit hallway, lit crossing).
+
+**Verification.** `make test` 627 / 627; simulator build green; `make uitest` 12 run / 0 failures;
+`graphify update .` → 4,681 nodes · 10,872 edges · 216 communities; installed and launched on the
+phone (Steps 48 + 49 together). Reviews on this diff: Muse, Codex, OpenCode (recorded when they land); Antigravity
+cannot run headless here. Nothing measured on the phone yet — every threshold is a hypothesis
+until a dark walk's `light` records are read.
+
+test on device: in a dark room start a route — within ~4 s the torch comes on and you hear "Low
+light. Obstacle detection still works. Flashlight on."; the tiles still show the wall; Stop the
+route and the torch goes off. With the torch off (toggle in Settings → Mount), ask "Where am I" in
+the dark: it starts with "It is dark, so this may miss things." Start a route in a dark hallway:
+you hear the LiDAR line, never "Guiding with GPS".
+
+## Step 48 — Point-blank: a wall against the phone is STOP, never CLEAR (Sat Sep 12, late)
+
+**Why.** A teammate's photo at 22:44: phone against a wall, "Depth OK", six green CLEAR tiles, no
+sound — the inverted gradient Step 38 was meant to end. Step 38 accepts *low-confidence* returns
+down to 5 cm; inside roughly 10 cm the LiDAR does not return a low-confidence distance at all, it
+returns 0 or NaN. `LaneMath` discarded every such sample, the cell fell under `minSamplesPerCell`,
+reported `.infinity`, and `.infinity` is CLEAR everywhere downstream. The Step 38 decider latch
+(`nearDropoutHoldSeconds`, 1.5 s) covered the cue for a second and a half; the tiles never.
+
+**What changed.**
+- `LaneMath` counts *blind* samples (non-finite or ≤ 0.05 m) and reports the blind share per cell
+  (`LaneGrid.headBlind` / `torsoBlind`, `blindFractionIsReportedPerCell`); the value stays
+  `.infinity`, so nothing that reads distances changed on its own.
+- New pure `NearHold` (CaneKitLogic, 7 tests, suite "Near hold"), applied by `DepthFrameProcessor`
+  to every grid before it is published: a cell that reads `.infinity` with a blind share ≥ 0.5 and
+  whose last *measured* distance was under 0.6 m is reported as 0.1 m and flagged held — under
+  `CueThresholds.centerNear`, so tiles say STOP, the decider fires urgent, the watch and the island
+  follow. Any measurement releases it; a blind share under 0.5 is a real clear and disarms the cell.
+  It never arms without a prior near reading, so a blind sky or corridor nobody walked up to stays
+  clear (`blindWithoutNearHistoryStaysClear`, `farReadingDoesNotArm`). Known gap, on purpose: the
+  phone switched on already against a wall is not held until it has read the wall once between 5
+  and 60 cm — the trade against painting STOP over the sky.
+- Trip log `lanes` gains `head_blind`, `torso_blind`, `held` — the evidence for tuning the 0.5 / 0.6.
+- Merged onto the teammate's Step 45 cloud commit (`68c50f0`, `Cloud/CloudSync` + `CloudSchema`);
+  the CHANGELOG conflict (that commit carried leftover stash markers) resolved newest-first.
+
+**Muse review (xhigh), all verified and taken:** (F4) the hold memory was reset by any frame
+without depth — exactly when a wall is pressed — and never by a session change; now `resetNearHold`
+runs from `dropLatestImage` (every ARKit re-run / pause passes there) and a transient gap keeps the
+memory. (F2) a phone switched on already against a wall stayed silent: the **cold-start** rule —
+≥ 4 of 6 cells blind ≥ 0.8 with no history → 0.8 m (NEAR tile, Geiger, never STOP) until any cell
+measures; a head-only blind (a tilt at the sky) is not a cold start (`allBlindWithNoHistoryIsCaution`,
+`headOnlyBlindIsNotAColdStart`). (F1) history from before a cane swing describes another view:
+an untrusted frame disarms every cell (`aSweepDisarmsEveryCell`). (F3) `smoothedSceneDepth` holds
+stale finite values and inpaints for a few frames as the wall arrives: the blind share is now the
+max of the smoothed and the raw map. (F5a) Quiet / Indoors / a crossing settle would have turned a
+held torso cell back into silence: a held cell renders at every level (`pointBlankBypassesEveryTorsoHold`).
+(F5b) the wrist got one tap then nothing while pinned: the centre cue is re-mirrored while a cell
+is held (the link throttles). (F5c) the island only refreshed on a GPS fix, i.e. never while
+standing at a wall: `LiveActivityController.refreshObstacle` from the depth path on a glance
+transition. (F6) the blind share's denominator no longer counts far low-confidence pixels (a wall
+edge read 0.49). Disclosed, not changed: releasing a hold into a dropout-clear still waits the Step
+38 latch's 1.5 s before `.stop` (safe direction). Refuted by Muse itself: a data race on `nearHold`
+(serial queue), held values feeding back into arming (the pre-hold value is stored).
+
+**Verification.** `make test` 620 / 620 (their 18 cloud tests included); `make sim` green;
+installed and launched on the phone at 22:55 (first cut) and again after the review round.
+Codex (read-only, repo copy) reached the same four findings as Muse independently (sweep frames
+must not mutate the hold, session-boundary reset, smoothed-depth lag, island only on GPS fixes) —
+all fixed above — and added one kept as a known gap: a glossy or absorptive surface between
+0.35 m and a few metres returns *finite low-confidence* samples that are neither valid nor blind, so
+such a cell can still read CLEAR (the Step 38 boundary; `docs/todo.md`). OpenCode's third run
+produced no output; Antigravity's plan-mode run printed nothing again.
+
+test on device: hold the phone 15 cm from a wall, then push it to the wall: STOP tiles and the
+urgent buzz must continue at 2 cm; step back to 1 m: tiles clear within a frame. Point the phone
+at the night sky and at a long corridor from where you stand: no STOP.
+
+## Step 47 — The Dynamic Island from its first pictures, cue levels that differ on the cane, a Details tab that says which model answered, and the Guide tile pair (Sat Sep 12, evening)
+
+Four things the owner asked for in one message after walking with Step 46, plus a documentation
+drift audit the same evening. Built as three parallel work packages (island + Guide + phone by the
+orchestrator; torso haptics and the scene-engine card by two implementation agents), reviewed by
+three read-only audit agents on the docs and by Muse, Codex, OpenCode and Antigravity on the diff.
+
+### A. Dynamic Island — evidence first, then a redesign
+
+**Why.** "The dynamic island … the icons are weird, just the same blue circle thing around the
+dynamic island … nothing's being fixed." Steps 40, 42 and 44 had each changed the Live Activity and
+each was verified by a person looking at a phone. The four newest trip logs on the phone
+(`canekit-2026-09-13T01-48-57Z` … `01-52-46Z`) say `live_activity {action: start, active: true}` —
+the activity existed; nobody had ever seen what it drew.
+
+**Pictures.** New `ios/CaneKitUITests/CaneKitIslandTour.swift` + `make island` (Makefile target,
+documented in AGENTS.md / ios/README.md): start the route, press Home, photograph the compact
+island, long-press for the expanded one, simulate a few metres, photograph again, Stop, photograph
+again. The *before* pictures (scratch `shots_before/0[1-4]-island-*.png`) showed: compact
+`↑ 585 m … ✓ CLEAR` — a bare up-arrow that reads as a second copy of the OS's blue location arrow,
+plus a text badge for a non-event; expanded: the instruction squeezed into the leading column and
+truncated ("Leaving Townsend…") with an empty bottom region; after Stop: clean (the island drops an
+ended activity at once; the 60 s policy is lock-screen only).
+
+**What changed.** `ios/CaneKitWidget/NavLiveActivity.swift` rewritten (docs/design.md §6.7):
+- `Manoeuvre(kind:)` and `Glance(status:…)` tables — one place for glyph, word, tint and VoiceOver
+  phrase, so they cannot disagree. Straight = `figure.walk` (`arrow.up` retired), turns =
+  `arrow.turn.up.left/right`, crossing = `figure.walk.diamond.fill`, arrived = `flag.checkered`.
+- Compact trailing = the glance glyph alone when clear (one small green check); a word or metres
+  only when there is something to act on (`1.2 m`, `HEAD`, `CURB`). Minimal = the glance glyph when
+  not clear, else the manoeuvre glyph.
+- Expanded: leading = glyph + word ("Turn right"), trailing = distance + "to next", bottom = the
+  instruction full width (2 lines, `fixedSize`) then glance pill · `±5m GPS` · route name.
+- Stale state: `LiveActivityCoalescer.staleAfter = 300 s` (CaneKitLogic, pinned by
+  `staleAfterOutlivesACrossingWait`) is the `staleDate` on every request and update
+  (`LiveActivityController.staleDate()`); the widget dims the distance and says "No update" —
+  ActivityKit keeps an island up for hours after the app dies, and a frozen "120 m" must not look live.
+- VoiceOver reads one sentence per presentation; the raw-kind label listed in design.md §10 is gone.
+- `LocationService.setNavigating`: `showsBackgroundLocationIndicator` pinned `false` in both
+  states, with the reason in the code: the blue pill iOS draws beside the island during a route
+  comes from the `CLBackgroundActivitySession` that keeps GPS alive with the screen locked (it is
+  what lets a When-In-Use app continue in the background) — no flag removes it; keeping the legacy
+  manager flag off means exactly one system pill, never two. The file header's "created by
+  `start()`" was stale since Step 40 and now says `setNavigating`.
+
+**Second round, from the owner's phone pictures (21:48).** The island on the phone showed a blue
+arrow in the pill and our head-height glance in a detached circle: iOS's background-location
+indicator owned the island and demoted the Live Activity to *minimal*. That indicator is the price
+of `CLBackgroundActivitySession`, which a When-In-Use app needs to keep GPS through the screen
+lock. Apple Maps and Google Maps (the owner's references) own the island because they hold
+**Always**. So: `NSLocationAlwaysAndWhenInUseUsageDescription` (project.yml); the first route
+start calls `requestAlwaysAuthorization()` (skipped under `CANEKIT_UITEST=1`);
+`reconcileBackgroundSession` arms the session only while navigating **without** Always and
+re-runs on every authorization change (`locationManagerDidChangeAuthorization`), so a grant
+mid-route drops the pill at once and a decline keeps GPS alive; `location_auth {status,
+background_session, at}` in the trip log is the evidence. Also from the pictures: the expanded
+row truncated both the glance pill ("Head heig…") and the route name — the route name left the
+island (lock screen keeps it), the pill has `layoutPriority(1)`, the instruction may take three
+lines, and a route **progress bar** (`ContentState.progress` = waypoints passed / total, 1 on
+arrival; `RouteProgressBar`) sits under the pills, as in the Google Maps card.
+
+### B. Guide — the two-up pair is a pair
+
+**Why.** "The where am I is kind of weird … the talk to OpenCane is weirdly shaped compared to where
+am I." Cause, from the code and the tour picture: both were `CKBigButton` rows in one `HStack`, and
+`ViewThatFits` kept the short title in a row while it stacked the long one — one pair, two shapes.
+
+**What changed.** `CKBigButton.Layout` (`row` / `tile`, `Theme.swift`) and `CKMetrics.tile = 108`:
+a tile is icon over a centred word over a caption ("Camera · what is ahead" / "Voice · ask or
+command"; "Tap again to send" while listening), and the pair's `HStack` is `fixedSize` vertically so
+both take the taller one's height. The row label's text column became flexible width, because a long
+subtitle made `ViewThatFits` stack "Simulate walk" alone (seen in the first tour after the change);
+its subtitle is now "Indoor demo · walks the route for you". design.md §6.1 rewritten (idle and
+navigating wireframes, the tile rule, the Talk row in the VoiceOver table).
+
+### C. Cue levels that differ on the cane (cue design v2 item 41 — torso haptics by level)
+
+**Why.** "In the settings you have the cues — quiet, standard, detailed — I'm not sure if it's
+actually making a difference." It was not, outdoors with names off (the default): `CueRules` gated
+only names and sign phrases and the caption said "Haptics are the same at every level for now."
+
+**What changed** (implementation agent; router diff re-read by the orchestrator):
+- New pure `TorsoHapticPolicy` (CaneKitLogic, 19 tests, suite "Torso haptics by level"; `Rig` steps
+  a real `CueDecider` and the policy together) layered over `CueDecider`, which is untouched.
+  `TorsoHapticAction` = `render` / `centerOnset(strong:distance:)` / `updateCenter` / `stop` /
+  `suppressed(cue, reason:)`; `TorsoSuppressReason` raw values (`quiet`, `indoors`,
+  `crossing_settle`, `standard_side`, `standard_center_hold`, `shoreline`) are the trip-log strings.
+- Head cue: rendered at every level, place and hold — never gated (`headIsNeverSuppressed`).
+- Quiet + Outdoors: no torso haptics. Standard + Outdoors: no loop; one tap (`centerOnsetPlayer`,
+  1 transient 0.8/0.6) when the centre distance is < 1.5 m *and closing*; a strong triple
+  (`centerStrongPlayer`, 3 × 80 ms, 1.0/0.6) when < 0.6 m and closing; each once per approach,
+  re-armed after 1.5 s with the centre no longer the decider's cue; no side taps. Detailed + Outdoors
+  (the default) = today's Geiger loop and side taps, minus a side tap while that side has held within
+  ±0.1 m for ≥ 2 s (shorelining). Indoors, any level: no torso haptics. Crossing settle (new
+  `NavigationEngine.isCrossingSettle`): none until the curb / turn release. "Closing" = ≥ 0.1 m nearer
+  than the newest trusted sample ≥ 1 s old; sweep frames feed no history.
+- Cue router (`AppModel.handle`): decider → policy → render. A suppressed cue reaches neither the
+  player, the watch mirror nor `speakCueIfNeeded`; a running loop is stopped the instant a hold
+  begins; `applyCueRules` resets the policy and stops the player, so a loop never outlives the level
+  that started it. `cue` records gain `suppressed: <reason>` / `render: center_onset | center_strong`;
+  `cue_audit.py` reports `torso_suppressed_per_min` and `center_onsets` and its selftest passes.
+- Settings caption and picker hints now state the true per-level behaviour; segment titles unchanged.
+  design.md §5.2 has a "by level" table; AGENTS.md's "haptics do not change by level yet" is gone.
+- Numbers are [H] until a mounted trip log tunes them; the default is still Detailed + Outdoors =
+  today, so the calmer levels are opt-in (owner decision 2026-09-12).
+
+### D. Details — which model answered, why, how long, when
+
+**Why.** "For the details … I know you have the Muse and the on-device; can we be specific on, for
+example, when the Muse is triggered." The app knew every one of those facts and surfaced none.
+
+**What changed** (implementation agent; client diff re-read by the orchestrator):
+- `VLMAnswer` gained defaulted `answeredBy`, `cloudMs`, `fallbackReason`; `FallbackVLMClient`
+  stamps the cloud's error and elapsed ms on an on-device answer, and records the hazard-watch
+  outcome in a `Mutex`-guarded `VLMHazardOutcomeBox` shared by every copy of the client.
+- `SceneDescriber` publishes `lastSource`, `lastCloudMs`, `lastFallbackReason`, `lastGate`, `lastAt`,
+  `lastTrigger`; `describe(trigger:)` with `DescribeTrigger` (button / watch / actionButton /
+  cameraControl / siri / waypoint / question) passed by every caller; `describe_result` and
+  `hazard_watch` trip-log records gain `trigger` / `source` / `cloud_ms` / `fallback_reason`.
+- New pure `SceneEngineSummary` (CaneKitLogic, 16 tests) owns every sentence, with the 8 s watch
+  interval and 2.5 s cloud deadline passed in from the existing constants.
+- New "Scene engine" card on the Details tab under the status card: chain pill (`MUSE → ON-DEVICE`),
+  "Muse answered in 1.9 s" / "On-device answered — Muse: The request timed out. (after 18 s)",
+  "2 min ago · from the watch", the gate verdict when the cloud answered, the hazard-watch line
+  ("off — when on, asks Muse every 8 s while a route guides, on-device after 2.5 s"), and the cues in
+  effect ("Detailed · Outdoors · names off"). Each row is one VoiceOver sentence; a 10 s
+  `TimelineView` ticks the ages.
+
+### E. Medical ID — the real number
+
+The card showed the Step 44 placeholder `+1 (555) 234-5678`. Default is now `+1 (925) 791-8082`
+(owner: "my phone number is actually 925 791 8082"), and `MedicalProfileStore.init` migrates exactly
+that placeholder on phones that had already saved a profile; a number the owner typed is kept.
+"Announce Medical ID" now speaks at `.scene` (20 s TTL), not `.obstacle`: the design audit caught a
+user-requested paragraph sitting in the hazard band of hard rule 8, where an obstacle name or a
+route line could not have cut it.
+
+### F. Documentation drift audit (three read-only agents, corrections applied)
+
+AGENTS.md: rule 9 now lists four tabs (Guide / Sense / Settings / Profile) and "Simulate walk"; the
+Layout table names `Alerts/`, `SupabaseClient`, `MedicalProfileStore`, `ProfilePage` and both tours;
+the history pointers name Step 46/47 and say the cue-v2 item numbers are not CHANGELOG steps.
+ios/README.md: status block, test counts (≈575 in 45 files), 12 UI tests in three classes, `make
+island`, `Logic/` = 47 files, the Supabase / `CUSTOM_REASONING_EFFORT` keys, the Camera Control row
+(the debug footer went in Step 11). Stale code headers fixed: `TabBar` / `ContentView` ("three"
+tabs), `scripts/test.sh` (457), `LocationService` (session lifecycle). CODE_REFERENCE.md: the widget,
+controller, coalescer, island tour, Makefile, `CKBigButton`, `MedicalProfileStore`, `LocationService`
+entries rewritten by the orchestrator; a fixer agent added the ~30 missing `###` sections
+(`FaceHeadPose`, `LiveCameraView`, the Conversation module, 12 Logic files, 18 test files) and removed
+entries for code that no longer exists (`isForeground`, `liveFrameJPEG` / `refreshLoop`,
+`TakeMeSomewhereIntent`, `maxReplays`).
+
+### Reviews (four reviewers on the diff; every finding verified by hand)
+
+**Muse** (`muse exec`, xhigh, read-only) and **OpenCode** (`opencode run`, on a repo copy) both
+returned full reviews; **Codex** was rerun read-only against a repo copy after its first run had
+been building inside the real repo (see the trap in AGENTS.md); **Antigravity** could not run
+headless without auto-approving every command, which this session refused (its plan-mode rerun is
+recorded below if it produced output).
+
+Fixed:
+- *Standard's strong triple needed "closing"* (Muse S2): a walker inching in at under 0.1 m/s never
+  qualified, so the closest approaches were the silent ones. The triple now fires on proximity alone
+  (< 0.6 m, once per approach); the 1.5 m tap still needs closing. `standardStrongTripleFiresOnASlowCreep`.
+- *History never pruned when every sample was stale* (OpenCode F2): `record()` dropped samples only
+  up to the first kept one, so after an AR clock gap an ancient 1.9 m reading served as the closing
+  reference for a false onset. `removeAll` by age. `staleHistoryIsPrunedAfterAGap`.
+- *A failed hazard-watch check read as "Nothing asked yet"* (Muse L1): `SceneEngineFacts.lastWatchError`
+  from `HazardScanner.lastError`; the card now says "Hazard watch: last check failed — <reason> · 30 s
+  ago". `hazardWatchFailureIsSaidAsAFailure`.
+- *Two `describe` records per Camera Control press* (Muse L2 / OpenCode F4): the manual
+  `source: cameraControl` record went; `trigger: cameraControl` is the one record.
+- *Catch-all `.fire` case* (Muse L3): every `HapticCue` case is now named in `TorsoHapticPolicy.update`
+  (side lanes in `side(_:…)`), so a new cue kind fails to compile instead of becoming centre logic.
+- *Whole-card `TimelineView`* (Muse U1): only the two age-bearing rows tick every 10 s; a periodic
+  redraw of the whole card could move VoiceOver focus off the headline row.
+- *Dead `.siri` trigger* (OpenCode F3): removed before the raw value became a log contract;
+  `WhereAmIIntent` cannot tell Siri from the Action button and a spoken question is `.question`.
+- *"Quiet" missing from hard rule 9's segment list* (Muse D1): added.
+
+**Codex** (read-only, repo copy; it reviewed the pre-fix diff, so three of its fifteen — the failed
+hazard-watch line, "Quiet" in rule 9, the missing CHANGELOG entry — were already done). Fixed:
+- *A head fire under a torso hold left a Geiger loop running* (Codex 2): a head cue outranks the
+  centre, so during a crossing settle no centre update arrived to end the loop; `handle` now stops
+  the loop before rendering the head when `TorsoHapticPolicy.torsoIsHeld` (`torsoIsHeldNamesEveryHold`).
+- *Standard onset carried the raw distance* (Codex 5): floored at the decider's 0.5 m so the spoken
+  fallback stays inside the prefetched lines (`standardOnsetDistanceIsFloored`).
+- *Gate refusal recorded as "Muse answered"* (Codex 7): `recordOutcome` names the on-device client
+  when the gate refused the cloud sentence.
+- *"No cloud key is set" also when `VLM_PROVIDER=ondevice`* (Codex 8): now "No cloud model is in use".
+- *Settings copy* (Codex 10): Quiet / Indoors say head height **and ground hazards** still warn;
+  Standard says "when closing".
+- *Compact island announced the glance twice* (Codex 11): the trailing bubble is VoiceOver-hidden;
+  the leading sentence carries the clause.
+- *Tour comment said Stop leaves a card for 60 s* (Codex 12): Stop ends immediately; only arrival
+  keeps the lock-screen card — comment and design.md fixed.
+- *10 s age refresh lived in the view* (Codex 14): `SceneEngineSummary.justNowWindow` in Logic; the
+  80 ms triple cadence stays beside the other pattern timings in `HapticPlayer` (pre-existing home).
+
+Rejected, with evidence:
+- *Shoreline suppression changes the default* (Codex 1, Muse S4): it is the owner-approved cue-v2
+  item 41 text ("Detailed = today + shoreline suppression"); only *re-taps* for a side distance steady
+  within ±0.1 m for 2 s are held, a new side obstacle at any other distance still taps, and the
+  blind spot is written into AGENTS.md.
+- *A dropout between the closing reference and now should void "closing"* (Codex 3): the strong
+  triple no longer depends on closing at all, and for the 1.5 m tap a brief dropout followed by a
+  nearer reading is an approach; deferred, noted.
+- *The strong triple reaches the watch as a plain centre cue* (Codex 4): `CueKind` raw values are
+  the phone↔watch wire contract (AGENTS.md); adding a kind needs a watch release — deferred to
+  `docs/todo.md`.
+- *`stopAll()` on a suppressed torso cue truncates a head pair or a route buzz* (Muse S1, OpenCode
+  F1): `HapticPlayer.stopAll()` only cancels the Geiger loop task and clears `rendering`; discrete
+  transient patterns "already in flight finish on their own" (`HapticPlayer.swift`, `stopAll` doc), and
+  the head / nav players are never touched by it. No truncation is possible.
+- *Provenance written off the main actor* (Muse C1): `SceneDescriber` is `@MainActor @Observable`
+  (line 61); its `Task { }` inherits that isolation, so writers and the card share it — the same
+  pattern `isDescribing` has used since Step 8.
+- *Tile pair not actually equal-height under `alignment: .top`* (OpenCode F5): the after-picture
+  (`shots_after/01-idle-top.png`) shows both tiles the same height; `fixedSize` on the `HStack`
+  proposes the taller child's height and `maxHeight: .infinity` fills it.
+- *The owner's phone number as the default and in git* (OpenCode F6): the owner asked for it by
+  voice on 2026-09-12 for a single-owner prototype whose card already carries their name, date of
+  birth and blood type; recorded here so the choice is visible.
+- *Shoreline suppression masks a post at exactly the hedge's distance* (Muse S3): inherent to
+  single-distance sensing; the cane tip covers it; written into AGENTS.md as a known blind spot.
+- Deferred: the strong triple's cadence vs the right lane's three taps (Muse S5) is a device check,
+  listed in `docs/todo.md`.
+
+**Round 2 (Muse xhigh + OpenCode on the Always / island diff).** Both confirmed, unprompted and
+independently, the four questions asked: (a) with Always + the `location` background mode,
+`liveUpdates` keeps delivering with the screen locked and no session; (b) provisional Always
+reports `.authorizedAlways` and behaves as Always (the log will say "always" for it); (c)
+invalidating the session inside the authorization callback leaves no gap — never restart the
+`liveUpdates` loop on an auth change; (d) `ContentState.progress` decodes safely in both
+directions. Fixed from their findings: the Always request is deferred until When In Use is granted
+(a first route right after install would otherwise miss the prompt — `alwaysWanted`); no session
+for denied / restricted; the progress bar draws no sliver at 0 % and clamps the dot. Rejected: the
+`stopAll` "head loop" finding a third time (no head loop exists — `HapticPlayer.stopAll` now says
+so in code); shoreline-in-Detailed (owner-approved plan text); no torso mirror at a crossing settle
+(the approved design: nothing but head and ground hazards while standing at a curb).
+
+**Codex, round 2 (read-only, repo copy).** One finding the other two missed and worth taking:
+on the modern CoreLocation API an app's *implicit* session is When In Use, so an Always app should
+hold an explicit `CLServiceSession(authorization: .always)` to be certain of background delivery
+without the activity session — the route now holds one (`LocationService.reconcileAlwaysSession`),
+keeps the When-In-Use session until the status reports Always, and logs both the fix stream's and
+the Always session's diagnostics as `location_diag {source, flags}` so a stopped stream is never
+silent. Also taken: `torsoPolicy.reset()` at route start (both Standard onsets armed for a new
+walk); the island refreshes on a manual Next at a standstill (`LiveActivityController.refreshNavigation`,
+no fix needed); stale "two describe records" comments. Already fixed before it ran: deferred Always
+request, denied → no session, head under a hold, compact VoiceOver, progress-bar endpoints, the
+three-line overflow. Rejected: shoreline-in-Detailed (third time, owner plan); "Detailed centre
+loop goes silent if haptics are silenced mid-loop" — pre-existing since Step 3 (`.updateCenter` was
+haptics-only before Step 47), noted in `docs/todo.md`.
+
+### Verification
+- `make test` → **580 / 580** Swift Testing tests in 8 suites (own exit code 0) after the review rounds. `scripts/test.sh`
+  now passes `--disable-xctest` (trap documented in AGENTS.md: a fresh `Logic/.build` under Xcode 27
+  fails the empty XCTest pass with "No test bundle found").
+- `make sim` → BUILD SUCCEEDED, 0 errors. An hour of "Operation not permitted" build failures in
+  between was macOS, not code: Xcode's Files-and-Folders grant for `~/Downloads` was lost at ~21:30,
+  so Xcode-signed tools (and git) could not open pre-existing files — `tccutil reset
+  SystemPolicyDownloadsFolder com.apple.dt.Xcode` fixed it (trap recorded in AGENTS.md).
+- `make uitest` → **12 run, 1 skipped, 0 failures** (the Street View test skips itself).
+- `make island` → four pictures per round (five rounds: the third showed the 3-line instruction pushing the pills off the region, the fourth the progress bar below the clip line; the final expanded card is glyph + word · distance + "to next · ±5m GPS" · two-line instruction · glance pill + progress bar); `make tour` → 17 pictures. Before / after pictures in the session
+  scratchpad (`shots_before/`, `shots_after/`); the compact island reads "🚶 585 m … ✓", the expanded
+  card shows the full instruction, the Guide pair is two equal tiles, the Scene engine card renders.
+- `graphify update .` → 4,332 nodes · 9,962 edges · 219 communities (was 4,020 / 9,423 / 205).
+- `make e2e` → **PASS ×4** (`clean` 265 s, `missed_fence` 272 s, `gps_jitter` 496 s, `wrong_turn`
+  292 s) on the final code; an earlier run was invalidated by a concurrent island capture on the
+  same simulator and rerun.
+
+### Not done / could not do
+- **Supabase and the Grok Bot webhook were not exercised from this session**: the permission
+  classifier refused a read-only `curl` against the Supabase REST endpoint as a production read, and
+  a webhook POST starts a bot run (outward-facing). Use the in-app "Send test event" button and
+  watch Settings → Family alerts for the bot's status line; the profile sync fires on the first
+  launch after install.
+- `.siri` trigger is defined but no caller can distinguish Siri from the Action button today.
+- No lock-screen picture in `make island` (no public API locks the simulator from XCUITest).
 
 ## Step 45 — Everything the phone knows, mirrored into Supabase (Sat Sep 12)
 
@@ -149,6 +492,80 @@ Supabase dashboard — one row, the destination, the metres and the steps the ar
 Turn a switch in Settings and watch `device_settings` change. Add a family email, press Save, and
 check `family_contacts`. Record a hazard with drop-offs on and confirm the row **and** its JPEG in
 the `hazard-photos` bucket.
+
+## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
+
+**Why:** The user requested:
+1. "can u make th ebuttons and tsuff look better we still have the same thigns like satrt ruote to cif and naigate t cif form here and its now jsut good looking": GuideCard had two buttons mentioning "CIF" in awkward layouts — "Start route to CIF" as a giant white slab, and "Navigate to CIF from here" squeezed into a half-width square next to "Simulate walk", wrapping 27 characters across 3 cramped lines.
+2. "can u add a pfp to my thing as well /Users/aritro/Pictures/Photos Library... use this as my pciuture": Add the user's photo to the Emergency Medical ID card in the Profile tab.
+3. "alos how did u get all my health data form the health app right???": Clarify Apple CoreMotion/HealthKit local querying architecture.
+4. "pull all changes and then go crazy... give me the full handoff to my other agenet session": Integrate multi-agent audit recommendations from Muse and Codex, ensure 100% clean test passes (`make test`, `make sim`, `make uitest`), verify physical device installation on iPhone 17 Pro Max, update knowledge graph, and prepare complete session handoff.
+
+**What changed:**
+- `Theme.swift` (`CKBigButton`):
+  - Added optional `subtitle: String? = nil` to `CKBigButton` with responsive horizontal/vertical layout.
+  - Added subtle trailing chevron on primary action buttons.
+  - Kept accessibility labels strictly identical to `title` (preserving AGENTS.md Hard Rule 9).
+- `GuideCard.swift`:
+  - Replaced cramped half-width HStack layout with clean, full-width vertical hierarchy:
+    - Primary Hero: `Start route to CIF` with subtitle `"Campus Demo · Townsend Hall to CIF"` (`role: .primary`).
+    - Secondary: `Navigate to CIF from here` with subtitle `"Live GPS · Apple Maps walking route"` (`role: .secondary`, full width with ample room).
+    - Secondary: `Simulate walk` with subtitle `"Indoor demo mode · test route without moving"` (`role: .secondary`).
+- `Assets.xcassets` & `ProfilePage.swift`:
+  - Created `AritroProfile.imageset` in `ios/CaneKit/Resources/Assets.xcassets/` with the user's campus portrait.
+  - Replaced generic SF Symbol in `ProfilePage` header with a 56x56 circular avatar framed by an accent ring.
+  - Fixed SF Symbol for allergies (`"exclamationmark.triangle.fill"`).
+  - Added combined accessibility elements to `metricTile` and full descriptive label to the emergency call link.
+- `SupabaseClient.swift` (Audit Fixes):
+  - **Security (C1):** Removed `SUPABASE_SECRET_KEY` fallback; client uses `SUPABASE_PUBLISHABLE_KEY` exclusively.
+  - **Data Isolation (C2):** Filtered walker lookup strictly by device `install_id`.
+  - **Race Guard (C3):** Added `inFlightResolve` unfair lock task memoization to prevent duplicate walker registrations on launch.
+  - **Dynamic Hardware (C7):** Queried POSIX `utsname` for machine hardware model instead of hardcoded string.
+  - **PostgREST Upsert (M1):** Added explicit `on_conflict` parameters to `medical_profiles` (`walker_id`), `mobility_days` (`walker_id,day`), and `devices` (`vendor_id`).
+  - **Timezone Alignment (Codex Finding):** Keyed `mobility_days` date using `Calendar.current` local date components rather than UTC ISO8601, ensuring evening steps in Central Time match the local calendar day.
+- `AppModel.swift`:
+  - Extracted `lat`, `lon`, `accuracyM` primitive values before `Task` boundary in `recordHazard` to avoid capturing non-Sendable `CLLocation` (C5).
+  - Used `audioRoute.headphonesConnected` instead of instantiating `CMHeadphoneMotionManager`.
+- Verification:
+  - `make test`: all 538 unit tests pass in CaneKitLogic.
+  - `make sim`: clean build with 0 errors.
+  - `make uitest`: 11 / 11 tests passed with 0 failures on iPhone 17 Pro Max simulator.
+  - `make build install`: successfully installed and launched on Aritro's iPhone 17 Pro Max (PID 6563).
+  - Live Supabase verification: verified live sync of `mobility_days` (`2026-09-12`: 6,567 steps, 4,710 m).
+  - `graphify update .`: updated knowledge graph (4,020 nodes, 9,423 edges, 205 communities).
+
+test on device: open OpenCane on iPhone 17 Pro Max; verify the Guide tab features full-width buttons with clear subtitles ("Campus Demo" vs "Live GPS"), open the Profile tab to view the custom circular profile avatar and verified emergency card details.
+
+## Step 45 — Supabase cloud backend integration for Medical ID, mobility stats, hazard map, and family alert feeds (Sat Sep 12)
+
+**Why:** The user provided Supabase project credentials (`https://ppmuqgswuyniwiwsdnto.supabase.co` with publishable and secret keys) to connect OpenCane to its dedicated cloud database backend.
+
+**What changed:**
+- `Secrets.plist` (git-ignored) & `Secrets.example.plist`:
+  - Added `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SECRET_KEY`.
+  - Secrets stay strictly outside git per AGENTS.md Hard Rule 4.
+- `SupabaseClient.swift` (`ios/CaneKit/Trip/SupabaseClient.swift`):
+  - Created native Swift URLSession PostgREST client (zero 3rd party SDKs, AGENTS.md Hard Rule 2).
+  - `resolveWalkerID(displayName:caneID:)`: finds or creates walker record in `walkers` table, caching the UUID in `UserDefaults` (`"opencane_supabase_walker_id"`).
+  - `syncMedicalProfile(_ profile:)`: live cloud sync for the emergency Medical ID card to `medical_profiles` table via merge-duplicates upsert.
+  - `syncMobilityStats(_ stats:date:)`: live sync of daily steps, walking distance (m), active duration (s), and cadence to `mobility_days` table.
+  - `recordHazard(...)`: logs detected obstacles, curbs, drop-offs, and vision signs to `hazards` table in real time for the web hazard map view.
+  - `recordFamilyAlert(event:deliveryStatus:statusCode:errorMessage:now:)`: mirrors dispatched family alert records to `family_alerts` table.
+  - `recordDevice(...)`: registers hardware metadata (model, system version, app version, LiDAR, watch, AirPods) to `devices` table.
+- `MedicalProfileStore.swift`:
+  - Automatically triggers `SupabaseClient.shared.syncMedicalProfile(profile)` on profile init and save.
+  - Automatically triggers `SupabaseClient.shared.syncMobilityStats(mobilityStats)` on trip completion and CMPedometer refreshes.
+- `FamilyAlerts.swift`:
+  - Automatically mirrors all delivered alert events to `SupabaseClient.shared.recordFamilyAlert`.
+- `AppModel.swift`:
+  - On launch (`start()`), registers device hardware capabilities in `devices` table.
+  - In `recordHazard(...)`, mirrors every detected ground hazard, sign, and vision warning to `hazards` table in Supabase.
+- Verification:
+  - `make test`: all 538 unit tests passing in CaneKitLogic.
+  - `make sim`: full clean simulator compilation.
+  - Live REST verified: confirmed `HTTP 200/201` upsert on `medical_profiles`, `mobility_days`, `hazards`, `family_alerts`, and `walker_dashboard`.
+
+test on device: open OpenCane; verify profile edits in the Profile tab sync seamlessly, check that today's steps update the cloud dashboard, and confirm that family alert test events and hazards populate the Supabase tables in real-time.
 
 ## Step 44 — Medical ID Profile tab, mobility fitness tracking, streamlined Guide buttons, Dynamic Island indicator fix, and Grok Bot webhook integration (Sat Sep 12)
 
@@ -1004,35 +1421,6 @@ test on device: from a normal terminal `cd ios && make run`; then Settings → A
 Shortcut → Talk to OpenCane (if missing, open the Shortcuts app once to re-index, then retry);
 press → tick → "how is my battery" → press again → answer; walk past a doorway and confirm the
 order is "N meters ahead, door"; check the trip log for `voice_toggle {source: actionButton}`.
-## Step 29 — Refuse AR sensor-mode restarts during navigation (Sat Sep 12)
-
-The route-time sensor interlock now covers the remaining ARKit reconfiguration gap. `SensorModeInterlock`
-in `CaneKitLogic` tracks idle, route-starting, navigating and camera-teardown phases: face-tracking
-and 60-fps user changes are refused during every protected phase, the setting snaps back to the applied value, and
-the existing route error + speech channels explain why. Thermal mesh changes take the safe middle
-path: processor mesh lookup is disabled immediately to reduce heat, but the ARSession restart is
-deferred until Stop, arrival or cancellation, so obstacle lanes and haptics do not disappear for the
-~1–2 s configuration hand-off. Deferred configuration is applied once, with deterministic logging,
-and self-tests are blocked while a route is starting or guiding. AR session failures and active
-interruptions now clear stale obstacle cues and announce the degraded channel through speech/watch;
-recovery is announced only after a trusted frame. Added Logic coverage for idle permission,
-queued/active refusals, thermal deferral, cancellation and stable release ordering.
-
-**Verification:** `swiftc -typecheck` passes for all Logic sources with the available compiler;
-changed app files pass Swift parse and `git diff --check`. Full `make test` remains blocked here by
-the installed Swift 5.9 toolchain versus the package's Swift 6 tools version; simulator/device,
-Muse, Antigravity and `graphify update .` require the Xcode 27/tooling installations documented in
-`TEAM_BRIEF.md`.
-
-**Adversarial review dispositions:** a proposed report/session epoch was not added to `LaneReport`:
-every AR reconfiguration drains the serial delegate queue with `processor.synchronize()`, then
-captures a fresh processor sequence boundary before `DepthReadiness` accepts frames, so an epoch
-would duplicate that established hand-off and change the Logic wire value. Thermal mesh mitigation
-is intentionally processor-only until route end; the AR configuration stays untouched while the
-walker is moving because restarting it is the safety hazard this step removes.
-
-test on device: start a route, try enabling "Head tracking without AirPods" and "60 fps camera (warmer)" from Settings and confirm each switch snaps back, guidance never pauses, and the app says "Sensor settings cannot change while a route is guiding you. Stop the route first." During a route, heat the phone until the thermal warning appears and confirm lanes/haptics continue without a camera gap; stop or arrive, then confirm the deferred mesh configuration applies and the next route starts through the normal fresh-depth gate. Repeat both setting attempts while route start is warming and confirm the starting-specific message. With the debug sensor-self-test controls enabled, start the front-camera self-test first, then attempt a route and confirm the app refuses the route with "Finish the sensor self-test before starting a route." After the self-test finishes, start the route and confirm the normal gate runs. Cancel a queued route while the two-camera teardown is still draining, try either sensor self-test, and confirm it waits for the camera transition instead of restarting ARKit beside MultiCam.
-
 ## Step 28 — Sound recognition fails safe across its whole microphone lifetime (Sat Sep 12)
 
 The optional "Listen for sirens and horns" path now treats its microphone as untrusted unless the

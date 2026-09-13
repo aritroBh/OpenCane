@@ -92,6 +92,14 @@ struct GuideCard: View {
                 if model.nav.gpsWeak {
                     CKStatusPill(text: "GPS weak", tone: .warning, systemImage: "exclamationmark.triangle")
                 }
+                // Step 49: the light the cameras have, for the sighted spotter — the walker was
+                // told once by voice ("Low light. Obstacle detection still works."). Warning, not
+                // danger: LiDAR, GPS and haptics are unaffected; it is the camera features that
+                // may miss things. Drawn only while `LowLightPolicy` says dark.
+                if model.lightState == .dark {
+                    CKStatusPill(text: "Dark", tone: .warning, systemImage: "moon.fill",
+                                 spoken: "Low light; obstacle detection still works")
+                }
             }
 
             // ⚠ test contract: "Where am I". While describing, the label becomes "Describing…"
@@ -99,9 +107,13 @@ struct GuideCard: View {
             // returning to "Where am I" and on a static text containing "camera" (the no-frame
             // error) or starting "Scene:" (a description).
             // Conversational assistant push-to-talk (Step 23): paired beside Where am I.
-            HStack(spacing: CKSpacing.md) {
+            // Both are `tile` layout and the row is `fixedSize` vertically, so the two are the
+            // same shape and height whatever their words do (Step 47: before this, `ViewThatFits`
+            // kept "Where am I" in a row and stacked "Talk to OpenCane" — one pair, two shapes).
+            HStack(alignment: .top, spacing: CKSpacing.md) {
                 CKBigButton(title: model.describer.isDescribing ? "Describing…" : "Where am I",
-                            systemImage: "eye", role: .secondary,
+                            subtitle: "Camera · what is ahead",
+                            systemImage: "eye", role: .secondary, layout: .tile,
                             hint: "Takes a photo and reads out hazards and landmarks ahead",
                             value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
                     .disabled(model.describer.isDescribing)
@@ -109,9 +121,12 @@ struct GuideCard: View {
                 CKBigButton(title: model.voiceInput.isListening ? "Listening…" :
                                 (model.voiceInput.isStarting ? "Starting…" :
                                     (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane")),
+                            subtitle: model.voiceInput.isListening ? "Tap again to send" :
+                                (model.voiceInput.isStarting ? "Tap again to cancel" : "Voice · ask or command"),
                             systemImage: model.voiceInput.isListening ? "waveform" :
                                 (model.voiceInput.isStarting ? "hourglass" : "mic.fill"),
                             role: model.voiceInput.isListening || model.voiceInput.isStarting ? .destructive : .secondary,
+                            layout: .tile,
                             hint: model.voiceInput.isStarting ? "Tap to cancel microphone setup" :
                                 "Tap to speak a command, ask a question, or set a post",
                             value: model.voiceInput.isListening ? "listening" :
@@ -119,6 +134,7 @@ struct GuideCard: View {
                     model.toggleVoiceInput()
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             if !model.describer.lastDescription.isEmpty {
                 Text(model.describer.lastDescription)
                     .font(CKFont.body)
@@ -206,7 +222,7 @@ struct GuideCard: View {
                     .disabled(model.isBuildingRoute || model.routeStartWaiting)
 
                 CKBigButton(title: "Simulate walk",
-                            subtitle: "Indoor demo mode · test route without moving",
+                            subtitle: "Indoor demo · walks the route for you",
                             systemImage: "play.circle.fill",
                             role: .secondary,
                             hint: "Simulates walking the demo route indoors step by step without moving") {

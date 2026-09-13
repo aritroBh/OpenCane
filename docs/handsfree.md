@@ -45,7 +45,8 @@ can put any of them on the Action button (section 3) by first making a one-step 
   watch has a Recenter button, and the app re-zeroes itself after a few seconds of walking
   straight, so you rarely need this.
 - **Turn a feature on or off** — drop-off detection, sign reading, the hazard watch, naming people
-  ahead, obstacle names, the audio beacon, or listening for sirens and horns. It says the new state
+  ahead, obstacle names, the audio beacon, listening for sirens and horns, or nod to talk (eight
+  features, `HandsFreeOption`). It says the new state
   out loud, and turning one **off** always says what stops with it ("Obstacle names off. Obstacles
   are still felt on the cane, but not named."). It reads the state back from the app rather than
   from what you asked for, so a feature that refuses to start — a denied microphone, for instance —

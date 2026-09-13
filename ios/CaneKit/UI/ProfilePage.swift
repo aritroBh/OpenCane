@@ -161,7 +161,10 @@ struct ProfilePage: View {
                 hint: "Reads emergency medical identification aloud"
             ) {
                 let summary = "\(p.name). White cane user, legally blind. Blood type \(p.bloodType). Allergies: \(p.allergies). Emergency contact: \(p.emergencyContactName), \(p.emergencyContactPhone)."
-                model.speech.say(summary, .obstacle)
+                // `.scene`, not `.obstacle` (Step 47 audit): this is a user-requested paragraph,
+                // and `.obstacle` is the hazard band of AGENTS.md hard rule 8 / design.md §5.1 —
+                // an obstacle name or a route line must be able to cut it, never the reverse.
+                model.speech.say(summary, .scene, ttl: 20)
             }
         }
     }

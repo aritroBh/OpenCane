@@ -252,10 +252,20 @@ final class AppModel {
     /// `applyCueRules` writes `decider.thresholds.head` (Indoors shortens it to 1.2 m), and every
     /// ARKit pause (`scenePhaseChanged(.background)`, both cameras on) calls `reset()`.
     @ObservationIgnored private let decider = CueDecider()
+    /// Which of the decider's torso decisions the walker's Cue detail level × place renders
+    /// (CaneKitLogic `TorsoHapticPolicy`, Step 41): Quiet none, Standard two centre onset taps,
+    /// Detailed today's loop and side taps minus shoreline re-taps; Indoors and a crossing settle
+    /// hold every torso cue; the head cue always passes. Stepped in `handle(_:)` right after the
+    /// decider with `rules: cueRules` and `crossingSettle: nav.isCrossingSettle`; `reset()`
+    /// wherever the decider is reset and in `applyCueRules` (a level / place change also stops
+    /// the player, so a loop never outlives the level that started it). `TorsoHapticPolicyTests`.
+    @ObservationIgnored private var torsoPolicy = TorsoHapticPolicy()
     /// "Two meters ahead, door" from the mesh classification (step 4). Consulted only while
     /// `obstacleNamesEnabled`; `reset()` wherever the decider is reset.
     @ObservationIgnored private let namer = ObstacleNamer()
-    /// Kind currently decided as active (for the UI and the `lanes` log line); `.clear` when
+    /// Kind currently *rendered* (for the UI and the `lanes` log line): the decider's active cue
+    /// after `TorsoHapticPolicy` — a torso cue the level, place or crossing settle suppressed shows
+    /// `.clear`, a Standard onset tap shows `.center` until the decider's `.stop`. `.clear` when
     /// nothing is in range or after any ARKit pause.
     private(set) var activeCue: CueKind = .clear
 
@@ -353,12 +363,19 @@ final class AppModel {
     }
 
     /// Push `cueRules` into the engines that hold a copy: the head distance into `CueDecider`, the
-    /// allowed sign phrases into `HazardScanner`. Obstacle names read `cueRules` per report in
-    /// `handle(_:)`. Called from `init` (stored values) and `cueProfileChanged`.
+    /// allowed sign phrases into `HazardScanner`. Obstacle names and `TorsoHapticPolicy` read
+    /// `cueRules` per report in `handle(_:)`; the policy is reset here and the player stopped, so a
+    /// Geiger loop started under Detailed never keeps running after a switch to Standard or Quiet
+    /// (the decider itself is not reset: its zones are still true). Called from `init` (stored
+    /// values, before the engine starts — `stopAll()` on an idle player is a no-op) and
+    /// `cueProfileChanged`.
     private func applyCueRules() {
         let rules = cueRules
         decider.thresholds.head = rules.headEnterM
         hazards.signAllowedPhrases = rules.allowedSignPhrases
+        torsoPolicy.reset()
+        haptics.stopAll()
+        activeCue = .clear
     }
 
     /// Spatial click toward the next waypoint while navigating. Mirrored into `beacon.enabled`.
@@ -383,6 +400,20 @@ final class AppModel {
     /// Default OFF until validated on the phone.
     var hazardWatchEnabled: Bool = Settings.bool("hazardWatchEnabled", default: false) {
         didSet { Settings.set(hazardWatchEnabled, "hazardWatchEnabled"); hazards.watchEnabled = hazardWatchEnabled }
+    }
+    /// "Flashlight on in the dark (routes)" (Settings → Mount card, Step 49).
+    ///
+    /// Default **ON** — a deliberate exception to "new and untuned ships off by default" (AGENTS.md →
+    /// How we engineer, 6), written down here so nobody "fixes" it: a blind walker cannot see that
+    /// it is dark, so an opt-in nobody knows to flip would never be flipped; the light both gives
+    /// the cameras (ARKit tracking, signs, scene words, "Where am I") something to see and makes
+    /// the walker visible to drivers. What keeps it safe: the torch is lit **only while a route
+    /// guides** (a flashlight in a pocket is a burn risk and a dead battery — the rule
+    /// `torchEnabled` already follows), goes off again when the light returns or the route ends,
+    /// and never touches a torch the walker switched on themselves. The owner can flip it off.
+    /// Persisted; read by `lowLightAct`. Not in `cloudSettings` yet (schema change — todo).
+    var autoTorchInDark: Bool = Settings.bool("autoTorchInDark", default: true) {
+        didSet { Settings.set(autoTorchInDark, "autoTorchInDark") }
     }
     /// Send cane events (fall, SOS, close obstacle, breadcrumb, low battery) to the Grok Bot
     /// routine so it can alert family.
@@ -512,13 +543,19 @@ final class AppModel {
     /// back at once, a silent refusal (thermal) snaps it back at the deadline with "The flashlight
     /// did not switch on.". The trip log records `torch {action, active, outcome}` per outcome, so
     /// a device run measures whether torch + ARKit coexist on this phone.
-    /// - Parameter on: the requested state.
-    /// Main actor. Caller: `HazardsCard`'s Flashlight toggle.
-    func setTorch(_ on: Bool) {
+    /// - Parameters:
+    ///   - on: the requested state.
+    ///   - byApp: true when the low-light policy is switching it (Step 49, `lowLightAct` /
+    ///     `releaseAppTorch`): the torch is then remembered as app-lit (`torchLitByApp`) and its
+    ///     "Flashlight on." confirmation is muted because the low-light line already said it. The
+    ///     walker's switch passes the default false, which also hands an app-lit torch over to them.
+    /// Main actor. Callers: `HazardsCard`'s Flashlight toggle; `lowLightAct` / `releaseAppTorch`.
+    func setTorch(_ on: Bool, byApp: Bool = false) {
         guard let device = torchDevice
                 ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               device.hasTorch else {
             torchEnabled = false
+            torchLitByApp = false
             speech.say("This phone has no flashlight.", .scene, ttl: 6)
             logger.event("torch", ["action": "unsupported"])
             return
@@ -527,7 +564,10 @@ final class AppModel {
         observeTorch(device)
         torchSwitch.request(on, now: ProcessInfo.processInfo.systemUptime)
         torchEnabled = torchSwitch.displayed
-        logger.event("torch", ["action": on ? "request_on" : "request_off", "active": device.isTorchActive])
+        torchLitByApp = on && byApp
+        torchConfirmationMuted = on && byApp
+        logger.event("torch", ["action": on ? "request_on" : "request_off", "active": device.isTorchActive,
+                               "by_app": byApp])
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
@@ -589,10 +629,120 @@ final class AppModel {
     private func applyTorch(_ outcome: TorchSwitch.Outcome, active: Bool, error: String? = nil) {
         torchEnabled = torchSwitch.displayed
         guard let line = outcome.spokenLine else { return }
-        speech.say(line, .scene, ttl: outcome.queueSeconds)
+        // Step 49: an app-lit torch was announced inside the low-light line ("… Flashlight on."),
+        // so its confirmation a second later would be a duplicate. Failures and device changes are
+        // news and stay spoken; a failed app request also forgets the torch as app-lit, so the
+        // route's end does not announce "Flashlight off." for a torch that never lit.
+        let muted = torchConfirmationMuted && outcome == .confirmed(on: true)
+        torchConfirmationMuted = false
+        if outcome == .failed(requested: true) { torchLitByApp = false }
+        // The device cut an app-lit torch (thermal): forget it as ours and back the auto-torch off
+        // for `LowLightPolicy.Configuration.torchBackoffSeconds` (60 s) so the dark edge cannot
+        // relight a hot LED at once.
+        if outcome == .changedByDevice(on: false), torchLitByApp {
+            torchLitByApp = false
+            lowLight.torchCutByDevice(now: lastReportTime)
+            logLight()
+        }
+        if !muted { speech.say(line, .scene, ttl: outcome.queueSeconds) }
         var fields: [String: Any] = ["action": "\(outcome)", "active": active, "text": line]
         if let error { fields["error"] = error }
+        if muted { fields["muted"] = true }
         logger.event("torch", fields)
+    }
+
+    // MARK: Low light (Step 49)
+
+    /// The dark / lit decision (CaneKitLogic `LowLightPolicy`: 0.3 s EMA over ARKit's ambient lux,
+    /// dark after 3 s under 40 lux, lit after 5 s over 120 — all [H] until a dark-room walk),
+    /// stepped once per `LaneReport` in `handle(_:)` on the AR clock. Not observed: it changes 30
+    /// times a second; `lightState` is the published verdict.
+    @ObservationIgnored private var lowLight = LowLightPolicy()
+    /// `lowLight.state`, written only when it changes, so the Guide card's DARK pill and the Scene
+    /// engine card's Light row redraw on a change and never at frame rate (Step 21's rule).
+    private(set) var lightState: LowLightPolicy.State = .unknown
+    /// `lowLight.smoothedLux` after the last report — deliberately `@ObservationIgnored` (30 Hz);
+    /// the Scene engine card reads it inside its 10 s `TimelineView`, the `light` log on changes.
+    @ObservationIgnored private(set) var ambientLux: Float?
+    /// True while the torch is on because *this app* lit it for the dark. Only such a torch is ever
+    /// switched off again by the app (`releaseAppTorch`); one the walker switched on is theirs.
+    /// Any `setTorch` without `byApp` clears it, so a walker who touches the switch takes over.
+    private(set) var torchLitByApp = false
+    /// Set by an app-lit torch request: the `TorchSwitch` confirmation "Flashlight on." is then not
+    /// spoken (`applyTorch`), because `LowLightAdvice.darkLineWithTorch` already said it. Cleared
+    /// by the first spoken outcome, whatever it is.
+    @ObservationIgnored private var torchConfirmationMuted = false
+    /// `timestamp` of the last report (ARKit clock): the policy's `now` for events that arrive on
+    /// another clock (a KVO torch cut-out, `applyTorch`) and for `canAutoLight` at a route start.
+    @ObservationIgnored private var lastReportTime: TimeInterval = 0
+
+    /// Whether this phone has a back-camera torch (the lookup `setTorch` makes, cached device first).
+    private var torchAvailable: Bool {
+        (torchDevice ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back))?.hasTorch ?? false
+    }
+
+    /// True while it is dark and no torch is lit: what `SceneDescriber` reads to prefix "It is dark,
+    /// so this may miss things." and `HazardScanner` to log `light: "dark"` (`wireDescriber`,
+    /// `wireHazards`). A lit torch, whoever lit it, gives the cameras light again.
+    private var camerasInTheDark: Bool { lightState == .dark && !torchEnabled }
+
+    /// Step the low-light policy with one report (from `handle(_:)`). On a state change: publish
+    /// `lightState`, release an app-lit torch on `didExitDark`, act on `didEnterDark`
+    /// (`lowLightAct`), and log `light {state, lux, torch, torch_by_app}` — never on a frame that
+    /// changed nothing.
+    private func updateLowLight(_ report: LaneReport) {
+        lastReportTime = report.timestamp
+        // `torchByApp`: the policy holds `dark` for the torch's minimum on-time, because the torch
+        // itself raises the reading (an auto-exposure proxy) and would otherwise switch itself off.
+        let step = lowLight.update(lux: report.ambientLux, now: report.timestamp, torchByApp: torchLitByApp)
+        ambientLux = step.smoothedLux
+        guard step.state != lightState else { return }
+        lightState = step.state
+        if step.didExitDark { releaseAppTorch() }
+        if step.didEnterDark { lowLightAct(entered: true) }
+        logLight()
+    }
+
+    /// Apply `LowLightAdvice` (CaneKitLogic): light the torch through the KVO-confirmed `setTorch`
+    /// (only while a route guides, only with `autoTorchInDark`, only a torch that exists and is
+    /// off) and speak the line once at `.nav`, 10 s TTL — "Low light. Obstacle detection still
+    /// works." plus " Flashlight on." when the app is lighting it. Both strings are in `commonLines`.
+    /// - Parameters:
+    ///   - entered: true on the dark edge (`updateLowLight`) and at a route start in a room that is
+    ///     already dark (`startRouteNow`) — the only two moments anything is lit or spoken.
+    ///   - routeStart: a route start only acts when it would light the torch; a repeat of the
+    ///     plain line for a walker who already heard it is noise.
+    private func lowLightAct(entered: Bool, routeStart: Bool = false) {
+        // Not inside a thermal backoff, and the battery above `LowLightPolicy.minBatteryPct` (20 %,
+        // the family's low-battery line; −1 before the first reading counts as unknown = allowed).
+        let allowed = lowLight.canAutoLight(now: lastReportTime, batteryPct: batteryPercent)
+        let advice = LowLightAdvice.decide(state: lightState, entered: entered, torchOn: torchEnabled,
+                                           torchAvailable: torchAvailable, navigating: nav.isNavigating,
+                                           autoTorch: autoTorchInDark, autoTorchAllowed: allowed)
+        if routeStart, !advice.turnTorchOn { return }
+        if advice.turnTorchOn { setTorch(true, byApp: true) }
+        if let line = advice.spokenLine {
+            speech.say(line, .nav, ttl: 10)
+            logger.event("speech", ["text": line, "priority": "nav"])
+        }
+    }
+
+    /// Switch off a torch the app lit — never one the walker lit. Its "Flashlight off." confirmation
+    /// is spoken (the walker was told it went on). Callers: `updateLowLight` on `didExitDark`,
+    /// `stopRoute`, `endRouteQuietly`, arrival (`wireNav`).
+    private func releaseAppTorch() {
+        guard torchLitByApp else { return }
+        setTorch(false, byApp: true)
+        logLight()
+    }
+
+    /// One `light` trip-log record: `state` (`LowLightPolicy.State.rawValue`), `lux` (smoothed, −1
+    /// before the first estimate), `torch` (as shown), `torch_by_app`. Never `kind` or `t`
+    /// (`TripLogRecord` owns those). Written on every state change and on an app-torch release.
+    private func logLight() {
+        logger.event("light", ["state": lightState.rawValue,
+                               "lux": ambientLux.map { Double($0) } ?? -1,
+                               "torch": torchEnabled, "torch_by_app": torchLitByApp])
     }
 
     /// Head tracking from the **front** camera instead of the AirPods (`DepthEngine`'s
@@ -826,16 +976,20 @@ final class AppModel {
     }
 
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
-    /// Logs a `describe` event with the provider name, then hands off to `SceneDescriber`
-    /// (which waits for a camera frame and speaks at `.scene` priority).
+    /// Logs a `describe` event with the provider name and the trigger, then hands off to
+    /// `SceneDescriber` (which waits for a camera frame and speaks at `.scene` priority).
+    /// - Parameter trigger: who asked (`DescribeTrigger`, default `.button`); the Scene engine
+    ///   card shows it ("from the watch") and `describe_result` logs it.
     /// - Returns: false when a description is already in flight (spoken "Still describing the
     ///   previous scene."); the result itself arrives later through `describe_result`.
-    /// Callers: `GuideCard` "Where am I", `WhereAmIIntent`, `handleWatchCommand(.describe)`,
-    /// `cameraControlPressed`, and the `describeEveryWaypoint` automation hook.
+    /// Callers: `GuideCard` "Where am I" (`.button`), `WhereAmIIntent` (`.actionButton`),
+    /// `handleWatchCommand(.describe)` (`.watch`), `cameraControlPressed` (`.cameraControl`), and
+    /// the `describeEveryWaypoint` automation hook (`.waypoint`).
     @discardableResult
-    func describeScene() -> Bool {
-        logger.event("describe", ["provider": describer.providerName ?? "none"])
-        return describer.describe()
+    func describeScene(trigger: DescribeTrigger = .button) -> Bool {
+        logger.event("describe", ["provider": describer.providerName ?? "none",
+                                  "trigger": trigger.rawValue])
+        return describer.describe(trigger: trigger)
     }
 
     /// Toggles push-to-talk voice recording: first press listens, second press submits what was
@@ -883,17 +1037,28 @@ final class AppModel {
     /// Logs every "Where am I" / "Ask OpenCane" outcome (sentence or error, latency, replay frame)
     /// as `describe_result`, so a walk log shows what was actually said. Wired once in `start()`.
     /// Fields: `text`, `error`, `ms` (−1 unknown), `gate`, `cloud_text`, `question`, `provider`,
-    /// `frame`, `labels`, `vision_error`, `people` (the last three read from `OnDeviceVision`'s
-    /// `Mutex`es, so they describe the most recent on-device pass).
+    /// `trigger`, `source`, `cloud_ms`, `fallback_reason`, `frame`, `labels`, `vision_error`,
+    /// `people` (the last three read from `OnDeviceVision`'s `Mutex`es, so they describe the most
+    /// recent on-device pass).
     /// `gate` is the `CloudSceneGate` verdict ("spoken", "edited: dropped count …", "refused: …",
     /// "on-device") and `cloud_text` the cloud model's raw reply, so a refusal can be read back
-    /// against what the model wanted to say. Neither field may be called `kind` or `t`
+    /// against what the model wanted to say. `trigger` (Step 47) is who asked
+    /// (`DescribeTrigger.rawValue`), `source` who actually answered ("Muse" / "On-device", "" on
+    /// failure), `cloud_ms` the cloud's round trip when it was tried (−1 otherwise) and
+    /// `fallback_reason` the cloud's error when on-device answered instead ("" otherwise) — the
+    /// same values the Scene engine card shows. No field may be called `kind` or `t`
     /// (`TripLogRecord` owns those).
     private func wireDescriber() {
+        // Step 49: dark with no torch → the spoken description is prefixed with the caveat.
+        describer.isDark = { [weak self] in self?.camerasInTheDark ?? false }
         describer.onResult = { [weak self] text, error, ms, frame, gate, cloudText in
             self?.logger.event("describe_result", [
                 "text": text ?? "", "error": error ?? "", "ms": ms ?? -1,
                 "gate": gate, "cloud_text": cloudText,
+                "trigger": self?.describer.lastTrigger?.rawValue ?? "",
+                "source": self?.describer.lastSource ?? "",
+                "cloud_ms": self?.describer.lastCloudMs ?? -1,
+                "fallback_reason": self?.describer.lastFallbackReason ?? "",
                 // "" for a plain "Where am I"; the walker's words for an "Ask OpenCane" run, so a
                 // walk log shows which question an answer belonged to (an answer with no question
                 // beside it cannot be read back). Never `kind` or `t` — `TripLogRecord` owns those.
@@ -1354,6 +1519,7 @@ final class AppModel {
             depth.pause()
             haptics.stopAll()
             decider.reset()
+            torsoPolicy.reset()              // its closing / shoreline history is as stale as the zones
             cueSpeech.cleared()              // a new foreground is a new episode: speak the first head cue
             namer.reset()
             activeCue = .clear
@@ -1421,8 +1587,10 @@ final class AppModel {
     // MARK: Report routing (the "cue router")
 
     /// Every depth report lands here (~30 Hz normal / up to 60 Hz high-rate): decide → render on the phone (step 3);
-    /// step 4 adds the ObstacleNamer, step 5 the watch mirror.
-    /// In order: cue decision (haptics, wrist mirror, cue speech, `cue` log) → obstacle name if
+    /// step 4 adds the ObstacleNamer, step 5 the watch mirror, Step 41 the level filter.
+    /// In order: cue decision (`CueDecider`, then `TorsoHapticPolicy` for the walker's level ×
+    /// place × crossing settle: haptics, wrist mirror, cue speech, `cue` log — a suppressed torso
+    /// cue reaches none of the first three, only the log) → obstacle name if
     /// `obstacleNamesEnabled` and `cueRules.allowsName` (spoken with load class
     /// `.ambientObstacleName`, so `SpeechLoadPolicy` may suppress it; logged `speech` only when it
     /// was accepted) → ground hazard if enabled and `groundPolicy` agrees → `sceneContext` line →
@@ -1457,31 +1625,59 @@ final class AppModel {
             logger.lanes(report, cue: activeCue, thermal: thermalName, battery: batteryPercent, fps: depth.fps)
             return
         }
-        if let output = decider.update(report, now: report.timestamp) {
-            switch output {
-            case .fire(let cue):
+        // The decider runs on every report (its zones and gates must see every trusted frame);
+        // the policy then says what this level renders. Both share the AR clock.
+        let output = decider.update(report, now: report.timestamp)
+        if let action = torsoPolicy.update(output, report: report, rules: cueRules,
+                                           crossingSettle: nav.isCrossingSettle, now: report.timestamp) {
+            switch action {
+            case .render(let cue):
+                // A head fire outranks the centre, so under a torso hold (crossing settle, a level
+                // change) no centre update would arrive to end a running Geiger loop: stop it
+                // first, then render the head (Codex review, Step 47). `stopAll` never touches the
+                // head pattern that follows.
+                if cue.kind == .head, activeCue == .center,
+                   torsoPolicy.torsoIsHeld(rules: cueRules, crossingSettle: nav.isCrossingSettle) {
+                    haptics.stopAll()
+                }
                 activeCue = cue.kind
                 haptics.play(cue)
-                // Wrist mirror: whenever the phone cannot buzz (engine down *or* silenced), or
-                // the user asked for both.
-                let phoneCannotBuzz = !haptics.isHealthy || haptics.silenced
-                if phoneCannotBuzz || fallbackToWatch {
-                    watch.send(obstacle: cue.kind, now: report.timestamp)
-                }
-                speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: report.timestamp)
+                mirrorAndSpeak(cue, now: report.timestamp)
                 // Field "cue", not "kind": "kind" is the record type (TripLogRecord reserves it).
                 var fields: [String: Any] = ["cue": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
                 logger.event("cue", fields)
+            case .centerOnset(let strong, let d):
+                // Standard: one tap (< 1.5 m, closing) or the strong triple (< 0.6 m, closing),
+                // once per approach; the wrist / speech fallback treats it as a centre cue.
+                activeCue = .center
+                haptics.playCenterOnset(strong: strong)
+                mirrorAndSpeak(.centerApproach(distance: d), now: report.timestamp)
+                logger.event("cue", ["cue": CueKind.center.rawValue, "ar_t": report.timestamp,
+                                     "distance": Double(d), "render": strong ? "center_strong" : "center_onset"])
             case .updateCenter(let d):
-                // Continuous approach ramp: haptics only (no watch, no speech).
+                // Continuous approach ramp (Detailed): haptics only (no watch, no speech) — except
+                // while a cell is point-blank held: the wrist keeps getting the centre cue (the
+                // link throttles) instead of one tap then silence (Muse review, Step 48).
                 activeCue = .center
                 haptics.setApproach(distance: d)
+                if report.grid.torsoHeld[1] || report.grid.headHeld.contains(true),
+                   !haptics.isHealthy || haptics.silenced || fallbackToWatch {
+                    watch.send(obstacle: .center, now: report.timestamp)
+                }
             case .stop:
                 activeCue = .clear
                 haptics.stopAll()
                 cueSpeech.cleared()              // the next head cue is a new episode
                 logger.event("cue", ["cue": "clear"])
+            case .suppressed(let cue, let reason):
+                // The level, place or crossing settle renders nothing for this torso cue: no
+                // pattern, no wrist mirror, no spoken fallback (Quiet means nothing for torso).
+                // `stopAll` ends a loop the hold interrupted; the record keeps the audit honest.
+                activeCue = .clear
+                haptics.stopAll()
+                logger.event("cue", ["cue": cue.kind.rawValue, "ar_t": report.timestamp,
+                                     "suppressed": reason.rawValue])
             }
         }
         let rules = cueRules
@@ -1509,6 +1705,22 @@ final class AppModel {
             groundHazardFound(g, now: report.timestamp)
         }
         sceneContext.set(Self.contextLine(report))
+        // Island glance while standing still (no GPS fix drives `liveActivity.update` then): a
+        // point-blank hold or a head cell change is pushed from the depth path, throttled by the
+        // coalescer's hazard rules (Muse review, Step 48).
+        if nav.isNavigating {
+            let anyHeld = report.grid.headHeld.contains(true) || report.grid.torsoHeld.contains(true)
+            let headNear = report.grid.head.contains { $0 < decider.thresholds.head }
+            let status: LiveActivityObstacleGlance = headNear ? .head : (anyHeld ? .warning : .clear)
+            if status != lastIslandGlance {
+                lastIslandGlance = status
+                liveActivity.refreshObstacle(status: status,
+                                             distanceM: Double(report.grid.nearest(lane: 1).isFinite ? report.grid.nearest(lane: 1) : 0),
+                                             headM: Double(report.grid.head.min() ?? .infinity).isFinite ? Double(report.grid.head.min() ?? 0) : 0)
+            }
+        }
+        // Step 49: is it dark? (EMA + dwell in `LowLightPolicy`; acts only on a state change.)
+        updateLowLight(report)
         // Age the front-camera head pose on the AR clock: face anchors stop arriving the moment
         // the walker looks away, and the card and the beacon must both see nil, not a stale angle.
         faceHead.refresh(now: report.timestamp)
@@ -1550,6 +1762,22 @@ final class AppModel {
         }
     }
 
+    /// Wrist mirror and spoken fallback for a cue the phone is rendering (`.render` and
+    /// `.centerOnset` in `handle`; never a suppressed one). Mirror whenever the phone cannot buzz
+    /// (engine down *or* silenced), or the user asked for both (`fallbackToWatch`); then
+    /// `speakCueIfNeeded`. `now` is the AR clock.
+    private func mirrorAndSpeak(_ cue: HapticCue, now: TimeInterval) {
+        let phoneCannotBuzz = !haptics.isHealthy || haptics.silenced
+        if phoneCannotBuzz || fallbackToWatch {
+            watch.send(obstacle: cue.kind, now: now)
+        }
+        speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: now)
+    }
+
+    /// Last obstacle glance pushed to the island from the depth path (`handle`), so a standing
+    /// walker's island changes on the transition only. Reset at route start.
+    @ObservationIgnored private var lastIslandGlance: LiveActivityObstacleGlance = .clear
+
     /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
     /// Replaced with a fresh value at every `startRouteNow`; `cleared()` on the decider's `.stop`,
     /// on `.background` and when both cameras pause ARKit.
@@ -1583,6 +1811,7 @@ final class AppModel {
     /// `CANEKIT_HAZARD_WATCH=1` e2e hook.
     private func wireHazards() {
         hazards.isNavigating = { [weak self] in self?.nav.isNavigating ?? false }
+        hazards.isDark = { [weak self] in self?.camerasInTheDark ?? false }   // Step 49: `light: "dark"` on its records
         // Speed of a fix older than 5 s is not current: CoreLocation stops sending fixes while
         // the walker stands still, so the last walking speed would keep the hazard watch asking
         // at a curb (Antigravity final review).
@@ -1692,6 +1921,7 @@ final class AppModel {
                 self.depth.pause()              // the AR session must let the cameras go
                 self.haptics.stopAll()
                 self.decider.reset()
+                self.torsoPolicy.reset()
                 self.cueSpeech.cleared()
                 self.namer.reset()
                 self.activeCue = .clear
@@ -2105,6 +2335,7 @@ final class AppModel {
     private func endRouteQuietly() {
         speech.routeLines = []               // no route: nothing standing to re-request
         nav.stop()
+        releaseAppTorch()                    // Step 49: the new route decides again from its own start
         location.setNavigating(false)
         finishSensorModeRoute()
         beacon.stop()
@@ -2358,6 +2589,10 @@ final class AppModel {
                 }
                 let acc = Int((fix.accuracy).rounded())
                 let detail = acc > 0 && acc <= 50 ? "±\(acc)m GPS" : ""
+                // Route progress for the island's bar: waypoints passed over waypoints total
+                // (a step per waypoint, like a transit line; the metres countdown is the fine grain).
+                let total = self.nav.route?.waypoints.count ?? 0
+                let progress = total > 0 ? Double(self.nav.waypointIndex) / Double(total) : 0
 
                 self.liveActivity.update(
                     instruction: self.nav.instruction,
@@ -2366,7 +2601,8 @@ final class AppModel {
                     obstacleStatus: obsStatus,
                     obstacleDistanceM: obsDist,
                     headClearanceM: headM,
-                    statusDetail: detail
+                    statusDetail: detail,
+                    progress: progress
                 )
                 // The link dedups (same text and < 5 m change), so this is ~1 message / 5 s.
                 self.pushStatusToWatch()
@@ -2378,6 +2614,14 @@ final class AppModel {
             self.family.location(lat: fix.coordinate.latitude, lng: fix.coordinate.longitude,
                                  accuracyM: fix.accuracy, heading: self.location.heading,
                                  speedMps: Double(fix.speed), now: fix.timestamp)
+        }
+        location.onDiagnostic = { [weak self] source, flags in
+            // "updates" = the fix stream's flags, "always_session" = the route's Always session.
+            self?.logger.event("location_diag", ["source": source, "flags": flags.joined(separator: ",")])
+        }
+        location.onAuthorizationChange = { [weak self] status, armed in
+            // Evidence for the island question: "always" + false means OpenCane owns the island.
+            self?.logger.event("location_auth", ["status": status, "background_session": armed, "at": "change"])
         }
         location.onHeading = { [weak self] h, fromCourse in
             guard let self else { return }
@@ -2405,8 +2649,15 @@ final class AppModel {
         nav.onWaypointAdvanced = { [weak self] in
             guard let self else { return }
             self.logger.event("waypoint", ["index": self.nav.waypointIndex])
-            if Self.describeEveryWaypoint { self.describeScene() }
+            if Self.describeEveryWaypoint { self.describeScene(trigger: .waypoint) }
             self.pushStatusToWatch()
+            // Manual Next at a stationary crossing brings no GPS fix, so the island would keep
+            // the old line and progress until the walker moves (Codex review): refresh it now.
+            let total = self.nav.route?.waypoints.count ?? 0
+            self.liveActivity.refreshNavigation(instruction: self.nav.instruction,
+                                                distanceM: self.nav.distanceToNext ?? 0,
+                                                kind: self.lastNavKind,
+                                                progress: total > 0 ? Double(self.nav.waypointIndex) / Double(total) : 0)
             // The head reference is re-zeroed on the new leg, but only once the user is
             // demonstrably walking it straight (never on a timer: at a curb they are stopped
             // with their head turned toward traffic).
@@ -2420,9 +2671,10 @@ final class AppModel {
                                   lat: self.location.fix?.coordinate.latitude,
                                   lng: self.location.fix?.coordinate.longitude)
             self.finishSensorModeRoute()
-            if Self.describeEveryWaypoint { self.describeScene() }
+            if Self.describeEveryWaypoint { self.describeScene(trigger: .waypoint) }
             self.beacon.stop()
             self.head.stop()
+            self.releaseAppTorch()           // Step 49: the route is over, so is the app's reason for the torch
             self.location.setNavigating(false)
             // GPS deliberately stays on after arrival: it runs for the life of the foreground
             // session now (see `start()`), so the card keeps telling the truth and the next route
@@ -2722,6 +2974,7 @@ final class AppModel {
         nav.stop()
         activeRouteName = nil
         finishSensorModeRoute()
+        releaseAppTorch()                    // Step 49: a torch the app lit for the route goes off with it
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
         // with no fix.
@@ -2852,6 +3105,9 @@ final class AppModel {
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
         "Obstacle detection warming up. Guiding with GPS.",
+        // Step 49: the honest twin of the line above for a dark hallway (`failQueuedRouteStart`,
+        // `.safety`). ⚠ Byte-identical to `trackingLimitedLine`.
+        "Camera tracking is limited, probably low light. Obstacle detection is running on LiDAR.",
         // Refusals of the modes that re-run or pause ARKit (`setBothCameras`,
         // `faceHeadTrackingEnabled`): spoken at `.nav`, so a cache miss would hold route and
         // obstacle speech behind a fetch. ⚠ Keep byte-identical to those `speech.say` calls.
@@ -2875,6 +3131,10 @@ final class AppModel {
         // Every flashlight line (`TorchSwitch.allSpokenLines`, pinned to the outcomes by
         // `TorchSwitchTests.allSpokenLinesMatchOutcomes`): toggle feedback never waits on a fetch.
         + TorchSwitch.allSpokenLines
+        // The two low-light lines (`LowLightAdvice.allSpokenLines`, Step 49, pinned by
+        // `LowLightTests.adviceSpeaksOncePerEpisode`): spoken at `.nav` the moment the dark is
+        // confirmed, so they must not wait on a fetch either.
+        + LowLightAdvice.allSpokenLines
 
     /// Shared entry for both route sources (the bundled demo route and every MapKit build).
     /// Order: tear down a route already guiding (`endRouteQuietly`) → refuse a denied Location
@@ -3022,14 +3282,25 @@ final class AppModel {
         }
     }
 
-    /// Gracefully fall back to GPS navigation if depth readiness times out.
+    /// Start the route anyway when depth readiness times out — and say what is actually true.
     /// Never leaves the walker stranded (AGENTS.md: "Never trade guidance away for a stricter check —
     /// a refused camera warns loudly but still guides").
-    /// Speaks "Obstacle detection warming up. Guiding with GPS." (.safety, 15 s TTL), logs
-    /// `route_readiness {state: timed_out_fallback_gps}` and starts GPS guidance immediately.
+    ///
+    /// Two lines, by `DepthReadiness.TimeoutReason` (Step 49): in a dark hallway ARKit sits in
+    /// `.limited(.insufficientFeatures)` for the whole wait while `sceneDepth` arrives and the lane
+    /// cues run (`handle` / `CueDecider` never read `trackingNormal`), so the old "Guiding with GPS."
+    /// was false there — the walker was told the obstacle channel was down while it was buzzing.
+    ///   · `trackingLimitedDepthLive` → "Camera tracking is limited, probably low light. Obstacle
+    ///     detection is running on LiDAR." (`.safety`, 15 s; prefetched), log
+    ///     `route_readiness {state: timed_out_tracking_limited, reason}`;
+    ///   · anything else (depth missing, unsteady, or the request deadline with no gate at all) →
+    ///     "Obstacle detection warming up. Guiding with GPS." (`.safety`, 15 s), log
+    ///     `route_readiness {state: timed_out_fallback_gps, reason}`.
+    /// Then `startRouteNow` at once either way.
     /// Callers: `depthReadinessChanged(.timedOut)`, `routeReadinessTimeoutTask`.
     private func failQueuedRouteStart() {
         guard let pending = pendingRouteStart else { return }
+        let reason = depth.readinessTimeoutReason      // before `cancelReadiness` clears it
         routeStartGeneration &+= 1
         pendingRouteStart = nil
         routeStartWaiting = false
@@ -3041,11 +3312,21 @@ final class AppModel {
         finishSensorModeRoute()
         routeStartStatus = nil
         routeError = nil
-        speech.say("Obstacle detection warming up. Guiding with GPS.", .safety, ttl: 15)
-        watch.send(status: "Guiding with GPS", distanceM: -1)
-        logger.event("route_readiness", ["state": "timed_out_fallback_gps"])
+        if reason == .trackingLimitedDepthLive {
+            speech.say(Self.trackingLimitedLine, .safety, ttl: 15)
+            watch.send(status: "Obstacle detection on LiDAR", distanceM: -1)
+            logger.event("route_readiness", ["state": "timed_out_tracking_limited", "reason": reason?.rawValue ?? ""])
+        } else {
+            speech.say("Obstacle detection warming up. Guiding with GPS.", .safety, ttl: 15)
+            watch.send(status: "Guiding with GPS", distanceM: -1)
+            logger.event("route_readiness", ["state": "timed_out_fallback_gps", "reason": reason?.rawValue ?? ""])
+        }
         startRouteNow(pending.route, announce: pending.announce)
     }
+
+    /// The route-start line for a readiness timeout with depth live but tracking never `.normal`
+    /// (Step 49). ⚠ Also in `commonLines` (prefetched; matched by bytes).
+    static let trackingLimitedLine = "Camera tracking is limited, probably low light. Obstacle detection is running on LiDAR."
 
     /// Cancel a queued route-start request. Called by Stop and by a newer MapKit/destination
     /// request so an older route can never auto-start after the user has changed their mind.
@@ -3134,6 +3415,13 @@ final class AppModel {
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
         location.setNavigating(true)
+        // Step 47: Always lets the route run with the screen locked without the blue location pill
+        // that otherwise takes the Dynamic Island from our Live Activity (LocationService doc).
+        if ProcessInfo.processInfo.environment["CANEKIT_UITEST"] != "1" {
+            location.requestAlwaysAuthorization()
+        }
+        logger.event("location_auth", ["status": location.authorizationName,
+                                       "background_session": location.backgroundSessionArmed, "at": "route_start"])
         nav.start(route)
         activeRouteName = route.name
         fallWatcher.reset()
@@ -3149,6 +3437,8 @@ final class AppModel {
         recenterPending = true               // first straight stretch zeroes the head reference
         straightWalk.reset()
         cueSpeech = CueSpeechPolicy()
+        torsoPolicy.reset()                  // a new walk starts with both Standard onsets armed (Codex review)
+        lastIslandGlance = .clear
         startTicker()
         trip.start()
         lastNavKind = "straight"
@@ -3170,7 +3460,10 @@ final class AppModel {
         cloud.uploadRoute(route, source: Self.bundledRouteName == route.name ? "bundled" : "mapkit")
         pushStatusToWatch()
         announceChannels()
-        if Self.describeEveryWaypoint { describeScene() }   // the start (ISR) is a corner too
+        // Step 49: a route starting in a room that is already dark lights the torch now (and says
+        // so); the dark edge itself happened earlier, with no route to light for.
+        if lightState == .dark { lowLightAct(entered: true, routeStart: true) }
+        if Self.describeEveryWaypoint { describeScene(trigger: .waypoint) }   // the start (ISR) is a corner too
     }
 
     // MARK: Cloud mirror
@@ -3276,7 +3569,7 @@ final class AppModel {
         logger.event("watch", ["command": cmd.rawValue])
         switch cmd {
         case .nextWaypoint: nextWaypoint()
-        case .describe: describeScene()
+        case .describe: describeScene(trigger: .watch)
         case .recenter: recenter()
         case .repeatLast: repeatInstruction()
         }
@@ -3304,8 +3597,9 @@ final class AppModel {
     /// then treated like "Where am I" (so one press writes two `describe` records).
     /// Caller: `ContentView`'s `CameraControlInteraction` background.
     func cameraControlPressed() {
-        logger.event("describe", ["source": "cameraControl"])
-        describeScene()
+        // One `describe` record per press: `describeScene` logs `trigger: cameraControl` itself
+        // (the separate `source` record it used to write here double-counted a press — review).
+        describeScene(trigger: .cameraControl)
     }
 
     // MARK: Private

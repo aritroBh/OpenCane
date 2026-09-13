@@ -42,7 +42,10 @@ public struct CKMedicalProfile: Codable, Sendable, Equatable {
         medications: "None",
         homeAddress: "Urbana, IL",
         emergencyContactName: "Emergency Contact",
-        emergencyContactPhone: "+1 (555) 234-5678",
+        // The owner's real number (owner, 2026-09-12: "my phone number is actually 925 791 8082");
+        // the 555 placeholder it replaces is migrated away in `init` for phones that already saved
+        // a profile. Filter in `ProfilePage` keeps digits and "+" for the tel: link.
+        emergencyContactPhone: "+1 (925) 791-8082",
         emergencyContactRelation: "Family",
         caneType: "130 cm · Standard Tip",
         organDonor: true
@@ -64,6 +67,9 @@ public struct CKMobilityStats: Sendable, Equatable {
 public final class MedicalProfileStore {
     private static let profileKey = "opencane_medical_profile"
     private static let tripsKey = "opencane_completed_trips_count"
+    /// The fake number the Step 44 default shipped with; `init` migrates it (and only it) to the
+    /// real one. ⚠ Keep byte-identical to what Step 44 wrote, or the migration never matches.
+    private static let placeholderPhone = "+1 (555) 234-5678"
 
     public var profile: CKMedicalProfile {
         didSet {
@@ -93,6 +99,12 @@ public final class MedicalProfileStore {
             }
             if decoded.caneType.contains("Rolling Ball") {
                 decoded.caneType = "130 cm · Standard Tip"
+            }
+            // Step 47: the seeded 555 placeholder was still on the card of every phone that had
+            // launched before the real number landed (`profile` is only seeded when nothing is
+            // saved). Replace exactly that placeholder; a number the owner typed is kept.
+            if decoded.emergencyContactPhone == Self.placeholderPhone {
+                decoded.emergencyContactPhone = CKMedicalProfile.standardDefault.emergencyContactPhone
             }
             self.profile = decoded
         } else {

@@ -81,6 +81,15 @@ public struct LiveActivityCoalescer: Sendable {
     /// Minimum seconds between emergency hazard transitions to prevent sensor flap bursts.
     public var minEmergencyIntervalSec: Double
 
+    /// Seconds after the last update at which the widget should stop showing a live-looking
+    /// distance (`ActivityContent.staleDate`; the widget reads `context.isStale` and dims the
+    /// number, says "No update"). 300 s: a walker can stand at a crossing for two minutes and
+    /// CoreLocation sends no fix while still, so anything shorter would go stale on every curb;
+    /// an app killed mid-route (the one case this exists for — ActivityKit keeps the island up
+    /// for hours after the process is gone) is dim within five minutes. Step 47. Pinned by
+    /// `staleAfterOutlivesACrossingWait`.
+    public static let staleAfter: TimeInterval = 300
+
     public init(minIntervalSec: Double = 0.8, minEmergencyIntervalSec: Double = 0.2) {
         self.minIntervalSec = minIntervalSec
         self.minEmergencyIntervalSec = minEmergencyIntervalSec
