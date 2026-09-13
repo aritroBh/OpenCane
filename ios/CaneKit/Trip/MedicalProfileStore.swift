@@ -92,8 +92,17 @@ public final class MedicalProfileStore {
         let trips = UserDefaults.standard.integer(forKey: Self.tripsKey)
         self.mobilityStats.completedTrips = max(trips, 0)
         refreshMobilityStats()
-        Task { [profile] in
-            await SupabaseClient.shared.syncMedicalProfile(profile)
+        triggerSync()
+    }
+
+    /// In-flight task handle to serialize profile syncs and prevent older saves from overwriting newer edits.
+    @ObservationIgnored private var inFlightSync: Task<Void, Never>?
+
+    private func triggerSync() {
+        let currentProfile = profile
+        inFlightSync?.cancel()
+        inFlightSync = Task {
+            await SupabaseClient.shared.syncMedicalProfile(currentProfile)
         }
     }
 
@@ -102,9 +111,7 @@ public final class MedicalProfileStore {
         if let data = try? JSONEncoder().encode(profile) {
             UserDefaults.standard.set(data, forKey: Self.profileKey)
         }
-        Task { [profile] in
-            await SupabaseClient.shared.syncMedicalProfile(profile)
-        }
+        triggerSync()
     }
 
     /// Increments the count of completed walks.

@@ -76,6 +76,9 @@ final class PhoneWatchLink {
     /// `describe`, `recenter`).
     @ObservationIgnored var onCommand: ((WatchToPhone) -> Void)?
 
+    /// Called on the main actor when watch activation or pairing state changes.
+    @ObservationIgnored var onStateChange: ((Bool) -> Void)?
+
     // MARK: Private
 
     /// The session delegate (WCSession holds it weakly, so it is retained here).
@@ -104,6 +107,7 @@ final class PhoneWatchLink {
                 self.isWatchAppInstalled = installed
                 self.isReachable = reachable
                 if let error { self.lastError = error }
+                self.onStateChange?(paired)
             }
         }
         relay.onCommand = { [weak self] cmd in
