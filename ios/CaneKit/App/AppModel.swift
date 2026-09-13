@@ -1441,6 +1441,14 @@ final class AppModel {
         // utility task inside `prefetch`: it never touches the main actor and never delays launch,
         // and a failure only writes `speech.voiceError` (the system voice still speaks everything).
         speech.backgroundLines = SpokenPhrases.warningLines
+        // A previous launch's refused key (quota used up) must win before the first cached line
+        // can play ElevenLabs (Step 63). Warm cache never hits the API, so the in-session latch
+        // of Step 61 never armed on a restart.
+        speech.applyPersistedNaturalVoiceLatch()
+        if speech.naturalVoiceUnavailable {
+            logger.event("voice_backend", ["natural": false, "by": "persisted",
+                                           "error": speech.voiceError ?? ""])
+        }
         // Safety vocabulary first (Step 54): an uncached `.safety` line is the one case that still
         // speaks in the system voice by design, so it is requested before anything else.
         speech.prefetch(Self.voiceReadyLines)
@@ -1842,6 +1850,9 @@ final class AppModel {
             // speak (Codex review 2026-09-13).
             voiceShellGeneration &+= 1
             conversation.cancelForBackground()
+            // Same reason as the conversation cancel: a "Where am I" JPEG captured before the
+            // lock must not speak the pre-lock scene after the unlock (Step 63).
+            describer.cancelForBackground()
             sounds.stop()
             faceHead.stop()                  // ARKit pauses: no face anchors, so no head pose
             sceneContext.set("")             // LiDAR facts from here are stale once we come back

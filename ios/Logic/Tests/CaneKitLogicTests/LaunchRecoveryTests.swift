@@ -25,7 +25,9 @@
 //    · The healthy mark is later than a cold ARKit start (first depth at 3.1 s on the phone) and
 //      earlier than a walk, so a crash inside the warm-up is always caught.
 //    · `optionalFeatureKeys` never contains a core-guidance setting: recovering from a crash may
-//      not silence the beacon, the haptics or the trip log.
+//      not silence the beacon, the haptics or the trip log. It also never contains
+//      `NaturalVoiceLatch.settingsKey` (Step 63): a refused voice key is not a crash-causing
+//      feature, and clearing it would restore two-voice mixing.
 //    · The spoken line says what is off *and* that guidance still works (AGENTS.md rule 6: a
 //      refused feature warns loudly but still guides).
 //
@@ -74,6 +76,12 @@ import Testing
         #expect(!LaunchRecovery.optionalFeatureKeys.contains(key),
                 "recovery must not clear the core setting \(key)")
     }
+}
+
+/// A refused ElevenLabs key is not a crash-causing feature. Clearing it on recovery would
+/// restore two-voice mixing (cached ElevenLabs + new Apple lines) after quota death.
+@Test func recoveryNeverClearsTheRefusedVoiceLatch() {
+    #expect(!LaunchRecovery.optionalFeatureKeys.contains(NaturalVoiceLatch.settingsKey))
 }
 
 /// Every optional sensor/model feature that is persisted *and* touched during `AppModel.start()`

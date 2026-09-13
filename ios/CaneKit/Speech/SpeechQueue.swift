@@ -215,11 +215,12 @@ final class SpeechQueue {
     /// Mirror of `breaker.isOpen` for the UI and `AppModel.voiceFacts()`: true while the natural
     /// voice is treated as unreachable (Step 54).
     private(set) var naturalVoiceOffline = false
-    /// ElevenLabs refused the key this session (HTTP 401 / 403 / 422: quota used up, revoked key,
-    /// wrong voice — `VoicePrefetch.isFatal`). Latched: every line, cached or not, speaks in the
-    /// system voice until `retryNaturalVoice()` (the Settings picker off → on), and prefetching stops
-    /// spending requests. One voice for the session instead of cached lines in ElevenLabs and new
-    /// ones in Apple's (first-launch report 2026-09-13; the account had 0 of 10,000 credits).
+    /// ElevenLabs refused the key (HTTP 401 / 403 / 422: quota used up, revoked key, wrong voice —
+    /// `VoicePrefetch.isFatal`). Latched and persisted (`NaturalVoiceLatch.settingsKey`): every
+    /// line, cached or not, speaks in the system voice until `retryNaturalVoice()` (the Settings
+    /// picker off → on), including the next launch — a warm cache never calls the API, so an
+    /// in-session-only latch mixed voices on restart (Step 63). Prefetching stops spending
+    /// requests.
     private(set) var naturalVoiceUnavailable = false
     /// Called once when `naturalVoiceUnavailable` latches, with the service's message (for
     /// `voice_backend {natural: false, by: refused, error}`).
@@ -231,12 +232,26 @@ final class SpeechQueue {
         guard naturalVoiceUnavailable else { return }
         naturalVoiceUnavailable = false
         voiceError = nil
+        Settings.set(false, NaturalVoiceLatch.settingsKey)
         runPrefetchWorker()
     }
 
-    /// Latch `naturalVoiceUnavailable` (once) and report why.
+    /// Restore a refused-key latch written by a previous launch, before the first line can be
+    /// dispatched. A warm mp3 cache never calls ElevenLabs (`ElevenLabsVoice.prefetch`), so without
+    /// this the next launch mixes cached ElevenLabs lines with Apple's until the first miss
+    /// (trip log `canekit-2026-09-13T08-51-14Z`). Caller: `AppModel.start()`, after the Voice
+    /// picker is pushed and before `prefetch` / `say`.
+    func applyPersistedNaturalVoiceLatch() {
+        guard Settings.bool(NaturalVoiceLatch.settingsKey, default: false) else { return }
+        naturalVoiceUnavailable = true
+        if voiceError == nil { voiceError = NaturalVoiceLatch.persistedError }
+    }
+
+    /// Latch `naturalVoiceUnavailable` (once) and report why. Persists so the next launch is one
+    /// voice from the first line, cached or not.
     private func markNaturalVoiceUnavailable(_ message: String) {
         voiceError = message
+        Settings.set(true, NaturalVoiceLatch.settingsKey)
         guard !naturalVoiceUnavailable else { return }
         naturalVoiceUnavailable = true
         onNaturalVoiceUnavailable?(message)
@@ -1249,11 +1264,14 @@ final class SpeechQueue {
     /// line), `speakNow` (a warning or breaker-open line that came out in the system voice, a line
     /// whose race failed or timed out), `AppModel`'s emergency-profile and shell lines.
     /// - Parameter lines: lines in the order they will be spoken. Blank lines are ignored.
-    /// Clears `voiceError` (a new attempt; a failing chunk writes a fresh one, never while the app is
-    /// backgrounded, where suspension shows up as a timeout).
+    /// Clears `voiceError` only while the key has not been refused (`NaturalVoiceLatch`): a later
+    /// prefetch after a 401 must not wipe the Haptics-card line. A failing chunk writes a fresh
+    /// error, never while the app is backgrounded, where suspension shows up as a timeout.
     func prefetch(_ lines: [String]) {
         guard naturalVoice != nil, useNaturalVoice else { return }
-        voiceError = nil
+        if NaturalVoiceLatch.shouldClearVoiceError(unavailable: naturalVoiceUnavailable) {
+            voiceError = nil
+        }
         prefetchBacklog = VoicePrefetch.queue(lines + prefetchBacklog) { _ in false }
         runPrefetchWorker()
     }

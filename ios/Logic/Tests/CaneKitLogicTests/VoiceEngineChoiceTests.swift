@@ -116,6 +116,7 @@ import Testing
     #expect(VoiceEngineChoice.resolvedEngine(.raceTimeout) == .system)
     #expect(VoiceEngineChoice.resolvedEngine(.raceFailed) == .system)
     #expect(VoiceEngineChoice.resolvedEngine(.playbackFailed) == .system)
+    #expect(VoiceEngineChoice.resolvedEngine(.naturalUnavailable) == .system)
 }
 
 /// The Details card's last line: every reason has words, never a raw value, and the words name

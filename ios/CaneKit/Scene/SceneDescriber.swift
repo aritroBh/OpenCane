@@ -41,7 +41,9 @@
 //  Only Sendable values (`Data`, `String`) cross; `DepthFrameProcessor` is Sendable by design.
 //
 //  Invariant: one description at a time (`isDescribing`), always reset by `defer` even when the
-//  task is cancelled. Missing keys never crash (hard rule 4): the app speaks a graceful line.
+//  task is cancelled. A lock calls `cancelForBackground()` (generation bump + cancel) so a
+//  pre-lock JPEG never speaks after the unlock (`SceneDescribePolicy`; Step 63). Missing keys
+//  never crash (hard rule 4): the app speaks a graceful line.
 //
 //  Faithfulness: a CLOUD sentence is never spoken as it arrives. It goes through
 //  `CloudSceneGate` (CaneKitLogic) against the LiDAR line, the text Vision read in that frame and
@@ -121,6 +123,20 @@ final class SceneDescriber {
     /// which is forbidden to give numbers — and, written from here, the depth grid of the very
     /// frame being described, so a person found in the image can be given a real distance.
     @ObservationIgnored private let context: SceneContext
+    /// Bumped by `cancelForBackground` so a JPEG captured before a lock cannot speak after it
+    /// (`SceneDescribePolicy.maySpeak`). Same shape as `voiceShellGeneration`.
+    @ObservationIgnored private var describeGeneration = 0
+    /// The live run; cancelled on background so the cloud `await` does not finish after the lock.
+    @ObservationIgnored private var describeTask: Task<Void, Never>?
+
+    /// The app went to the background: drop the run in flight so its pre-lock scene can never
+    /// speak after the unlock (Step 63). `isDescribing` is cleared by the task's `defer`.
+    /// Caller: `AppModel.scenePhaseChanged(.background)`.
+    func cancelForBackground() {
+        describeGeneration &+= 1
+        describeTask?.cancel()
+        describeTask = nil
+    }
 
     /// Takes the resolved client (cloud with on-device fallback, or on-device only); changing keys
     /// needs an app relaunch.
@@ -242,7 +258,8 @@ final class SceneDescriber {
         // to explain.
         lastQuestion = requested ?? ""
         lastTrigger = trigger
-        Task { [weak self] in
+        let generation = describeGeneration
+        describeTask = Task { [weak self] in
             guard let self else { return }
             defer { self.isDescribing = false }
 
@@ -253,15 +270,18 @@ final class SceneDescriber {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
                 waited += 1
             }
+            guard self.stillCurrent(generation) else { return }
             let processor = self.processor
             let frameName = FrameReplay.shared.currentName ?? ""
             guard let (jpeg, depth) = await Self.snapshot(processor) else {
+                guard self.stillCurrent(generation) else { return }
                 self.lastError = "No camera frame"
                 self.recordOutcome(source: nil, cloudMs: nil, reason: nil, gate: "no frame")
                 self.speech.say("Camera warming up. Try again.", .scene)
                 self.onResult?(nil, "No camera frame", nil, frameName, "no frame", "")
                 return
             }
+            guard self.stillCurrent(generation) else { return }
             // Publish the frame's depth before the client runs: it turns "a person ahead" into
             // "a person ahead, about two meters" — and stays empty rather than guessing.
             self.context.setDepth(depth)
@@ -277,8 +297,10 @@ final class SceneDescriber {
                 if let question, let cloud {
                     let raw = try await cloud.describe(jpeg: jpeg,
                                                        prompt: QuestionPrompt.text(for: question))
+                    guard self.stillCurrent(generation) else { return }
                     self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                     let (text, gate) = await self.groundedAnswer(raw, jpeg: jpeg, lidar: capturedLidar)
+                    guard self.stillCurrent(generation) else { return }
                     // A question is always the cloud's answer (no fallback on this path).
                     self.recordOutcome(source: cloud.name, cloudMs: self.lastLatencyMs, reason: nil,
                                        gate: gate)
@@ -297,11 +319,13 @@ final class SceneDescriber {
                     return
                 }
                 let answer = try await client.describeScene(jpeg: jpeg)
+                guard self.stillCurrent(generation) else { return }
                 self.lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                 // Only a cloud sentence needs the gate; an on-device one is already faithful.
                 var (text, gate) = answer.source == .cloud
                     ? await self.grounded(answer.text, jpeg: jpeg, lidar: capturedLidar)
                     : (answer.text, "on-device")
+                guard self.stillCurrent(generation) else { return }
                 // Who really answered, and why the cloud did not: the Scene engine card's headline.
                 // A refused cloud sentence was spoken by the on-device client (`grounded`): the
                 // card must not say "Muse answered" over "On-device spoke instead" (Codex review).
@@ -318,6 +342,7 @@ final class SceneDescriber {
                 if !self.context.peopleHandled(), self.context.peopleEnabled() {
                     text = await Self.withPeople(text, jpeg: jpeg, depth: depth,
                                                  mirrored: self.context.mirrored())
+                    guard self.stillCurrent(generation) else { return }
                 }
                 // Step 49: in the dark with no torch the description is prefixed with the caveat —
                 // spoken and shown (the Guide card's "Scene: …" line), after the gate and after the
@@ -329,7 +354,12 @@ final class SceneDescriber {
                 self.speech.say(text, .scene, ttl: 20)
                 self.onResult?(text, nil, self.lastLatencyMs, frameName, gate,
                                answer.source == .cloud ? answer.text : "")
+            } catch is CancellationError {
+                return
+            } catch let error as URLError where error.code == .cancelled {
+                return
             } catch {
+                guard self.stillCurrent(generation) else { return }
                 self.lastError = error.localizedDescription
                 self.recordOutcome(source: nil, cloudMs: nil, reason: nil, gate: "error")
                 // A failed question says so as a question. "Scene description failed" after
@@ -340,6 +370,11 @@ final class SceneDescriber {
             }
         }
         return true
+    }
+
+    /// False when a lock bumped the generation after this run started (`SceneDescribePolicy`).
+    private func stillCurrent(_ generation: Int) -> Bool {
+        SceneDescribePolicy.maySpeak(started: generation, current: describeGeneration)
     }
 
     /// Writes the provenance of a finished run (`lastSource`, `lastCloudMs`, `lastFallbackReason`,
