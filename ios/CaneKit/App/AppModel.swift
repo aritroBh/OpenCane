@@ -911,13 +911,7 @@ final class AppModel {
         observeLaunchHealth()
         logger.start()
         liveActivity.endAllOrphanedActivities()
-        Task { [watchPaired = watch.isPaired, airPodsPaired = audioRoute.headphonesConnected] in
-            await SupabaseClient.shared.recordDevice(
-                hasLiDAR: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
-                watchPaired: watchPaired,
-                airPodsPaired: airPodsPaired
-            )
-        }
+        recordDeviceCapabilities()
         speech.onSuppressed = { [weak self] text, load, reason in
             self?.logger.event("speech_suppressed", [
                 "text": text, "load": load.rawValue, "reason": reason.rawValue
@@ -938,6 +932,7 @@ final class AppModel {
         wireHeadNod()
         haptics.start()
         watch.onCommand = { [weak self] cmd in self?.handleWatchCommand(cmd) }
+        watch.onStateChange = { [weak self] _ in self?.recordDeviceCapabilities() }
         watch.activate()
         wireNavigation()
         // GPS runs from launch, not from route start. Three reasons, in order of how much they
@@ -1993,6 +1988,7 @@ final class AppModel {
             guard let self else { return }
             self.beacon.headphonesConnected = connected
             self.logger.event("audioroute", ["connected": connected, "name": name])
+            self.recordDeviceCapabilities()
             if connected {
                 self.speech.say("\(name) connected.", .nav, ttl: 5)
                 if self.nav.isNavigating { self.head.start(); self.recenterPending = true }
@@ -2006,6 +2002,17 @@ final class AppModel {
         }
         audioRoute.start()
         beacon.headphonesConnected = audioRoute.headphonesConnected
+    }
+
+    /// Records current device hardware capabilities, watch presence, and headphone status to Supabase.
+    private func recordDeviceCapabilities() {
+        Task { [watchPaired = watch.isPaired, airPodsPaired = audioRoute.headphonesConnected] in
+            await SupabaseClient.shared.recordDevice(
+                hasLiDAR: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
+                watchPaired: watchPaired,
+                airPodsPaired: airPodsPaired
+            )
+        }
     }
 
     /// Turns the AirPods double nod (`HeadPoseTracker.onDoubleNod`) into `startVoiceInput()` when
