@@ -2071,9 +2071,10 @@ Always dark (OLED). Text on any coloured fill is `WKColor.ink`, same rule as the
 
 ### `ios/Shared/LiveActivity/NavActivityAttributes.swift` — Live Activity payload (app + widget)
 
-- `nonisolated struct NavActivityAttributes: ActivityAttributes` — `nonisolated` because ActivityKit encodes it off the main actor under `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`. Static: `var routeName: String`.
-- `struct ContentState: Codable, Hashable` — `instruction: String`, `distanceM: Int` (metres), `kind: String` — one of `"turnLeft" | "turnRight" | "crossing" | "arrived" | "straight"`; picks the glyph. Producer: `LiveActivityController` (kind = `AppModel.lastNavKind`, which is `"straight"` at route start and `NavCue.rawValue` after each `nav.onNavCue` — including veer cues, so a "Veer left." leaves the turn-left glyph up until the next cue; `end()` forces `"arrived"`). Any other string falls to the default glyph.
-⚠ Compiled into two targets; any field change must be made once here and both `CaneKit` and `CaneKitWidget` rebuilt together — a mismatched widget shows nothing.
+- `nonisolated public struct NavActivityAttributes: ActivityAttributes, Sendable` — `nonisolated` because ActivityKit encodes it off the main actor under `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`. Static: `var routeName: String`.
+- `public enum LiveActivityObstacleGlance: String, Codable, Hashable, Sendable` — `.clear`, `.warning`, `.head`, `.dropOff`.
+- `struct ContentState: Codable, Hashable, Sendable` — `instruction: String`, `distanceM: Int` (metres), `kind: String` ("turnLeft" | "turnRight" | "crossing" | "arrived" | "straight"), `obstacleStatus: LiveActivityObstacleGlance`, `obstacleDistanceM: Double`, `headClearanceM: Double`, `statusDetail: String`. Custom `init(from decoder:)` with `decodeIfPresent` fallbacks guarantees backward and forward compatibility. Producer: `LiveActivityController`.
+⚠ Compiled into two targets (`CaneKit` and `CaneKitWidget`); wire contract between processes.
 
 ---
 
@@ -2085,30 +2086,36 @@ Always dark (OLED). Text on any coloured fill is `WKColor.ink`, same rule as the
 
 ### `ios/CaneKitWidget/NavLiveActivity.swift` — lock screen + Dynamic Island
 
-`struct NavLiveActivity: Widget` — `ActivityConfiguration(for: NavActivityAttributes.self)`. No buttons by design (phone on a cane is glanced at, not touched). Colours hard-coded so the widget has no dependency on `Theme.swift`.
+`struct NavLiveActivity: Widget` — `ActivityConfiguration(for: NavActivityAttributes.self)`. No buttons by design (phone on a cane is glanced at, not touched). Colours hard-coded ivory-on-ink so the widget has no dependency on `Theme.swift`.
 
-- Lock screen / banner: `HStack(spacing: 12)` — `glyph(kind)` `.title.bold`; `VStack(alignment: .leading, spacing: 2)` of `instruction` (`.headline`, `lineLimit(2)`) and `attributes.routeName` (`.caption`, `.secondary`); `Spacer`; `distance(distanceM)` (`.title` rounded heavy, `monospacedDigit`). `.padding(14)`, `.activityBackgroundTint(Color(red: 0.09, green: 0.08, blue: 0.06))` (ink), `.foregroundStyle(Color(red: 0.96, green: 0.95, blue: 0.92))` (ivory).
-- Dynamic Island: expanded `.leading` glyph `.title2.bold`; `.trailing` distance `.title2` rounded heavy monospaced; `.bottom` instruction `.subheadline` `lineLimit(2)`; `compactLeading` glyph; `compactTrailing` distance monospaced; `minimal` glyph only (never the distance).
-- `private func glyph(_ kind: String) -> some View` — `"turnLeft"→arrow.turn.up.left`, `"turnRight"→arrow.turn.up.right`, `"crossing"→figure.walk`, `"arrived"→flag.checkered`, default (`"straight"`/unknown) → `arrow.up`; `accessibilityLabel(kind)`.
-- `private func distance(_ m: Int) -> Text` — `m >= 1000` → `String(format: "%.1f km", m/1000)`, else `"\(m) m"`.
-
-Not implemented versus docs/design.md §6.7: no TRUSTED pill, no time-left/steps line.
+- Lock screen / banner: `HStack(spacing: 12)` — `glyph(kind)` `.system(size: 32, weight: .bold)`; `VStack(alignment: .leading)` of `instruction` (`.headline`, `lineLimit(2)`), and `HStack` of `attributes.routeName` (`.caption`, `.secondary`) plus `obstaclePill(status:distanceM:headM:)` (`.layoutPriority(1)`); `Spacer`; `distance(distanceM)` (`.title` rounded heavy, `monospacedDigit`). `.activityBackgroundTint(Color(red: 0.09, green: 0.08, blue: 0.06))` (ink), `.foregroundStyle(Color(red: 0.96, green: 0.95, blue: 0.92))` (ivory). Spoken via `accessibilitySummary`.
+- Dynamic Island:
+  - `compactLeading`: turn glyph + monospaced distance (`[ ↱ 45m ]`).
+  - `compactTrailing`: real-time obstacle clearance glance badge (`[ ● CLEAR ]`, `[ ⚠ 1.1m ]`, `[ ⛔ HEAD ]`, `[ ⚠ CURB ]`).
+  - `minimal`: turn glyph, or hazard alert symbol if obstacle detected.
+  - `expanded`: `.leading` glyph + route name + instruction; `.trailing` distance + status detail (`±3m GPS`); `.bottom` obstacle clearance pill banner.
+- VoiceOver: Natural accessibility summary combining distance, turn direction, instruction, route name, and obstacle clearance.
 
 ---
 
-### Live Activity update coalescing (`ios/CaneKit/Trip/LiveActivityController.swift`, the producer for this module)
+### Live Activity update coalescing (`ios/Logic/Sources/CaneKitLogic/LiveActivityCoalescer.swift` & `ios/CaneKit/Trip/LiveActivityController.swift`)
 
-`@MainActor @Observable final class LiveActivityController`; published `isActive`, `lastError`; private `activity: Activity<NavActivityAttributes>?`, `lastState: ContentState?`.
+Pure decision state machine `LiveActivityCoalescer` (in `CaneKitLogic`):
+- Non-linear distance bands: 2m threshold near turns (<30m), 5m mid-block (<100m), 10m at range (>=100m).
+- Immediate emission for emergency hazard transitions (`clear <-> warning/head/dropOff`), guarded by a 0.2s flap-guard against sensor oscillation.
+- 0.8s rate-limit time floor for routine updates, preventing ActivityKit rate throttling.
+- Status detail text jitter alone is suppressed.
 
-- `start(routeName:instruction:distanceM:)` — guard `ActivityAuthorizationInfo().areActivitiesEnabled` (else `lastError = "Live Activities are off in Settings"`); calls `end()` first; `Activity.request(attributes:, content: .init(state:, staleDate: nil), pushType: nil)` with `kind: "straight"`; a throw sets `lastError = "Live Activity: …"`.
-- `update(instruction:distanceM:kind:)` — no-op without an activity; called on **every GPS fix** while navigating. **Coalesce rule: skip when `last.instruction == instruction && last.kind == kind && abs(last.distanceM - distanceM) < 10` m**; otherwise store state and `Task.detached { await act.update(...) }` (`nonisolated(unsafe) let act` because `Activity` is not Sendable). No time-based floor (docs/design.md §6.7 says "5 m or 15 s"; code is 10 m or any instruction/kind change).
-- `end(final: String? = nil)` — no-op without an activity; final state `instruction ?? "Route ended"`, `distanceM: 0`, `kind: "arrived"`, `dismissalPolicy: .after(.now + 60)` (arrival glyph stays on the lock screen for 60 s); clears `activity`, `isActive = false`.
-⚠ Do not lower the 10 m threshold or add per-fix updates without a device check that ActivityKit does not start throttling (its update budget is enforced silently).
+`@MainActor @Observable final class LiveActivityController`; published `isActive`, `lastError`; private `activity: Activity<NavActivityAttributes>?`, `coalescer: LiveActivityCoalescer`.
+- `start(routeName:instruction:distanceM:obstacleStatus:obstacleDistanceM:headClearanceM:statusDetail:)` — calls `end(immediate: true)` first; primes `coalescer`; requests activity.
+- `update(...)` — called on every GPS fix while navigating (`AppModel.wireNavigation`). Gated by `coalescer.shouldEmit(...)`.
+- `end(final:immediate:)` — stops activity and resets `coalescer`. Arrival stays 60s (`after(.now + 60)`); user cancellation/stop dismisses immediately.
 
 ### Tests that cover this module
 
 | What | Test | How to run |
 |---|---|---|
+| LiveActivity coalescer & decoding | `LiveActivityCoalescerTests` (9 tests) | `make test` |
 | Envelope encode/decode, unknown payload → nil | `ios/Logic/Tests/CaneKitLogicTests/WatchMessageTests.swift` | `make test` (`scripts/test.sh`); also the `logic-tests` job in `.github/workflows/ci.yml` (manual) |
 | Crown gesture (3 detents in 1 s either direction, rhythmic sleeve ignored, 0.8 s debounce) | `crownFiresOnThreeDetentsWithinASecond`, `crownIgnoresARhythmicSleeve`, `crownDebouncesBackToBackGestures` in `ios/Logic/Tests/CaneKitLogicTests/NavSupportTests.swift` | `make test` / CI `logic-tests` (manual) |
 | Haptic map, reply `ok` handling, obstacle throttle, keep-alive, watch layout, Live Activity coalescing | **no unit tests** (all live in app/watch targets) | device test in `CHANGELOG.md` "Step 5 — Watch" (Reachable pill; four distinct wrist taps; crown ×3 → "Next."; Describe/Recenter acknowledged; mirror ≤ 300 ms; wrist down 30 s) and the Apple Watch checklist + sanity check in `docs/devices_setup.md` |

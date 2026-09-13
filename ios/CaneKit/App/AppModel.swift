@@ -1840,6 +1840,7 @@ final class AppModel {
     private func endRouteQuietly() {
         speech.routeLines = []               // no route: nothing standing to re-request
         nav.stop()
+        location.setNavigating(false)
         beacon.stop()
         head.stop()
         stopTicker()
@@ -1949,8 +1950,59 @@ final class AppModel {
             self.nav.update(fix: fix)
             self.trip.ingest(fix)
             if self.nav.isNavigating {
-                self.liveActivity.update(instruction: self.nav.instruction,
-                                         distanceM: self.nav.distanceToNext ?? 0, kind: self.lastNavKind)
+                let rep = self.depth.report
+                let obsStatus: LiveActivityObstacleGlance
+                let obsDist: Double
+                let headM: Double
+                if self.activeCue == .head {
+                    let h0 = rep.grid.head[0]
+                    let h1 = rep.grid.head[1]
+                    let h2 = rep.grid.head[2]
+                    let minH = min(h0.isFinite ? h0 : 99, h1.isFinite ? h1 : 99, h2.isFinite ? h2 : 99)
+                    if minH < 90 {
+                        obsStatus = .head
+                        headM = Double(minH)
+                        obsDist = headM
+                    } else {
+                        obsStatus = .clear
+                        headM = 0.0
+                        obsDist = 0.0
+                    }
+                } else if let hazard = rep.groundHazard {
+                    obsStatus = .dropOff
+                    obsDist = Double(hazard.distance)
+                    headM = 0.0
+                } else if self.activeCue != .clear {
+                    let n0 = rep.grid.nearest(lane: 0)
+                    let n1 = rep.grid.nearest(lane: 1)
+                    let n2 = rep.grid.nearest(lane: 2)
+                    let minD = min(n0.isFinite ? n0 : 99, n1.isFinite ? n1 : 99, n2.isFinite ? n2 : 99)
+                    if minD < 90 {
+                        obsStatus = .warning
+                        obsDist = Double(minD)
+                        headM = 0.0
+                    } else {
+                        obsStatus = .clear
+                        obsDist = 0.0
+                        headM = 0.0
+                    }
+                } else {
+                    obsStatus = .clear
+                    obsDist = 0.0
+                    headM = 0.0
+                }
+                let acc = Int((fix.accuracy).rounded())
+                let detail = acc > 0 && acc <= 50 ? "±\(acc)m GPS" : ""
+
+                self.liveActivity.update(
+                    instruction: self.nav.instruction,
+                    distanceM: self.nav.distanceToNext ?? 0,
+                    kind: self.lastNavKind,
+                    obstacleStatus: obsStatus,
+                    obstacleDistanceM: obsDist,
+                    headClearanceM: headM,
+                    statusDetail: detail
+                )
                 // The link dedups (same text and < 5 m change), so this is ~1 message / 5 s.
                 self.pushStatusToWatch()
                 self.autoRecenterIfWalkingStraight(fix)
@@ -2002,6 +2054,7 @@ final class AppModel {
             if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
+            self.location.setNavigating(false)
             // GPS deliberately stays on after arrival: it runs for the life of the foreground
             // session now (see `start()`), so the card keeps telling the truth and the next route
             // begins with a warm fix instead of a cold one.
@@ -2278,11 +2331,12 @@ final class AppModel {
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
         // with no fix.
+        location.setNavigating(false)
         beacon.stop()
         head.stop()
         stopTicker()
         Task { [weak self] in await self?.trip.stop() }
-        liveActivity.end()
+        liveActivity.end(immediate: true)
         speech.stopAll()                     // queued waypoint lines must not play after Stop
         speech.routeLines = []               // and nothing of that route stays on the prefetch list
         speech.say("Route stopped.", .nav)
@@ -2506,6 +2560,7 @@ final class AppModel {
         routeReadinessTimeoutTask = nil
         routeStartStatus = nil
         depth.cancelReadiness()
+        location.setNavigating(false)
         logger.event("route_readiness", ["state": "cancelled"])
     }
 
@@ -2565,6 +2620,7 @@ final class AppModel {
         speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
                         + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
         location.start()
+        location.setNavigating(true)
         nav.start(route)
         activeRouteName = route.name
         // New walk: forget the breadcrumb / obstacle rate limits so the first fix goes out
