@@ -878,8 +878,9 @@ reading the phone on the cane, and for the walker hearing it: an Apple Health-st
 today's mobility numbers. Two cards, both titled in **capitals** — the only upper-case card titles in
 the app, on purpose: they must read as an emergency document, not a settings group. Data is
 `MedicalProfileStore` (persisted on the phone). The optional Supabase mirror is **off by default** and
-requires the Profile → Privacy consent toggle; turning it off stops future uploads and drops queued
-rows, while local data remains available. A fresh install contains no identity, address, date of birth
+requires the Profile → Privacy consent toggle; turning it off stops future uploads and drops
+deferred registration / trip-open work, while local data remains available. There is no
+trip-event upload queue in the Step 60 MVP. A fresh install contains no identity, address, date of birth
 or emergency phone number until the walker/helper enters it.
 
 ```
@@ -923,9 +924,10 @@ or emergency phone number until the walker/helper enters it.
   nothing has been measured (a placeholder, not a measurement — do not quote it as one). The refresh
   glyph re-reads the pedometer.
 - **Privacy** is a reversible switch above the two cards: "Share data with OpenCane cloud" is off by
-  default and disabled when no cloud project is configured. Its caption names Medical ID, mobility,
-  route locations and trip logs. Turning it off drops queued uploads and detaches the mirror; it does
-  not silently delete already-uploaded rows.
+  default and disabled when no cloud project is configured. Its VoiceOver hint names Medical ID,
+  family contacts, a walk summary (start / end) and detected hazards — not mobility, route
+  geometry or the JSONL trip log, which stay on the phone. Turning it off stops future uploads
+  and detaches the mirror; it does not silently delete already-uploaded rows.
 
 | # | Element | VoiceOver label | Value / hint | Traits |
 |---|---|---|---|---|

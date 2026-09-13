@@ -880,6 +880,10 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
 - [ ] **cue-v2 #45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
 - Deferred (not scheduled): ~~gravity-corrected metric head band~~ (shipped, Step 51); speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).
 
+## Step 64 — Cloud docs match the MVP (Sun Sep 13)
+
+- [x] Profile caption, AppModel comments, AGENTS.md / README / design.md / CODE_REFERENCE no longer promise settings, mobility or trip-log uploads
+
 ## Step 63 — Audit of Step 61 (Sun Sep 13)
 
 - [x] Persist the refused-key latch (`NaturalVoiceLatch`) so a restart with a warm cache is one voice

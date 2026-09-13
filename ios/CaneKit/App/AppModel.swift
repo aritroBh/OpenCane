@@ -150,9 +150,10 @@ final class AppModel {
     /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 39).
     /// Off unless `familyAlertsEnabled`; unconfigured (no webhook key) is a no-op that says so.
     let family = FamilyAlerts()
-    /// The optional cloud mirror (step 45): settings, family list, Medical ID, trip log, hazard
-    /// map, posts and alerts are kept in Supabase only after `cloudSharingEnabled` is opted in.
-    /// Inert when `Secrets.plist` has no keys, and never on the cue path.
+    /// The optional cloud mirror (Steps 45 / 60): after `cloudSharingEnabled`, only Medical ID,
+    /// family contacts, trip summaries, hazards (+ photos) and family alerts leave the phone.
+    /// Settings, the JSONL trip log, mobility, posts and conversations stay local. Inert when
+    /// `Secrets.plist` has no keys, and never on the cue path.
     let cloud = CloudSync()
     /// Last LiDAR ground hazard spoken ("Two meters ahead, drop-off."), for the Hazards card's
     /// LIDAR row. Set by `groundHazardFound`; cleared by `startRouteNow` so a new route never shows
@@ -324,9 +325,10 @@ final class AppModel {
     var loggingEnabled: Bool = Settings.bool("loggingEnabled", default: true) {
         didSet { Settings.set(loggingEnabled, "loggingEnabled"); logger.enabled = loggingEnabled }
     }
-    /// Explicit opt-in for the Supabase mirror. It covers Medical ID, mobility, route locations,
-    /// trip logs and device identifiers; cloud keys alone never grant this consent. Defaults off
-    /// so a configured project cannot silently receive a walker's identity or whereabouts.
+    /// Explicit opt-in for the Supabase mirror. It covers Medical ID, family contacts, a walk
+    /// summary (start / end), hazards and family alerts; cloud keys alone never grant this
+    /// consent. Defaults off so a configured project cannot silently receive a walker's identity
+    /// or whereabouts.
     var cloudSharingEnabled: Bool = Settings.bool("cloudSharingEnabled", default: false) {
         didSet {
             Settings.set(cloudSharingEnabled, "cloudSharingEnabled")
@@ -1047,9 +1049,9 @@ final class AppModel {
         AppModel.shared = self
         self.conversation = ConversationCoordinator(appModel: self, client: client)
         self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
-        // Every persisted write mirrors to the cloud, with no per-setting wiring — see
-        // `Settings.onChange`. `CloudSync` coalesces the burst a single toggle can make (the cue
-        // profile writes two keys) and does nothing at all when the project is unconfigured.
+        // Every persisted write still builds a `DeviceSettingsRow` (`Settings.onChange`) so the
+        // snapshot cannot fall behind the Settings screen. Since Step 60 `saveSettings` is a
+        // no-op seam (`device_settings` is gone); this is not a live upload.
         Settings.onChange = { [weak self] in
             guard let self else { return }
             self.cloud.saveSettings(self.cloudSettings)
@@ -3967,8 +3969,8 @@ final class AppModel {
         }
         logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count,
                                "headphones": audioRoute.outputName, "watch": watch.isReachable])
-        // Open the cloud walk and upload the waypoints. Everything the logger queues from here on
-        // is stamped with this trip, so `trip_summary` reads as one walk rather than loose lines.
+        // Open the cloud walk summary (`trips`). `uploadRoute` is a no-op seam (Step 60: no
+        // waypoint geometry leaves the phone). The JSONL trip log stays local.
         cloud.beginTrip(destination: route.name, cueLevel: cueLevel.rawValue,
                         cuePlace: cuePlace.rawValue, batteryPct: batteryPercent,
                         logFileName: logger.fileName, start: location.fix)
@@ -3985,20 +3987,15 @@ final class AppModel {
 
     // MARK: Cloud mirror
 
-    /// Register the cane, push everything the phone already holds, and start mirroring the log.
+    /// Register the cane and start the MVP writers (Medical ID, family contacts, trips, hazards,
+    /// family alerts). The trip-log hook still fires; `logEvent` is a no-op seam (Step 60).
     ///
-    /// Called once from `start()`, after `logger.start()` so the `session` record is the first
-    /// line the cloud sees too. Every step is a no-op when `Secrets.plist` has no Supabase keys,
-    /// which is what makes the cloud genuinely optional: with no project configured OpenCane
-    /// behaves exactly as it did before step 45.
-    ///
-    /// ⚠ Order matters. The `onRecord` hook goes on *before* the registration RPC is awaited, so
-    /// the lines logged during launch are queued rather than lost; `CloudSync` stamps the walker
-    /// id onto them when registration lands.
+    /// Called once from `start()`, after `logger.start()`. Every step is a no-op when
+    /// `Secrets.plist` has no Supabase keys, which is what makes the cloud genuinely optional.
     private func startCloudMirror() {
         guard cloud.isConfigured, cloudSharingEnabled else { return }
         cloud.setSharingEnabled(true)
-        // Every line the trip log writes, mirrored. Cheap and synchronous — it appends to a queue.
+        // The hook stays so a later table can reuse it; `logEvent` is a no-op in the MVP.
         logger.onRecord = { [weak self] kind, t, fields in
             self?.cloud.logEvent(kind: kind, tSeconds: t, fields: fields)
         }
@@ -4045,8 +4042,8 @@ final class AppModel {
         }
     }
 
-    /// Removes all cloud callbacks and drops queued cloud data after the walker withdraws consent.
-    /// Local trip logs, Medical ID and family-alert behavior remain available on the phone.
+    /// Removes all cloud callbacks and drops deferred registration / trip-open work after the
+    /// walker withdraws consent. Local trip logs, Medical ID and family-alert behavior remain.
     private func stopCloudMirror() {
         logger.onRecord = nil
         family.onDelivered = nil

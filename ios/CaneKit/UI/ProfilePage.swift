@@ -51,7 +51,7 @@ struct ProfilePage: View {
             Text(self.model.cloud.isConfigured
                  ? (self.model.cloudSharingEnabled
                     ? "Cloud sharing is on. Turn it off any time to stop future uploads."
-                    : "Cloud sharing is off. Your Medical ID and route history stay on this phone.")
+                    : "Cloud sharing is off. Medical ID, family contacts and walk summaries stay on this phone.")
                  : "No cloud project is configured; your data stays on this phone.")
                 .font(CKFont.secondary)
                 .foregroundStyle(CKColor.textSecondary)
