@@ -651,6 +651,26 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
 - **test on device:** see CHANGELOG Step 39
 
+## Step 41 — Falls, weapons, trip bookends, webhook spam guard (Sat Sep 12)
+- [x] `ActionRateLimit` (Logic): 10 s between repeats of a webhook action; a refused tap never
+      extends the wait; `secondsRemaining` so the refusal can be spoken
+- [x] Contacts editor redesigned: no fake placeholder, card rows + 44 pt trash, `+` disabled until
+      you type, Save goes primary while edits are unregistered
+- [x] `FallDetector` (Logic) free fall → impact → still-and-tilted + `FallWatcher` (CoreMotion, 20 Hz);
+      one alert per episode, re-arms when upright
+- [x] `ThreatWatch` (Logic): weapon / attacker nouns in vision replies, whole-word, benign
+      collocations and clause-scoped negation; checked on the RAW reply; one per 2 min
+- [x] `trip_start` / `trip_end` (warn, so the bot emails); Stop on an idle guide sends nothing
+- [ ] ⚠ **Measure the fall thresholds.** Drop a cane from waist height 10+ times with the trip log
+      running, read `fall` records and the raw motion, and re-derive freeFallG / impactG / tilt.
+      Until then this is a guess shipped on, which AGENTS.md "evidence before claims" does not allow
+- [ ] Measure the threat matcher against real hazard-watch replies from a walk: count false
+      positives before trusting it on the demo
+- [ ] XCUITest for the contacts editor and the rate-limited buttons
+- [ ] Grok Bot side (not app code): show reasoning while it works, and send a separate
+      "sending test email" message rather than one silent email
+- **test on device:** see CHANGELOG Step 41
+
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen

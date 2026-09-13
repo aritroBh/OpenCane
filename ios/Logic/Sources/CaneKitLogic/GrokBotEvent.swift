@@ -50,6 +50,12 @@ public struct OpenCaneEventType: RawRepresentable, Codable, Sendable, Equatable,
     public static let sos: Self = "sos"
     /// Heartbeat / state change (route started, arrived). Quiet.
     public static let status: Self = "status"
+    /// The vision model described a weapon or an attacker ahead. Critical; see `ThreatWatch`.
+    public static let threat: Self = "threat"
+    /// A walk began. Family are told so an unexpected trip is visible.
+    public static let tripStart: Self = "trip_start"
+    /// A walk ended, by arrival or by the walker stopping it.
+    public static let tripEnd: Self = "trip_end"
     /// Registers the family email list with the bot. Carries `emails` (and optionally
     /// `send_test`) instead of a position; see `FamilyContacts`.
     public static let familyContacts: Self = "family_contacts"

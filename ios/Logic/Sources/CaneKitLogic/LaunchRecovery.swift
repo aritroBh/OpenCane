@@ -107,6 +107,9 @@ public enum LaunchRecovery {
         // Family alerts: a background POST per detection, and the walker's position leaves the
         // phone. Off by default; cleared on a crash loop like every other optional feature.
         "familyAlertsEnabled",
+        // Cane-fall detection: an always-on CoreMotion stream with thresholds that have never been
+        // measured against a real cane. Exactly the kind of thing a crash loop should clear.
+        "fallDetectionEnabled",
     ]
 
     /// How to run this launch.

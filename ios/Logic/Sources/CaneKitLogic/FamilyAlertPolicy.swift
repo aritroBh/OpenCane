@@ -44,6 +44,10 @@ public struct FamilyAlertLimits: Sendable, Equatable {
     /// Percent at or below which the phone is "low". The phone is the only computer on this cane
     /// (AGENTS.md), so a flat battery ends guidance outright.
     public var lowBatteryPct: Int = 20
+    /// Seconds between `threat` events. The hazard watch runs every ~8 s and a weapon stays in
+    /// frame, so without this one sighting would email the family a dozen times. Long, because a
+    /// second email adds nothing the first did not say.
+    public var threatInterval: TimeInterval = 120
     /// Percent the battery must climb back above before another low-battery alert can fire.
     /// Above `lowBatteryPct` so that discharge noise around the threshold cannot re-trigger.
     public var lowBatteryRearmPct: Int = 30
@@ -125,6 +129,14 @@ public struct FamilyAlertPolicy {
                              batteryPct: pct)
     }
 
+    /// The vision model described a weapon or an attacker. `critical`, rate-limited to
+    /// `threatInterval` — the same gun stays in frame for many scans.
+    public mutating func threat(_ sighting: ThreatSighting, lat: Double?, lng: Double?,
+                                now: TimeInterval) -> OpenCaneEvent? {
+        guard allow(.threat, interval: limits.threatInterval, now: now) else { return nil }
+        return ThreatWatch.event(sighting, lat: lat, lng: lng)
+    }
+
     /// Suspected fall. Never rate-limited and always `critical` — a second fall report while the
     /// first is still being handled is information, not noise.
     /// - Note: **OpenCane has no fall detector yet.** This builds the event; nothing in the app
@@ -138,6 +150,29 @@ public struct FamilyAlertPolicy {
     public static func sos(lat: Double?, lng: Double?, note: String?) -> OpenCaneEvent {
         OpenCaneEvent(type: .sos, severity: .critical, lat: lat, lng: lng,
                       note: note ?? "SOS from the cane")
+    }
+
+    /// A walk began. Never rate-limited: it happens once per route, and it is the event that tells
+    /// family a trip is under way at all.
+    ///
+    /// ⚠ `warn`, not `info`, and that is a deliberate product choice rather than a severity
+    /// mistake: the bot only emails family for warn/critical, and the owner asked for an email at
+    /// the start and end of every trip. `info` would be chat-only and nobody would hear about it.
+    public static func tripStarted(destination: String?, lat: Double?, lng: Double?) -> OpenCaneEvent {
+        let where_ = destination.map { " to \($0)" } ?? ""
+        return OpenCaneEvent(type: .tripStart, severity: .warn, lat: lat, lng: lng,
+                             note: "Walk started\(where_).")
+    }
+
+    /// A walk ended — by arriving, or by the walker stopping it. `warn` for the same reason as
+    /// `tripStarted`; `arrived` distinguishes the two in the payload so the bot can word the email.
+    public static func tripEnded(destination: String?, arrived: Bool,
+                                 lat: Double?, lng: Double?) -> OpenCaneEvent {
+        let where_ = destination.map { " at \($0)" } ?? ""
+        var event = OpenCaneEvent(type: .tripEnd, severity: .warn, lat: lat, lng: lng,
+                                  note: arrived ? "Arrived\(where_)." : "Walk stopped before arriving\(where_ ).")
+        event.extra = ["arrived": .bool(arrived)]
+        return event
     }
 
     /// Quiet state change (route started, arrived). `info`: chat-only, no SMS.

@@ -2,6 +2,61 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 41 — Falls, weapons, trip bookends, and a spam guard on the webhook buttons (Sat Sep 12)
+
+Five things the owner asked for after walking with Step 39 on the phone.
+
+**Buttons no longer spam the bot.** "Send test event" and "Save family emails" each POST to the
+webhook, and every POST starts a bot *run* — Save can also email the whole family. `ActionRateLimit`
+(CaneKitLogic) spaces each action 10 s apart. ⚠ A refused tap **says so out loud** ("try again in 7
+seconds") instead of doing nothing: a silent button reads as a broken one, and the walker cannot see
+a greyed-out control. A refused tap also does not push the next allowed one further away, or holding
+the button would lock the action out forever (pinned by a test).
+
+**The email editor stopped looking like a form.** The fake `family@example.com` placeholder is gone
+— it read as a filled-in field, and, as the owner put it, people know what an email is. Rows are now
+cards with an envelope glyph and a 44 pt trash target, the add field has a `+` that is disabled
+until you type, and Save turns primary while there are unregistered edits.
+
+**The cane going over is detected.** `FallDetector` (CaneKitLogic) is a free fall → impact → still
+and tilted state machine; `FallWatcher` feeds it CoreMotion at 20 Hz. All three stages are required,
+and most of the tests are about what must *not* fire: a hard tap, a caught drop, a quick pick-up, a
+single noisy sample. One alert per episode, re-arming only when the cane is upright again.
+
+⚠ **The thresholds are guesses, not measurements.** Nothing here has been checked against a real
+cane going over, so AGENTS.md "evidence before claims" is *not* satisfied — the first job on the
+phone is to drop a cane a few times with the trip log running and re-derive them. It ships on
+(the owner asked for falls to be reported) but it is in `optionalFeatureKeys` and has its own switch.
+
+**Weapons the camera describes are reported.** The hazard watch already asks a vision model what is
+ahead; `ThreatWatch` reads that reply for weapon and attacker nouns. The matching is strict because
+this is the one alert whose false positive is genuinely expensive — it emails a family that their
+blind relative may be being robbed:
+
+- whole words only, so "gunmetal" and "shotgun microphone" do not match;
+- benign collocations cancel it ("knife and fork", "nail gun", "toy gun");
+- ⚠ a negation covers its **whole clause**, not a fixed lookbehind. The first version looked back
+  two words and read "without any gun or knife" as a knife sighting — the negation covered `gun` and
+  ran out before `knife`. A hazard model listing what it did *not* see is the commonest reply shape
+  there is. A contrasting conjunction still resets it, so "no cars, but a man with a gun" alerts.
+
+It is checked on the **raw** reply, before `HazardWatchPolicy` decides whether to speak: that policy
+drops repeats to keep the soundscape calm, which is right for a kerb and wrong for a gun. The event
+quotes the camera ("OpenCane's camera described: …") rather than asserting a weapon, because that
+is genuinely all the app knows. The walker is told too — a blind person walking toward what the
+camera thinks is a knife should hear about it. Rate-limited to one per two minutes.
+
+**Trips are bookended.** `trip_start` on route start, `trip_end` on arrival or on Stop (only when a
+walk was actually under way, so Stop on an idle guide emails nobody). ⚠ Both are `warn`, not `info`,
+and that is a product choice rather than a severity slip: the bot only emails for warn/critical, and
+the owner asked for an email at each end of every trip.
+
+Verified: `make test` **535/535**, `make sim` and `make uitest` green.
+
+test on device: tap Send test event twice quickly and hear the wait line; add an address with a typo
+and hear the refusal; lay the cane down hard and confirm one fall alert, then pick it up and lay it
+down again and confirm a second; point the camera at a picture of a knife with hazard watch on.
+
 ## Step 40 — Dynamic Island: clean idle state (session scoped to active route), real-time obstacle radar pill and ActivityKit coalescing (Sat Sep 12)
 
 **Why:** The user reported:
