@@ -4,11 +4,15 @@ Legend: `[ ]` open · `[x]` done · `[~]` written, not yet compiled/tested · `[
 
 ---
 
-## WHERE WE ARE — Fri 2026-09-11, 19:45 (read this first)
+## Historical (Fri 2026-09-11, 19:45) — the "WHERE WE ARE" snapshot
+
+**This block is a dated snapshot, not the current state.** It was last rewritten on Fri 2026-09-11
+evening; CHANGELOG Steps 38–47 landed after it (Sat 2026-09-12). For where things stand now read the
+newest `CHANGELOG.md` entry (top of file — Step 47 as of Sat evening) and the "## Step 47" block near
+the end of this file; where this block and a newer section disagree, the newer one is right.
 
 Demo: Sat 2026-09-12. The app runs untethered on Aritro's iPhone 17 Pro Max (iOS 27), clamped to a
-cane, with AirPods Pro. **This block is rewritten on every push; if it contradicts an older section
-lower down, this block is right.**
+cane, with AirPods Pro.
 
 ### What is proven ON THE PHONE (measured, from trip logs in `Documents/`)
 
@@ -95,6 +99,18 @@ sensors did not see is ever spoken.*
   settings stability 0.4 / similarity 0.75.
 - `CUSTOM_*` — set to Meta Model API: `https://api.meta.ai/v1`, `muse-spark-1.3-contributor`,
   `VLM_PROVIDER = custom`. Key format is **pipe**-delimited (`LLM|<digits>|<chars>`).
+- Added Sat 2026-09-12 (Steps 39, 43, 45; template `ios/Secrets.example.plist`), each read only from
+  the git-ignored plist (the two webhook names also from the process environment first, for e2e):
+  - `OPENCANE_GROKBOT_WEBHOOK_URL` / `OPENCANE_GROKBOT_WEBHOOK_KEY` — the Grok Bot routine's webhook
+    trigger. Without them **Family alerts is dead**: the "Send cane events to family" switch and
+    "Save family emails" are disabled and the card says "No webhook key…" (`ContentView` family card);
+    falls, breadcrumbs, test events and the contacts list go nowhere.
+  - `ALERT_MODEL` / `ALERT_REASONING_EFFORT` (default `minimal`, measured: 2.1 s vs 7.1 s for `low`) —
+    the one-sentence `ai_context` on a family alert. Empty model = the cheapest model of whichever
+    provider has a key; no key at all = "Add AI context" is disabled and alerts carry facts only.
+  - `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` — the cloud mirror of the Medical ID, mobility days,
+    hazards, family alerts and device rows. Without them the app runs entirely on the phone: the
+    Profile tab still works from local storage, nothing syncs, nothing fails loudly.
 - ⚠ **Rotate both keys after the event** — they were pasted into a chat transcript.
 - ⚠ A build made in a git worktree gets an **empty** Secrets.plist (the file is git-ignored), so an
   agent's build silently loses both keys. The keys have been copied into every `cane-wt-*` worktree;
@@ -102,7 +118,9 @@ sensors did not see is ever spoken.*
 
 ### Branch state (updated 2026-09-12 morning)
 
-**Merged into main and verified (316 Logic tests, simulator build clean, `make uitest` green):**
+**Merged into main and verified (316 Logic tests *at the time*; the Logic target holds 575 `@Test`
+annotations in 44 files at Step 47 — recount with `grep -rc '@Test' ios/Logic/Tests` before quoting;
+simulator build clean, `make uitest` green):**
 - the destination-search rework + its accessibility fix
 - `fix/cloud-scene-gate` — the cloud sentence is gated, and Muse Spark can actually answer
   (`max_tokens` 120 → 1024 and `reasoning_effort: "low"`; it was spending the whole budget
@@ -136,16 +154,16 @@ inset re-check after reinstall.
   `SceneDescriber` ask path, `describe_result` question field (merged).
 - Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). **Rerun settled the test-count
   question** (2026-09-12, Step 27): the target held 366 `@Test` annotations and `make test` on
-  Xcode 27 reported **366 tests passed in 1 suite**. Step 28 adds six lifetime-guard tests and
-  Step 29 adds six sensor-mode interlock tests and the VoiceInputGuard suite adds the current
-  push-to-talk lifecycle coverage, so the current target holds **567 test cases**;
-  the 359 figure was the last green run *before* the
+  Xcode 27 reported **366 tests passed in 1 suite**. Step 28 added six lifetime-guard tests, so the
+  target then held **372 annotations** (historical: at Step 47 it holds **575 `@Test` annotations in
+  44 files**, Step 46's last full run was 538/538, and the number moves every step — recount, do not
+  copy); the 359 figure was the last green run *before* the
   Step 25 interlock tests existed; reaching 366 first needed the
   `#expect` + `mutating` compile fix in `DepthReadinessTests` (CHANGELOG Step 27).
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
   stale 8/12 s timeouts and stale test-count references fixed; the Step 27 snapshot had 366 `@Test`
-  annotations, and the current target has 567 test cases).
+  annotations and the Step 28 target 372 — both historical, see the recount note above).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
@@ -195,15 +213,9 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [x] **Permission race can start the mic after the user turned it off.** The pure
       `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
       polls permission while it owns the session and cancels any pending continuation on Stop.
-- [x] **Sensor-mode restart interlock (Steps 29/34).** Face-tracking and 60-fps setting writes are
-      refused during route warm-up, active navigation and serialized camera teardown, snapped back to the
-      applied value, and spoken through the existing route-error channel. The two-camera mode keeps the
-      same refusal policy. Thermal mesh changes stop processor mesh lookup immediately but defer the
-      ARSession restart until Stop, arrival or cancellation, so no user-triggered or thermal change
-      creates a 1–2 s depth gap while guiding. `SensorModeInterlock` is pure Logic and covers idle,
-      queued, active, thermal deferral and release. Terminal AR failures and active interruptions
-      clear stale obstacle cues and announce the degraded depth channel; only a trusted frame says it
-      is back. **Step 34:** refusal was measured on the phone (t = 80.7 s).
+- [x] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
+      The two-camera mode correctly refuses during a route; this path does not. **Step 34:** measured
+      on the phone (t = 80.7 s); now refused while a route guides or starts (`FaceTrackingChange`).
 - [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
@@ -220,9 +232,13 @@ none blocks the demo — but they are real, and several need the phone to judge.
 
 ### The merge gate (nothing lands on main that fails any step)
 
-1. `cd ios/Logic && swift test` · 2. `make sim` · 3. `make uitest` (muted) · 4. `make e2e` (4 scenarios)
-· 5. Muse + Antigravity over the **merged whole**, every finding verified by hand before acting
-· 6. install on the phone and confirm from the trip log.
+1. `cd ios && make test` (`scripts/test.sh`; judge it by its own exit code, never through `| tail`)
+· 2. `make sim` · 3. `make uitest` (muted; the whole `CaneKitUITests` target, 12 tests), plus
+`make tour` for a UI change and `make island` for a Live Activity / Dynamic Island change (the only
+visual check the widget has) · 4. `make e2e` (4 scenarios) · 5. two independent adversarial
+reviewers over the **merged whole** (Muse plus Codex or Antigravity on a repo copy — Step 46 was
+Muse + Codex), every finding verified by hand before acting · 6. install on the phone and confirm
+from the trip log.
 
 ⚠ Never run two simulator jobs at once — concurrent `make uitest` and `make e2e` produced a bogus
 "harness error: No such file or directory" that looks like a real failure. Use
@@ -311,8 +327,6 @@ Phone: iPhone 17 Pro Max (iOS 27.0) connected, signed with the free Personal Tea
 - [x] False "Hole ahead" indoors: ground hazards judged only with a mount-like tilt (0-15 deg) and a
       plausible ground height (0.5-1.3 m below the camera); drop-off and hole frames agree as one hazard
 - [x] Screen-lock warning once per route (no spam); Muse + Antigravity final-review fixes
-- [x] Sensor-mode restart interlock: route-time face-tracking / 60-fps writes refuse safely; thermal
-      mesh restarts defer until route end (`SensorModeInterlock`, Step 29)
 - [!] **ElevenLabs natural voice — waiting on Aritro.** Code is done and merged (cache, prefetch,
       2.5 s timeout, circuit breaker, Apple-voice fallback). It is off only because
       `ELEVENLABS_API_KEY` in `ios/CaneKit/Resources/Secrets.plist` is empty. See "ElevenLabs
@@ -715,26 +729,62 @@ for 60 s so a weak network can never stall a cue.
 - [x] PostGIS `geography` generated columns on `hazards` / `posts` / `route_waypoints`, GiST indexed; `hazards_near(lat, lon, radius)`
 - [x] RLS on all 16 tables with explicit anon policies; advisors clean on the OpenCane tables
 - [x] `CloudSchema.swift` + `CloudSchemaTests.swift` (CaneKitLogic): row types + `CloudBatchPolicy`, 17 tests
-- [x] ⚠ Uniform-key encoding for bulk inserts — PostgREST 400s `PGRST102` on mismatched key sets and writes nothing
+- [x] Uniform-key encoding for bulk inserts (avoids PostgREST `PGRST102` mismatched-key rejection)
 - [x] `SupabaseClient.swift` (hand-rolled PostgREST + Storage over URLSession, no SDK) and `CloudSync.swift` (queue + 5 s flush)
 - [x] Wired: `TripLogger.onRecord`, `recordHazard`, `dropPost`, `FamilyAlerts.onDelivered`, `MedicalProfileStore` hooks, `Settings.onChange`
 - [x] Family email list mirrored through `save_family_contacts` only — never in a log payload or an alert row
-- [x] Fixed: trip + route opens deferred until `register_cane` returns (a cold-launch route start lost the whole walk's `trips` row)
+- [x] Fixed: trip + route opens deferred until `register_cane` returns
 - [x] Verified `make test` (555) / `make sim` / `make e2e SCENARIO=clean`, rows queried back out of Postgres
 - [ ] Device: walk the route on the cane, then check `trip_summary`, `device_settings`, `family_contacts` and a hazard JPEG in the bucket
-- [ ] Open (not done): conversation turns are wired but `ConversationCoordinator` does not call `recordConversationTurn` yet; family contacts are readable with the publishable key (drop the `family_contacts_read` policy to close that)
+- [ ] Open: conversation turns are wired but `ConversationCoordinator` does not call `recordConversationTurn` yet; review the publishable-key family-contact policy
 - **test on device:** see CHANGELOG Step 45
 
-## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
-- [x] Muse review findings resolved: C1 (secret key removed from client bundle), C2 (install_id data isolation), C3 (in-flight mutex on resolveWalkerID), C5 (Sendable primitive extraction in recordHazard), C7 (utsname dynamic hardware model), M1 (explicit on_conflict upserts), M5 (a11y labels + allergen symbol fix)
-- [x] Codex review findings resolved: aligned `mobility_days` date to local calendar day via `Calendar.current` date components (avoiding UTC timezone rollover discrepancy)
-- [x] Added `AritroProfile.imageset` to `Assets.xcassets` with user's campus portrait; rendered 56x56 circular avatar in ProfilePage
-- [x] Redesigned GuideCard buttons: added subtitle and chevron support to `CKBigButton`; replaced cramped 3-line wrapped HStack with clean full-width vertical hierarchy ("Campus Demo" vs "Live GPS")
-- [x] Verified unit tests (`make test`: 538 / 538 passing), simulator build (`make sim`), XCUITests (`make uitest`: 11 / 11 passing), and physical device install on iPhone 17 Pro Max (PID 6563)
-- [x] Refreshed knowledge graph (`graphify update .`) to 4,020 nodes, 9,423 edges, 205 communities
+## Step 49 — Low light: notice the dark for the walker, say what still works (Sat Sep 12, late)
+- [x] Owner's question 22:50 ("we have the flashlight and LiDAR doesn't need light — what else?"). Honest answer: LiDAR, gyro gate, GPS, compass, haptics unaffected; ARKit tracking, signs, scene words, people, "Where am I", hazard watch degrade silently — and a blind walker cannot tell it is dark
+- [x] `LowLightPolicy` (CaneKitLogic, 11 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity` (`LaneReport.ambientLux`), dark after 3 s under 40 lux, lit after 5 s over 120, unknown before the first estimate, 60 s minimum on-time for an app-lit torch (the torch raises the reading), 60 s backoff after a thermal cut-out, no auto-torch at ≤ 20 % battery (`FamilyAlertLimits.lowBatteryPct`) — **all [H]**
+- [x] `AppModel`: "Flashlight on in the dark (routes)" (Mount card, **default ON — deliberate, AGENTS.md**), torch only while a route guides via `setTorch(_:byApp:)`, off on lit / Stop / arrival / restart, walker's own torch never touched; "Low light. Obstacle detection still works." (+ " Flashlight on.") once per episode at `.nav` 10 s; the duplicate "Flashlight on." confirmation muted; `light {state, lux, torch, torch_by_app}` records
+- [x] Vision honesty: "It is dark, so this may miss things. " prefix on "Where am I" / a question when dark with no torch; `ScenePrompt` asks for "It is too dark to see." (`CloudSceneGate.tooDark` passes it, spoken as the answer); `HazardPrompt` asks for NONE in the dark; `scan` / `hazard_watch` carry `light: "dark"`; no mesh name (`centerHit = nil`) while tracking is not `.normal`
+- [x] `DepthReadiness.TimeoutReason` (2 tests): a timeout with depth live but tracking never `.normal` speaks "Camera tracking is limited, probably low light. Obstacle detection is running on LiDAR." (`.safety`, 15 s) instead of the false "Guiding with GPS."; `route_readiness {state: timed_out_tracking_limited | timed_out_fallback_gps, reason}`
+- [x] Details → Scene engine "Light" row (3 tests): "Light: lit (640 lux)" / "Light: dark (12 lux) · flashlight on (by OpenCane)" / "Light: dark (12 lux) · flashlight off — cameras may miss things" / "Light: unknown"; Guide card DARK pill (warning) next to GPS
+- [x] `make test` 626 / 626; simulator build clean; docs (design.md §5.1 / §5.4 / §6.5 / Scene engine, CODE_REFERENCE, AGENTS.md two bullets)
+- [ ] **On the phone, dark room, torch off**: start a route → within ~3–4 s the torch comes on and "Low light. Obstacle detection still works. Flashlight on." is spoken **once**; no second "Flashlight on."; the tiles still show obstacles; Stop → "Flashlight off."; Details → Light row reads "dark (N lux) · flashlight on (by OpenCane)"
+- [ ] Dark room, no route: the line is spoken without "Flashlight on.", the torch stays off, the Guide card shows DARK; "Where am I" starts with "It is dark, so this may miss things." (or the model answers "It is too dark to see.")
+- [ ] Dark hallway route start: does readiness time out with `reason: tracking_limited_depth_live` and speak the LiDAR line (not "Guiding with GPS")? Do obstacle cues run during it?
+- [ ] Walker's own Flashlight switch on, then a route in the dark: the app must not switch it off at Stop
+- [ ] Lit room → torch cycle check: while the app's torch is on the exit threshold is `litWithTorchLux` (400 lux [H]); read `light` records in a torch-lit hallway and at a lit crossing and tune 400 so the glow never ends the episode but a lit building does
+- [ ] Tune 40 / 120 lux and 3 / 5 s from the `light` + `lanes` records of a dusk walk (a street-lamp pool must not end an episode; a doorway shadow must not start one)
+- [ ] Battery: at ≤ 20 % the torch must not auto-light (the plain line is spoken); thermal: after "The flashlight turned off." the app must not relight it for 60 s
+- [ ] `cloudSettings` / `DeviceSettingsRow` do not carry `autoTorchInDark` yet (Supabase schema change) — add the column with the next cloud step
+
+## Step 48 — Point-blank: a wall against the phone is STOP, never CLEAR (Sat Sep 12, late)
+- [x] Root cause from the teammate's photo: inside ~10 cm the LiDAR returns 0 / NaN, `LaneMath` discarded them, the cell went `.infinity` = CLEAR; Step 38 only covered low-confidence finite returns
+- [x] `LaneMath` blind share per cell; `NearHold` (7 tests) holds a blind-after-near cell at 0.1 m; `lanes {head_blind, torso_blind, held}` evidence
+- [x] Merged onto the teammate's Step 45 cloud commit; 605 / 605 tests; installed on the phone
+- [ ] On the phone: wall at 15 cm → push to the wall → STOP + urgent buzz stays; step back → clear; night sky / long corridor → no STOP
+- [ ] Tune `NearHoldConfig` (0.5 blind share, 0.6 m arm, cold start 4 cells / 0.8 / 0.8 m) from the `lanes` records of that walk
+- [ ] Known gap (Codex): a glossy / absorptive surface at 0.35 m–a few metres returns finite *low-confidence* samples — neither valid nor blind — so the cell can read CLEAR; needs an "unknown" tile state, not a guess (Step 38 boundary)
+- [ ] Known gap: toggling "Mirror left / right" mid-session swaps lane indices under the hold's per-lane memory; the next sweep disarms it
+
+## Step 47 — Dynamic Island redesign from its first pictures, Guide tile pair, real emergency phone (Sat Sep 12, evening)
+- [x] Evidence first: the newest phone logs say `live_activity {action: start, active: true}` — the activity exists; nobody had ever seen what it drew
+- [x] `CaneKitIslandTour` + `make island`: compact, expanded, walking, after-Stop pictures of the island from the simulator (before and after)
+- [x] `NavLiveActivity.swift` redesigned: manoeuvre glyphs that cannot be mistaken for the OS location arrow (`arrow.up` retired), glance glyph-only when clear, instruction full-width in the expanded bottom region, stale state ("No update"), one VoiceOver sentence per presentation
+- [x] `LiveActivityCoalescer.staleAfter` (300 s, `staleAfterOutlivesACrossingWait`) → `staleDate` on every request / update
+- [x] `LocationService.setNavigating`: `showsBackgroundLocationIndicator` pinned false; the blue pill during a route is the OS's background-location indicator (design.md §6.7 says so)
+- [x] `CKBigButton.Layout.tile` for the two-up "Where am I" / "Talk to OpenCane" pair (equal shapes and heights); row label made flexible so "Simulate walk" no longer stacks alone
+- [x] Medical ID: emergency phone +1 (925) 791-8082 by default, and the seeded 555 placeholder migrated on phones that already saved a profile
+- [x] Cue levels differ on the cane (cue-v2 #41, implementation agent): `TorsoHapticPolicy` + 21 tests; Quiet no torso taps, Standard onset tap (< 1.5 m closing) + strong triple (< 0.6 m, proximity only after Muse), Detailed today minus shoreline re-taps, Indoors / crossing settle hold; Settings caption tells the truth
+- [x] Details tab "Scene engine" card (implementation agent): who answered the last Where am I, why, how long, when, from what; hazard-watch plan / last check / failure; cues in effect; `SceneEngineSummary` + 17 tests; `describe_result` / `hazard_watch` carry `trigger` / `source` / `cloud_ms` / `fallback_reason`
+- [x] "Announce Medical ID" moved from `.obstacle` to `.scene` (design audit)
+- [x] Reviews: Muse + OpenCode (8 fixed, 5 rejected with evidence in CHANGELOG); Codex rerun read-only on a copy after it built in the real repo; Antigravity cannot run headless without auto-approving commands
+- [x] Doc drift audit (3 read-only agents) → AGENTS.md, CLAUDE.md, ios/README.md, CODE_REFERENCE.md (~30 sections added), design.md (§6 four tabs, §6.5 Family alerts, §6.8 Profile, §5.1 six lines), todo.md, TEAM_HANDOFF.md, docs/README.md, handsfree.md, devices_setup.md
+- [x] docs: design.md §6.7 rewritten, §10 raw-kind gap closed, CODE_REFERENCE, AGENTS.md `make island` + two new traps (no concurrent builders; `--disable-xctest`)
+- [x] Second round from the phone pictures: Always location at route start (no blue pill → the Live Activity owns the island like Apple / Google Maps), background session only without Always, `location_auth` log; expanded row de-cramped (route name off the island, pill priority, 3-line instruction) + route progress bar
+- [ ] Pre-existing (Codex round 2): a Detailed centre Geiger loop that loses haptics mid-approach (engine down, Silence haptics) sends no wrist / speech fallback until the next decider fire — `.updateCenter` has been haptics-only since Step 3
+- [ ] On the phone: first route start → answer **Always** to the location prompt; lock → island shows walking figure + metres and one green check (no blue arrow in the pill); long-press → instruction in full; Profile shows the 925 number; Settings → Cues → Standard, walk at a wall: one tap at 1.5 m, strong triple at 0.6 m, no side taps; Quiet: nothing but head height; Details → Scene engine after one Where am I with and without network
 
 ## Cross-cutting
-- [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
+- [x] Four icon-only root tabs (Guide / Sense / Settings / Profile; Profile added in Step 44) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab (no test opens Profile yet)
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
 - [x] route_isr_cif.json with OSM-verified coordinates (docs/route_isr_cif.md); re-record Friday on foot
 - [x] TripLogger JSONL (Documents folder; AirDrop from Files)
@@ -746,7 +796,15 @@ for 60 s so a weak network can never stall a cue.
       iOS wants calibration (heading is nil until walking > 0.7 m/s), VoiceOver double-speak on frequently-updating
       pills, MapKit route build waits only 15 s for a first fix
 
-## Cue design v2 — Steps 35–45 (approved 2026-09-12 evening; talk floor inserted as 37 the same night, later steps renumbered +1 — CHANGELOG entries before Step 37 use the old numbers)
+## Cue design v2 — items cue-v2 #35–#45 (approved 2026-09-12 evening; talk floor inserted as #37 the same night, later items renumbered +1 — CHANGELOG entries before Step 37 use the old numbers)
+
+⚠ **Numbering.** The item numbers below are the *plan's* numbers, prefixed `cue-v2 #`. They are
+**not** CHANGELOG step numbers: CHANGELOG Steps 38–46 are a separate stream of shipped work (38
+point-blank wall safety, 39 Grok Bot webhook, 40 Dynamic Island, 41 hazard telemetry, 42 GPS
+fallback, 43 falls / weapons, 44 Medical ID Profile tab, 45 Supabase, 46 review fixes) that reused
+the same digits. Only #35, #36 and #37 coincide with CHANGELOG Steps 35–37; cue-v2 #41 (torso
+haptics) shipped in CHANGELOG **Step 47**. When one of the open items ships, it gets whatever
+CHANGELOG step number is next, and the tick here names it.
 
 Research: `docs/cue_design_v2.md` (74 source-checked findings + the field-log addendum). Owner chose
 "Full v2", default level **Detailed = today** until a *mounted* trip log tunes the numbers; speech
@@ -757,17 +815,18 @@ net displacement not path length, dropped lines stay available to Repeat, ground
 Safety floor for every step: head haptic at every onset; "Head height." spoken at a moving onset;
 ground hazards (when on) speak their first confirmation; hush never touches any of them.
 
-- [x] **35** `scripts/cue_audit.py` + `make audit` — mounted?, head band wall vs overhang, cues and lines per minute, replays
-- [x] **36** `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
-- [x] **37** Talk floor (owner: "directions and obstacle alerts interrupt each other"): a line cut by a warning resumes from its clause (`SpeechResume`), 0.35 s pause between bands, `speech_end` + `resume_from` logged, `cue_audit` resume / pause metrics. Rejected before building (Muse): holding "Head height." behind a direction (a walker reaches a 1.5 m overhang before the words)
+- [x] **cue-v2 #35** (= CHANGELOG Step 35) `scripts/cue_audit.py` + `make audit` — mounted?, head band wall vs overhang, cues and lines per minute, replays
+- [x] **cue-v2 #36** (= CHANGELOG Step 36) `CueProfile` / `CueRules`: Quiet / Standard / Detailed × Outdoors / Indoors; Settings pickers, change spoken once; names default off; door names only on a route in Standard; Detailed's one delta from today: never names walls; indoor overrides (no torso taps, no names, beacon only routing, safety signs only, head 1.2 / 0.8 m)
+- [x] **cue-v2 #37** (= CHANGELOG Step 37) Talk floor (owner: "directions and obstacle alerts interrupt each other"): a line cut by a warning resumes from its clause (`SpeechResume`), 0.35 s pause between bands, `speech_end` + `resume_from` logged, `cue_audit` resume / pause metrics. Rejected before building (Muse): holding "Head height." behind a direction (a walker reaches a 1.5 m overhang before the words)
   - [ ] Device: route intro cut by a head cue resumes mid-line in both voices; tune `mp3MarginUTF16` / `clipLead` from `resume_from`
   - [ ] Later (review, not fixed): a system-voice line resumed from a cached mp3 maps an exact word offset to a proportional clip time; the interruption resume retry Task is not cancelled by a new `.began` (pre-existing)
-- [ ] **38** Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
-- [ ] **39** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
-- [ ] **40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
-- [ ] **41** Torso haptics by level: Standard onset taps (1.5 m closing, 0.6 m strong triple), Detailed = today + shoreline suppression, Quiet none; no torso taps during a crossing settle
-- [ ] **42** "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
-- [ ] **43** Hush: Watch double tap + app button + Siri, 60 s, non-safety speech and non-head haptics only, soft buzz on, "Cues back." off
-- [ ] **44** "What's ahead?": LiDAR lanes + ARKit mesh class + ground hazard, no vision model; ≤ 3 items (≤ 5 Detailed), nearest first, doors / drop-offs before furniture
-- [ ] **45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
+- [ ] **cue-v2 #38** (not CHANGELOG Step 38, which is point-blank wall safety) Head speech episode: ends after 2 s of trusted clear frames; no new head speech while still (`MotionState`: net horizontal displacement < 0.3 m in 2 s of a low-passed camera position, so a cane swinging ±0.5 m in place never reads as walking — `swingingInPlaceCountsAsStill`, `vigorousScanAtACurbIsStill`)
+- [ ] **cue-v2 #39** Speech de-chop: interrupted `.obstacle` / `.scene` dropped (kept for Repeat), late optional lines dropped (> 1.5 s), cue tier always the system voice, rate follows the user's Spoken Content setting
+- [ ] **cue-v2 #40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
+- [x] **cue-v2 #41** (shipped as CHANGELOG Step 47) Torso haptics by level: Standard onset taps (1.5 m closing, 0.6 m strong triple), Detailed = today + shoreline suppression, Quiet none; no torso taps during a crossing settle — `TorsoHapticPolicy` (CaneKitLogic, 19 tests + `defaultRulesRenderTodaysHaptics`) over an untouched `CueDecider`; `HapticPlayer.playCenterOnset`; `cue` log gains `suppressed` / `render`, `cue_audit` counts them; Settings caption now true per level
+  - [ ] Device: feel the Standard onset tap and the strong triple on the cane (the triple shares the right lane's 3-tap count — Standard has no side taps, but confirm it is not mistaken for "right" on the shaft); walk a hedge in Detailed and confirm the shoreline hush; stand at a crossing and confirm no torso taps
+- [ ] **cue-v2 #42** "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
+- [ ] **cue-v2 #43** Hush: Watch double tap + app button + Siri, 60 s, non-safety speech and non-head haptics only, soft buzz on, "Cues back." off
+- [ ] **cue-v2 #44** "What's ahead?": LiDAR lanes + ARKit mesh class + ground hazard, no vision model; ≤ 3 items (≤ 5 Detailed), nearest first, doors / drop-offs before furniture
+- [ ] **cue-v2 #45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
 - Deferred (not scheduled): gravity-corrected metric head band; speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).

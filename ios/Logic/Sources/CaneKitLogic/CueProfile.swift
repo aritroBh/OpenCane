@@ -16,12 +16,14 @@
 //  (`ios/scripts/cue_audit.py` says whether a log was mounted). The one Detailed change is that it
 //  never names walls — a spoken-line reduction, the cane trails walls.
 //
-//  Later steps extend these rules (torso taps by level in Step 41); this file only holds decisions.
+//  Torso haptics by level live next door in `TorsoHapticPolicy.swift` (Step 41), which takes a
+//  `CueRules` value and the decider's output; this file only holds the level × place decisions.
 //  Pure: Foundation-only. Owner: `AppModel.cueLevel` / `cuePlace` (persisted with
 //  `Settings.string`, changed from Settings → Cues); `AppModel.cueRules` rebuilds the value, and
 //  `applyCueRules` pushes `headEnterM` into `CueDecider.thresholds.head` and `allowedSignPhrases`
-//  into `HazardScanner.signAllowedPhrases`; `allowsName` is read per report in `AppModel.handle`.
-//  Tests: `CueProfileTests.swift` (11, suite "Cue profile") + `SignPhraseFilterTests` (4, same file).
+//  into `HazardScanner.signAllowedPhrases`; `allowsName` is read per report in `AppModel.handle`,
+//  which also hands the value to `TorsoHapticPolicy.update`.
+//  Tests: `CueProfileTests.swift` (12, suite "Cue profile") + `SignPhraseFilterTests` (4, same file).
 //
 
 import Foundation
@@ -29,12 +31,14 @@ import Foundation
 /// How much the app volunteers. Raw values are persisted (`UserDefaults` key `cueLevel`) — never
 /// rename them (`rawValuesAreStable`). An unknown stored value falls back to `.detailed` in the app.
 public enum CueLevel: String, CaseIterable, Sendable, Codable {
-    /// No obstacle names; safety signs only. (Step 41 adds: no torso taps. Head-height and
-    /// ground-hazard warnings are identical at every level — the safety floor.)
+    /// No obstacle names; safety signs only; no torso taps at all (`TorsoHapticPolicy`, Step 41).
+    /// Head-height and ground-hazard warnings are identical at every level — the safety floor.
     case quiet
-    /// Door names while a route guides; every sign. (Step 41: onset torso taps.)
+    /// Door names while a route guides; every sign; centre torso = two onset taps (< 1.5 m and
+    /// closing, a strong triple < 0.6 m), no loop, no side taps.
     case standard
-    /// Today's behaviour: every speakable name except wall, every sign, today's haptics.
+    /// Today's behaviour: every speakable name except wall, every sign, the centre Geiger loop and
+    /// side taps (minus a side tap while a wall or hedge is being trailed — shoreline suppression).
     case detailed
 
     /// Spoken once when the walker changes the level (`.nav`, prefetched via

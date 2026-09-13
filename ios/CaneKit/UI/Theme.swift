@@ -189,6 +189,9 @@ enum CKMetrics {
     static let touchTarget: CGFloat = 60
     /// `CKBigButton` minimum height (design.md §3: 72 pt, full or half width).
     static let bigButton: CGFloat = 72
+    /// Minimum height of a `CKBigButton` in `tile` layout (icon over word over caption); the
+    /// pair's `HStack` stretches both tiles to the taller one. Step 47.
+    static let tile: CGFloat = 108
     /// Hairline normally; a real border under Increase Contrast.
     static func border(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 3 : 1
@@ -210,6 +213,15 @@ struct CKBigButton: View {
     /// with a border, `destructive` = `danger` fill with ink text (Stop route).
     enum Role { case primary, secondary, destructive }
 
+    /// How the label is arranged. `row` = icon, word (+ subtitle) and chevron across the button,
+    /// restacking only at accessibility text sizes; `tile` = icon over a centred word (+ subtitle),
+    /// for a pair placed side by side. Step 47: the Guide's two-up "Where am I" / "Talk to
+    /// OpenCane" pair used `row`, and `ViewThatFits` kept the short title in a row while it
+    /// stacked the long one — two shapes in one pair, which the owner read as broken. A pair is
+    /// always `tile`, and the pair's `HStack` gets `.fixedSize(horizontal: false, vertical: true)`
+    /// so both tiles take the taller one's height.
+    enum Layout { case row, tile }
+
     /// Visible word and VoiceOver label. ⚠ test contract for every title used by the XCUITests.
     let title: String
     /// Optional subtitle rendered below the title for additional context.
@@ -218,6 +230,8 @@ struct CKBigButton: View {
     let systemImage: String
     /// Visual role; see `Role`.
     var role: Role = .primary
+    /// Label arrangement; see `Layout`. Default `row` (every full-width button).
+    var layout: Layout = .row
     /// VoiceOver hint: what the button does, in one sentence. Optional only for previews.
     var hint: String? = nil
     /// Optional VoiceOver value ("Describing…") while the action is in flight.
@@ -229,19 +243,66 @@ struct CKBigButton: View {
     /// full width and `bigButton` height, styled by `CKBigButtonStyle`.
     var body: some View {
         Button(action: action) {
-            // At accessibility text sizes the row won't fit, so the label stacks under the icon.
+            if layout == .tile { tileLabel } else { rowLabel }
+        }
+        .buttonStyle(CKBigButtonStyle(role: role))
+        // ⚠ test contract: the label is exactly `title`; do not decorate it.
+        .accessibilityLabel(title)
+        .accessibilityHint(hint ?? "")
+        .accessibilityValue(value ?? "")
+    }
+
+    /// `tile`: icon over the word over the subtitle, all centred, filling the width and any
+    /// height the pair's `HStack` gives it (≥ `CKMetrics.tile`). The word may wrap to two lines
+    /// ("Talk to OpenCane" at 17 Pro Max width) and shrinks to 90 % before it hyphenates.
+    private var tileLabel: some View {
+        VStack(spacing: CKSpacing.xs) {
+            Image(systemName: systemImage)
+                .font(.title.weight(.bold))
+                .frame(height: 32)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(CKFont.button)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.9)
+                .fixedSize(horizontal: false, vertical: true)
+            if let subtitle {
+                Text(subtitle)
+                    .font(CKFont.secondary)
+                    .foregroundStyle(role == .primary ? CKColor.onAccent.opacity(0.75) : CKColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, CKSpacing.md)
+        .padding(.vertical, CKSpacing.md)
+        .frame(maxWidth: .infinity, minHeight: CKMetrics.tile, maxHeight: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: CKRadius.button))
+    }
+
+    /// `row`: the full-width arrangement. At accessibility text sizes the row won't fit, so the
+    /// label stacks under the icon.
+    private var rowLabel: some View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: CKSpacing.md) {
                     icon
+                    // Flexible width (`maxWidth: .infinity`) so a long subtitle never makes
+                    // `ViewThatFits` reject the row and stack this one button while its
+                    // neighbours stay rows (Step 47: "Simulate walk" did exactly that). The
+                    // subtitle wraps to a second line instead of forcing the stacked shape.
                     VStack(alignment: .leading, spacing: 2) {
                         text
                         if let subtitle {
                             Text(subtitle)
                                 .font(CKFont.secondary)
                                 .foregroundStyle(role == .primary ? CKColor.onAccent.opacity(0.75) : CKColor.textSecondary)
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 0)
                     if role == .primary {
                         Image(systemName: "chevron.right")
@@ -264,12 +325,6 @@ struct CKBigButton: View {
             .padding(.vertical, subtitle != nil ? CKSpacing.sm : CKSpacing.md)
             .frame(maxWidth: .infinity, minHeight: CKMetrics.bigButton)
             .contentShape(RoundedRectangle(cornerRadius: CKRadius.button))
-        }
-        .buttonStyle(CKBigButtonStyle(role: role))
-        // ⚠ test contract: the label is exactly `title`; do not decorate it.
-        .accessibilityLabel(title)
-        .accessibilityHint(hint ?? "")
-        .accessibilityValue(value ?? "")
     }
 
     /// The companion SF Symbol, hidden from VoiceOver so the label is read once.

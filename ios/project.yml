@@ -155,6 +155,12 @@ targets:
         # CANEKIT_UITEST=1); Motion and HealthKit at route start.
         NSCameraUsageDescription: "OpenCane uses the camera and LiDAR to detect obstacles between your waist and head."
         NSLocationWhenInUseUsageDescription: "OpenCane uses your location and heading to guide you along the route."
+        # Step 47: Always is requested at the first route start (LocationService.requestAlwaysAuthorization).
+        # With Always, iOS draws no blue background-location pill in the Dynamic Island while a route
+        # runs with the screen locked, so OpenCane's own Live Activity owns the island the way Apple
+        # Maps / Google Maps do; with When In Use only, the pill is mandatory and the activity is
+        # pushed into the minimal bubble (owner's phone pictures, 2026-09-12 21:48).
+        NSLocationAlwaysAndWhenInUseUsageDescription: "OpenCane keeps guiding you with the screen locked. Always lets it do that without the blue location banner covering its own route card."
         NSMotionUsageDescription: "OpenCane uses motion to tell when the cane is sweeping, to track your head direction with AirPods, and to count steps."
         # Spoken commands: the push-to-talk / conversational assistant (VoiceInputEngine).
         NSSpeechRecognitionUsageDescription: "OpenCane can take spoken commands."

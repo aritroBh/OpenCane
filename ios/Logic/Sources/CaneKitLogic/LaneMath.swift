@@ -14,7 +14,10 @@
 //
 //  Key invariants:
 //    · Depth is Float32 metres; confidence is UInt8 (0 low / 1 medium / 2 high); medium must
-//      be accepted. A sample is valid only if finite and > 0.05 m.
+//      be accepted. A sample is valid only if finite and > 0.05 m; a sample that is NOT (0, NaN,
+//      ≤ 5 cm — what the LiDAR emits inside its saturation range) is counted as *blind*, and the
+//      fraction of blind samples per cell travels with the grid (`LaneGrid.headBlind` /
+//      `torsoBlind`, Step 48) so `NearHold` can tell "nothing there" from "too close to read".
 //    · Both row strides are honoured (CVPixelBuffer rows are padded).
 //    · Portrait remap (phone upright on the cane): bufX = sceneY, bufY = bufH − 1 − sceneX.
 //    · Output index 0 = left, 1 = centre, 2 = right; band 0 (top) = head, band 1 = torso;
@@ -67,6 +70,16 @@ public struct LaneGrid: Sendable, Equatable {
     public var torso: [Float]
     /// Median depth of the centre window (for the mesh classification lookup). `.infinity` if unknown.
     public var centerDepth: Float
+    /// Fraction (0…1) of each head cell's sampled pixels that were blind — 0, NaN or ≤ 5 cm, the
+    /// LiDAR's answer inside its saturation range (Step 48). 0 when the cell read normally.
+    public var headBlind: [Float]
+    /// Same for the torso band.
+    public var torsoBlind: [Float]
+    /// Per head cell: the value was substituted by `NearHold` (a blind cell right after a near
+    /// reading), not measured this frame. Logged so a held STOP is visible as held.
+    public var headHeld: [Bool]
+    /// Same for the torso band.
+    public var torsoHeld: [Bool]
 
     /// All cells and the centre clear (`.infinity`) — the value before the first depth frame.
     public static let empty = LaneGrid(head: [.infinity, .infinity, .infinity],
@@ -77,10 +90,18 @@ public struct LaneGrid: Sendable, Equatable {
     ///   - head: three head-band depths, metres (left, centre, right).
     ///   - torso: three torso-band depths, metres (left, centre, right).
     ///   - centerDepth: centre-window median, metres.
-    public init(head: [Float], torso: [Float], centerDepth: Float) {
+    ///   - headBlind / torsoBlind: blind fractions per cell (default 0: every sample valid).
+    ///   - headHeld / torsoHeld: `NearHold` substitution flags (default false).
+    public init(head: [Float], torso: [Float], centerDepth: Float,
+                headBlind: [Float] = [0, 0, 0], torsoBlind: [Float] = [0, 0, 0],
+                headHeld: [Bool] = [false, false, false], torsoHeld: [Bool] = [false, false, false]) {
         self.head = head
         self.torso = torso
         self.centerDepth = centerDepth
+        self.headBlind = headBlind
+        self.torsoBlind = torsoBlind
+        self.headHeld = headHeld
+        self.torsoHeld = torsoHeld
     }
 
     /// Closest thing in a lane across both bands.
@@ -129,11 +150,14 @@ public enum LaneMath {
         // Reads one scene-space pixel through the portrait remap; nil when low-confidence,
         // non-finite or ≤ 5 cm. Proximity overrides confidence: returns < closeOverrideThreshold (35 cm)
         // represent near-field physical presence (where LiDAR saturation drops confidence to 0) rather than noise.
+        // A non-finite / ≤ 5 cm read also increments `blind` (Step 48): inside ~10 cm the LiDAR
+        // returns 0 or NaN, and a cell that is mostly blind is not empty — it is too close to read.
+        var blind = 0
         @inline(__always) func sample(sx: Int, sy: Int) -> Float? {
             let bx = rotate ? sy : sx
             let by = rotate ? (bufH - 1 - sx) : sy
             let d = depth.load(fromByteOffset: by * depthBytesPerRow + bx * MemoryLayout<Float>.stride, as: Float.self)
-            guard d.isFinite, d > 0.05 else { return nil }
+            guard d.isFinite, d > 0.05 else { blind += 1; return nil }
             if d < config.closeOverrideThreshold {
                 return d
             }
@@ -146,6 +170,8 @@ public enum LaneMath {
 
         var head = [Float](repeating: .infinity, count: 3)
         var torso = [Float](repeating: .infinity, count: 3)
+        var headBlind = [Float](repeating: 0, count: 3)
+        var torsoBlind = [Float](repeating: 0, count: 3)
 
         for band in 0..<2 {
             let sy0 = band * bandH
@@ -154,15 +180,23 @@ public enum LaneMath {
                 let sx0 = lane * laneW
                 let sx1 = sx0 + laneW
                 scratch.removeAll(keepingCapacity: true)
+                blind = 0
+                var sampled = 0
                 var sy = sy0
                 while sy < sy1 {
                     var sx = sx0
                     while sx < sx1 {
                         if let d = sample(sx: sx, sy: sy) { scratch.append(d) }
+                        sampled += 1
                         sx += step
                     }
                     sy += step
                 }
+                // Share of the *readable* samples that were blind: far low-confidence pixels are
+                // neither valid nor blind and must not dilute a wall edge (Muse F6). `sampled`
+                // is kept for the empty-cell case.
+                let readable = blind + scratch.count
+                let blindFraction: Float = readable > 0 ? Float(blind) / Float(readable) : (sampled > 0 ? 0 : 0)
                 var value: Float = .infinity
                 if scratch.count >= config.minSamplesPerCell {
                     scratch.sort()
@@ -170,7 +204,8 @@ public enum LaneMath {
                     value = scratch[idx]
                 }
                 let outLane = config.mirrorLeftRight ? (2 - lane) : lane
-                if band == 0 { head[outLane] = value } else { torso[outLane] = value }
+                if band == 0 { head[outLane] = value; headBlind[outLane] = blindFraction }
+                else { torso[outLane] = value; torsoBlind[outLane] = blindFraction }
             }
         }
 
@@ -193,7 +228,8 @@ public enum LaneMath {
             center = scratch[scratch.count / 2]
         }
 
-        return LaneGrid(head: head, torso: torso, centerDepth: center)
+        return LaneGrid(head: head, torso: torso, centerDepth: center,
+                        headBlind: headBlind, torsoBlind: torsoBlind)
     }
 
     /// Convenience for tests and offline replay: arrays instead of raw pointers.

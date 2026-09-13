@@ -7,7 +7,10 @@
 //  hand. `CueDecider` (CaneKitLogic) decides what/when; this file only renders.
 //
 //  Patterns (docs/design.md §5.2 obstacle cues, §5.3 navigation cues):
-//    centre approach   Geiger loop: one sharp tap repeated at 2 Hz (2 m) … 8 Hz (0.5 m)
+//    centre approach   Geiger loop: one sharp tap repeated at 2 Hz (2 m) … 8 Hz (0.5 m) (Detailed)
+//    centre onset      Standard level (Step 41, `playCenterOnset`): one tap at 0.8 when the centre
+//                      is < 1.5 m and closing; a strong triple (3 taps 80 ms apart, 1.0) < 0.6 m.
+//                      Never a loop — the onset players stop a stale Geiger loop first.
 //    left              2 taps, 120 ms apart
 //    right             3 taps, 100 ms apart
 //    head              2 hard, sharp hits 80 ms apart
@@ -38,6 +41,10 @@
 //  suppress rendering but `rendering` still reflects the decided cue (so the UI and the watch
 //  mirror stay truthful). Patterns and their numbers mirror docs/design.md §5; the decision
 //  numbers (distances, thresholds) live in CaneKitLogic (`CueDecider`, `GeigerRate`).
+//
+//  Which torso pattern plays at which Cue detail level is decided upstream by
+//  `TorsoHapticPolicy` (CaneKitLogic, Step 41): Quiet renders none of the torso patterns, Standard
+//  only the two centre onsets, Detailed the loop and the side taps. This file has no level logic.
 //
 //  Owner: `AppModel` (`haptics`). Readers: `HapticsCard` (`isHealthy`, `lastError`, `test`),
 //  `AppModel.speakStatus` (`StatusSummary`) / `ConversationCoordinator` (`isHealthy`), the cue
@@ -95,6 +102,14 @@ final class HapticPlayer {
     @ObservationIgnored private var headPlayer: CHHapticPatternPlayer?
     /// Single tap re-fired by the Geiger loop; intensity is modulated per tap via dynamic params.
     @ObservationIgnored private var tapPlayer: CHHapticPatternPlayer?
+    /// Standard-level centre onset (Step 41): one transient, intensity 0.8, sharpness 0.6 — the
+    /// Geiger tick's texture, once, so "something ahead within 1.5 m and closing" reads as the
+    /// same channel as the Detailed loop.
+    @ObservationIgnored private var centerOnsetPlayer: CHHapticPatternPlayer?
+    /// Standard-level strong centre onset (Step 41): 3 transients 80 ms apart, intensity 1.0,
+    /// sharpness 0.6 — "under 0.6 m and still closing". Same 80 ms cadence as the head pair but
+    /// three of them and duller, so it is neither the head hit nor the right lane's 100 ms triple.
+    @ObservationIgnored private var centerStrongPlayer: CHHapticPatternPlayer?
     /// Route cues felt on the cane (long, soft *continuous* buzzes — never confusable with the
     /// crisp obstacle taps): turn left = 1 long, turn right = 2 long, crossing = 3 long,
     /// arrived = long-short-long. No entry for `NavCue.obstacle` (AppModel never passes it).
@@ -241,7 +256,8 @@ final class HapticPlayer {
     // MARK: Patterns
 
     /// (Re)build every pattern player on the current engine: the four obstacle players (left,
-    /// right, head, Geiger tap), `groundPlayer` and the four `navPlayers`. Throws on the first
+    /// right, head, Geiger tap), the two Standard-level centre onsets (`centerOnsetPlayer`,
+    /// `centerStrongPlayer`), `groundPlayer` and the four `navPlayers`. Throws on the first
     /// pattern/player creation failure; callers turn that into `isHealthy = false`. A nil engine is
     /// a silent no-op. Patterns: docs/design.md §5.2 / §5.3.
     private func buildPlayers() throws {
@@ -250,6 +266,8 @@ final class HapticPlayer {
         rightPlayer = try engine.makePlayer(with: Self.pattern(taps: 3, gap: 0.10, intensity: 0.9, sharpness: 0.5))
         headPlayer = try engine.makePlayer(with: Self.pattern(taps: 2, gap: 0.08, intensity: 1.0, sharpness: 1.0))
         tapPlayer = try engine.makePlayer(with: Self.pattern(taps: 1, gap: 0, intensity: 1.0, sharpness: 0.6))
+        centerOnsetPlayer = try engine.makePlayer(with: Self.pattern(taps: 1, gap: 0, intensity: 0.8, sharpness: 0.6))
+        centerStrongPlayer = try engine.makePlayer(with: Self.pattern(taps: 3, gap: 0.08, intensity: 1.0, sharpness: 0.6))
         groundPlayer = try engine.makePlayer(with: Self.pattern(taps: 4, gap: 0.07, intensity: 1.0, sharpness: 0.3))
         navPlayers = [
             .turnLeft: try engine.makePlayer(with: Self.buzzes([0.45])),
@@ -331,6 +349,20 @@ final class HapticPlayer {
         }
     }
 
+    /// Standard-level centre onset (Step 41, `TorsoHapticAction.centerOnset`): one tap, or the
+    /// strong triple when `strong`. Sets `rendering = .center` like any centre cue, then renders
+    /// nothing while silenced or unhealthy (the cue router mirrors / speaks instead). Always stops
+    /// a running Geiger loop first: Standard has no loop, so one still running is left over from a
+    /// level change mid-approach (`TorsoHapticPolicyTests.aRunningLoopStopsWhenTorsoBecomesHeld`
+    /// covers the policy side). Caller: `AppModel.handle` on `.centerOnset`.
+    /// - Parameter strong: false = one tap (< 1.5 m and closing), true = triple (< 0.6 m and closing).
+    func playCenterOnset(strong: Bool) {
+        stopApproachLoop()
+        rendering = .center
+        guard !silenced, isHealthy else { return }
+        fire(strong ? centerStrongPlayer : centerOnsetPlayer)
+    }
+
     /// Distance update while the centre cue is active: only the loop rate changes.
     /// Metres. Starts the loop if it is not running (e.g. after un-silencing mid-approach).
     /// Caller: `AppModel.handle` on `CueDecider`'s `.updateCenter`.
@@ -342,7 +374,11 @@ final class HapticPlayer {
 
     /// Active cue ended.
     /// Stops the Geiger loop and clears `rendering`; discrete patterns already in flight finish
-    /// on their own (they are < 250 ms). Callers: AppModel on `.stop`, on backgrounding and when
+    /// on their own (they are < 250 ms). ⚠ There is no head "loop" for this to kill: the head
+    /// cue is one transient pair (`headPlayer`) and the decider re-fires it about once a second
+    /// while the hazard persists (`headCueKeepsRefiringWhileObstaclePersists`), so a `stopAll`
+    /// between two head fires costs nothing — three Step 47 reviewers assumed otherwise; this is
+    /// the evidence. Callers: AppModel on `.stop`, on backgrounding and when
     /// the two-camera mode pauses depth, `silenced = true`, and the debug "center" test after 2 s
     /// (and `test(.clear)`).
     func stopAll() {

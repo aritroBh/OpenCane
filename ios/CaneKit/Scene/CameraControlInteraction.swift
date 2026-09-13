@@ -32,7 +32,7 @@ import UIKit
 
 /// Attach once anywhere in the view tree: `.background(CameraControlInteraction { … })`.
 /// Used by `ContentView`, which forwards presses to `AppModel.cameraControlPressed()`
-/// (logs `describe {source: cameraControl}`, then `describeScene()`).
+/// (`describeScene(trigger: .cameraControl)`, one `describe {trigger: cameraControl}` record).
 struct CameraControlInteraction: UIViewRepresentable {
     /// Called on the main actor on a press (`.began`); releases are ignored.
     var onPress: () -> Void
