@@ -2,28 +2,21 @@
 //  NavLiveActivity.swift
 //  CaneKitWidget
 //
-//  Lock screen + Dynamic Island for the current route: a turn glyph, the instruction, and the
-//  distance. No buttons on purpose (docs/design.md §6.7): "Next" from the lock screen is too easy
-//  to hit by accident with the phone on a cane, which is glanced at, not touched. Colours are
-//  hard-coded ivory-on-ink so the widget has no dependency on Theme.swift (not in this target).
+//  Lock screen + Dynamic Island for the current route: turn glyph, countdown distance,
+//  and real-time obstacle clearance radar for both the blind walker (VoiceOver) and the
+//  sighted spotter glancing down at the phone clamped to the cane.
 //
-//  Why it exists: the sighted teammate walking behind reads the next instruction and distance
-//  over the walker's shoulder without unlocking the phone.
+//  No interactive buttons on purpose (docs/design.md §6.7): "Next" from the lock screen is
+//  too easy to hit accidentally while walking with the phone on the cane shaft.
+//  Colours are hard-coded ivory-on-ink so the widget target has no dependency on Theme.swift.
 //
-//  Implements docs/design.md §6.7 (Live Activity / Dynamic Island): compact = glyph + distance,
-//  minimal = glyph only, expanded = glyph / distance / instruction. Deviations from §6.7 (listed
-//  there as "Not built"): no TRUSTED pill or ETA / steps line, and VoiceOver reads the glyph by
-//  its raw kind (design.md §10). Update-rate coalescing (≥ 10 m or an instruction / kind change)
-//  and the 60 s dismissal after arrival are the phone's job (`LiveActivityController`), not this
-//  file's.
-//
-//  Owner / callers: WidgetKit, via `CaneKitWidgetBundle`. Isolation: MainActor (target default).
-//  Tests: none automated; CHANGELOG "Steps 8–9" and Step 20 ("lock phone to check single Live
-//  Activity on Lock Screen") device tests.
-//
-//  Accessibility contract: the glyph's VoiceOver label is the raw `kind` string ("turnLeft",
-//  "turnRight", "crossing", "arrived", "straight"); instruction and distance are plain texts.
-//  No XCUITest reaches the widget. Any new `kind` must also get a case in `glyph(_:)`.
+//  Key invariants:
+//    · Compact leading = turn glyph + distance.
+//    · Compact trailing = real-time obstacle glance badge (CLEAR / CAUTION / HEAD / CURB).
+//    · Minimal = turn glyph (or hazard alert if non-clear).
+//    · Expanded = turn glyph + instruction + countdown distance + 3-lane obstacle radar pill.
+//    · Lock screen = turn glyph · instruction over route name · obstacle clearance pill · distance.
+//    · VoiceOver accessibility reads natural sentence combining navigation and obstacle status.
 //
 
 import ActivityKit
@@ -31,70 +24,122 @@ import SwiftUI
 import WidgetKit
 
 /// The navigation Live Activity, driven by `Activity<NavActivityAttributes>` from the app.
-///
-/// Renders `NavActivityAttributes.ContentState` (instruction, distance in metres, glyph kind)
-/// plus the static `routeName`. Tapping opens the app (system default); there are no buttons.
 struct NavLiveActivity: Widget {
-    /// The lock-screen / banner layout (glyph · instruction over route name · distance, ink tint)
-    /// and the Dynamic Island regions. Distance is always `.monospacedDigit()` so "120 m" →
-    /// "119 m" does not jitter (design.md §1).
+
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: NavActivityAttributes.self) { context in
-            // Lock screen / banner.
+            // Lock screen / banner presentation
             HStack(spacing: 12) {
                 glyph(context.state.kind)
-                    .font(.title.weight(.bold))
-                VStack(alignment: .leading, spacing: 2) {
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundStyle(glyphTint(context.state.kind))
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(context.state.instruction)
                         .font(.headline)
                         .lineLimit(2)
-                    Text(context.attributes.routeName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Text(context.attributes.routeName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        obstaclePill(
+                            status: context.state.obstacleStatus,
+                            distanceM: context.state.obstacleDistanceM,
+                            headM: context.state.headClearanceM
+                        )
+                        .layoutPriority(1)
+                    }
                 }
-                Spacer()
+
+                Spacer(minLength: 8)
+
                 distance(context.state.distanceM)
                     .font(.system(.title, design: .rounded).weight(.heavy))
                     .monospacedDigit()
             }
             .padding(14)
-            // Ink ground (#17140F-ish) with cane-ivory text (#F4F1EA-ish), matching the phone's dark palette.
             .activityBackgroundTint(Color(red: 0.09, green: 0.08, blue: 0.06))
             .foregroundStyle(Color(red: 0.96, green: 0.95, blue: 0.92))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilitySummary(context.state, routeName: context.attributes.routeName))
+
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    glyph(context.state.kind).font(.title2.weight(.bold))
+                    HStack(spacing: 8) {
+                        glyph(context.state.kind)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(glyphTint(context.state.kind))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(context.attributes.routeName)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Text(context.state.instruction)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                        }
+                    }
                 }
+
                 DynamicIslandExpandedRegion(.trailing) {
-                    distance(context.state.distanceM)
-                        .font(.system(.title2, design: .rounded).weight(.heavy))
-                        .monospacedDigit()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        distance(context.state.distanceM)
+                            .font(.system(.title3, design: .rounded).weight(.heavy))
+                            .monospacedDigit()
+                        if !context.state.statusDetail.isEmpty {
+                            Text(context.state.statusDetail)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
+
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(context.state.instruction).font(.subheadline).lineLimit(2)
+                    HStack(spacing: 8) {
+                        obstaclePill(
+                            status: context.state.obstacleStatus,
+                            distanceM: context.state.obstacleDistanceM,
+                            headM: context.state.headClearanceM
+                        )
+                        Spacer()
+                    }
+                    .padding(.top, 4)
                 }
             } compactLeading: {
-                glyph(context.state.kind)
+                HStack(spacing: 3) {
+                    glyph(context.state.kind)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(glyphTint(context.state.kind))
+                    distance(context.state.distanceM)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                }
             } compactTrailing: {
-                distance(context.state.distanceM).monospacedDigit()
+                compactObstacleGlance(
+                    status: context.state.obstacleStatus,
+                    distanceM: context.state.obstacleDistanceM
+                )
             } minimal: {
-                // Glyph only: the distance is too small to read and changes too fast (§6.7).
-                glyph(context.state.kind)
+                if context.state.obstacleStatus != .clear {
+                    Image(systemName: context.state.obstacleStatus == .head ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(context.state.obstacleStatus == .head ? Color.red : Color.orange)
+                } else {
+                    glyph(context.state.kind)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(glyphTint(context.state.kind))
+                }
             }
         }
     }
 
-    /// SF Symbol for the upcoming manoeuvre: turnLeft / turnRight arrows, a walking figure for a
-    /// crossing, a chequered flag on arrival, and a straight-up arrow for anything else
-    /// ("straight" or an unknown kind).
-    ///
-    /// The kind is the last wrist cue the phone sent (`AppModel.lastNavKind`), so a "Veer left."
-    /// leaves the turn-left arrow up until the next cue; "straight" only at route start, and
-    /// `LiveActivityController.end` forces "arrived" (also for a stopped route).
-    ///
-    /// Accessibility: labelled with the raw `kind` string (not a spoken phrase).
-    /// - Parameter kind: `NavActivityAttributes.ContentState.kind`.
+    // MARK: Helpers
+
+    /// SF Symbol for upcoming manoeuvre: turn arrows, crossing pedestrian, chequered flag, or straight arrow.
     private func glyph(_ kind: String) -> some View {
         let name: String
         switch kind {
@@ -107,12 +152,117 @@ struct NavLiveActivity: Widget {
         return Image(systemName: name).accessibilityLabel(kind)
     }
 
-    /// Distance text: "N m" below 1000 m, "%.1f km" from 1000 m up (callers add tabular digits).
-    /// Note the phone sends 0 for "unknown", so a missing fix reads "0 m" here (the watch, which
-    /// gets -1, shows its title instead). `String(format:)` uses the POSIX "." decimal separator
-    /// regardless of locale.
-    /// - Parameter m: whole metres to the next waypoint.
+    /// Tint color for turn glyphs to ensure immediate visual recognition.
+    private func glyphTint(_ kind: String) -> Color {
+        switch kind {
+        case "arrived": return Color.green
+        case "crossing": return Color.yellow
+        default: return Color(red: 0.96, green: 0.95, blue: 0.92)
+        }
+    }
+
+    /// Distance text: "N m" below 1000m, "%.1f km" from 1000m up.
     private func distance(_ m: Int) -> Text {
         m >= 1000 ? Text(String(format: "%.1f km", Double(m) / 1000)) : Text("\(m) m")
+    }
+
+    /// Compact obstacle clearance glance for the trailing bubble of the Dynamic Island.
+    @ViewBuilder
+    private func compactObstacleGlance(status: LiveActivityObstacleGlance, distanceM: Double) -> some View {
+        switch status {
+        case .head:
+            HStack(spacing: 2) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.red)
+                Text("HEAD")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.red)
+            }
+        case .warning:
+            HStack(spacing: 2) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(Color.orange)
+                if distanceM > 0 {
+                    Text(String(format: "%.1fm", distanceM))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.orange)
+                } else {
+                    Text("ALERT")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.orange)
+                }
+            }
+        case .dropOff:
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .foregroundStyle(Color.purple)
+                Text("CURB")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.purple)
+            }
+        case .clear:
+            HStack(spacing: 2) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.green)
+                Text("CLEAR")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.green)
+            }
+        }
+    }
+
+    /// High-contrast obstacle clearance badge pill for expanded and lock-screen presentations.
+    @ViewBuilder
+    private func obstaclePill(status: LiveActivityObstacleGlance, distanceM: Double, headM: Double) -> some View {
+        let (icon, text, tint): (String, String, Color) = {
+            switch status {
+            case .head:
+                let hStr = headM > 0 ? String(format: " %.1fm", headM) : ""
+                return ("exclamationmark.triangle.fill", "Head hazard\(hStr)", Color.red)
+            case .warning:
+                let dStr = distanceM > 0 ? String(format: " %.1fm", distanceM) : ""
+                return ("exclamationmark.circle.fill", "Obstacle ahead\(dStr)", Color.orange)
+            case .dropOff:
+                return ("arrow.down.right.and.arrow.up.left", "Drop-off / Curb", Color.purple)
+            case .clear:
+                return ("checkmark.circle.fill", "Path clear", Color.green)
+            }
+        }()
+
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+            Text(text)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(tint.opacity(0.2))
+        .foregroundStyle(tint)
+        .clipShape(Capsule())
+    }
+
+    /// Descriptive VoiceOver sentence announced when a blind user touches the Dynamic Island or Lock Screen banner.
+    private func accessibilitySummary(_ state: NavActivityAttributes.ContentState, routeName: String) -> String {
+        let dist = state.distanceM > 0 ? "In \(state.distanceM) meters, " : ""
+        let turnPhrase: String = {
+            switch state.kind {
+            case "turnLeft": return "turn left"
+            case "turnRight": return "turn right"
+            case "crossing": return "cross street"
+            case "arrived": return "destination reached"
+            default: return "continue straight"
+            }
+        }()
+        let obs: String
+        switch state.obstacleStatus {
+        case .head: obs = "Warning: head-height obstacle ahead."
+        case .warning: obs = "Caution: obstacle detected ahead."
+        case .dropOff: obs = "Caution: drop-off or curb ahead."
+        case .clear: obs = "Path is clear."
+        }
+        let routeClause = routeName.isEmpty ? "" : " on route \(routeName)"
+        return "OpenCane\(routeClause): \(dist)\(turnPhrase), \(state.instruction). \(obs)"
     }
 }

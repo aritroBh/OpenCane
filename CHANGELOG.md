@@ -2,6 +2,50 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 40 — Dynamic Island: clean idle state (session scoped to active route), real-time obstacle radar pill and ActivityKit coalescing (Sat Sep 12)
+
+**Why:** The user reported:
+1. "the app has having the navigation thing ever since I downloaded": A persistent blue navigation arrow in the Dynamic Island / status bar since app launch, even when idle and not navigating.
+2. Dynamic Island split presentation in screenshots: the system background location indicator claimed the elongated pill, shoving OpenCane's Live Activity into the minimal detached circular bubble (`↑`).
+3. Sighted spotters and blind users needed a richer Dynamic Island: glanceable obstacle clearance, sunlight-legible badges, and clear VoiceOver sentences.
+
+**Root cause:**
+- `LocationService.swift`: `LocationService.start()` unconditionally instantiated `CLBackgroundActivitySession()`, which runs at app launch (`AppModel.start()`). In iOS 17+, this permanently anchors the blue location navigation pill in the Dynamic Island 24/7.
+- `NavActivityAttributes.swift` / `NavLiveActivity.swift`: Only transmitted `(instruction, distanceM, kind)`. Dynamic Island compact layout had no obstacle awareness.
+
+**What changed:**
+- `LocationService.swift`:
+  - Removed unconditional `CLBackgroundActivitySession()` creation from `start()`.
+  - Added `@MainActor func setNavigating(_ isNavigating: Bool)`: idempotently creates `CLBackgroundActivitySession` when `isNavigating == true`, and calls `invalidate()` before nil when false.
+  - Teardown hooked into all exits: `startRouteNow()`, `stopRoute()`, `endRouteQuietly()`, `onArrived`, `cancelPendingRouteStart()`, and `authorizationDenied`.
+- `LiveActivityCoalescer.swift` (new pure logic in `CaneKitLogic`):
+  - Enforces non-linear distance thresholds (2m near turns <30m, 5m at <100m, 10m at range).
+  - Immediate emission for emergency hazard transitions (`clear <-> warning/head/dropOff`), guarded by a 0.2s flap-guard against sensor oscillation.
+  - 0.8s rate-limit time floor for routine updates, preventing ActivityKit update throttling.
+  - Suppresses status detail text jitter.
+- `NavActivityAttributes.swift`:
+  - Enriched payload: `LiveActivityObstacleGlance` (`.clear`, `.warning`, `.head`, `.dropOff`), `obstacleDistanceM`, `headClearanceM`, `statusDetail`.
+  - Custom `init(from decoder: Decoder)` with `decodeIfPresent` guarantees backward and forward compatibility with existing serialized activity payloads.
+- `LiveActivityController.swift`:
+  - Integrated `LiveActivityCoalescer` state machine on the main actor.
+- `NavLiveActivity.swift`:
+  - Compact Leading: Turn glyph + bold monospaced distance (`[ ↱ 45m ]`).
+  - Compact Trailing: Obstacle clearance badge (`[ ● CLEAR ]`, `[ ⚠ 1.1m ]`, `[ ⛔ HEAD ]`, `[ ⚠ CURB ]`).
+  - Minimal: Turn glyph (or warning symbol if obstacle detected).
+  - Expanded: Turn glyph + route name + full instruction, large rounded distance + status detail, obstacle clearance pill banner.
+  - Lock Screen: Obstacle pill with `.layoutPriority(1)` alongside route name and instruction.
+  - VoiceOver: Natural accessibility summary combining distance, turn direction, instruction, and obstacle clearance.
+- Tests:
+  - 9 tests in `LiveActivityCoalescerTests.swift` covering emission, rate-limiting, distance bands, emergency transitions, flap-guards, and legacy JSON decoding.
+
+**Verification:**
+- `make test`: 468/468 passed.
+- `make sim`: BUILD SUCCEEDED.
+- `make run`: deployed to iPhone 17 Pro Max (`00008150-001A698C1108401C`), running PID 6129 with widget PIDs 6127 & 6128.
+- Audited with two independent rounds of Muse (`--reasoning-effort high`).
+
+test on device: open OpenCane while idle — no persistent blue navigation arrow in Dynamic Island. Start route to CIF — OpenCane owns the full Dynamic Island with turn countdown on the left and live obstacle clearance radar on the right. Stop route — Live Activity and background session dismiss immediately.
+
 ## Step 39 — Cane events reach the family: the Grok Bot webhook client (Sat Sep 12)
 
 OpenCane can now tell someone. Cane detections become one JSON event POSTed to the Grok Bot

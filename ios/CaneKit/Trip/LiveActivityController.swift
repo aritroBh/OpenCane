@@ -30,6 +30,7 @@
 //
 
 import ActivityKit
+import CaneKitLogic
 import Foundation
 import Observation
 
@@ -41,36 +42,57 @@ final class LiveActivityController {
     /// True while an activity has been requested and not yet ended. Not observed by any view today.
     private(set) var isActive = false
     /// Last failure ("Live Activities are off in Settings", "Live Activity: <request error>"); nil
-    /// after a successful `start`. Not shown by any view today (the debug footer is gone) — read it
-    /// in the debugger.
+    /// after a successful `start`.
     private(set) var lastError: String?
 
     /// The running activity, nil when none. Only this class touches it (main actor); the async
     /// ActivityKit calls get a `nonisolated(unsafe)` copy.
     @ObservationIgnored private var activity: Activity<NavActivityAttributes>?
-    /// Last state actually sent; the coalescing baseline for `update`. Not reset by `end` — the
-    /// next `start` overwrites it.
+    /// Pure decision state machine that gates updates to prevent ActivityKit rate throttling.
+    @ObservationIgnored private var coalescer = LiveActivityCoalescer()
+    /// Last state actually sent; the coalescing baseline for `update`.
     @ObservationIgnored private var lastState: NavActivityAttributes.ContentState?
 
     /// Idle until `start`.
     init() {}
 
-    /// Requests a new activity (ending any previous one immediately — Step 20: rapid restarts
-    /// stacked stale activities on the lock screen) with glyph kind "straight".
-    /// Called by `AppModel.startRouteNow` (after `nav.start`, so `instruction` is WP1's line).
-    /// - Parameters:
-    ///   - routeName: the static attribute ("ISR Townsend Hall to CIF", "To Grainger …").
-    ///   - instruction: first content line.
-    ///   - distanceM: metres to the first waypoint (0 if unknown).
-    /// No-op with `lastError` set when the user has turned Live Activities off; a refused request
-    /// also only sets `lastError` — guidance never depends on the Live Activity.
-    func start(routeName: String, instruction: String, distanceM: Int) {
+    /// Requests a new activity with initial navigation and obstacle clearance state.
+    func start(
+        routeName: String,
+        instruction: String,
+        distanceM: Int,
+        obstacleStatus: LiveActivityObstacleGlance = .clear,
+        obstacleDistanceM: Double = 0.0,
+        headClearanceM: Double = 0.0,
+        statusDetail: String = ""
+    ) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             lastError = "Live Activities are off in Settings"
             return
         }
         end(immediate: true)
-        let state = NavActivityAttributes.ContentState(instruction: instruction, distanceM: distanceM, kind: "straight")
+        coalescer.reset()
+        let logicStatus = LiveActivityObstacleStatus(rawValue: obstacleStatus.rawValue) ?? .clear
+        let snap = LiveActivitySnapshot(
+            instruction: instruction,
+            distanceM: distanceM,
+            kind: "straight",
+            obstacleStatus: logicStatus,
+            obstacleDistanceM: obstacleDistanceM,
+            headClearanceM: headClearanceM,
+            statusDetail: statusDetail
+        )
+        _ = coalescer.shouldEmit(snapshot: snap, now: Date().timeIntervalSinceReferenceDate)
+
+        let state = NavActivityAttributes.ContentState(
+            instruction: instruction,
+            distanceM: distanceM,
+            kind: "straight",
+            obstacleStatus: obstacleStatus,
+            obstacleDistanceM: obstacleDistanceM,
+            headClearanceM: headClearanceM,
+            statusDetail: statusDetail
+        )
         do {
             activity = try Activity.request(attributes: NavActivityAttributes(routeName: routeName),
                                             content: .init(state: state, staleDate: nil),
@@ -83,36 +105,57 @@ final class LiveActivityController {
         }
     }
 
-    /// Pushes a new state, unless the instruction and kind are unchanged and the distance moved
-    /// less than 10 m. Called on every GPS fix while navigating (AppModel `location.onFix`).
-    /// - Parameters:
-    ///   - instruction: `nav.instruction`.
-    ///   - distanceM: `nav.distanceToNext ?? 0`, metres.
-    ///   - kind: `AppModel.lastNavKind` (a `NavCue.rawValue` — including "turnLeft"/"turnRight" from a
-    ///     veer — or "straight"). ⚠ Any new value needs a case in `NavLiveActivity.glyph(_:)`.
-    /// Fire-and-forget: the update runs in a detached task and its outcome is not observed. There
-    /// is no time floor, so a walker standing still gets no updates (design.md §6.7).
-    func update(instruction: String, distanceM: Int, kind: String) {
+    /// Pushes an update if the pure coalescing rules permit.
+    func update(
+        instruction: String,
+        distanceM: Int,
+        kind: String,
+        obstacleStatus: LiveActivityObstacleGlance = .clear,
+        obstacleDistanceM: Double = 0.0,
+        headClearanceM: Double = 0.0,
+        statusDetail: String = "",
+        now: Double = Date().timeIntervalSinceReferenceDate
+    ) {
         guard let activity else { return }
-        let state = NavActivityAttributes.ContentState(instruction: instruction, distanceM: distanceM, kind: kind)
-        if let last = lastState, last.instruction == instruction, last.kind == kind, abs(last.distanceM - distanceM) < 10 {
-            return
-        }
+        let logicStatus = LiveActivityObstacleStatus(rawValue: obstacleStatus.rawValue) ?? .clear
+        let snap = LiveActivitySnapshot(
+            instruction: instruction,
+            distanceM: distanceM,
+            kind: kind,
+            obstacleStatus: logicStatus,
+            obstacleDistanceM: obstacleDistanceM,
+            headClearanceM: headClearanceM,
+            statusDetail: statusDetail
+        )
+        guard coalescer.shouldEmit(snapshot: snap, now: now) else { return }
+
+        let state = NavActivityAttributes.ContentState(
+            instruction: instruction,
+            distanceM: distanceM,
+            kind: kind,
+            obstacleStatus: obstacleStatus,
+            obstacleDistanceM: obstacleDistanceM,
+            headClearanceM: headClearanceM,
+            statusDetail: statusDetail
+        )
         lastState = state
-        // `Activity` is not Sendable but its async API is safe to call from any task.
         nonisolated(unsafe) let act = activity
         Task.detached { await act.update(.init(state: state, staleDate: nil)) }
     }
 
-    /// Ends the activity with an "arrived" glyph and `instruction` (default "Route ended"),
-    /// dismissed 60 s later (or immediately if `immediate` is true). Called on arrival (`final: nav.instruction`),
-    /// on `stopRoute()` (so a stopped route also shows the arrived glyph for a minute), by
-    /// `AppModel.endRouteQuietly()` and by `start` (both `immediate: true`) to replace a previous
-    /// activity. No-op when none is running. `activity` is cleared synchronously, before the
-    /// detached end completes.
+    /// Ends the activity with an "arrived" glyph and `instruction`.
     func end(final instruction: String? = nil, immediate: Bool = false) {
         guard let activity else { return }
-        let state = NavActivityAttributes.ContentState(instruction: instruction ?? "Route ended", distanceM: 0, kind: "arrived")
+        coalescer.reset()
+        let state = NavActivityAttributes.ContentState(
+            instruction: instruction ?? "Route ended",
+            distanceM: 0,
+            kind: "arrived",
+            obstacleStatus: .clear,
+            obstacleDistanceM: 0.0,
+            headClearanceM: 0.0,
+            statusDetail: ""
+        )
         nonisolated(unsafe) let act = activity
         let policy: ActivityUIDismissalPolicy = immediate ? .immediate : .after(.now + 60)
         Task.detached { await act.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }

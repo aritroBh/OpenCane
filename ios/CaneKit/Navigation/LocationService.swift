@@ -133,13 +133,18 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         isRunning = true
         manager.requestWhenInUseAuthorization()
         if CLLocationManager.headingAvailable() { manager.startUpdatingHeading() }
-        // Keeps location alive if the screen locks mid-walk (UIBackgroundModes: location).
-        backgroundSession = CLBackgroundActivitySession()
+        // Note: backgroundSession is NOT created here at launch. It is armed strictly while
+        // navigating a route via `setNavigating(true)` so the persistent blue navigation arrow
+        // is not held in the Dynamic Island / status bar while idle in the foreground.
         updatesTask = Task { [weak self] in
             do {
                 for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
                     guard let self, !Task.isCancelled else { return }
-                    if update.authorizationDenied { self.denied = true; self.authorized = false }
+                    if update.authorizationDenied {
+                        self.denied = true
+                        self.authorized = false
+                        self.setNavigating(false)
+                    }
                     if update.authorizationRequestInProgress { continue }
                     guard let loc = update.location else { continue }
                     self.authorized = true
@@ -151,6 +156,21 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         }
     }
 
+    /// Arms or invalidates the CoreLocation background activity session.
+    /// Scoped strictly to active navigation so the system does not display the persistent
+    /// blue navigation pill in the Dynamic Island / status bar while idle in the foreground.
+    /// Idempotent. Calls invalidate() before nil to avoid leaking the session assertion.
+    func setNavigating(_ isNavigating: Bool) {
+        if isNavigating {
+            if backgroundSession == nil {
+                backgroundSession = CLBackgroundActivitySession()
+            }
+        } else {
+            backgroundSession?.invalidate()
+            backgroundSession = nil
+        }
+    }
+
     /// Stops fixes and heading, releases the background session and clears `fix`. Called only by
     /// `AppModel.scenePhaseChanged(.background)` when no route is running — not by `stopRoute()`
     /// or arrival any more (bf03253).
@@ -158,8 +178,7 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         updatesTask?.cancel()
         updatesTask = nil
         manager.stopUpdatingHeading()
-        backgroundSession?.invalidate()
-        backgroundSession = nil
+        setNavigating(false)
         isRunning = false
         fix = nil                             // a stale fix must not seed the next MapKit route
     }
