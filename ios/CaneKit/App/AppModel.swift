@@ -138,6 +138,11 @@ final class AppModel {
     let hazards: HazardScanner
     /// Hazard map: every announced hazard with GPS + photo → Documents/hazards/*.geojson.
     let hazardLog = HazardLog()
+    /// Cane-went-over detector (CoreMotion → CaneKitLogic `FallDetector`). ⚠ Unvalidated
+    /// thresholds; see FallDetector.swift.
+    let fallWatcher = FallWatcher()
+    /// Spam guard for the two buttons that POST to the webhook (CaneKitLogic; 10 s apart).
+    @ObservationIgnored private var actionLimit = ActionRateLimit()
     /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 39).
     /// Off unless `familyAlertsEnabled`; unconfigured (no webhook key) is a no-op that says so.
     let family = FamilyAlerts()
@@ -253,7 +258,13 @@ final class AppModel {
     /// Phone mounted upright (portrait, camera at the top). See ios/README.md §6 for the remap.
     /// Pushed to `depth.apply(portrait:mirror:)` via `pushDepthSettings()`.
     var portraitMode: Bool = Settings.bool("portraitMode", default: true) {
-        didSet { Settings.set(portraitMode, "portraitMode"); pushDepthSettings() }
+        didSet {
+            Settings.set(portraitMode, "portraitMode")
+            pushDepthSettings()
+            // Tilt is measured off whichever axis points up the cane; a stale value here would
+            // make every fall look upright and none would ever be reported.
+            fallWatcher.portraitMount = portraitMode
+        }
     }
     /// Swap left/right if the mount points the camera the other way.
     /// Toggled by the "Mirror left / right" control (accessibility label is a UI-test contract).
@@ -348,7 +359,11 @@ final class AppModel {
     /// position off the phone, so it is opt-in twice over: the switch here and a webhook key in
     /// Secrets.plist). In `LaunchRecovery.optionalFeatureKeys`, so a crash loop clears it.
     var familyAlertsEnabled: Bool = Settings.bool("familyAlertsEnabled", default: false) {
-        didSet { Settings.set(familyAlertsEnabled, "familyAlertsEnabled"); family.enabled = familyAlertsEnabled }
+        didSet {
+            Settings.set(familyAlertsEnabled, "familyAlertsEnabled")
+            family.enabled = familyAlertsEnabled
+            applyFallWatcher()
+        }
     }
     /// Family email addresses the bot should alert. Stored normalised (`FamilyContacts.normalize`),
     /// so what is on disk is what gets posted.
@@ -366,6 +381,16 @@ final class AppModel {
     /// True when the stored list has not been registered since it last changed — the Settings
     /// card uses it to show that Save is still needed.
     private(set) var familyContactsNeedSave = false
+
+    /// Watch for the cane going over and report it to family.
+    ///
+    /// Default **on** — the owner asked for falls to be reported, and it only ever sends anything
+    /// while family alerts are also on. ⚠ It is nonetheless the least validated thing in the app:
+    /// the thresholds have never been measured against a real cane (docs/todo.md), so if it cries
+    /// wolf on the phone, turn it off here rather than living with it.
+    var fallDetectionEnabled: Bool = Settings.bool("fallDetectionEnabled", default: true) {
+        didSet { Settings.set(fallDetectionEnabled, "fallDetectionEnabled"); applyFallWatcher() }
+    }
 
     /// Let a cheap model add one sentence of context to each family alert (`extra.ai_context`).
     ///
@@ -713,6 +738,10 @@ final class AppModel {
         family.enabled = familyAlertsEnabled
         family.contextProvider = { [weak self] in self?.familyContext ?? AlertContext() }
         family.aiContextEnabled = familyAlertsAIContext
+        fallWatcher.portraitMount = portraitMode
+        fallWatcher.onFall = { [weak self] fall in self?.fallDetected(fall) }
+        hazards.onThreat = { [weak self] sighting, _ in self?.threatSeen(sighting) }
+        applyFallWatcher()            // didSet does not fire during init
         AppModel.shared = self
         self.conversation = ConversationCoordinator(appModel: self, client: client)
         self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
@@ -2051,6 +2080,9 @@ final class AppModel {
         nav.onArrived = { [weak self] in
             guard let self else { return }
             self.logger.event("arrived")
+            self.family.tripEnded(destination: self.activeRouteName, arrived: true,
+                                  lat: self.location.fix?.coordinate.latitude,
+                                  lng: self.location.fix?.coordinate.longitude)
             if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
@@ -2326,6 +2358,13 @@ final class AppModel {
     func stopRoute() {
         cancelRouteBuild()
         cancelPendingRouteStart()
+        // Before `activeRouteName` is cleared, and only when a walk was actually under way, so
+        // pressing Stop on an idle guide does not email the family about a trip that never began.
+        if nav.isNavigating {
+            family.tripEnded(destination: activeRouteName, arrived: false,
+                             lat: location.fix?.coordinate.latitude,
+                             lng: location.fix?.coordinate.longitude)
+        }
         nav.stop()
         activeRouteName = nil
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
@@ -2623,6 +2662,10 @@ final class AppModel {
         location.setNavigating(true)
         nav.start(route)
         activeRouteName = route.name
+        fallWatcher.reset()
+        family.tripStarted(destination: route.name,
+                           lat: location.fix?.coordinate.latitude,
+                           lng: location.fix?.coordinate.longitude)
         // New walk: forget the breadcrumb / obstacle rate limits so the first fix goes out
         // promptly. Battery arming deliberately survives (FamilyAlertPolicy.reset).
         family.reset()
@@ -2806,6 +2849,7 @@ final class AppModel {
     /// ⚠ Says the bot **accepted** the list. It never says an email was sent: the bot sends it,
     /// afterwards, and the app has no way to know that it worked.
     func saveFamilyContacts() async {
+        guard allowWebhookAction("save_contacts") else { return }
         let sendTest = !familyContactsRegistered
         let result = await family.registerContacts(familyEmails, sendTest: sendTest)
         let line: String
@@ -2827,6 +2871,61 @@ final class AppModel {
         speech.say(line, .nav, ttl: 10)
         logger.event("family_contacts", ["count": familyEmails.count, "send_test": sendTest,
                                          "result": result.summary])
+    }
+
+    /// Spam guard for the buttons that POST to the Grok Bot webhook.
+    ///
+    /// Each tap starts a *bot run*, and Save can email the whole family, so a held finger would
+    /// burn the routine's quota and mail everyone repeatedly. `ActionRateLimit` (CaneKitLogic)
+    /// spaces each action 10 s apart.
+    ///
+    /// ⚠ A refused tap **says so out loud** rather than doing nothing: a button that silently
+    /// ignores you reads as a broken button, and the walker cannot see a greyed-out control.
+    /// - Returns: true when the action may run; false when it was refused (and already announced).
+    private func allowWebhookAction(_ action: String) -> Bool {
+        let now = Date().timeIntervalSinceReferenceDate
+        if actionLimit.allow(action, now: now) { return true }
+        let wait = actionLimit.secondsRemaining(action, now: now)
+        speech.say("Just a moment. Try again in \(wait) second\(wait == 1 ? "" : "s").", .nav, ttl: 4)
+        family.noteThrottled(secondsRemaining: wait)
+        return false
+    }
+
+    /// Runs the fall watcher only when it can do something: both switches on.
+    ///
+    /// Not gated on `started` — a cane can go over while the walker is standing still with the app
+    /// open and no route running, which is exactly when nobody else would notice.
+    private func applyFallWatcher() {
+        if fallDetectionEnabled && familyAlertsEnabled {
+            fallWatcher.portraitMount = portraitMode
+            fallWatcher.start()
+        } else {
+            fallWatcher.stop()
+        }
+    }
+
+    /// The cane went over and stayed down: tell the family, and say so out loud in case the walker
+    /// is fine and wants to cancel by picking it up (the detector re-arms when it is upright).
+    private func fallDetected(_ fall: Fall) {
+        family.fall(lat: location.fix?.coordinate.latitude,
+                    lng: location.fix?.coordinate.longitude,
+                    note: "Possible fall: the cane went over and stayed down.")
+        speech.say("Possible fall detected. Telling your family.", .nav, ttl: 10)
+        logger.event("fall", ["impact_g": fall.impactG, "rest_tilt": fall.restTiltDegrees,
+                              "ar_t": fall.at])
+    }
+
+    /// The vision model described a weapon or an attacker ahead.
+    ///
+    /// The walker is told as well as the family. It may be a false positive — but a blind person
+    /// walking toward something the camera thinks is a knife should hear about it, and the wording
+    /// quotes the camera rather than asserting it.
+    private func threatSeen(_ sighting: ThreatSighting) {
+        family.threat(sighting, lat: location.fix?.coordinate.latitude,
+                      lng: location.fix?.coordinate.longitude,
+                      now: Date().timeIntervalSinceReferenceDate)
+        speech.say("Careful. The camera described a possible \(sighting.term) ahead.", .obstacle, ttl: 8)
+        logger.event("threat", ["term": sighting.term, "text": sighting.text])
     }
 
     /// Everything the phone knows that a family member would want with an alert: where the walker
@@ -2860,6 +2959,7 @@ final class AppModel {
     /// ⚠ It reports that the bot **accepted** the event. It never says family was texted: the bot
     /// decides that later, and claiming it here would be a lie the walker might rely on.
     func sendFamilyTestEvent() async {
+        guard allowWebhookAction("test_event") else { return }
         let line = await family.sendTestEvent(lat: location.fix?.coordinate.latitude,
                                               lng: location.fix?.coordinate.longitude)
         speech.say(line, .nav, ttl: 10)

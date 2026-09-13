@@ -2158,6 +2158,42 @@ are worded for that; do not "improve" them into "family notified".
 - ⚠ Struct with mutating methods: a call inside `#expect`/`#require` does not compile under
   Swift 6. The tests assign to a local first.
 
+### `Logic/Sources/CaneKitLogic/FallDetector.swift` — the cane went over (Step 41)
+
+- Free fall (`freeFallG` 0.6 for ≥ 0.1 s) → impact (`impactG` 2.5) → still (within ±0.25 g) and
+  tilted (≥ 50° off vertical) for ≥ 1.5 s. All three stages required: free fall alone is a caught
+  drop, an impact alone is a tap, and a cane upright two seconds later did not stay down.
+- One `Fall` per episode; re-arms only below `uprightTiltDegrees` (30°), so a cane lying on the
+  ground being nudged cannot re-alert.
+- ⚠ **Every threshold is an unvalidated guess** — never measured against a real cane. `docs/todo.md`
+  carries the measurement job. The tests pin the shape of the decision, not that the numbers fit.
+
+### `Logic/Sources/CaneKitLogic/ThreatWatch.swift` — a weapon in the vision reply (Step 41)
+
+- `sighting(in:)` — weapon / attacker nouns, whole words only. `benignPhrases` cancel a sentence
+  ("knife and fork", "nail gun"); a negation is armed by `negations` and disarmed by a sentence end
+  or a `clauseResets` conjunction.
+- ⚠ Negation is **clause-scoped, not a fixed lookbehind**. The first version looked back two words
+  and read "without any gun or knife" as a knife sighting. "No cars, but a man with a gun" must
+  still alert — that is what `clauseResets` is for.
+- `event(_:lat:lng:)` — `critical`, and the note **quotes** the camera rather than asserting a
+  weapon, because that is all OpenCane knows.
+
+### `Logic/Sources/CaneKitLogic/ActionRateLimit.swift` — webhook button spam guard (Step 41)
+
+- `allow(_:now:)` / `secondsRemaining(_:now:)`, `defaultInterval` 10 s, keyed per action.
+- ⚠ A refused attempt does **not** record a run, or holding the button would push the next allowed
+  one forever out of reach.
+
+### `ios/CaneKit/Alerts/FallWatcher.swift` — CoreMotion → FallDetector (Step 41)
+
+- `CMDeviceMotion` at 20 Hz to `.main` (one of the two `assumeIsolated` cases hard rule 1 allows).
+  `gravity + userAcceleration` is total g; tilt is the angle of the mount's up-axis from vertical,
+  chosen by `portraitMount` ← `AppModel.portraitMode`. A stale mount value would measure tilt off
+  the wrong axis and miss every fall.
+- Runs only while `fallDetectionEnabled && familyAlertsEnabled`; deliberately **not** gated on a
+  route, because a cane can go over while the walker stands still.
+
 ### `Logic/Sources/CaneKitLogic/FamilyContacts.swift` — who the bot emails
 
 - `isValid(_:)` — conservative address check (one `@`, dotted domain, alphabetic TLD ≥ 2, no
@@ -2221,6 +2257,9 @@ are worded for that; do not "improve" them into "family notified".
   in `prepare(_:)` so the payload describes the moment the event fired, not whenever the send Task
   ran. `deliver(_:prompt:client:)` then summarises (best effort) and POSTs off the main actor.
 - `aiContextEnabled` ← the `familyAlertsAIContext` setting (default **on**).
+- `threat(_:lat:lng:now:)`, `tripStarted(…)`, `tripEnded(…:arrived:)` — Step 41. ⚠ The trip pair
+  are `warn`, not `info`: the bot only emails for warn/critical and the owner asked for an email at
+  each end of a trip. `noteThrottled(secondsRemaining:)` puts a refused tap in the Settings row.
 - `registerContacts(_:sendTest:)` — ⚠ three deliberate differences from every other send: it
   ignores `enabled` (registering is setup, done before alerts are switched on), it skips
   `prepare`/`deliver` entirely (no context, and **the addresses never reach the summarizer**), and

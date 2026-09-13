@@ -218,8 +218,23 @@ What each detection becomes — thresholds in `FamilyAlertPolicy` (CaneKitLogic,
 | Periodic GPS | `location` | `info` (chat-only) | one per 120 s |
 | Close obstacle (≤ 1.2 m) | `obstacle` | `warn` | one per 60 s |
 | Phone battery ≤ 20 % | `low_battery` | `warn` | once per discharge (re-arms above 30 %) |
-| Fall | `fall` | `critical` | never limited |
+| Cane went over and stayed down | `fall` | `critical` | one per episode |
+| Weapon named in a vision reply | `threat` | `critical` | one per 120 s |
+| Route started | `trip_start` | `warn` | once per route |
+| Arrived, or Stop pressed mid-route | `trip_end` | `warn` | once per route |
 | SOS | `sos` | `critical` | never limited |
+
+⚠ `trip_start` / `trip_end` are `warn` on purpose: the bot only emails family for warn/critical.
+
+⚠ Fall detection ships **on** but its thresholds have never been measured against a real cane
+(`FallDetector`). If it cries wolf, Settings → Family alerts → "Detect the cane falling".
+
+⚠ `threat` only means *the vision model's reply named a weapon*. There is no weapon classifier on
+the phone; the event quotes the camera rather than asserting one, and the matcher refuses negations
+("no weapon"), benign collocations ("knife and fork") and substrings ("gunmetal").
+
+"Send test event" and "Save family emails" are limited to one every 10 seconds each — every POST
+starts a bot run, and Save can email the whole family. A refused tap is spoken aloud, not ignored.
 
 #### Who gets alerted
 
@@ -272,8 +287,8 @@ a safety alert, so its sentence sits in `extra.ai_context` beside the facts it w
 always be checked against them. The prompt also forbids the failure a small model reaches for
 unprompted: never say the walker is safe or that help is coming, never invent a street or an injury.
 
-⚠ **No fall detector and no SOS control exist yet.** `FamilyAlerts.fall(…)` / `.sos(…)` are written
-and tested, but nothing calls them except the test button — see `docs/todo.md`.
+⚠ **No SOS control exists yet.** `FamilyAlerts.sos(…)` is written and tested, but nothing calls it
+— see `docs/todo.md`.
 
 ⚠ **HTTP 200 means the bot accepted the call and started a run — not that an SMS was sent.** The bot
 decides who to text afterwards, from `severity` and `type`. No string in the app says "family

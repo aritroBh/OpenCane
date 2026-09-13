@@ -100,6 +100,11 @@ final class HazardScanner {
     /// once per line the policies decided to say. `AppModel.wireHazards` speaks it at `.obstacle`
     /// and records it in `HazardLog` + the trip log (`hazard {type, text, source}`).
     @ObservationIgnored var onHazard: ((String, HazardSource, Data?) -> Void)?
+    /// The vision model described a weapon or an attacker. Fired from the **raw** reply, before
+    /// `HazardWatchPolicy` decides whether to speak anything: that policy exists to keep the
+    /// soundscape calm and will happily drop a repeat, which is right for "kerb ahead" and wrong
+    /// for a gun. Rate limiting for the family alert happens in `FamilyAlertPolicy.threat`.
+    @ObservationIgnored var onThreat: ((ThreatSighting, Data?) -> Void)?
     /// Diagnostics for the trip log (AppModel → `logger.event(kind, fields)`): one `scan` record
     /// per sign scan (what text was read, what was said) and one `hazard_watch` record per hazard-watch
     /// reply (reply, latency, and why it was dropped). Without these a walk log, or the Street
@@ -281,6 +286,12 @@ final class HazardScanner {
                 fields["dropped"] = "stale"
                 onDiagnostic?("hazard_watch", fields)
                 return
+            }
+            // Checked on the raw reply and before the age gate: a weapon a second ago still
+            // matters, even when the distance in the sentence has gone stale.
+            if let sighting = ThreatWatch.sighting(in: reply) {
+                fields["threat"] = sighting.term
+                onThreat?(sighting, jpeg)
             }
             if age > distanceFreshFor { reply = HazardWatchPolicy.withoutDistance(reply) }
             let spoken = watchPolicy.line(forReply: reply, now: Date().timeIntervalSinceReferenceDate)

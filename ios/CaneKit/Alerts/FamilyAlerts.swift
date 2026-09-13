@@ -113,11 +113,30 @@ final class FamilyAlerts {
         send(event)
     }
 
+    /// The vision model described a weapon or an attacker ahead (`critical`, one per two minutes).
+    func threat(_ sighting: ThreatSighting, lat: Double?, lng: Double?, now: TimeInterval) {
+        guard enabled else { return }
+        guard let event = policy.threat(sighting, lat: lat, lng: lng, now: now) else { return }
+        send(event)
+    }
+
+    /// A walk began (`warn`, so the bot emails — see `FamilyAlertPolicy.tripStarted`).
+    func tripStarted(destination: String?, lat: Double?, lng: Double?) {
+        guard enabled else { return }
+        send(FamilyAlertPolicy.tripStarted(destination: destination, lat: lat, lng: lng))
+    }
+
+    /// A walk ended, by arriving or by being stopped.
+    func tripEnded(destination: String?, arrived: Bool, lat: Double?, lng: Double?) {
+        guard enabled else { return }
+        send(FamilyAlertPolicy.tripEnded(destination: destination, arrived: arrived,
+                                         lat: lat, lng: lng))
+    }
+
     /// Suspected fall (`critical`, never rate-limited).
     ///
-    /// ⚠ **Nothing calls this yet — OpenCane has no fall detector.** It exists so the detector,
-    /// when it is written, has one obvious place to report to. `sendTestEvent()` exercises the
-    /// same path end to end.
+    /// Called by `AppModel` from `FallWatcher` (CoreMotion → `FallDetector`). ⚠ Those thresholds
+    /// are unvalidated guesses; see FallDetector.swift.
     func fall(lat: Double?, lng: Double?, note: String? = nil) {
         guard enabled else { return }
         send(FamilyAlertPolicy.fall(lat: lat, lng: lng, note: note))
@@ -135,6 +154,11 @@ final class FamilyAlerts {
     func status(_ note: String, lat: Double? = nil, lng: Double? = nil) {
         guard enabled else { return }
         send(FamilyAlertPolicy.status(note, lat: lat, lng: lng))
+    }
+
+    /// Records a tap that the 10 s spam guard refused, so the Settings row explains the silence.
+    func noteThrottled(secondsRemaining: Int) {
+        lastStatus = "Too quick — try again in \(secondsRemaining) second\(secondsRemaining == 1 ? "" : "s")."
     }
 
     // MARK: Family contacts
