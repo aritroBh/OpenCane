@@ -128,17 +128,17 @@ public enum LaunchRecovery {
     ///
     /// Spoken to someone who cannot see that a switch moved, so it names the loss *and* says the
     /// guidance is intact — AGENTS.md "How we engineer" 6: a refused feature warns loudly but still
-    /// guides. Kept to one breath: it is said during launch, over the top of "OpenCane ready."
-    /// ⚠ "Turn them back on in Hazards." names the Hazards card, which now sits on the Sense tab
-    /// (Guide / Sense / Settings); "60 fps camera" lives on Settings → Mount. The words are pinned
-    /// only loosely (`theRecoveryLineSaysWhatIsOffAndThatGuidanceRemains`), and are not prefetched.
+    /// guides. Step 67 (owner: "a lot of jargon" at launch): one short sentence, no settings-card
+    /// names (it used to add "Turn them back on in Hazards."). The switches themselves are on the
+    /// Sense tab's Hazards card and Settings → Mount. Pinned by
+    /// `theRecoveryLineSaysWhatIsOffAndThatGuidanceRemains` (one sentence, ≤ 12 words, "off",
+    /// "guidance"); not prefetched (it is rare).
     public static func spokenLine(for mode: LaunchMode) -> String? {
         switch mode {
         case .normal:
             return nil
         case .recovered:
-            return "The last start did not finish, so the extra camera features are off. "
-                 + "Guidance and obstacle warnings are on. Turn them back on in Hazards."
+            return "Extra camera features are off after a crash, but guidance still works."
         }
     }
 }

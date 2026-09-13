@@ -14,7 +14,7 @@
 //    · `WalkingIntro` — the line spoken before the route starts ("Walking to Grainger
 //      Engineering Library, 750 meters.") so a blind walker hears what was chosen and can say
 //      Stop if it is wrong.
-//      Also `routeStarted` (Step 54): the "Route started. <name>. First: …" intro, built once
+//      Also `routeStarted` (Step 54; Step 68 wording "Route to <destination>. <first line>"): the intro, built once
 //      for both `NavigationEngine.start` (speaks it) and `AppModel` (prefetches it).
 //
 //  Owner / callers (all in the app, all main actor; every type here is a stateless value):
@@ -31,7 +31,8 @@
 //  Key invariants:
 //    · Foundation only (no MapKit / CoreLocation): candidates arrive as `PlaceCandidate`.
 //    · Matching is whole-alias only after `normalize` (case, accents, punctuation, "the", "and"
-//      ignored). No fuzzy or partial matching: "Grainger Street" must go to MapKit.
+//      ignored). No fuzzy or partial matching: "Grainger Street" must go to MapKit. Recogniser
+//      mishearings are added as exact aliases instead ("Granger Library", "C I F"; Step 67).
 //    · ⚠ CIF and ISR coordinates are the last / first waypoint of route_isr_cif.json
 //      (`gazetteerEndpointsAreTheRouteFileEntrances`). The other entrances are OSM entrance nodes
 //      queried 2026-09-11 and have NOT been walked: verify on site.
@@ -86,8 +87,10 @@ public enum CampusPlaces {
         CampusPlace(id: "cif", name: "the CIF east entrance",
                     // route_isr_cif.json WP9 (the demo route's arrival point).
                     coordinate: Coordinate(latitude: 40.11242, longitude: -88.22788),
+                    // "CIF building", "C I F", "see eye eff": how the recogniser writes "CIF" (Step 67).
                     aliases: ["CIF", "Campus Instructional Facility", "CIF east entrance",
-                              "Campus Instructional Facility east entrance"]),
+                              "Campus Instructional Facility east entrance",
+                              "CIF building", "C I F", "see eye eff"]),
         CampusPlace(id: "isr", name: "the Townsend Hall doors",
                     // route_isr_cif.json WP1 (OSM entrance node 5418851678, ISR south vestibule).
                     coordinate: Coordinate(latitude: 40.10949, longitude: -88.22135),
@@ -98,10 +101,15 @@ public enum CampusPlaces {
         CampusPlace(id: "grainger", name: "Grainger Engineering Library",
                     // OSM entrance node 5296014632, Springfield Avenue side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1125612, longitude: -88.2272830),
-                    // "Granger" is the common speech-recognition mishearing of "Grainger".
+                    // "Granger" is the common speech-recognition mishearing of "Grainger"
+                    // (phone log 2026-09-13T15-48-34Z: "… to Granger library"). Step 67 adds the
+                    // longer mishearings. ⚠ Not "library" alone: that is also the Main Library.
                     aliases: ["Grainger", "Grainger Library", "Grainger Engineering Library",
                               "Grainger Engineering Library Information Center",
-                              "Granger", "Granger Library"]),
+                              "Granger", "Granger Library", "Granger Engineering Library",
+                              "Grainger Engineering",
+                              // Review round Steps 67–68 (Muse #9): compound mishearings.
+                              "Granger Engineering", "Granger Building", "Grainger Building"]),
         CampusPlace(id: "illiniUnion", name: "the Illini Union",
                     // OSM entrance node 5399191831 (entrance=main), Green Street side. Verify on site.
                     coordinate: Coordinate(latitude: 40.1098522, longitude: -88.2272312),
@@ -248,26 +256,52 @@ public enum WalkingIntro {
         return "Walking to \(place), \(d). GPS is weak. If you are inside, head for the exit first."
     }
 
-    /// The route intro, "Route started. <name>. First: <first waypoint's line>" (Step 54).
+    /// The route intro, "Route to <destination>. <first waypoint's line>" (Step 68; Step 54 said
+    /// "Route started. <route name>. First: <line>" — 200 characters on the demo route, now 159).
     ///
     /// Why one function: `NavigationEngine.start` speaks it and `AppModel` prefetches it into the
     /// natural-voice cache (`queueRouteStart` during the depth wait, `buildRoute` as soon as MapKit
     /// answers, `startRouteNow` for the degraded paths). The cache is keyed by exact bytes; the
     /// old copy of this string in `startRouteNow` was prefetched a moment before the engine spoke
     /// it, so on a cold cache the first line of every route came out in the system voice.
-    /// Pinned by `introLineIsWhatNavigationSpeaks`.
-    /// - Parameter route: the route about to start; an empty route ends in "First: " (the engine
-    ///   still speaks it before the first fix).
+    /// The waypoint's `say` is the route file's text and is not shortened here.
+    /// Pinned by `introLineIsWhatNavigationSpeaks`, `introNamesTheDestinationNotTheRoute`.
+    /// - Parameter route: the route about to start; an empty route is just "Route to <name>." (the
+    ///   engine still speaks it before the first fix).
     public static func routeStarted(_ route: Route) -> String {
-        routeStarted(name: route.name, firstLine: route.waypoints.first?.say ?? "")
+        routeStarted(destination: destinationName(route), firstLine: route.waypoints.first?.say ?? "")
     }
 
     /// The intro from its two parts; `routeStarted(_:)` is the production entry.
     /// - Parameters:
-    ///   - name: `Route.name`.
-    ///   - firstLine: the first waypoint's `say`, or "".
-    public static func routeStarted(name: String, firstLine: String) -> String {
-        "Route started. \(name). First: \(firstLine)"
+    ///   - destination: `destinationName(_:)`.
+    ///   - firstLine: the first waypoint's `say`, or "" (then no trailing space).
+    public static func routeStarted(destination: String, firstLine: String) -> String {
+        let head = "Route to \(destination)."
+        let first = firstLine.trimmingCharacters(in: .whitespaces)
+        return first.isEmpty ? head : "\(head) \(first)"
+    }
+
+    /// The spoken destination of a route: MapKit's "To <name>" → "<name>"; a hand-named
+    /// "<origin> to <destination>" ("ISR Townsend Hall to CIF") → the part after the last " to ";
+    /// otherwise the last waypoint's place name; otherwise the route name. A trailing full stop is
+    /// dropped so the intro never says "..". Pinned by `introNamesTheDestinationNotTheRoute`.
+    /// - Parameter route: the route about to start.
+    public static func destinationName(_ route: Route) -> String {
+        let name = route.name.trimmingCharacters(in: .whitespaces)
+        var dest: String
+        if name.hasPrefix("To ") {
+            dest = String(name.dropFirst(3))
+        } else if let r = name.range(of: " to ", options: .backwards) {
+            dest = String(name[r.upperBound...])
+        } else if let last = route.waypoints.last?.placeName, !last.isEmpty {
+            dest = last
+        } else {
+            dest = name
+        }
+        dest = dest.trimmingCharacters(in: .whitespaces)
+        while dest.hasSuffix(".") { dest.removeLast() }
+        return dest.isEmpty ? name : dest
     }
 
     /// Nearest 10 m below a kilometre (at least "10 meters", never "0"), tenths of a kilometre

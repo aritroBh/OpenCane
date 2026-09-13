@@ -47,7 +47,10 @@
 //    · `CueKind` raw values are wire format (they travel to the watch in `PhoneToWatch`); the
 //      head payload never leaves the phone.
 //    · `CueDecider` is not Sendable: exactly one actor owns and drives it.
-//  Tests: CueDeciderTests.swift (26 tests).
+//  Tests: CueDeciderTests.swift (26 tests); StressTests.swift (Step 66: the seeded lane-stream
+//  property test and the regressions `headOnsetFiresAfterAGatedHandoffAndALongSweep`,
+//  `noHeadOnsetOnANonFiniteDistance` — an onset needs a finite distance, and an onset while `active`
+//  is a stale `.head` still fires).
 //
 
 import Foundation

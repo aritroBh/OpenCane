@@ -287,6 +287,15 @@ public struct StraightWalkDetector: Sendable, Equatable {
 /// `secondHeadLineNeedsUnderSixtyCentimetres`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`,
 /// `aBuzzedSideCueDoesNotSplitAHeadEpisode` (NavSupportTests) and `fixedCueLinesAreLeftToCommonLines`
 /// (SpokenPhrasesTests).
+///
+/// Step 68 adds "Close." (`close(torsoCentreM:covered:held:trusted:now:)`): the owner asked for
+/// half the words "but if something comes close, tell us — like when it turns into the red". It
+/// follows the centre torso cell's red tile (`TileLevel.urgent`, < 0.7 m), once per red episode, at
+/// `.safety` since the review round Steps 67–68 (`closeTier`; it was `.obstacle` and got dropped
+/// behind the route intro), at every cue level (`closeAllowed`). Pinned by `closeIsASafetyLineAtEveryCueLevel`,
+/// `closeIsSpokenOncePerRedEpisode`, `closeNeedsThreeSecondsOutOfTheRed`,
+/// `closeIsRateLimitedToOneEveryFourSeconds`, `aPointBlankHoldNeverStartsClose`,
+/// `sweepAndUncoveredFramesNeitherStartNorEndClose` (NavSupportTests).
 public struct CueSpeechPolicy: Sendable, Equatable {
     /// Speech priority class of a returned line: `safety` ("Head height.") maps to the speech
     /// queue's highest priority, `obstacle` to the obstacle-name tier.
@@ -304,6 +313,38 @@ public struct CueSpeechPolicy: Sendable, Equatable {
     private var lastSpoken: [CueKind: TimeInterval] = [:]
     /// True once the current head episode has used its second line (reset by every onset).
     private var headSecondLineSpoken = false
+
+    /// The close-obstacle line (Step 68). ⚠ In `RouteStatusLines.allSpokenLines` (prefetched).
+    public static let closeText = "Close."
+    /// The speech tier of `closeText`: `.safety` (review round Steps 67–68, Antigravity #3). At
+    /// `.obstacle` it queued behind the 8–10 s route intro (`.nav`) and its 3 s TTL dropped it — an
+    /// imminent-collision warning that never played. At `.safety` it cuts `.nav` / `.obstacle` /
+    /// `.scene`; it never cuts "Head height." and "Head height." never cuts it (equal priority queues
+    /// in order of arrival; "Close." is one word). Caller: `AppModel.handle`, mapped with the same
+    /// rule as `speakCueIfNeeded`. Pinned by `closeIsASafetyLineAtEveryCueLevel`.
+    public static let closeTier: Tier = .safety
+
+    /// Whether "Close." may be spoken at all: while a route or an indoor step script guides, at
+    /// EVERY cue level (review round Steps 67–68, Muse #2 — Quiet renders no torso haptic, so under
+    /// Quiet "Close." is the only near-obstacle signal; it used to be gated off there).
+    /// - Parameters:
+    ///   - navigating: `NavigationEngine.isNavigating`.
+    ///   - indoorActive: `IndoorGuide.isActive`.
+    ///   - level: the cue level — deliberately not consulted (documents that Quiet is included).
+    /// - Returns: true while guiding. Pinned by `closeIsASafetyLineAtEveryCueLevel`.
+    public static func closeAllowed(navigating: Bool, indoorActive: Bool, level: CueLevel) -> Bool {
+        navigating || indoorActive
+    }
+    /// Seconds the centre torso cell must stay out of the red before a new red episode may speak.
+    public var closeClearSeconds: TimeInterval = 3
+    /// Seconds: minimum gap between two "Close." lines.
+    public var closeInterval: TimeInterval = 4
+    /// True while in a red episode that has spoken.
+    private var closeEpisode = false
+    /// Start of the current out-of-the-red run inside an episode; nil otherwise.
+    private var closeClearSince: TimeInterval?
+    /// When "Close." was last spoken; nil before the first.
+    private var lastCloseAt: TimeInterval?
 
     /// Creates a policy with the default 4 s / 4 s limiters and the 0.6 m second line.
     public init() {}
@@ -347,6 +388,48 @@ public struct CueSpeechPolicy: Sendable, Equatable {
         if let last = lastSpoken[cue.kind], now - last < interval { return nil }
         lastSpoken[cue.kind] = now
         return (text, tier)
+    }
+
+    /// "Close." when the centre torso cell turns red (Step 68), fed every depth report while a
+    /// route or an indoor script guides (`AppModel.handle`, not under Quiet cues).
+    ///
+    /// Red = `TileLevel.level(for:hasData:covered:) == .urgent` (< 0.7 m) — exactly the tile the
+    /// walker sees go red. One line per red episode, and the episode ends only after
+    /// `closeClearSeconds` (3 s) of trusted frames out of the red, so standing at a wall, or the
+    /// reading flapping at 0.7 m, never repeats it; never two lines within `closeInterval` (4 s)
+    /// — a red entry inside the limiter waits and speaks when it expires if still red.
+    /// A `NearHold` substitution (`held`: point-blank after a near reading, or the 0.8 m cold start)
+    /// may continue an episode but never start one: a phone switched on against a wall or put face
+    /// down must not say "Close." (a real approach is measured red before the hold takes over).
+    /// Sweep frames (`trusted` false) and a cell the camera cannot see (`covered` false) neither
+    /// start nor end an episode.
+    /// - Parameters:
+    ///   - torsoCentreM: `LaneGrid.torso[1]`, metres (`.infinity` = clear).
+    ///   - covered: `LaneGrid.torsoCoverage[1]`.
+    ///   - held: `LaneGrid.torsoHeld[1]`.
+    ///   - trusted: `LaneReport.isTrusted`.
+    ///   - now: seconds (the report's AR timestamp).
+    /// - Returns: `closeText`, or nil. The app speaks it at `closeTier` (`.safety`, review round Steps 67–68) with a 3 s TTL.
+    public mutating func close(torsoCentreM: Float, covered: Bool, held: Bool, trusted: Bool,
+                               now: TimeInterval) -> String? {
+        guard trusted, covered, now.isFinite else { return nil }
+        let red = TileLevel.level(for: torsoCentreM, hasData: true, covered: true) == .urgent
+        if red {
+            closeClearSince = nil
+            guard !closeEpisode, !held else { return nil }
+            if let last = lastCloseAt, now - last < closeInterval { return nil }
+            closeEpisode = true
+            lastCloseAt = now
+            return Self.closeText
+        }
+        guard closeEpisode else { return nil }
+        let since = closeClearSince ?? now
+        closeClearSince = since
+        if now - since >= closeClearSeconds {
+            closeEpisode = false
+            closeClearSince = nil
+        }
+        return nil
     }
 }
 

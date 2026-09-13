@@ -40,7 +40,7 @@ maths as `CaneKitLogic.GeoMath` (R = 6 371 000 m; the earlier 6 371 008.8 m chan
 Where the `name` is used: "Passed <name>. <Next name> in N meters." (passed-by), "Next, <name>, in N
 meters." (appended by Repeat). The Guide instruction, the watch and the Live Activity show the `say` of the
 *upcoming* waypoint.
-The route intro at Start is "Route started. ISR Townsend Hall to CIF. First: <WP1 say>".
+The route intro at Start is "Route to CIF. <WP1 say>" (Step 68; the destination is the part of the route name after " to ").
 
 ## What the app does at each waypoint
 
@@ -64,8 +64,10 @@ from the previous leg (right = `.directionDown`, left = `.directionUp`); a cross
 ## Why the file looks the way it does
 
 **Fences.** An intermediate fence fires on the first fix that is inside `radius_m`, with horizontal
-accuracy ≤ 20 m and speed > 0.5 m/s (standing still near a fence never fires it). "GPS weak. Waypoint
-cues paused until it recovers." is spoken after 10 s of accuracy worse than 20 m, the same threshold.
+accuracy ≤ 20 m and speed > 0.5 m/s (standing still near a fence never fires it). The GPS WEAK pill
+comes after 10 s of accuracy worse than 20 m, the same threshold; the spoken "GPS weak." comes 10 s
+after GPS turns bad for `GPSAnnouncer` — a fix worse than 20 m or older than 12 s (Step 68, retuned in the
+Steps 67–68 review round).
 Every fix is also tested against the next two waypoints (skip-ahead: "Passed one waypoint." then the
 real line), and a waypoint you walk past without entering counts once you came within 2 × r and then
 receded by a full radius over three fixes (passed-by: "Passed Goodwin Avenue. Green Street in 150

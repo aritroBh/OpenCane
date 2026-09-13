@@ -11,6 +11,15 @@
 //      AirPods, route distance), campus navigation ("take me to CIF"), route stop, and voice markers ("set a post").
 //    · Step 62: "take me from A to B" (`.routeFromTo`, rule 13b) and "I'm outside" (`.indoorOutside`,
 //      rule 1b) for the indoor-then-outdoor walk (`IndoorRoute.swift`).
+//    · Step 67: rule 14b — a travel verb anywhere in the sentence ("I just wanna get from here to
+//      Granger library", "how do I get to CIF", "can you take me to the Union please") routes on the
+//      phone. Spoken destinations never go to the cloud: on `canekit-2026-09-13T15-48-34Z.jsonl` that
+//      sentence missed every rule, the cloud turn hit its budget and the walker heard "No answer.".
+//    · Review round Steps 67–68 (Codex, Muse, Antigravity): rule 1 drops polite fillers ("please
+//      stop"); rule 1c sends any whole-word "emergency" / "911" to the emergency confirmation before
+//      every route rule ("take me to emergency" was a MapKit route); ambiguous travel phrases ("go
+//      to", "get to", "walk to", "going to") route only to a campus place — a free-text MapKit
+//      search needs an explicit navigation verb ("I need to get to class" was a route to "Class").
 //
 //  Key invariants:
 //    · Pure Foundation only; no side effects.
@@ -34,8 +43,12 @@
 //  `fastPathMarkersAndTrends`, `fastPathCampusNavigation`, `fastPathDelegatesOpenEnded`,
 //  `sceneQuestionDetection`, `ivrRuleRunsBeforeEverythingElse`, `stopPhrasesStillStopBehindRuleZero`,
 //  `howFarHaveIWalkedIsTheDistanceWalked`, Step 62: `fromAToBIsARouteFromTo`,
-//  `fromHereOrHalfARouteIsNotARouteFromTo`, `imOutsideIsTheIndoorHandover`), `VoiceMenuTests` and
-//  `NodToTalkFastPathTests` (rule 5b).
+//  `fromHereOrHalfARouteIsNotARouteFromTo`, `imOutsideIsTheIndoorHandover`, Step 67:
+//  `spokenDestinationsRouteOnThePhone`, `aTravelVerbAnywhereKeepsARealOrigin`,
+//  `noTravelIntentIsNotARoute`, review round: `politeStopPhrasesStillStop`,
+//  `ambiguousTravelPhrasesRouteOnlyToCampusPlaces`, `emergencyWordsReachTheConfirmationNeverARoute`),
+//  `CampusPlacesTests.compoundGraingerMishearingsMatch`, `VoiceMenuTests`, `NodToTalkFastPathTests` (rule 5b) and
+//  `StressTests.fastPathFuzz` (decoration invariance, purity).
 //
 
 import Foundation
@@ -73,10 +86,10 @@ public enum FastPathIntentClassifier {
             return .confirm(yes)
         }
 
-        // 1. Navigation Escape / Stop — exact phrases only, so "stop the beacon" or "don't stop"
-        //    never end a route.
-        if cleaned == "stop" || cleaned == "stop route" || cleaned == "stop navigating"
-            || cleaned == "stop navigation" || cleaned == "cancel route" || cleaned == "end route" {
+        // 1. Navigation Escape / Stop — exact phrases only, after dropping polite fillers at either
+        //    end (`stopKey`; review round Steps 67–68, Muse #5: "please stop" went to the cloud and
+        //    guidance ran on for up to 8 s), so "stop the beacon" or "don't stop" never end a route.
+        if stopPhrases.contains(stopKey(trimmed)) {
             return .stopRoute
         }
 
@@ -84,6 +97,14 @@ public enum FastPathIntentClassifier {
         //     from the recogniser counts), so "is it cold outside" is not a handover.
         if outsideForms.contains(cleaned.replacingOccurrences(of: "\u{2019}", with: "'")) {
             return .indoorOutside
+        }
+
+        // 1c. Emergency anywhere in the sentence (review round Steps 67–68, Antigravity #1, Muse #10):
+        //     before rules 13b / 14 / 14b, so "take me to emergency" is the confirmation-gated call to
+        //     the emergency contact, never a MapKit route, and "there's an emergency" does not wait on
+        //     the cloud. See `isEmergencyRequest(_:)`. A false hit only asks "Say yes to call …".
+        if isEmergencyRequest(trimmed) {
+            return .emergency
         }
 
         // 2. Settings: Silence / Unsilence Cane Haptics
@@ -218,17 +239,260 @@ public enum FastPathIntentClassifier {
         // A gazetteer hit returns the place's spoken `name` (not its id), and `AppModel.navigate(to:)`
         // re-matches it (every name is an alias since Step 62, `everyCampusPlaceNameRoundTripsThroughMatch`).
         // Any other target after a prefix starts a route to `target.capitalized` through MapKit
-        // (⚠ "go to settings" becomes a place search).
+        // (⚠ "take me to settings" becomes a place search). Trailing fillers ("please", "now") are
+        // trimmed by `destinationAction` (Step 67). The ambiguous prefixes "go to " / "walk to "
+        // (`gazetteerOnlyPrefixes`) route only to a campus place (review round Steps 67–68: "go to
+        // class", "go to bed").
         for prefix in destinationPrefixes {
             if cleaned.hasPrefix(prefix) {
                 let target = String(cleaned.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if let action = destinationAction(target) {
+                let action = gazetteerOnlyPrefixes.contains(prefix) ? campusAction(target) : destinationAction(target)
+                if let action {
                     return action
                 }
             }
         }
 
+        // 14b. Travel intent anywhere (Step 67): "I wanna go to X", "how do I get to X", "directions
+        //      to X", "can you take me from A to B please". See `travelIntent(_:)`. Last, so every
+        //      narrower rule above keeps its phrase.
+        if let travel = travelIntent(trimmed) {
+            return travel
+        }
+
         return nil
+    }
+
+    /// Rule 14b's EXPLICIT navigation verb phrases — the only ones whose destination may become a
+    /// free-text MapKit search — as lower-case word sequences with apostrophes removed. Checked before
+    /// `gazetteerOnlyVerbPhrases` at each word, so "get me" wins over "get".
+    /// Deliberately absent: "went" (past: "I went to Grainger yesterday"), "route" alone (rule 0 /
+    /// rule 14 own it), and since the review round Steps 67–68 the ordinary-English "go", "get",
+    /// "walk", "travel" (now gazetteer-only: "I need to get to class", "I have to go to work").
+    /// ⚠ A false hit acts (a MapKit search starts; a miss says it could not find the place), so the
+    /// list stays verbs that only mean navigation. Pinned by `spokenDestinationsRouteOnThePhone`,
+    /// `noTravelIntentIsNotARoute`, `ambiguousTravelPhrasesRouteOnlyToCampusPlaces`.
+    static let travelVerbPhrases: [[String]] = [
+        ["show", "me", "the", "way"],
+        ["take", "me"], ["bring", "me"], ["get", "me"], ["navigate", "me"], ["walk", "me"],
+        ["guide", "me"], ["lead", "me"], ["route", "me"],
+        ["directions"], ["navigate"],
+    ]
+
+    /// Rule 1's route-stop phrases, compared with `stopKey(_:)` (lower case, apostrophes removed,
+    /// polite fillers dropped). Pinned by `stopPhrasesStillStopBehindRuleZero`, `politeStopPhrasesStillStop`.
+    static let stopPhrases: Set<String> = [
+        "stop", "stop route", "stop navigating", "stop navigation", "cancel route", "end route",
+    ]
+
+    /// Words said before a stop that are not part of it ("please stop", "okay stop"). Rule 1 only.
+    static let leadingStopFillers: Set<String> = ["please", "okay", "ok", "um", "uh"]
+
+    /// Rule 1's comparison form of a query: its word keys with `leadingStopFillers` dropped from the
+    /// front and `trailingFillers` from the end, joined by single spaces ("Stop, please." → "stop").
+    /// Review round Steps 67–68 (Muse #5).
+    /// - Parameter query: the whitespace-trimmed query, any case.
+    /// - Returns: the key, possibly empty.
+    static func stopKey(_ query: String) -> String {
+        var w = words(query)
+        while let first = w.first, leadingStopFillers.contains(first.key) { w.removeFirst() }
+        return trimTrailingFillers(w).map(\.key).joined(separator: " ")
+    }
+
+    /// Rule 1c's negations: a sentence with one of these is not a request ("not an emergency",
+    /// "cancel emergency", the app's own "Emergency canceled.", "it isn't an emergency").
+    static let emergencyNegations: Set<String> = ["not", "isnt", "cancel", "canceled", "cancelled", "never", "false"]
+
+    /// Words that make "emergency" a thing, not a request, when they follow it ("emergency exit",
+    /// "the emergency stairs"): a landmark or a destination, never the call.
+    static let emergencyObjectWords: Set<String> = ["exit", "exits", "door", "doors", "stairs", "stairway", "stairwell"]
+
+    /// Rule 1c (review round Steps 67–68, Antigravity #1, Muse #10): the query asks for emergency
+    /// help — the whole word "emergency" / "emergencies" (not followed by `emergencyObjectWords`),
+    /// "911" (also "9-1-1") or "nine one one" anywhere, and no `emergencyNegations` word nor a "no"
+    /// right before "emergency". The action is `.emergency`: the confirmation prompt that calls the
+    /// walker's emergency contact after a "yes" (`EmergencyConfirm`), never 911 itself.
+    /// Pinned by `emergencyWordsReachTheConfirmationNeverARoute`.
+    /// - Parameter query: the whitespace-trimmed query, any case.
+    /// - Returns: true for an emergency request.
+    static func isEmergencyRequest(_ query: String) -> Bool {
+        let keys = words(query).map(\.key)
+        let nineOneOne = keys.contains { key in
+            key.filter(\.isNumber) == "911" && key.allSatisfy { $0.isNumber || $0 == "-" }
+        } || keys.indices.contains { i in
+            i + 2 < keys.count && keys[i] == "nine" && keys[i + 1] == "one" && keys[i + 2] == "one"
+        }
+        let emergencyAt = keys.indices.filter { keys[$0] == "emergency" || keys[$0] == "emergencies" }
+        let emergency = emergencyAt.contains { i in
+            !(i + 1 < keys.count && emergencyObjectWords.contains(keys[i + 1]))
+        }
+        guard nineOneOne || emergency else { return false }
+        if keys.contains(where: { emergencyNegations.contains($0) }) { return false }
+        if emergencyAt.contains(where: { $0 > 0 && keys[$0 - 1] == "no" }) { return false }
+        return true
+    }
+
+    /// Words said after a destination that are not part of it, as lower-case word sequences
+    /// (apostrophes removed). Trimmed from the end, repeatedly: "the Union please now" → "the Union".
+    /// "from here" needs no entry: it is split off as an origin (`hereOrigins`).
+    static let trailingFillers: [[String]] = [
+        ["right", "now"], ["thank", "you"], ["for", "me"], ["please"], ["now"], ["thanks"],
+    ]
+
+    /// One spoken word: `text` as said with edge punctuation removed (for the destination the route
+    /// is built from) and `key`, lower-case with apostrophes removed (for matching).
+    struct Word {
+        /// The word as said, edge punctuation trimmed ("Grainger," → "Grainger").
+        let text: String
+        /// Comparison form ("Let's" → "lets").
+        let key: String
+    }
+
+    /// Splits a query into `Word`s at whitespace, dropping words that are only punctuation.
+    /// - Parameter text: any query.
+    /// - Returns: the words in order.
+    static func words(_ text: String) -> [Word] {
+        let edge = CharacterSet.punctuationCharacters.union(.symbols)
+        return text.split(whereSeparator: { $0.isWhitespace }).compactMap { raw in
+            let t = String(raw).trimmingCharacters(in: edge)
+            guard !t.isEmpty else { return nil }
+            let key = t.lowercased().replacingOccurrences(of: "'", with: "")
+                .replacingOccurrences(of: "\u{2019}", with: "")
+            return Word(text: t, key: key)
+        }
+    }
+
+    /// `words` with every trailing filler (`trailingFillers`) removed from the end.
+    /// - Parameter words: a destination or origin.
+    /// - Returns: the words without their trailing fillers (possibly empty).
+    static func trimTrailingFillers(_ words: [Word]) -> [Word] {
+        var out = words
+        var changed = true
+        while changed {
+            changed = false
+            for filler in trailingFillers where out.count >= filler.count {
+                if out.suffix(filler.count).map(\.key) == filler {
+                    out.removeLast(filler.count)
+                    changed = true
+                }
+            }
+        }
+        return out
+    }
+
+    /// Rule 14b verbs that count only when the destination is a campus place ("I'm going to CIF",
+    /// "heading to Grainger", "how do I get to Grainger"): as a MapKit search they would catch "I'm
+    /// going to sit down", "turn my head to the left" (Muse review, Step 67), "I need to get to
+    /// class", "I have to go to work", "I want to go to bed" (review round Steps 67–68). Pinned by
+    /// `ambiguousTravelPhrasesRouteOnlyToCampusPlaces`, `travelIntentReviewCases`.
+    static let gazetteerOnlyVerbPhrases: [[String]] = [
+        ["going"], ["heading"], ["headed"], ["head"], ["go"], ["get"], ["walk"], ["travel"],
+    ]
+
+    /// Rule 14 / 13b prefixes that are ordinary English at the start of a sentence ("go to bed",
+    /// "walk to the door"): they route only to a campus place (review round Steps 67–68).
+    static let gazetteerOnlyPrefixes: Set<String> = ["go to ", "walk to "]
+
+    /// A campus place route for `target` (trailing fillers trimmed), or nil — never a MapKit search.
+    /// Callers: rule 14 and rule 13b for `gazetteerOnlyPrefixes`.
+    /// - Parameter target: the words after the prefix.
+    /// - Returns: `.startRoute` with the place's spoken name, or nil.
+    static func campusAction(_ target: String) -> ConversationAction? {
+        let place = trimTrailingFillers(words(target)).map(\.text).joined(separator: " ")
+        return CampusPlaces.match(place).map { .startRoute(destination: $0.name) }
+    }
+
+    /// Words that mark a rule-14b destination as not a place, so a gazetteer miss is not searched on
+    /// MapKit: "where do I go to pay my bill", "I need to get to work on my homework", "how do I get
+    /// to sleep" (Muse review, Step 67). A campus place never contains one.
+    /// Review round Steps 67–68: "you" ("how do I get to see you"), "emergency" / "emergencies" /
+    /// "911" (never a destination — rule 1c owns them; "take me to the emergency exit" goes to the cloud).
+    static let nonPlaceWords: Set<String> = [
+        "my", "your", "it", "that", "this", "me", "him", "her", "them", "us", "you",
+        "sleep", "know", "next", "question", "do", "be", "pay", "work", "bed", "eat", "drink",
+        "emergency", "emergencies", "911",
+    ]
+
+    /// Longest rule-14b destination (words) that may become a MapKit search on a gazetteer miss.
+    static let maxMapKitDestinationWords = 4
+
+    /// Rule 14b (Step 67): a travel verb phrase (`travelVerbPhrases`, or `gazetteerOnlyVerbPhrases`
+    /// for a campus place only — "go", "get", "walk", "travel", "going", "heading" since the review
+    /// round Steps 67–68) anywhere, followed by "to <destination>" or "from <origin> to <destination>".
+    ///   · "to B from A" splits at the last "from" (as rule 13b does).
+    ///   · An origin in `hereOrigins` ("here", "my location") is no origin.
+    ///   · A real origin → `.routeFromTo(from: A, to: B)`, both ends as said (first such verb wins).
+    ///   · Every verb is tried: a gazetteer hit from any verb beats a MapKit search from an earlier
+    ///     one ("get directions to go to Grainger" is Grainger, not a search for "Go To Grainger").
+    ///   · A MapKit search needs ≤ `maxMapKitDestinationWords` words and none of `nonPlaceWords`.
+    ///   · Trailing fillers are trimmed; an end left empty, or a destination ending in a dangling
+    ///     "from" / "to" (a cut-off sentence), skips that verb.
+    ///   · A verb right after "used to" is skipped ("I used to go to Grainger" is not a request).
+    /// Pinned by `spokenDestinationsRouteOnThePhone`, `aTravelVerbAnywhereKeepsARealOrigin`,
+    /// `noTravelIntentIsNotARoute`, `travelIntentReviewCases`, `StressTests.fastPathFuzz`.
+    /// - Parameter query: the whitespace-trimmed query, original case.
+    /// - Returns: `.startRoute`, `.routeFromTo`, or nil.
+    static func travelIntent(_ query: String) -> ConversationAction? {
+        let w = words(query)
+        let keys = w.map(\.key)
+        func joined(_ part: [Word]) -> String { part.map(\.text).joined(separator: " ") }
+        var mapKitFallback: ConversationAction?
+        for i in w.indices {
+            let gazetteerOnly: Bool
+            let verb: [String]
+            func matches(_ phrase: [String]) -> Bool {
+                i + phrase.count <= keys.count && Array(keys[i..<(i + phrase.count)]) == phrase
+            }
+            if let v = travelVerbPhrases.first(where: matches) {
+                verb = v; gazetteerOnly = false
+            } else if let v = gazetteerOnlyVerbPhrases.first(where: matches) {
+                verb = v; gazetteerOnly = true
+            } else {
+                continue
+            }
+            if i >= 2, keys[i - 2] == "used", keys[i - 1] == "to" { continue }
+            let next = i + verb.count
+            guard next < w.count else { continue }
+            var origin: [Word] = []
+            var destination: [Word]
+            if keys[next] == "from" {
+                guard let to = keys[(next + 1)...].firstIndex(of: "to") else { continue }
+                origin = Array(w[(next + 1)..<to])
+                destination = Array(w[(to + 1)...])
+                guard !trimTrailingFillers(origin).isEmpty else { continue }
+            } else if keys[next] == "to" {
+                destination = Array(w[(next + 1)...])
+                if let from = destination.lastIndex(where: { $0.key == "from" }),
+                   from > 0, from + 1 < destination.count {
+                    origin = Array(destination[(from + 1)...])
+                    destination = Array(destination[..<from])
+                }
+            } else {
+                continue
+            }
+            origin = trimTrailingFillers(origin)
+            destination = trimTrailingFillers(destination)
+            guard let first = destination.first, first.key != "from", first.key != "to",
+                  let last = destination.last, last.key != "from", last.key != "to" else { continue }
+            let to = joined(destination)
+            let hereOrigin = origin.isEmpty || hereOrigins.contains(CampusPlaces.normalize(joined(origin)))
+            if !hereOrigin {
+                guard destination.count <= maxMapKitDestinationWords,
+                      origin.count <= maxMapKitDestinationWords,
+                      !destination.contains(where: { nonPlaceWords.contains($0.key) }),
+                      !origin.contains(where: { nonPlaceWords.contains($0.key) }),
+                      let oFirst = origin.first, oFirst.key != "from", oFirst.key != "to",
+                      let oLast = origin.last, oLast.key != "from", oLast.key != "to"
+                else { continue }
+                if gazetteerOnly && CampusPlaces.match(to) == nil { continue }
+                return .routeFromTo(from: joined(origin), to: to)
+            }
+            if let place = CampusPlaces.match(to) { return .startRoute(destination: place.name) }
+            if !gazetteerOnly, mapKitFallback == nil {
+                mapKitFallback = destinationAction(to)
+            }
+        }
+        return mapKitFallback
     }
 
     /// Rule 1b's whole utterances (lower case, edge punctuation trimmed, curly apostrophe folded).
@@ -259,7 +523,8 @@ public enum FastPathIntentClassifier {
     /// origin (`hereOrigins`) → `destinationAction(to)`. ⚠ A destination that itself contains
     /// " from " ("across from the Union") splits there too.
     /// Pinned by `fromAToBIsARouteFromTo`, `fromHereOrHalfARouteIsNotARouteFromTo`,
-    /// `everyDestinationPrefixTakesAFromOrigin`.
+    /// `everyDestinationPrefixTakesAFromOrigin`. Review round Steps 67–68: after a
+    /// `gazetteerOnlyPrefixes` prefix ("go to B from A") B must be a campus place, else nil.
     /// - Parameter query: the whitespace-trimmed query, original case.
     /// - Returns: `.routeFromTo`, `.startRoute` for a "here" origin, or nil.
     static func routeFromTo(_ query: String) -> ConversationAction? {
@@ -267,12 +532,14 @@ public enum FastPathIntentClassifier {
         let text = query.trimmingCharacters(in: edge)
         func clean(_ part: Substring) -> String { String(part).trimmingCharacters(in: edge) }
         var from = "", to = ""
-        if let prefix = destinationPrefixes.lazy
-                .compactMap({ text.range(of: $0, options: [.anchored, .caseInsensitive]) }).first,
+        var campusOnly = false
+        if let match = destinationPrefixes.lazy
+                .compactMap({ p in text.range(of: p, options: [.anchored, .caseInsensitive]).map { (p, $0) } }).first,
            let split = text.range(of: " from ", options: [.caseInsensitive, .backwards],
-                                  range: prefix.upperBound..<text.endIndex) {
-            to = clean(text[prefix.upperBound..<split.lowerBound])
+                                  range: match.1.upperBound..<text.endIndex) {
+            to = clean(text[match.1.upperBound..<split.lowerBound])
             from = clean(text[split.upperBound...])
+            campusOnly = gazetteerOnlyPrefixes.contains(match.0)
         } else if let prefix = ["take me from ", "go from ", "navigate from ", "from "].lazy
                     .compactMap({ text.range(of: $0, options: [.anchored, .caseInsensitive]) }).first,
                   let split = text.range(of: " to ", options: .caseInsensitive,
@@ -283,16 +550,31 @@ public enum FastPathIntentClassifier {
             return nil
         }
         guard !from.isEmpty, !to.isEmpty else { return nil }
+        if campusOnly {
+            guard let campus = campusAction(to) else { return nil }
+            if hereOrigins.contains(CampusPlaces.normalize(from)) { return campus }
+            return .routeFromTo(from: from, to: to)
+        }
         if hereOrigins.contains(CampusPlaces.normalize(from)) { return destinationAction(to) }
         return .routeFromTo(from: from, to: to)
     }
 
-    /// Rule 14's destination: a gazetteer hit → `.startRoute` with the place's spoken `name`;
-    /// any other non-empty target → `.startRoute(target.capitalized)` (MapKit); empty → nil.
-    /// Callers: rule 14, and rule 13b for a "from here" origin.
+    /// Rule 14's destination: trailing fillers trimmed ("the Union please" → "the Union", Step 67),
+    /// then a gazetteer hit → `.startRoute` with the place's spoken `name`; any other non-empty
+    /// target → `.startRoute(target.capitalized)` (MapKit) provided it looks like a place (<= maxMapKitDestinationWords,
+    /// no nonPlaceWords, no dangling from/to); empty (or only fillers) → nil.
+    /// Callers: rule 14, rule 13b for a "from here" origin, rule 14b.
     static func destinationAction(_ target: String) -> ConversationAction? {
-        if let place = CampusPlaces.match(target) { return .startRoute(destination: place.name) }
-        return target.isEmpty ? nil : .startRoute(destination: target.capitalized)
+        let targetWords = trimTrailingFillers(words(target))
+        let place = targetWords.map(\.text).joined(separator: " ")
+        if let hit = CampusPlaces.match(place) { return .startRoute(destination: hit.name) }
+        guard !targetWords.isEmpty,
+              targetWords.count <= maxMapKitDestinationWords,
+              !targetWords.contains(where: { nonPlaceWords.contains($0.key) }),
+              let first = targetWords.first, first.key != "from", first.key != "to",
+              let last = targetWords.last, last.key != "from", last.key != "to"
+        else { return nil }
+        return .startRoute(destination: place.capitalized)
     }
 
     /// Rule 0's mapping from a menu item to the action the coordinator performs. "where am I" and

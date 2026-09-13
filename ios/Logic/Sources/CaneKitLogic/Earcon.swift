@@ -199,7 +199,7 @@ public enum EarconPolicy {
     public enum ListenKind: String, Sendable, Equatable {
         /// The walker pressed (Guide tile, Action button, nod).
         case press
-        /// The voice shell, once after the launch menu.
+        /// The voice shell, once after "OpenCane ready." (Step 67: no launch menu).
         case launch
         /// The voice shell, after an answer.
         case followUp

@@ -183,6 +183,22 @@ struct ConversationLogicTests {
         }
     }
 
+    /// Review round Steps 67–68 (Muse #5): a polite stop is still a stop. Leading "please / okay /
+    /// ok / um / uh" and the trailing fillers ("please", "now", "thanks", "thank you", "right now")
+    /// are dropped before rule 1's exact phrases; anything else ("stop the beacon", "don't stop")
+    /// still is not a route stop.
+    @Test func politeStopPhrasesStillStop() {
+        for phrase in ["please stop", "stop please", "stop navigation please", "Stop, please.", "okay stop",
+                       "stop now", "please stop route now", "cancel route please", "end route, thanks",
+                       "um stop", "stop right now", "stop thank you"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == .stopRoute, "\(phrase)")
+        }
+        for phrase in ["stop the beacon", "don't stop", "please don't stop", "stop the route from beeping",
+                       "please", "now"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) != .stopRoute, "\(phrase)")
+        }
+    }
+
     /// Rule 12 is checked before rule 8 (Step 56): "how far have I walked" is the distance walked,
     /// not the distance to the next point; "how far to next point" is still the route clause.
     @Test func howFarHaveIWalkedIsTheDistanceWalked() {
@@ -227,6 +243,162 @@ struct ConversationLogicTests {
                     == .startRoute(destination: "the CIF east entrance"), "\(prefix)")
         }
         #expect(FastPathIntentClassifier.destinationPrefixes.count == 9)
+    }
+
+    /// Step 67: a spoken destination routes on the phone, never through the cloud. Phone log
+    /// `canekit-2026-09-13T15-48-34Z.jsonl`: the launch listen heard "I just wanna get from here to
+    /// Granger library", no rule matched, the cloud turn ran into the 4 s budget and the walker heard
+    /// "No answer.". Rule 14b: a travel verb anywhere, then " to " and the destination (trailing
+    /// fillers trimmed; "from here" is no origin).
+    @Test func spokenDestinationsRouteOnThePhone() {
+        let grainger = ConversationAction.startRoute(destination: "Grainger Engineering Library")
+        for phrase in [
+            "I just wanna get from here to Granger library",          // the exact log utterance
+            "I want to go to Grainger", "I wanna go to Grainger library", "how do I get to Grainger?",
+            "directions to Grainger", "get me to Grainger", "bring me to Grainger library",
+            "can you take me to Grainger", "let's go to Grainger", "I need to get to Grainger",
+            "take me to the Grainger library please", "navigate me to Grainger", "Navigate me to Granger.",
+            "I want to go to Grainger now", "get me to Grainger right now", "go to Grainger, thanks",
+            "I want to get from my location to Grainger", "could you give me directions to Grainger please",
+            "take me to Granger Engineering Library", "I want to go to Grainger Engineering",
+            "how do I get to Grainger from here",
+        ] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == grainger, "\(phrase)")
+        }
+        #expect(FastPathIntentClassifier.classify(query: "I want to go to the CIF building")
+                == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "take me to C I F please")
+                == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "how do I get to see eye eff")
+                == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "I wanna go to the Illini union")
+                == .startRoute(destination: "the Illini Union"))
+        #expect(FastPathIntentClassifier.classify(query: "directions to Siebel center")
+                == .startRoute(destination: "the Siebel Center"))
+        #expect(FastPathIntentClassifier.classify(query: "let's go to the ARC gym")
+                == .startRoute(destination: "the Activities and Recreation Center"))
+        // Not in the gazetteer: an explicit navigation verb searches MapKit for the destination as
+        // said (capitalised, fillers gone). "I want to go to Green Street please" no longer does
+        // (review round Steps 67–68: `ambiguousTravelPhrasesRouteOnlyToCampusPlaces`).
+        #expect(FastPathIntentClassifier.classify(query: "take me to Green Street please")
+                == .startRoute(destination: "Green Street"))
+    }
+
+    /// Step 67: with a travel verb anywhere, "from A to B" with a real origin is still a
+    /// `.routeFromTo` (both ends as said), and "to B from A" splits the same way.
+    @Test func aTravelVerbAnywhereKeepsARealOrigin() {
+        #expect(FastPathIntentClassifier.classify(query: "I want to go from ISR to CIF") == .routeFromTo(from: "ISR", to: "CIF"))
+        #expect(FastPathIntentClassifier.classify(query: "can you take me from Townsend Hall to Grainger please")
+                == .routeFromTo(from: "Townsend Hall", to: "Grainger"))
+        #expect(FastPathIntentClassifier.classify(query: "I need to get to CIF from ISR") == .routeFromTo(from: "ISR", to: "CIF"))
+    }
+
+    /// Step 67 negatives: no travel verb, no " to ", past habit, or a destination made only of
+    /// fillers is not a route; rule 0 (menu words, yes / no) and the stop rule are untouched.
+    @Test func noTravelIntentIsNotARoute() {
+        for phrase in ["I went to Grainger yesterday", "Grainger please", "Grainger", "I want to go",
+                       "how do I get better", "I used to go to Grainger", "go to please",
+                       "what is the weather", "is it cold outside", "take me", "get to"] {
+            let action = FastPathIntentClassifier.classify(query: phrase)
+            if case .startRoute? = action { Issue.record("\(phrase) became a route") }
+            if case .routeFromTo? = action { Issue.record("\(phrase) became a route from-to") }
+        }
+        #expect(FastPathIntentClassifier.classify(query: "stop") == .stopRoute)
+        #expect(FastPathIntentClassifier.classify(query: "yes") == .confirm(true))
+        #expect(FastPathIntentClassifier.classify(query: "no") == .confirm(false))
+        #expect(FastPathIntentClassifier.classify(query: "help") == .help)
+        #expect(FastPathIntentClassifier.classify(query: "menu") == .help)
+        #expect(FastPathIntentClassifier.classify(query: "options") == .help)
+        #expect(FastPathIntentClassifier.classify(query: "route") == .startDefaultRoute)
+    }
+
+    /// Step 67 Muse review: a verb + "to" + something that is not a place does not start a MapKit
+    /// search; a later verb's campus place beats an earlier verb's search; a cut-off "from" is not a
+    /// route; "going" / "heading" count only for a campus place. Known and unchanged (rules 14 / 13b,
+    /// not 14b): "take me to the next question" is still a MapKit search (like "go to settings"), and
+    /// "… across the street from the library" still splits at "from".
+    @Test func travelIntentReviewCases() {
+        for phrase in ["Where do I go to pay my bill", "I need to get to work on my homework",
+                       "how do I get to sleep", "I want to go to the next question", "take me to Grainger from",
+                       "go to from ISR", "I'm going to sit down", "turn my head to the left"] {
+            let action = FastPathIntentClassifier.classify(query: phrase)
+            if case .startRoute? = action { Issue.record("\(phrase) became \(String(describing: action))") }
+            if case .routeFromTo? = action { Issue.record("\(phrase) became \(String(describing: action))") }
+        }
+        let grainger = ConversationAction.startRoute(destination: "Grainger Engineering Library")
+        #expect(FastPathIntentClassifier.classify(query: "Get directions to go to Grainger") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "I'm going to Grainger") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "heading to Granger library") == grainger)
+    }
+
+    /// A conversational "get/go to" question is not a destination just because its last word is
+    /// a short noun. These are common self-talk / assistance questions, not requests to search for
+    /// a place called Eat or Drink; a false route would move the walker onto MapKit guidance.
+    @Test func commonGetToQuestionsDoNotStartRoutes() {
+        for phrase in ["What do I get to eat?", "Where can I go to eat?", "What can I go to drink?"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == nil, "\(phrase)")
+        }
+    }
+
+    /// Review round Steps 67–68 (Antigravity #4, Codex #1, Muse #4). "go to", "get to", "going to",
+    /// "need to get to", "how do I get to", "want to go to", "walk to" are ordinary English; they
+    /// start a route ONLY when the destination is a campus place. A free-text MapKit search needs an
+    /// explicit navigation verb (take / bring / get / walk / navigate / guide / lead / route me,
+    /// navigate, directions, show me the way). "I need to get to class" started a route to "Class".
+    @Test func ambiguousTravelPhrasesRouteOnlyToCampusPlaces() {
+        for phrase in ["I need to get to class", "how do I get to class", "how do I get to see you",
+                       "I'm going to call my mom", "I have to go to work", "listen to music",
+                       "talk to you later", "how do I get to sleep", "I want to go to bed",
+                       "I want to go to Green Street please", "go to class", "walk to the store",
+                       "I need to get to school", "let's go to lunch", "I have to go to the restroom",
+                       "go to class from here", "how do I get to Target", "I'm going to be late",
+                       "I want to travel to Chicago"] {
+            let action = FastPathIntentClassifier.classify(query: phrase)
+            if case .startRoute? = action { Issue.record("\(phrase) became \(String(describing: action))") }
+            if case .routeFromTo? = action { Issue.record("\(phrase) became \(String(describing: action))") }
+        }
+        let grainger = ConversationAction.startRoute(destination: "Grainger Engineering Library")
+        #expect(FastPathIntentClassifier.classify(query: "I just wanna get from here to Granger library") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "go to Grainger") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "I need to get to Grainger") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "how do I get to Grainger") == grainger)
+        #expect(FastPathIntentClassifier.classify(query: "walk to CIF") == .startRoute(destination: "the CIF east entrance"))
+        let explicit: [(String, String)] = [
+            ("take me to Green Street", "Green Street"), ("navigate to Target", "Target"),
+            ("directions to Green Street please", "Green Street"), ("walk me to the bus stop", "The Bus Stop"),
+            ("bring me to Green Street", "Green Street"), ("get me to Green Street", "Green Street"),
+            ("route to Target", "Target"), ("can you take me to Green Street", "Green Street"),
+            ("could you give me directions to Target", "Target"), ("navigate me to Green Street", "Green Street"),
+        ]
+        for (phrase, destination) in explicit {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == .startRoute(destination: destination), "\(phrase)")
+        }
+    }
+
+    /// Review round Steps 67–68 (Antigravity #1, Muse #10). "take me to emergency" used to start a
+    /// MapKit route to "Emergency". Any whole word "emergency" (or "911" / "nine one one") reaches
+    /// the confirmation-gated emergency flow — ahead of every route rule — unless it is negated
+    /// ("not an emergency", "cancel emergency", "Emergency canceled.") or an emergency exit. The two
+    /// words are never a destination either.
+    @Test func emergencyWordsReachTheConfirmationNeverARoute() {
+        for phrase in ["take me to emergency", "get me to emergency", "I need emergency", "call 911",
+                       "emergency please", "there's an emergency", "I have an emergency call someone",
+                       "emergency help me", "Call nine one one", "navigate to 911", "Emergency!",
+                       "call my emergency contact", "take me to the emergency room", "emergency"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == .emergency, "\(phrase)")
+        }
+        for phrase in ["take me to the emergency exit", "where is the emergency exit", "not an emergency",
+                       "no emergency", "cancel emergency", "Emergency canceled.", "it isn't an emergency"] {
+            let action = FastPathIntentClassifier.classify(query: phrase)
+            #expect(action != .emergency, "\(phrase)")
+            if case .startRoute? = action { Issue.record("\(phrase) became \(String(describing: action))") }
+        }
+        // Never a destination either: with rule 1c's negation in the way, the route rules still refuse it.
+        for phrase in ["take me to emergency not now", "navigate to 911 never mind"] {
+            if case .startRoute? = FastPathIntentClassifier.classify(query: phrase) { Issue.record("\(phrase) became a route") }
+        }
+        #expect(FastPathIntentClassifier.classify(query: "stop") == .stopRoute)
+        #expect(FastPathIntentClassifier.classify(query: "yes") == .confirm(true))
     }
 
     /// Step 62: "I'm outside" (whole utterance, straight or curly apostrophe) is the walker's indoor

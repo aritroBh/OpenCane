@@ -155,3 +155,39 @@ public struct EmergencyConfirm: Sendable, Equatable {
         return true
     }
 }
+
+// MARK: - Log masking (review round Steps 67–68, Muse #7)
+
+extension EmergencyConfirm {
+    /// Replacement for a phone number in a trip-log record.
+    public static let maskedNumber = "[number]"
+
+    /// Fewest digits a run needs to be masked: a 7-digit local number is the shortest real contact
+    /// (`EmergencyContactSeed.minDigits`); route distances, counts and "911" are left alone.
+    public static let maskMinDigits = 7
+
+    /// `text` with every phone-like run (digits with spaces, dashes, dots, parentheses, a leading
+    /// plus) of at least `maskMinDigits` digits replaced by `maskedNumber`. The emergency prompt
+    /// reads the number back aloud before dialing (hard requirement, kept); the trip log — and the
+    /// cloud mirror, which sees the same records — gets "Say yes to call Aritro at [number].".
+    /// Caller: `TripLogger.event` for the `text`, `response`, `matched_line` and `transcript` fields.
+    /// Pinned by `logRecordsMaskThePhoneNumber`.
+    /// - Parameter text: a logged line.
+    /// - Returns: the line with numbers masked (the same string when it has fewer than 7 digits).
+    public static func logSafe(_ text: String) -> String {
+        guard text.unicodeScalars.lazy.filter({ ("0"..."9").contains($0) }).count >= maskMinDigits,
+              let regex = try? NSRegularExpression(pattern: #"\+?\(?\d[\d \-().]*\d"#) else { return text }
+        let ns = text as NSString
+        var out = ""
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let run = ns.substring(with: match.range)
+            guard run.unicodeScalars.filter({ ("0"..."9").contains($0) }).count >= maskMinDigits else { continue }
+            out += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            out += maskedNumber
+            cursor = match.range.location + match.range.length
+        }
+        out += ns.substring(from: cursor)
+        return out
+    }
+}

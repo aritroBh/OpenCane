@@ -44,8 +44,9 @@ So: when you add a **spoken or visible** string, say OpenCane. When you touch a 
 target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
 
 1. ⚠ `AppModel.commonLines` prefetches the ElevenLabs audio for fixed spoken lines and matches them
-   **by bytes**. "OpenCane ready." appears both there and at the `speech.say` in `AppModel.start()`;
-   change one without the other and that line silently falls back to Apple's system voice.
+   **by bytes**. "OpenCane ready." is `VoiceShellPolicy.readyLine`, referenced by both `commonLines`
+   and the `speech.say` in `AppModel.start()` (Step 67); retype it as a literal in either place and a
+   one-byte drift silently falls back to Apple's system voice.
 2. ⚠ Changing `CFBundleDisplayName` changes **what the walker must say to Siri**: the phrase is
    "… in OpenCane" now, not "… in CaneKit". `docs/design.md` §6.3 and `docs/handsfree.md` list the current phrases.
 
@@ -110,7 +111,10 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    `.voiceChat` / echo cancellation stays forbidden: it forces Bluetooth HFP and kills the beacon.
 8. **Cue priorities** (speech, `SpeechPriority`): `.scene` (Where am I, answers, flashlight lines) <
    `.obstacle` (obstacle names, signs, hazard watch) < `.nav` (route lines, refusals) < `.safety`
-   ("Head height.", LiDAR ground hazards). The `.head` haptic is never suppressed and its onset never
+   ("Head height.", "Close." — the centre torso tile turning red, < 0.7 m, once per red episode, at every
+   cue level while guiding (`CueSpeechPolicy.closeTier` / `closeAllowed`, review round Steps 67–68: at
+   `.obstacle` it expired behind the route intro) — and LiDAR ground hazards). Two `.safety` lines never
+   cut each other: "Head height." and "Close." queue in order of arrival. The `.head` haptic is never suppressed and its onset never
    delayed; "Head height." is spoken at the onset of a head episode and once more only under 0.6 m
    (`CueSpeechPolicy`; the episode is `CueDecider`'s — re-fire only on crossing 1.0 / 0.6 m ≥ 1.5 s
    apart, ends after 2 s of trusted clear; Step 52). A line cut by a higher band is re-queued and resumes from the
@@ -296,7 +300,7 @@ bench has *disproved* must never sit in the file as though it were settled — m
 - `GeofenceTracker` looks ahead two waypoints and detects passed-by (1 m jitter tolerance). Near the
   current waypoint (2 × radius) the target bearing is the recorded leg bearing and veer cues are muted.
   Arrival needs `distance + accuracy/2 ≤ radius` on two consecutive fixes (no speed gate) — arrival is
-  irreversible. Intermediate fences need ≤ 20 m and > 0.5 m/s; "GPS weak" is spoken at the same 20 m.
+  irreversible. Intermediate fences need ≤ 20 m and > 0.5 m/s; "GPS weak" uses the same 20 m (spoken 10 s after GPS turns bad outdoors — worse than 20 m or a fix older than 12 s — `GPSAnnouncer`, Step 68, retuned in the Steps 67–68 review round).
 - Passed-by never speaks the passed waypoint's own line (its "turn right…" would be wrong by then):
   it says "Passed <place>. <next place> in N meters." Skip-ahead says "Passed one waypoint." + the real line.
 - `"curved": true` on a waypoint (WP1) = the next leg is not straight: no veer, beacon silent.

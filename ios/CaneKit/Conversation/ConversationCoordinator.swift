@@ -31,7 +31,7 @@
 //      item. "route" alone is the CIF demo route; "take me to …" reaches any place.
 //    · Latest wins, with a budget (`ConversationBudget`): every new query cancels a cloud turn still
 //      in flight (that turn logs `conv_turn {superseded: true}` and never speaks); a cloud turn says
-//      a quiet thinking tick at 1.5 s and 3 s (Step 65) and gives up at 4 s (error tone + "No answer.", `conv_error
+//      a quiet thinking tick at 1.5 s and 4 s (Step 65) and gives up at 8 s (Step 67; was 4 s) (error tone + "No answer.", `conv_error
 //      {timeout: true}`). A stale completion never speaks. The old `isProcessing` drop is gone.
 //    · Emergency is two utterances (`EmergencyConfirm`): "emergency" speaks the prompt with the
 //      contact's name and number (`.nav`, ttl 8); only "yes" inside 8 s opens `tel:` (the trip log
@@ -102,7 +102,9 @@ final class ConversationCoordinator {
     /// Turn ids that played the thinking tick (`conv_turn.filler_spoken`). Removed when logged.
     private var fillerTurns = Set<Int>()
     /// Bumped by every `handleQuery`; only the call holding the latest value clears `isProcessing`.
-    private var queryGeneration = 0
+    /// Read by `AppModel` for `CameraControlGate` (review round Steps 67–68, Muse #6): a deferred
+    /// Camera Control press is dropped when a spoken command ran meanwhile.
+    private(set) var queryGeneration = 0
     /// Fires once, just after the emergency window, to speak "Emergency canceled." when no answer came.
     private var emergencyExpiryTask: Task<Void, Never>?
 
@@ -229,7 +231,8 @@ final class ConversationCoordinator {
         let context = buildContext()
         let prompt = ConversationPrompt.buildUserPrompt(query: query, context: context, history: history)
 
-        // 4. Dispatch to the cloud LLM under the budget: filler at 1.5 s, timeout at 4 s (Step 57).
+        // 4. Dispatch to the cloud LLM under the budget: thinking ticks at 1.5 s and 4 s, timeout at 8 s
+        //    (Steps 57, 65, 67). Spoken destinations never get here: fast-path rule 14b routes them.
         let id = budget.begin(now: Self.clock())
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -343,7 +346,7 @@ final class ConversationCoordinator {
     }
 
     /// Drives the budget for turn `id` every `UtteranceEndDetector.checkInterval` (0.25 s): speaks
-    /// the thinking tick at 1.5 s and 3 s, and at 4 s cancels `task`, plays the error tone, speaks
+    /// the thinking tick at 1.5 s and 4 s, and at 8 s (Step 67) cancels `task`, plays the error tone, speaks
     /// "No answer." and logs
     /// `conv_error {timeout: true}`. Exits as soon as the turn is no longer the live one.
     private func runBudgetTicker(id: Int, query: String, turn: ConversationTurn, task: Task<Void, Never>) async {
@@ -354,7 +357,7 @@ final class ConversationCoordinator {
             case .none:
                 continue
             case .thinking:
-                // Step 65: a quiet tick at 1.5 s and 3 s, never the words "One moment.".
+                // Step 65: a quiet tick at 1.5 s and 4 s (Step 67), never the words "One moment.".
                 fillerTurns.insert(id)
                 model.speech.perform(EarconPolicy.feedback(for: .thinking), .scene, ttl: 3)
             case .timeout:
@@ -517,21 +520,23 @@ final class ConversationCoordinator {
         // MARK: Emergency (Step 59) — two utterances, never one
 
         case .emergency:
-            let profile = model.medicalProfile.profile
-            switch emergency.emergency(now: Self.clock(), name: profile.emergencyContactName,
-                                       number: profile.emergencyContactPhone) {
+            // The contact typed on the Profile tab, else the one from Secrets.plist — read, never
+            // stored (`MedicalProfileStore.effectiveEmergencyContact`, review round Steps 67–68). The
+            // prompt reads the number back aloud; `TripLogger` masks it in every log record.
+            let contact = model.medicalProfile.effectiveEmergencyContact
+            switch emergency.emergency(now: Self.clock(), name: contact.name, number: contact.phone) {
             case .prompt(let line):
                 model.speech.say(line, .nav, ttl: EmergencyConfirm.confirmWindow)
-                model.logger.event("emergency", ["action": "prompted", "contact": profile.emergencyContactName])
+                model.logger.event("emergency", ["action": "prompted", "contact": contact.name])
                 scheduleEmergencyExpiry()
                 return (line, true)
             default:
-                model.logger.event("emergency", ["action": "no_contact", "contact": profile.emergencyContactName])
+                model.logger.event("emergency", ["action": "no_contact", "contact": contact.name])
                 return (EmergencyConfirm.noContactLine, false)
             }
 
         case .confirm(let yes):
-            let contact = model.medicalProfile.profile.emergencyContactName
+            let contact = model.medicalProfile.effectiveEmergencyContact.name
             switch emergency.confirm(yes, now: Self.clock()) {
             case .call(let tel):
                 emergencyExpiryTask?.cancel()
@@ -585,7 +590,7 @@ final class ConversationCoordinator {
             if self.emergency.expire(now: Self.clock()) {
                 model.speech.say(EmergencyConfirm.canceledLine, .nav, ttl: 6)
                 model.logger.event("emergency", ["action": "timeout",
-                                                 "contact": model.medicalProfile.profile.emergencyContactName])
+                                                 "contact": model.medicalProfile.effectiveEmergencyContact.name])
             }
         }
     }

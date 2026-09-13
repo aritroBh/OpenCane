@@ -214,9 +214,9 @@ import Testing
 /// never retyped (a one-byte drift is a silent flip to the system voice).
 @Test func everyLineTheShellCanSpeakIsPrefetched() {
     let prefetched = Set(SpokenPhrases.shellLines)
-    var spoken: [String] = [VoiceMenu.shortMenuLine, VoiceMenu.menuLine, VoiceMenu.helpLine,
+    var spoken: [String] = [VoiceMenu.helpLine,
                             ConversationBudget.timeoutLine, EarconPolicy.routeReadyLine,
-                            SpokenPhrases.notHeardLine, HeadCoverNotice.line]
+                            SpokenPhrases.notHeardLine]
     spoken += VoiceMenu.Item.allCases.map(\.confirmationLine)
     spoken += EmergencyConfirm.fixedLines
     spoken += StatusSummary.fixedLines
@@ -234,9 +234,14 @@ import Testing
     let prefetched = Set(SpokenPhrases.shellLines)
     for gone in ["One moment.", "Still describing the previous scene.",
                  "That is taking too long. Ask again in a moment.",
-                 "Obstacle detection warming up. Route will start when it is ready."] {
+                 "Obstacle detection warming up. Route will start when it is ready.",
+                 // Step 67: the launch menus are gone; nobody hears them, so nobody pays for them.
+                 "Say route, where am I, or help.",
+                 "Say route, where am I, describe, status, repeat, quiet, help, or emergency."] {
         #expect(!prefetched.contains(gone), "still prefetched: \(gone)")
     }
     #expect(!prefetched.contains(SpokenPhrases.describerBusyText))
+    // Step 68 stopped speaking the head-cover line (still logged); review round Muse #11.
+    #expect(!prefetched.contains(HeadCoverNotice.line))
     #expect(prefetched.contains("No answer.") && prefetched.contains("Starting."))
 }

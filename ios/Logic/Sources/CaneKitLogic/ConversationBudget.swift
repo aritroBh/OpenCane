@@ -16,9 +16,13 @@
 //    · Only the cloud path begins a turn. Fast-path and scene answers never start the clock
 //      (`fastPathTurnsNeverStartTheClock`).
 //    · The thinking tick fires at `fillerAfter` and once more at `thinkingRepeatAfter`, never a
-//      third time (`thinkingTicksAtOneAndAHalfAndThreeSeconds`).
+//      third time (`thinkingTicksAtOneAndAHalfAndFourSeconds`).
 //    · At `budget` the turn times out exactly once; afterwards the turn is not in flight and a late
-//      completion is refused (`timeoutAtFourSeconds`).
+//      completion is refused (`timeoutAtEightSeconds`).
+//    · Step 67: 8 s, not 4. Every cloud answer logged so far took 6–17 s (first walk, and
+//      `canekit-2026-09-13T15-48-34Z.jsonl`), so 4 s made every open question "No answer.". Spoken
+//      destinations no longer reach the cloud (`FastPathIntentClassifier` rule 14b), so the only
+//      turns that wait this long are real questions.
 //    · `begin` while a turn is in flight supersedes it: the old id is refused forever
 //      (`aNewQuerySupersedesTheOldOne`, `aLateResultForASupersededTurnIsIgnored`).
 //    · Deterministic: `now` is the caller's clock; ids are a counter, never reused in one instance.
@@ -41,15 +45,18 @@ public struct ConversationBudget: Sendable, Equatable {
     /// same number as `UtteranceEndDetector.silenceAfterSpeech`, for the same reason).
     public static let fillerAfter: Double = 1.5
 
-    /// Seconds after which the thinking tick plays once more (Step 65). [H] 3 s.
-    public static let thinkingRepeatAfter: Double = 3.0
+    /// Seconds after which the thinking tick plays once more (Step 65). [H] 4 s (3 s until Step 67
+    /// doubled the budget: roughly halfway through the wait).
+    public static let thinkingRepeatAfter: Double = 4.0
 
     /// Most thinking ticks per turn: the one at `fillerAfter` and the one at `thinkingRepeatAfter`.
     public static let maxThinkingTicks = 2
 
-    /// Seconds after which the cloud turn is abandoned and `timeoutLine` spoken. [H] 4 s: past it
-    /// the walker on the first walk had already asked again.
-    public static let budget: Double = 4.0
+    /// Seconds after which the cloud turn is abandoned and `timeoutLine` spoken. [H] 8 s (Step 67;
+    /// was 4 s). The cloud answered in 6–17 s on every logged turn, so 4 s abandoned answers that
+    /// were on their way; two ticks keep the wait from reading as "it did not hear me", and a new
+    /// question at any time still wins.
+    public static let budget: Double = 8.0
 
     /// Spoken at `budget`, after the low `Earcon.error` double tap (Step 65: was "That is taking too
     /// long. Ask again in a moment.", 47 characters). Also the words after a failed cloud turn.

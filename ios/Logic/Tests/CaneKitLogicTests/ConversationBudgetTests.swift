@@ -11,7 +11,7 @@
 //  last question asked to be the one answered. Every number here is [H] until a walk log tunes it.
 //
 //  Source pinned: `ios/Logic/Sources/CaneKitLogic/ConversationBudget.swift` (`fillerAfter` 1.5,
-//  `thinkingRepeatAfter` 3.0, `maxThinkingTicks` 2, `budget` 4.0, `timeoutLine`, `thinkingTicks`, `begin(now:)`, `tick(now:)`, `finished(id:)`,
+//  `thinkingRepeatAfter` 4.0, `maxThinkingTicks` 2, `budget` 8.0, `timeoutLine`, `thinkingTicks`, `begin(now:)`, `tick(now:)`, `finished(id:)`,
 //  `inFlightID`, `fillerSpoken`, `elapsedMs(now:)`). Caller: `ConversationCoordinator.handleQuery`
 //  (app), which starts a turn only for the cloud path, ticks every 0.25 s, cancels the in-flight
 //  task on a new query and drops a completion whose `finished(id:)` is false.
@@ -24,20 +24,22 @@ import Testing
 struct ConversationBudgetTests {
 
     /// The numbers and the one line. 1.5 s is the longest silence that still reads as "heard you";
-    /// the quiet thinking tick repeats once at 3 s (Step 65: a tone, never "One moment."); 4 s is
-    /// where a walker stops waiting and asks again, and all they hear then is "No answer.".
+    /// the quiet thinking tick repeats once at 4 s (Step 65: a tone, never "One moment."). Step 67:
+    /// the budget is 8 s — on `canekit-2026-09-13T15-48-34Z.jsonl` and the first walk every cloud
+    /// answer took 6–17 s, so 4 s turned every open question into "No answer."; navigation no longer
+    /// reaches the cloud at all (rule 14b), so only real questions wait this long.
     @Test func numbersArePinned() {
         #expect(ConversationBudget.fillerAfter == 1.5)
-        #expect(ConversationBudget.thinkingRepeatAfter == 3.0)
+        #expect(ConversationBudget.thinkingRepeatAfter == 4.0)
         #expect(ConversationBudget.maxThinkingTicks == 2)
-        #expect(ConversationBudget.budget == 4.0)
+        #expect(ConversationBudget.budget == 8.0)
         #expect(ConversationBudget.fillerAfter < ConversationBudget.thinkingRepeatAfter)
         #expect(ConversationBudget.thinkingRepeatAfter < ConversationBudget.budget)
         #expect(ConversationBudget.timeoutLine == "No answer.")
     }
 
-    /// The thinking tick fires at 1.5 s and once more at 3 s, never a third time.
-    @Test func thinkingTicksAtOneAndAHalfAndThreeSeconds() {
+    /// The thinking tick fires at 1.5 s and once more at 4 s, never a third time.
+    @Test func thinkingTicksAtOneAndAHalfAndFourSeconds() {
         var b = ConversationBudget()
         _ = b.begin(now: 10)
         var e = b.tick(now: 11.4)
@@ -46,31 +48,33 @@ struct ConversationBudgetTests {
         #expect(e == .thinking)
         e = b.tick(now: 11.75)
         #expect(e == .none)
-        e = b.tick(now: 12.9)
+        e = b.tick(now: 13.9)
         #expect(e == .none)
-        e = b.tick(now: 13.0)
+        e = b.tick(now: 14.0)
         #expect(e == .thinking)
-        e = b.tick(now: 13.75)
+        e = b.tick(now: 17.75)
         #expect(e == .none)
         #expect(b.fillerSpoken)
         #expect(b.thinkingTicks == 2)
     }
 
-    /// At 4 s the turn times out: one `.timeout`, the turn is no longer in flight, a late result is
-    /// refused, and later ticks are quiet.
-    @Test func timeoutAtFourSeconds() {
+    /// At 8 s the turn times out: one `.timeout`, the turn is no longer in flight, a late result is
+    /// refused, and later ticks are quiet. 4 s is no longer a timeout.
+    @Test func timeoutAtEightSeconds() {
         var b = ConversationBudget()
         let id = b.begin(now: 0)
         _ = b.tick(now: 1.5)
-        _ = b.tick(now: 3.0)
-        var e = b.tick(now: 3.99)
+        _ = b.tick(now: 4.0)
+        var e = b.tick(now: 4.25)
         #expect(e == .none)
-        e = b.tick(now: 4.0)
+        e = b.tick(now: 7.99)
+        #expect(e == .none)
+        e = b.tick(now: 8.0)
         #expect(e == .timeout)
         #expect(b.inFlightID == nil)
         let late = b.finished(id: id)
         #expect(late == false)
-        e = b.tick(now: 4.25)
+        e = b.tick(now: 8.25)
         #expect(e == .none)
     }
 
