@@ -137,14 +137,15 @@ inset re-check after reinstall.
 - Conversational voice assistant — `TalkToOpenCaneIntent`, `VoiceInputEngine` (SFSpeechRecognizer with Hard Rule 7 audio safety), `ConversationCoordinator`, `ConversationModels`, `FastPathIntentClassifier`, `ConversationPrompt`, `WalkMarker` post drops, and rolling context memory (Step 23). **Rerun settled the test-count
   question** (2026-09-12, Step 27): the target held 366 `@Test` annotations and `make test` on
   Xcode 27 reported **366 tests passed in 1 suite**. Step 28 adds six lifetime-guard tests and
-  Step 29 adds six sensor-mode interlock tests, so the current target holds **378 annotations**;
+  Step 29 adds six sensor-mode interlock tests and the VoiceInputGuard suite adds the current
+  push-to-talk lifecycle coverage, so the current target holds **567 test cases**;
   the 359 figure was the last green run *before* the
   Step 25 interlock tests existed; reaching 366 first needed the
   `#expect` + `mutating` compile fix in `DepthReadinessTests` (CHANGELOG Step 27).
 - `CHANGELOG.md` (Step 16, 23), `docs/CODE_REFERENCE.md` (DualCameraSession, SoundAlerts,
   QuestionPrompt/StatusSummary, HandsFreeIntents, ConversationModels, VoiceInputEngine, cloudPrimary sections; AppIntents rewritten;
   stale 8/12 s timeouts and stale test-count references fixed; the Step 27 snapshot had 366 `@Test`
-  annotations, and the current target has 378).
+  annotations, and the current target has 567 test cases).
 
 **Committed on a branch, not yet merged:**
 - `feat/fm-image-describe` — Apple's on-device model with the image (experiment, off by default).
@@ -194,21 +195,15 @@ none blocks the demo — but they are real, and several need the phone to judge.
 - [x] **Permission race can start the mic after the user turned it off.** The pure
       `SoundRecognitionGuard` fences permission callbacks with a generation token; the adapter also
       polls permission while it owns the session and cancels any pending continuation on Stop.
-<<<<<<< HEAD
-- [x] **Face tracking re-runs the AR session mid-route with no warning** (~1–2 s without frames).
-      The two-camera mode correctly refuses during a route; this path does not. **Step 34:** measured
-      on the phone (t = 80.7 s); now refused while a route guides or starts (`FaceTrackingChange`).
-=======
-- [x] **Sensor-mode restart interlock (Step 29).** Face-tracking and 60-fps setting writes are
-      refused during route warm-up, active navigation and serialized camera teardown, snapped back to the applied value, and
-      spoken through the existing route-error channel. Thermal mesh changes stop processor mesh
-      lookup immediately but defer the ARSession restart until Stop, arrival or cancellation, so
-      no user-triggered or thermal configuration change creates a 1–2 s depth gap while guiding.
-      `SensorModeInterlock` is pure Logic and covers idle, queued, active, thermal deferral and
-      release; the existing two-camera refusal remains the same policy. Terminal AR failures and
-      active interruptions now clear stale obstacle cues and announce the degraded depth channel;
-      only a trusted frame says it is back.
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
+- [x] **Sensor-mode restart interlock (Steps 29/34).** Face-tracking and 60-fps setting writes are
+      refused during route warm-up, active navigation and serialized camera teardown, snapped back to the
+      applied value, and spoken through the existing route-error channel. The two-camera mode keeps the
+      same refusal policy. Thermal mesh changes stop processor mesh lookup immediately but defer the
+      ARSession restart until Stop, arrival or cancellation, so no user-triggered or thermal change
+      creates a 1–2 s depth gap while guiding. `SensorModeInterlock` is pure Logic and covers idle,
+      queued, active, thermal deferral and release. Terminal AR failures and active interruptions
+      clear stale obstacle cues and announce the degraded depth channel; only a trusted frame says it
+      is back. **Step 34:** refusal was measured on the phone (t = 80.7 s).
 - [x] **The mic input format was read synchronously before the route settled.** `SoundWatcher` now
       re-reads it once after the engine/session has had `MicrophoneStart.formatRetryDelay` to settle
       (the bounded retry is < 0.5 s), and the route guard allows only the startup `none → usable`
@@ -715,24 +710,6 @@ for 60 s so a weak network can never stall a cue.
 - [x] Mobility & fitness tracking in `MedicalProfileStore.swift`: daily steps, distance (km), trips completed, average pace via `CMPedometer`
 - [x] Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `_KEY` in `Secrets.plist`; verified HTTP 200 curl response
 
-<<<<<<< Updated upstream
-## Step 45 — Supabase cloud backend integration (Sat Sep 12)
-- [x] Configured Supabase project credentials in Secrets.plist (URL, publishable and secret keys)
-- [x] Created `SupabaseClient.swift`: native URLSession PostgREST client for walkers, medical_profiles, mobility_days, hazards, family_alerts, devices
-- [x] Live cloud sync on `MedicalProfileStore.swift` for Medical ID card and daily mobility steps
-- [x] Real-time hazard mapping on `AppModel.recordHazard` syncing obstacles, curbs, and drop-offs to Supabase `hazards`
-- [x] Family alert mirroring on `FamilyAlerts.swift` syncing delivered alerts to `family_alerts`
-- [x] Hardware telemetry registration on `AppModel.start()` syncing device metadata to `devices`
-- [x] Verified PostgREST endpoints and views (`hazard_map`, `walker_dashboard`, `mobility_days`)
-
-## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
-- [x] Muse review findings resolved: C1 (secret key removed from client bundle), C2 (install_id data isolation), C3 (in-flight mutex on resolveWalkerID), C5 (Sendable primitive extraction in recordHazard), C7 (utsname dynamic hardware model), M1 (explicit on_conflict upserts), M5 (a11y labels + allergen symbol fix)
-- [x] Codex review findings resolved: aligned `mobility_days` date to local calendar day via `Calendar.current` date components (avoiding UTC timezone rollover discrepancy)
-- [x] Added `AritroProfile.imageset` to `Assets.xcassets` with user's campus portrait; rendered 56x56 circular avatar in ProfilePage
-- [x] Redesigned GuideCard buttons: added subtitle and chevron support to `CKBigButton`; replaced cramped 3-line wrapped HStack with clean full-width vertical hierarchy ("Campus Demo" vs "Live GPS")
-- [x] Verified unit tests (`make test`: 538 / 538 passing), simulator build (`make sim`), XCUITests (`make uitest`: 11 / 11 passing), and physical device install on iPhone 17 Pro Max (PID 6563)
-- [x] Refreshed knowledge graph (`graphify update .`) to 4,020 nodes, 9,423 edges, 205 communities
-=======
 ## Step 45 — Supabase cloud mirror (Sat Sep 12)
 - [x] 16 tables + 4 demo views + 3 RPCs + `hazard-photos` bucket, migrations `opencane_01`…`_06`, every table commented
 - [x] PostGIS `geography` generated columns on `hazards` / `posts` / `route_waypoints`, GiST indexed; `hazards_near(lat, lon, radius)`
@@ -747,7 +724,14 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Device: walk the route on the cane, then check `trip_summary`, `device_settings`, `family_contacts` and a hazard JPEG in the bucket
 - [ ] Open (not done): conversation turns are wired but `ConversationCoordinator` does not call `recordConversationTurn` yet; family contacts are readable with the publishable key (drop the `family_contacts_read` policy to close that)
 - **test on device:** see CHANGELOG Step 45
->>>>>>> Stashed changes
+
+## Step 46 — Multi-agent adversarial review fixes (Muse/Codex), redesigned Guide buttons, profile avatar, and timezone alignment (Sat Sep 12)
+- [x] Muse review findings resolved: C1 (secret key removed from client bundle), C2 (install_id data isolation), C3 (in-flight mutex on resolveWalkerID), C5 (Sendable primitive extraction in recordHazard), C7 (utsname dynamic hardware model), M1 (explicit on_conflict upserts), M5 (a11y labels + allergen symbol fix)
+- [x] Codex review findings resolved: aligned `mobility_days` date to local calendar day via `Calendar.current` date components (avoiding UTC timezone rollover discrepancy)
+- [x] Added `AritroProfile.imageset` to `Assets.xcassets` with user's campus portrait; rendered 56x56 circular avatar in ProfilePage
+- [x] Redesigned GuideCard buttons: added subtitle and chevron support to `CKBigButton`; replaced cramped 3-line wrapped HStack with clean full-width vertical hierarchy ("Campus Demo" vs "Live GPS")
+- [x] Verified unit tests (`make test`: 538 / 538 passing), simulator build (`make sim`), XCUITests (`make uitest`: 11 / 11 passing), and physical device install on iPhone 17 Pro Max (PID 6563)
+- [x] Refreshed knowledge graph (`graphify update .`) to 4,020 nodes, 9,423 edges, 205 communities
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab

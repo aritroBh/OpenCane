@@ -155,6 +155,10 @@ final class VoiceInputEngine {
     /// press ends until the next start.
     private(set) var latestTranscript: String = ""
 
+    /// True while a permission prompt or audio graph is being negotiated. The Guide card exposes
+    /// this state so a second tap cancels a pending start instead of silently re-arming it.
+    private(set) var isStarting: Bool = false
+
     // MARK: - Dependencies
     /// The app's speech channel: microphone lease (`setMicrophoneEnabled(_:owner: .voiceInput)`),
     /// the voice hold, and every spoken outcome. `unowned`: `AppModel` owns both and outlives this.
@@ -195,6 +199,18 @@ final class VoiceInputEngine {
     /// format-retry wait) answered after `cancel()` cannot start the microphone behind the
     /// walker's back (same fence as `SoundWatcher.generation`).
     @ObservationIgnored private var generation = 0
+    /// Task polling permission and engine health for the full capture lifetime.
+    @ObservationIgnored private var permissionWatchTask: Task<Void, Never>?
+    /// Observer for graph invalidation events that do not always produce a recognizer error.
+    @ObservationIgnored private var engineConfigurationObserver: NSObjectProtocol?
+    /// Pure lifecycle guard; all state lives on the main actor and only Sendable snapshots enter it.
+    @ObservationIgnored private var lifecycle = VoiceInputGuard()
+    /// Generation fencing for permission and live-capture callbacks.
+    @ObservationIgnored private var pendingPermissionGeneration: UInt64?
+    @ObservationIgnored private var activeGeneration: UInt64?
+    @ObservationIgnored private var nextGeneration: UInt64 = 0
+    /// True only after this engine successfully acquired the shared microphone lease.
+    @ObservationIgnored private var microphoneLeaseAcquired = false
     /// `Date().timeIntervalSinceReferenceDate` when the engine started, for `voice_end` timing.
     @ObservationIgnored private var listeningSince: Double = 0
 
@@ -236,92 +252,155 @@ final class VoiceInputEngine {
     func startListening() {
         // A press during the format settle wait is the same press: the session and beacon are
         // already taken, and re-snapshotting the beacon here would remember it as off.
-        guard !isListening, formatRetry == nil else { return }
+        guard !isListening, formatRetry == nil, !isStarting else { return }
         // Snapshot the beacon now: every failure below runs `cleanupAudioPipeline`, which puts
         // this value back, and a stale one from an earlier run would switch the beacon off.
         previousBeaconEnabled = beacon.enabled
 
+        // Fence every asynchronous permission callback to this explicit request. The pending
+        // state is observable so the Guide button can cancel it instead of starting twice.
+        isStarting = true
+        guard let permissionGeneration = lifecycle.beginPermissionRequest() else {
+            isStarting = false
+            return
+        }
+        pendingPermissionGeneration = permissionGeneration
+        nextGeneration &+= 1
+
         // 0. Speech authorisation (SFSpeechRecognizer), then microphone permission.
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized:
-            break
+            continueRecordAuthorization(generation: permissionGeneration)
+            return
         case .notDetermined:
-            let generation = self.generation
             // `@Sendable` so the closure is nonisolated whatever queue Speech answers on.
             SFSpeechRecognizer.requestAuthorization { @Sendable [weak self] status in
                 Task { @MainActor [weak self] in
-                    guard let self, self.generation == generation else { return }
-                    if status == .authorized { self.startListening() } else {
-                        self.denied(speech: true)
+                    guard let self, self.pendingPermissionGeneration == permissionGeneration else { return }
+                    if status == .authorized {
+                        self.continueRecordAuthorization(generation: permissionGeneration)
+                    } else {
+                        self.resolvePermissions(granted: false, generation: permissionGeneration)
                     }
                 }
             }
             return
         case .denied, .restricted:
-            denied(speech: true)
+            resolvePermissions(granted: false, generation: permissionGeneration)
             return
         @unknown default:
             break
         }
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
-            break
+            continueRecordAuthorization(generation: permissionGeneration)
+            return
         case .undetermined:
-            let generation = self.generation
             // ⚠ `@Sendable`: the SDK says this block "may be called in a different thread
             // context" and its type is not NS_SWIFT_SENDABLE, so without it the closure is
             // inferred @MainActor and would trap off-main (the mechanism behind all 23 crash
             // reports pulled from the phone on 2026-09-12; see SoundWatcher / TripTracker).
             AVAudioApplication.requestRecordPermission { @Sendable [weak self] granted in
                 Task { @MainActor [weak self] in
-                    guard let self, self.generation == generation else { return }
-                    if granted { self.startListening() } else { self.denied(speech: false) }
+                    guard let self, self.pendingPermissionGeneration == permissionGeneration else { return }
+                    self.resolvePermissions(granted: granted, generation: permissionGeneration)
                 }
             }
             return
         case .denied:
-            denied(speech: false)
+            resolvePermissions(granted: false, generation: permissionGeneration)
             return
         @unknown default:
-            break
-        }
-        // Availability is read after the permissions on purpose: a recogniser that is unavailable
-        // *because* it is unauthorised must lead to the prompt, not to this line.
-        guard let recognizer, recognizer.isAvailable else {
-            logStart(session: "recognizer_unavailable", format: nil)
-            fail(with: "Speech recognition is not available right now.")
+            resolvePermissions(granted: false, generation: permissionGeneration)
             return
         }
 
-        // 1. Activate microphone session via SpeechQueue (Hard Rule 7)
+    }
+
+    /// Completes microphone authorization after Speech permission is known.
+    private func continueRecordAuthorization(generation: UInt64) {
+        guard pendingPermissionGeneration == generation else { return }
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            resolvePermissions(granted: true, generation: generation)
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { @Sendable [weak self] granted in
+                Task { @MainActor [weak self] in
+                    guard let self, self.pendingPermissionGeneration == generation else { return }
+                    self.resolvePermissions(granted: granted, generation: generation)
+                }
+            }
+        case .denied:
+            resolvePermissions(granted: false, generation: generation)
+        @unknown default:
+            resolvePermissions(granted: false, generation: generation)
+        }
+    }
+
+    /// Resolves the combined permission gate exactly once and enters microphone setup only for the
+    /// current generation. Denials use the existing spoken failure channel.
+    private func resolvePermissions(granted: Bool, generation: UInt64) {
+        guard pendingPermissionGeneration == generation else { return }
+        let decision = lifecycle.permissionResolved(granted: granted, generation: generation)
+        guard case .continueRunning = decision else {
+            pendingPermissionGeneration = nil
+            if case .stop = decision { fail(with: failureMessage(for: decision)) }
+            return
+        }
+        startAuthorizedListening(permissionGeneration: generation)
+    }
+
+    /// Acquires the shared microphone lease after both permissions are confirmed. Callbacks are
+    /// installed before activation so a route move or interruption during setup cannot be missed.
+    private func startAuthorizedListening(permissionGeneration: UInt64) {
+        guard pendingPermissionGeneration == permissionGeneration else { return }
+        pendingPermissionGeneration = nil
+        guard lifecycle.beginStart() else { return }
+        nextGeneration &+= 1
+        let runGeneration = nextGeneration
+        activeGeneration = runGeneration
+        speech.onVoiceInputRouteChanged = { [weak self] before, after in
+            self?.voiceInputRouteChanged(before: before, after: after, generation: runGeneration)
+        }
+        speech.onVoiceInputInterruption = { [weak self] event in
+            self?.voiceInputInterruption(event, generation: runGeneration)
+        }
+
         let sessionField: String
         switch speech.setMicrophoneEnabled(true, owner: .voiceInput) {
         case .granted(let route):
             sessionField = "granted:\(route)"
-        case .revertedRouteChanged(let before, let after):
-            logStart(session: "reverted:\(before)>\(after)", format: nil)
-            fail(with: "Listening would change your headphone sound, so it stayed off.")
+            microphoneLeaseAcquired = true
+        case .revertedRouteChanged:
+            logStart(session: "reverted_route", format: nil)
+            fail(with: "Voice input stopped because the audio route changed.")
             return
         case .failed(let err):
             logStart(session: "failed:\(err)", format: nil)
             fail(with: "The microphone could not start.")
             return
         }
-
-        // 2. Silence spatial audio beacon (its previous state was captured at the top)
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            fail(with: "Voice input stopped because microphone access was revoked.")
+            return
+        }
+        guard let route = speech.microphoneRouteSnapshot else {
+            fail(with: "Voice input stopped because the microphone is unavailable.")
+            return
+        }
+        let sessionDecision = lifecycle.sessionStarted(route: route)
+        guard case .continueRunning = sessionDecision else {
+            fail(with: failureMessage(for: sessionDecision))
+            return
+        }
         beacon.enabled = false
-
-        // 3. Configure recognition request. On-device when the phone has the model; otherwise the
-        //    flag is left off and Apple's server recognises (needs network) — never a silent fail.
+        guard let recognizer else { fail(with: "Speech recognition is not available right now."); return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
-        self.recognitionRequest = request
-        self.latestTranscript = ""
-
-        startEngine(attempt: 0, sessionField: sessionField)
+        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        recognitionRequest = request
+        latestTranscript = ""
+        startEngine(attempt: 0, sessionField: sessionField, generation: runGeneration)
     }
 
     /// Read the microphone's input format and, once it is real, install the tap and start the
@@ -338,7 +417,8 @@ final class VoiceInputEngine {
     ///   - attempt: zero-based; `MicrophoneStart.retryDelay(afterAttempt:)` decides whether there
     ///     is another one.
     ///   - sessionField: the `session` value for `voice_start`, decided by `startListening()`.
-    private func startEngine(attempt: Int, sessionField: String) {
+    private func startEngine(attempt: Int, sessionField: String, generation runGeneration: UInt64) {
+        guard activeGeneration == runGeneration, lifecycle.isActive else { return }
         guard let recognizer, let request = recognitionRequest else { return }
         // 4. Configure audio engine tap. `prepare()` realises the input node against the now-active
         //    session; only on a retry so the happy path is untouched.
@@ -353,12 +433,13 @@ final class VoiceInputEngine {
                 fail(with: "The microphone is not ready yet. Try again.")
                 return
             }
-            let generation = self.generation
             formatRetry = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled, let self, self.generation == generation else { return }
+                guard !Task.isCancelled, let self,
+                      self.activeGeneration == runGeneration,
+                      self.lifecycle.isActive else { return }
                 self.formatRetry = nil
-                self.startEngine(attempt: attempt + 1, sessionField: sessionField)
+                self.startEngine(attempt: attempt + 1, sessionField: sessionField, generation: runGeneration)
             }
             return
         }
@@ -367,9 +448,24 @@ final class VoiceInputEngine {
         self.bufferBox = box
         box.installTap(on: inputNode, format: recordingFormat)
 
+        // A graph reconfiguration can invalidate the tap without a recognizer callback. Observe it
+        // for the full run and fence the callback to this capture generation.
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.audioEngineConfigurationChanged(generation: runGeneration)
+            }
+        }
+
+        // Publish the live state before creating the recognition task: Apple's callback can report
+        // an error synchronously, and that error must take the hard-stop path rather than vanish.
+        isListening = true
+        state = .listening
+
         // 5. Start recognition task through the nonisolated relay (hard rule 1).
         let relay = SpeechResultsRelay { [weak self] text, isFinal, error in
-            self?.recognitionUpdate(text: text, isFinal: isFinal, error: error)
+            self?.recognitionUpdate(text: text, isFinal: isFinal, error: error, generation: runGeneration)
         }
         self.resultsRelay = relay
         self.recognitionTask = relay.start(recognizer, request)
@@ -379,12 +475,24 @@ final class VoiceInputEngine {
             try engine.start()
         } catch {
             logStart(session: sessionField, format: formatField)
-            fail(with: "The microphone could not start.")
+            let decision = lifecycle.recognitionFailed()
+            if case .stop = decision { fail(with: failureMessage(for: decision)) }
             return
         }
+        let liveRoute = speech.microphoneRouteSnapshot
+        let recognitionDecision: VoiceInputDecision
+        if let liveRoute {
+            recognitionDecision = lifecycle.recognitionStarted(route: liveRoute)
+        } else {
+            recognitionDecision = .stop(.inputUnavailable)
+        }
+        guard case .continueRunning = recognitionDecision else {
+            fail(with: failureMessage(for: recognitionDecision))
+            return
+        }
+        isStarting = false
+        startPermissionWatch(generation: runGeneration)
         generation += 1
-        isListening = true
-        state = .listening
         listeningSince = Date().timeIntervalSinceReferenceDate
         // Hold the speech channel: route and obstacle chatter queues instead of talking over
         // the dictation (and the recogniser never hears the app's own voice). `.safety` still
@@ -411,14 +519,16 @@ final class VoiceInputEngine {
     /// One recogniser callback, already on the main actor. Updates the partial transcript and
     /// ends listening on a final result or an error (with whatever words arrived — an error
     /// after a good transcript still answers the question).
-    private func recognitionUpdate(text: String, isFinal: Bool, error: String?) {
-        guard isListening else { return }
+    private func recognitionUpdate(text: String, isFinal: Bool, error: String?, generation: UInt64) {
+        guard isListening, activeGeneration == generation else { return }
         if !text.isEmpty {
             latestTranscript = text
             state = .recognizing(partialText: text)
         }
         if let error {
-            stopListeningAndSubmit(reason: "error:\(error)")
+            _ = error
+            let decision = lifecycle.recognitionFailed()
+            if case .stop = decision { fail(with: failureMessage(for: decision)) }
         } else if isFinal {
             stopListeningAndSubmit(reason: "final")
         } else if checkEnd() == .endOfUtterance {
@@ -471,15 +581,94 @@ final class VoiceInputEngine {
     /// Speaks nothing; logs `voice_end` with reason "cancel" only if it was listening. No caller
     /// today (AppModel's background path does not cancel a press) — kept for that teardown.
     func cancel() {
+        let wasListening = isListening
         generation += 1
-        if isListening {
+        nextGeneration &+= 1
+        pendingPermissionGeneration = nil
+        if isListening || isStarting || formatRetry != nil {
             cleanupAudioPipeline()
-            logEnd(reason: "cancel", transcriptLength: latestTranscript.count)
-        } else if formatRetry != nil {
-            // Waiting for the input format: the session and beacon are already taken, give them back.
-            cleanupAudioPipeline()
+            if wasListening { logEnd(reason: "cancel", transcriptLength: latestTranscript.count) }
         }
         state = .idle
+    }
+
+    // MARK: - Failure relays
+
+    /// Handles a shared-audio route transition. `SpeechQueue` has already restored `.playback`
+    /// before invoking this callback; the guard makes the stop one-shot and generation-safe.
+    private func voiceInputRouteChanged(before: SoundRecognitionRoute,
+                                        after: SoundRecognitionRoute,
+                                        generation: UInt64) {
+        _ = before
+        guard activeGeneration == generation else { return }
+        let decision = lifecycle.routeChanged(after)
+        guard case .stop = decision else { return }
+        fail(with: failureMessage(for: decision))
+    }
+
+    /// Fails closed on an audio interruption. `.ended` never resumes a partial transcript; the user
+    /// can start a fresh utterance after the call/Siri session has finished.
+    private func voiceInputInterruption(_ event: SpeechQueue.MicrophoneInterruption,
+                                        generation: UInt64) {
+        guard activeGeneration == generation, event == .began else { return }
+        let decision = lifecycle.interruptionBegan()
+        guard case .stop = decision else { return }
+        fail(with: failureMessage(for: decision))
+    }
+
+    /// Treats an engine graph change as a hard stop even when SpeechKit emits no error.
+    private func audioEngineConfigurationChanged(generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        let decision = lifecycle.recognitionFailed()
+        guard case .stop = decision else { return }
+        fail(with: failureMessage(for: decision))
+    }
+
+    /// Polls the two permission states and engine liveness while capture owns the microphone. iOS
+    /// does not provide a reliable mid-session permission notification, so this bounded poll is the
+    /// explicit cancellation path for Settings revocation.
+    private func startPermissionWatch(generation: UInt64) {
+        permissionWatchTask?.cancel()
+        permissionWatchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(VoiceInputGuard.permissionPollInterval))
+                guard !Task.isCancelled, let self,
+                      self.activeGeneration == generation, self.isListening else { return }
+                guard AVAudioApplication.shared.recordPermission == .granted,
+                      SFSpeechRecognizer.authorizationStatus() == .authorized else {
+                    let decision = self.lifecycle.permissionRevoked()
+                    if case .stop = decision { self.fail(with: self.failureMessage(for: decision)) }
+                    return
+                }
+                guard self.engine.isRunning else {
+                    let decision = self.lifecycle.recognitionFailed()
+                    if case .stop = decision { self.fail(with: self.failureMessage(for: decision)) }
+                    return
+                }
+            }
+        }
+    }
+
+    /// Maps a pure lifecycle failure to one concise spoken cue through the existing navigation
+    /// speech channel. Route/port details remain in diagnostics rather than speech.
+    private func failureMessage(for decision: VoiceInputDecision) -> String {
+        guard case .stop(let failure) = decision else { return "Voice input is not ready." }
+        switch failure {
+        case .outputRouteChanged:
+            return "Voice input stopped because the audio route changed."
+        case .inputRouteDegraded:
+            return "Voice input stopped because the microphone route is degraded."
+        case .inputUnavailable:
+            return "Voice input stopped because the microphone is unavailable."
+        case .recognitionFailed:
+            return "Voice input stopped because speech recognition failed."
+        case .interrupted:
+            return "Voice input stopped because audio was interrupted."
+        case .permissionRevoked:
+            return "Voice input stopped because microphone access was revoked."
+        case .permissionDenied:
+            return "Voice input is off in Settings."
+        }
     }
 
     // MARK: - Teardown
@@ -492,6 +681,18 @@ final class VoiceInputEngine {
     /// Does not change `state` — callers set it.
     private func cleanupAudioPipeline() {
         isListening = false
+        isStarting = false
+        activeGeneration = nil
+        pendingPermissionGeneration = nil
+        permissionWatchTask?.cancel()
+        permissionWatchTask = nil
+        _ = lifecycle.cancel()
+        speech.onVoiceInputRouteChanged = nil
+        speech.onVoiceInputInterruption = nil
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+            self.engineConfigurationObserver = nil
+        }
         // Release the speech hold first. The failure line / "I did not catch that." / answer
         // spoken right after this still plays before anything older: the release drains the
         // queue's head first (a still-valid held line is higher-priority guidance, correctly
@@ -514,11 +715,18 @@ final class VoiceInputEngine {
         recognitionTask = nil
         resultsRelay = nil
 
-        // Restore .playback audio session if no other microphone feature (like SoundWatcher) is using it
-        if let shouldRestore = shouldRestorePlaybackSession, shouldRestore() {
-            _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
-        } else if shouldRestorePlaybackSession == nil {
-            _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
+        // Restore `.playback` only when this run acquired the shared microphone lease. A route
+        // callback may already have restored it, in which case the snapshot is nil and another
+        // category transition would create a new route event.
+        if microphoneLeaseAcquired {
+            if speech.microphoneRouteSnapshot != nil {
+                if let shouldRestore = shouldRestorePlaybackSession, shouldRestore() {
+                    _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
+                } else if shouldRestorePlaybackSession == nil {
+                    _ = speech.setMicrophoneEnabled(false, owner: .voiceInput)
+                }
+            }
+            microphoneLeaseAcquired = false
         }
 
         // Restore beacon state to previous setting
@@ -544,6 +752,9 @@ final class VoiceInputEngine {
     /// `voice_start`'s `session` / `format` fields (callers log before calling this).
     /// - Parameter message: the spoken, user-facing reason; also stored in `state` as `.error`.
     private func fail(with message: String) {
+        // A failed recognizer/route must never leave a partial command looking usable to the next
+        // callback or UI read. The user-facing reason goes through the existing nav speech band.
+        latestTranscript = ""
         cleanupAudioPipeline()
         state = .error(message)
         speech.say(message, .nav, ttl: 8)

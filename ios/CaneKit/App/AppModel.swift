@@ -623,8 +623,8 @@ final class AppModel {
     /// `faceHeadTrackingEnabled` an older build left on disk.
     var faceHeadTrackingEnabled: Bool = false {
         didSet {
-<<<<<<< HEAD
-            guard !applyingFaceTracking, faceHeadTrackingEnabled != oldValue else { return }
+            guard !applyingFaceTracking, !revertingSensorModeSetting,
+                  faceHeadTrackingEnabled != oldValue else { return }
             // Either direction re-runs the AR session (~1–2 s without obstacle frames), so a
             // route refuses it like the two-camera mode (`FaceTrackingChange`, LiveViewTests).
             let change = FaceTrackingChange.decide(navigating: nav.isNavigating,
@@ -644,15 +644,16 @@ final class AppModel {
                                .nav, ttl: 10)
                     logger.event("face_tracking", ["action": "refused_route_start", "requested": !oldValue])
                 }
-=======
-            guard !revertingSensorModeSetting else { return }
+                return
+            }
             let decision = sensorModeInterlock.request(.faceTracking, source: .user)
             guard decision == .allowRestart else {
+                applyingFaceTracking = true
                 revertingSensorModeSetting = true
                 faceHeadTrackingEnabled = oldValue
                 revertingSensorModeSetting = false
+                applyingFaceTracking = false
                 rejectSensorModeChange(.faceTracking, decision: decision)
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
                 return
             }
             depth.setFaceTracking(faceHeadTrackingEnabled)
@@ -847,6 +848,8 @@ final class AppModel {
         logger.event("voice_toggle", ["source": source, "listening": !voiceInput.isListening])
         if voiceInput.isListening {
             voiceInput.stopListeningAndSubmit()
+        } else if voiceInput.isStarting {
+            voiceInput.cancel()
         } else {
             voiceInput.startListening()
         }
@@ -857,7 +860,7 @@ final class AppModel {
     /// head-nod gesture uses it. Not logged here (the caller logs `head_nod`).
     /// Callers: `wireHeadNod` (double nod with `nodToTalkEnabled`).
     func startVoiceInput() {
-        if !voiceInput.isListening {
+        if !voiceInput.isListening, !voiceInput.isStarting {
             voiceInput.startListening()
         }
     }
@@ -1212,20 +1215,18 @@ final class AppModel {
     /// `selfTestControlsVisible`).
     func startFaceTrackingSelfTest() {
         guard !selfTestRunning else { return }
-<<<<<<< HEAD
+        guard !nav.isNavigating, !routeStartWaiting, sensorModeInterlock.phase == .idle else {
+            selfTestStatus = sensorModeInterlock.phase == .finishing
+                ? "Waiting for the camera transition to finish"
+                : "Not while a route is starting or guiding you"
+            return
+        }
         // It re-runs the AR session twice (on now, restore at 15 s); never start it on a route, and
         // a route begun during the 15 s defers the restore until it ends (below).
         switch FaceTrackingChange.decide(navigating: nav.isNavigating, routeStartWaiting: routeStartWaiting) {
         case .apply: break
         case .refusedRoute: selfTestStatus = "Not while a route is guiding you"; return
         case .refusedRouteStart: selfTestStatus = "Not while a route is starting"; return
-=======
-        guard !nav.isNavigating, !routeStartWaiting, sensorModeInterlock.phase == .idle else {
-            selfTestStatus = sensorModeInterlock.phase == .finishing
-                ? "Waiting for the camera transition to finish"
-                : "Not while a route is starting or guiding you"
-            return
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         }
         selfTestRunning = true
         selfTestStatus = "Front camera self test: 15 seconds, hold the phone facing you"
@@ -2104,11 +2105,8 @@ final class AppModel {
     private func endRouteQuietly() {
         speech.routeLines = []               // no route: nothing standing to re-request
         nav.stop()
-<<<<<<< HEAD
         location.setNavigating(false)
-=======
         finishSensorModeRoute()
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         beacon.stop()
         head.stop()
         stopTicker()
@@ -2118,10 +2116,9 @@ final class AppModel {
         logger.event("route", ["action": "restart"])
     }
 
-<<<<<<< HEAD
     /// Thermal: was the phone already hot (`.serious` or `.critical`) at the last `updateThermal`,
     /// so "Phone is hot…" is spoken on the cool → hot transition only (Muse L5).
-=======
+
     /// Translate a refused sensor setting into the existing route error + speech channels. The
     /// walker must hear why the switch snapped back; a settings-screen change must never be a
     /// silent no-op. Caller: the face-tracking and high-frame-rate setting observers.
@@ -2219,7 +2216,6 @@ final class AppModel {
     }
 
     /// Thermal: was the phone already hot at the last update (announce transitions only).
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     @ObservationIgnored private var wasHot = false
 
     // MARK: Headphones / watch presence
@@ -2420,13 +2416,10 @@ final class AppModel {
         nav.onArrived = { [weak self] in
             guard let self else { return }
             self.logger.event("arrived")
-<<<<<<< HEAD
             self.family.tripEnded(destination: self.activeRouteName, arrived: true,
                                   lat: self.location.fix?.coordinate.latitude,
                                   lng: self.location.fix?.coordinate.longitude)
-=======
             self.finishSensorModeRoute()
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
             if Self.describeEveryWaypoint { self.describeScene() }
             self.beacon.stop()
             self.head.stop()
@@ -2727,11 +2720,8 @@ final class AppModel {
                              lng: location.fix?.coordinate.longitude)
         }
         nav.stop()
-<<<<<<< HEAD
         activeRouteName = nil
-=======
         finishSensorModeRoute()
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         // Not `location.stop()`: GPS belongs to the foreground session, not to the route. Stopping
         // it here made the card read "Off" the moment a route ended and made the next Start begin
         // with no fix.
@@ -2861,7 +2851,6 @@ final class AppModel {
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
-<<<<<<< HEAD
         "Obstacle detection warming up. Guiding with GPS.",
         // Refusals of the modes that re-run or pause ARKit (`setBothCameras`,
         // `faceHeadTrackingEnabled`): spoken at `.nav`, so a cache miss would hold route and
@@ -2870,13 +2859,11 @@ final class AppModel {
         "Both cameras cannot run while a route is starting. Wait for obstacle detection to be ready.",
         "Head tracking without AirPods cannot change while a route is guiding you. Stop the route first.",
         "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
-=======
         "Finish the sensor self-test before starting a route.",
         "Obstacle detection is back.",
         "Wait for the camera transition to finish.",
         "Sensor settings cannot change while a route is starting. Wait for obstacle detection to be ready.",
         "Sensor settings cannot change while a route is guiding you. Stop the route first.",
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         // Danger-sound lines (DangerSound.spokenLine, CaneKitLogic): a siren must not wait for a
         // synthesis round-trip. ⚠ Keep byte-identical to `DangerSound.spokenLine` — pinned by
         // `SoundAlertsTests.spokenLinesAreThePrefetchedOnes`.
@@ -3051,22 +3038,13 @@ final class AppModel {
         routeReadinessTimeoutTask?.cancel()
         routeReadinessTimeoutTask = nil
         depth.cancelReadiness()
-<<<<<<< HEAD
+        finishSensorModeRoute()
         routeStartStatus = nil
         routeError = nil
         speech.say("Obstacle detection warming up. Guiding with GPS.", .safety, ttl: 15)
         watch.send(status: "Guiding with GPS", distanceM: -1)
         logger.event("route_readiness", ["state": "timed_out_fallback_gps"])
         startRouteNow(pending.route, announce: pending.announce)
-=======
-        finishSensorModeRoute()
-        routeStartStatus = "Obstacle detection is not ready. Route did not start."
-        routeError = "Obstacle detection is not ready"
-        speech.say("Obstacle detection is not ready. Route did not start. Check the camera and reopen OpenCane.",
-                   .safety, ttl: 30)
-        watch.send(status: "Obstacle detection not ready", distanceM: -1)
-        logger.event("route_readiness", ["state": "timed_out"])
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
     }
 
     /// Cancel a queued route-start request. Called by Stop and by a newer MapKit/destination
@@ -3090,11 +3068,8 @@ final class AppModel {
         routeReadinessTimeoutTask = nil
         routeStartStatus = nil
         depth.cancelReadiness()
-<<<<<<< HEAD
         location.setNavigating(false)
-=======
         finishSensorModeRoute()
->>>>>>> 21b1717 (Step 29: interlock AR sensor mode restarts during routes)
         logger.event("route_readiness", ["state": "cancelled"])
     }
 

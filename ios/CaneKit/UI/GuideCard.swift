@@ -106,11 +106,16 @@ struct GuideCard: View {
                             value: model.describer.isDescribing ? "in progress" : nil) { model.describeScene() }
                     .disabled(model.describer.isDescribing)
 
-                CKBigButton(title: model.voiceInput.isListening ? "Listening…" : (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane"),
-                            systemImage: model.voiceInput.isListening ? "waveform" : "mic.fill",
-                            role: model.voiceInput.isListening ? .destructive : .secondary,
-                            hint: "Tap to speak a command, ask a question, or set a post",
-                            value: model.voiceInput.isListening ? "listening" : nil) {
+                CKBigButton(title: model.voiceInput.isListening ? "Listening…" :
+                                (model.voiceInput.isStarting ? "Starting…" :
+                                    (model.conversation.isProcessing ? "Thinking…" : "Talk to OpenCane")),
+                            systemImage: model.voiceInput.isListening ? "waveform" :
+                                (model.voiceInput.isStarting ? "hourglass" : "mic.fill"),
+                            role: model.voiceInput.isListening || model.voiceInput.isStarting ? .destructive : .secondary,
+                            hint: model.voiceInput.isStarting ? "Tap to cancel microphone setup" :
+                                "Tap to speak a command, ask a question, or set a post",
+                            value: model.voiceInput.isListening ? "listening" :
+                                (model.voiceInput.isStarting ? "starting" : nil)) {
                     model.toggleVoiceInput()
                 }
             }
