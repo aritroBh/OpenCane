@@ -2515,13 +2515,14 @@ Purpose: trip summary — distance, minutes, steps — shown while walking ("Thi
 
 ### ios/CaneKit/UI/ProfilePage.swift (Step 43)
 
-Purpose: 4th root tab — Apple Health-style Emergency Medical ID card and daily mobility fitness tracking for blind cane users.
+### ios/CaneKit/UI/ProfilePage.swift (Step 44)
 
-- `struct ProfilePage: View` — `@Environment(AppModel.self) private var model`. Hosts `medicalIDCard` and `mobilityFitnessCard`.
+Purpose: The 4th root tab view (`RootTab.profile`) housing the user's Emergency Medical ID card and daily Mobility & Fitness tracking.
+
+- `struct ProfilePage: View` — `@Environment(AppModel.self) private var model`; `@State private var isEditingMedicalID = false`.
 - `medicalIDCard: some View` — `CKCard(title: "EMERGENCY MEDICAL ID")`:
-  - Profile header with user avatar, name, and `staroflife.fill` emergency badge, plus an "Edit" button opening `EditMedicalIDSheet`.
-  - Prominent emergency safety banner: `"WHITE CANE USER / BLIND"` (`exclamationmark.shield.fill`, `danger` fill).
-  - Medical vitals grid: Date of Birth, Blood Type, Height & Weight, Allergies & Reactions, Medications, Home Residence, Cane equipment specification.
+  - White cane blind user emergency callout banner with high-contrast alert styling (`laneUrgent`, `crossmark.circle.fill`).
+  - Identity & vitals grid: Name, DOB, Blood Type, Height, Weight, Allergies, Medications, Home Address, Primary Cane Specs, Organ Donor status.
   - Emergency contact card with direct tap-to-call button (`tel:<phone>`).
   - `"Announce Medical ID"` button: reads the emergency identification summary aloud via `model.speech.say(summary, .obstacle)`.
 - `mobilityFitnessCard: some View` — `CKCard(title: "MOBILITY & FITNESS")`:
@@ -2531,7 +2532,7 @@ Purpose: 4th root tab — Apple Health-style Emergency Medical ID card and daily
 
 ---
 
-### ios/CaneKit/Trip/MedicalProfileStore.swift (Step 43)
+### ios/CaneKit/Trip/MedicalProfileStore.swift (Step 44)
 
 Purpose: persistence and telemetry bridge for emergency Medical ID card and mobility fitness metrics.
 
