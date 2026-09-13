@@ -14,7 +14,7 @@
 //  Accessibility contract: VoiceOver order is the selected page's cards, then the tab bar.
 //  Mount toggle labels are XCUITest `app.switches[...]` keys: "Mirror left / right" and
 //  "Write trip log" are ⚠ test contract (AGENTS.md rule 9). Tab buttons are ⚠ "Guide",
-//  "Sense", "Settings", "Profile" (`RootTab.title`; accessibility tests cover all four). Cues picker segments are ⚠ "Standard", "Detailed",
+//  "Details", "Settings", "Profile" (`RootTab.title`; accessibility tests cover all four). Cues picker segments are ⚠ "Standard", "Detailed",
 //  "Indoors", "Outdoors" (`CueLevel.title` / `CuePlace.title`).
 //
 //  Owner / caller: `CaneKitApp` (the app entry) shows it with `AppModel` in the environment.
@@ -79,6 +79,12 @@ struct ContentView: View {
                     .frame(height: keyboardUp ? 0 : nil)
                     .opacity(keyboardUp ? 0 : 1)
                     .clipped()
+                    // UI audit 2026-09-13: the bar's fill runs under the home indicator. Drawn here,
+                    // after `.clipped()`, because the clip cut the bar's own safe-area background
+                    // and left an ivory strip under the tabs on Face ID iPhones.
+                    .background {
+                        if !keyboardUp { CKColor.surface.ignoresSafeArea(edges: .bottom) }
+                    }
                     .accessibilityHidden(keyboardUp)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
@@ -166,8 +172,11 @@ private struct SensePage: View {
                     .font(.title2.weight(.bold))
                     .foregroundStyle(model.lidarSupported ? CKColor.laneClear : CKColor.laneUrgent)
                     .accessibilityHidden(true)
+                // UI audit 2026-09-13: body-sized headline, not the 22 pt instruction face — this
+                // is a status line, and at 22 pt "No LiDAR / sceneDepth on this device" filled
+                // the first screen. The sentence itself comes from DepthEngine (unchanged).
                 Text(model.status)
-                    .font(CKFont.instruction)
+                    .font(CKFont.label)
                     .foregroundStyle(CKColor.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -321,14 +330,14 @@ private struct FamilyContactsEditor: View {
         CKBigButton(title: "Save family emails",
                     systemImage: "person.crop.circle.badge.checkmark",
                     role: model.familyContactsNeedSave ? .primary : .secondary,
-                    hint: "Registers the list with the OpenCane Grok Bot, which emails your family when the cane reports a fall or SOS",
+                    hint: "Saves the list with the OpenCane alert service, which emails your family after a fall or SOS",
                     value: saving ? "Saving" : nil) {
             save()
         }
         .disabled(saving || !model.family.isConfigured)
 
         if model.familyContactsNeedSave {
-            Text("Not registered yet — press Save.")
+            Text("Not saved yet — tap Save.")
                 .font(CKFont.secondary)
                 .foregroundStyle(CKColor.laneNear)
         }
@@ -370,8 +379,8 @@ private struct IndoorRecordCard: View {
     /// Add landmark / Finish at the exit / Save / Cancel recording buttons. Always: the last status.
     var body: some View {
         @Bindable var indoor = model.indoor
-        CKCard(title: "Record indoor route") {
-            Text("A sighted teammate walks from the room to the exit door once. Steps and turns are counted; tap Add landmark and say what you pass.")
+        CKCard(title: "Record an indoor route", systemImage: "record.circle") {
+            Text("Walk once from a room to the exit door with a sighted helper. OpenCane counts steps and turns — tap Add landmark to name what you pass.")
                 .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             if indoor.isRecording {
@@ -391,11 +400,14 @@ private struct IndoorRecordCard: View {
                 CKBigButton(title: "Cancel recording", systemImage: "xmark.circle", role: .destructive,
                             hint: "Discards this recording") { indoor.cancelRecording() }
             } else {
-                TextField("Route id", text: $indoor.recordingID)
+                TextField("Route name", text: $indoor.recordingID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityHint("The file name; the ISR id replaces the floor-plan draft")
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, CKSpacing.md)
+                    .frame(minHeight: CKMetrics.touchTarget)
+                    .background(CKColor.surfaceRaised, in: RoundedRectangle(cornerRadius: CKRadius.button, style: .continuous))
+                    .accessibilityHint("Saved under this name; using the ISR name replaces the floor-plan draft")
                 CKBigButton(title: "Start recording", systemImage: "record.circle", role: .secondary,
                             hint: "Counts steps and turns until you finish at the exit") { indoor.startRecording() }
                     .disabled(indoor.isActive)
@@ -422,14 +434,14 @@ private struct IndoorRecordCard: View {
         let steps = counts.filter { $0 > 0 }.count
         let total = counts.reduce(0, +)
         let landmarks = model.indoor.recordedLandmarkCount
-        return "Recording · \(steps) \(steps == 1 ? "step" : "steps"), \(total) pedometer steps, \(landmarks) \(landmarks == 1 ? "landmark" : "landmarks")"
+        return "Recording · \(steps) \(steps == 1 ? "part" : "parts"), \(total) steps counted, \(landmarks) \(landmarks == 1 ? "landmark" : "landmarks")"
     }
 
-    /// "Indoor routes: Townsend Hall to the ISR front doors (not walked yet)".
+    /// "Saved routes: Townsend Hall to the ISR front doors (not recorded yet)".
     private var catalogLine: String {
         let scripts = model.indoor.scripts
-        guard !scripts.isEmpty else { return "No indoor routes." }
-        return "Indoor routes: " + scripts.map { "\($0.name)\($0.walked ? "" : " (not walked yet)")" }
+        guard !scripts.isEmpty else { return "No indoor routes saved." }
+        return "Saved routes: " + scripts.map { "\($0.name)\($0.walked ? "" : " (not recorded yet)")" }
             .joined(separator: "; ")
     }
 }
@@ -441,15 +453,23 @@ private struct SettingsPage: View {
 
     /// Cues first (the settings a walker changes most), then Haptics, Voice (Step 53), Watch, Mount,
     /// Family alerts, Record indoor route (Step 62), This phone.
+    ///
+    /// UI audit 2026-09-13: two labelled groups. "Everyday" holds what a walker or family member
+    /// changes (Alerts, Voice, Phone on cane, Family alerts); "Testing tools" holds the
+    /// team's check buttons (Vibration, Watch, Record an indoor route, This phone). The
+    /// XCUITest labels are unchanged; `testHapticTestButtonsAndSilenceToggle` taps elements (which
+    /// scroll themselves into view), so moving Vibration down the page does not affect it.
     var body: some View {
         @Bindable var model = model
         pageScroll {
+            CKSectionHeader(title: "Everyday")
             cueSettings($model)
-            HapticsCard()
             voiceSettings($model)
-            WatchCard()
             mountSettings($model)
             familyAlertsCard($model)
+            CKSectionHeader(title: "Testing tools")
+            HapticsCard()
+            WatchCard()
             IndoorRecordCard()
             capabilityCard
         }
@@ -466,11 +486,12 @@ private struct SettingsPage: View {
     /// `CuePlace.title` ("Standard", "Detailed", "Indoors", "Outdoors").
     /// - Parameter model: the `@Bindable` model from `body`.
     private func cueSettings(_ model: Bindable<AppModel>) -> some View {
-        CKCard(title: "Cues") {
+        CKCard(title: "Alerts", systemImage: "bell.badge",
+               caption: "How much OpenCane says and taps while you walk.") {
             // A segmented picker does not show or speak its own title on iOS, so each gets a visible
             // label and a VoiceOver container named after it; otherwise a swipe hears "Quiet, button"
             // with no context, next to the speech pill that also says "Quiet" (Step 36 review).
-            Text("Cue detail").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            Text("Detail").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .accessibilityHidden(true)
             Picker("Cue detail", selection: model.cueLevel) {
                 ForEach(CueLevel.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -479,7 +500,7 @@ private struct SettingsPage: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Cue detail")
             .accessibilityHint("How much OpenCane says and taps on its own. Quiet names nothing, reads only safety signs and taps only for head height. Standard taps once at 1.5 meters and a strong triple at 0.6, with no side taps. Detailed taps continuously ahead and for the sides. Head height warnings are the same at every level.")
-            Text("Place").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            Text("Where you are").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .accessibilityHidden(true)
             Picker("Place", selection: model.cuePlace) {
                 ForEach(CuePlace.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -491,6 +512,13 @@ private struct SettingsPage: View {
             Text(cueLevelCaption)
                 .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            CKRowDivider()
+            // Moved here from the Haptics card (UI audit 2026-09-13): it is an everyday alert
+            // setting, and the caption above refers to it.
+            CKToggleRow(title: "Speak obstacle names",
+                        subtitle: "Says “door”, “seat” or “table” when one is straight ahead",
+                        isOn: model.obstacleNamesEnabled,
+                        hint: "Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Detail and Where you are.")
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
@@ -509,28 +537,29 @@ private struct SettingsPage: View {
     /// - Parameter model: the `@Bindable` model from `body`.
     private func voiceSettings(_ model: Bindable<AppModel>) -> some View {
         let hasKey = model.wrappedValue.speech.naturalVoice != nil
-        return CKCard(title: "Voice") {
-            Text("Voice").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
-                .accessibilityHidden(true)
+        return CKCard(title: "Voice", systemImage: "waveform") {
             Picker("Voice", selection: model.naturalVoiceEnabled) {
                 Text("Natural").tag(true)
-                Text("System").tag(false)
+                Text("iPhone").tag(false)
             }
             .pickerStyle(.segmented)
             .disabled(!hasKey)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Voice")
-            .accessibilityHint("Natural uses the ElevenLabs voice for every line. System uses the iPhone voice, which needs no network.")
+            .accessibilityHint("Natural sounds more human and uses the internet. iPhone works offline.")
             Text(hasKey
-                 ? "Natural: one voice for everything. Cached lines play at once; a new line waits up to 2.5 seconds for the network, then the iPhone voice speaks it. System: the iPhone voice, instant and offline."
-                 : "Add an ElevenLabs key for the natural voice.")
+                 ? "Natural sounds more human and uses the internet — if it's slow, the iPhone voice fills in. iPhone works offline."
+                 : "The natural voice isn't set up on this phone, so the iPhone voice is used.")
                 .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            CKRowDivider()
             // Step 58 (voice shell) listening toggles.
-            Toggle("Listen on launch", isOn: model.listenOnLaunch)
-                .accessibilityHint("Speaks the voice menu and listens when OpenCane starts")
-            Toggle("Follow-up listening window", isOn: model.voiceFollowUp)
-                .accessibilityHint("Opens a listening window after assistant answers")
+            CKToggleRow(title: "Listen when the app opens",
+                        subtitle: "Reads the menu, then listens once",
+                        isOn: model.listenOnLaunch)
+            CKToggleRow(title: "Keep listening after answers",
+                        subtitle: "Gives you a moment to ask a follow-up",
+                        isOn: model.voiceFollowUp)
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
@@ -545,15 +574,18 @@ private struct SettingsPage: View {
     private var cueLevelCaption: String {
         var parts: [String]
         switch model.cueLevel {
-        case .quiet: parts = ["Quiet: no obstacle names; safety signs only. No cane taps for torso obstacles; head height and ground hazards still warn."]
-        case .standard: parts = ["Standard: door names on a route; every sign. One tap at 1.5 meters when closing, a strong triple at 0.6, no side taps."]
-        case .detailed: parts = ["Detailed: every obstacle name except walls; every sign. Continuous centre taps and side taps."]
+        // UI audit 2026-09-13: same facts, everyday words ("torso obstacles" → "things at body
+        // height", "continuous centre taps" → "steady taps"). Keep every sentence true to
+        // `TorsoHapticPolicy` and the names / signs rules above.
+        case .quiet: parts = ["Quiet: reads safety signs only and names nothing. No taps for things at body height — head-height and ground warnings stay on."]
+        case .standard: parts = ["Standard: names doors on a route and reads every sign. One tap when something is 1.5 m away, three strong taps at 0.6 m."]
+        case .detailed: parts = ["Detailed: names obstacles (not walls) and reads every sign. Steady taps for what's ahead and on each side."]
         }
         if model.cuePlace == .indoors {
-            parts.append("Indoors: head height from 1.2 meters, no names, safety signs only, no torso taps (head height and ground hazards still warn).")
+            parts.append("Indoors: head-height warnings start at 1.2 m. No names, safety signs only, no body-height taps.")
         }
         if !model.obstacleNamesEnabled, model.cueLevel != .quiet, model.cuePlace == .outdoors {
-            parts.append("Names are off: turn on Speak obstacle names below to hear them.")
+            parts.append("Names are off — turn on Speak obstacle names below to hear them.")
         }
         return parts.joined(separator: " ")
     }
@@ -568,24 +600,29 @@ private struct SettingsPage: View {
     /// whatever this says — `CameraRate.previewCap`), audio beacon (on), trip log (on).
     /// - Parameter model: the `@Bindable` model from `body`, so each toggle gets a binding.
     private func mountSettings(_ model: Bindable<AppModel>) -> some View {
-        CKCard(title: "Mount") {
+        CKCard(title: "Phone on cane", systemImage: "iphone.gen3") {
             MountAimRow()
-            Toggle("Phone held upright (portrait)", isOn: model.portraitMode)
-                .accessibilityHint("Turn off if the phone is clamped sideways")
+            CKRowDivider()
+            CKToggleRow(title: "Phone is upright", subtitle: "Turn off if it's clamped sideways",
+                        isOn: model.portraitMode)
             // ⚠ test contract: switches["Mirror left / right"].
-            Toggle("Mirror left / right", isOn: model.mirrorLeftRight)
-                .accessibilityHint("Turn on if left and right warnings feel swapped")
-            Toggle("60 fps camera (warmer)", isOn: model.highFrameRateCamera)
-                .accessibilityHint("Smoother live view; uses more battery and heat. Obstacle cues are the same either way.")
-            Toggle("Audio beacon while navigating", isOn: model.beaconEnabled)
-                .accessibilityHint("A soft click from the direction to walk, through the AirPods")
+            CKToggleRow(title: "Mirror left / right", subtitle: "Use if left and right feel swapped",
+                        isOn: model.mirrorLeftRight,
+                        hint: "Turn on if left and right warnings feel swapped")
+            CKToggleRow(title: "Smoother camera", subtitle: "Uses more battery and gets warmer",
+                        isOn: model.highFrameRateCamera,
+                        hint: "Smoother live view; uses more battery and heat. Obstacle warnings are the same either way.")
+            CKToggleRow(title: "Direction sound", subtitle: "A soft click in your headphones points the way",
+                        isOn: model.beaconEnabled)
             // Step 49. Default ON on purpose (see `AppModel.autoTorchInDark`): a blind walker cannot
             // see the dark, so the app notices it for them.
-            Toggle("Flashlight on in the dark (routes)", isOn: model.autoTorchInDark)
-                .accessibilityHint("When the camera sees low light while a route guides, OpenCane turns the flashlight on so the cameras can see and drivers can see you, and off again when the light returns or the route ends. Obstacle detection works in the dark either way.")
+            CKToggleRow(title: "Flashlight in the dark", subtitle: "Turns on by itself during a route when it's dark",
+                        isOn: model.autoTorchInDark,
+                        hint: "When it's dark during a route, OpenCane turns the flashlight on so the cameras can see and drivers can see you, and off again when it's light or the route ends. Obstacle detection works in the dark either way.")
             // ⚠ test contract: switches["Write trip log"].
-            Toggle("Write trip log", isOn: model.loggingEnabled)
-                .accessibilityHint("Saves a JSONL log of lanes, cues and location to the Files app")
+            CKToggleRow(title: "Write trip log", subtitle: "Saves walk details for troubleshooting",
+                        isOn: model.loggingEnabled,
+                        hint: "Saves a log of each walk to the Files app so the team can check what happened")
         }
         .font(CKFont.body)
         .foregroundStyle(CKColor.textPrimary)
@@ -601,35 +638,43 @@ private struct SettingsPage: View {
     /// switch that silently does nothing is worse than one that says why.
     /// - Parameter model: the `@Bindable` model from `body`.
     private func familyAlertsCard(_ model: Bindable<AppModel>) -> some View {
-        CKCard(title: "Family alerts") {
-            Toggle("Send cane events to family", isOn: model.familyAlertsEnabled)
-                .accessibilityHint("Sends falls, close obstacles, low battery and a position every few minutes to the OpenCane Grok Bot, which decides whether to text your family")
+        // UI audit 2026-09-13: plain words; no webhook / key / model names on screen. The wording
+        // contract above still holds — nothing here says the family *was* notified.
+        CKCard(title: "Family alerts", systemImage: "person.2.fill",
+               caption: "Let family know if something goes wrong on a walk.") {
+            CKToggleRow(title: "Alert my family", subtitle: "Falls, close calls and low battery",
+                        isOn: model.familyAlertsEnabled,
+                        hint: "Sends falls, close obstacles, low battery and your position every few minutes to the OpenCane alert service, which decides whether to text your family")
                 .disabled(!self.model.family.isConfigured)
             if !self.model.family.isConfigured {
-                Text("No webhook key. Add OPENCANE_GROKBOT_WEBHOOK_URL and _KEY to Secrets.plist.")
-                    .font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
+                Text("Family alerts aren't set up on this phone yet.")
+                    .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
-            Toggle("Detect the cane falling", isOn: model.fallDetectionEnabled)
-                .accessibilityHint("Reports to your family when the cane goes over and stays down. Thresholds are not tuned yet, so turn this off if it cries wolf.")
+            CKToggleRow(title: "Detect the cane falling", subtitle: "If the cane falls and stays down",
+                        isOn: model.fallDetectionEnabled,
+                        hint: "Tells your family when the cane goes over and stays down. Still being tuned, so turn this off if it goes off by mistake.")
                 .disabled(!self.model.fallWatcher.isSupported)
             if !self.model.fallWatcher.isSupported {
-                Text("This device has no motion sensor, so falls cannot be detected.")
+                Text("This phone can't detect falls.")
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
+            CKRowDivider()
             FamilyContactsEditor()
-            Toggle("Add AI context", isOn: model.familyAlertsAIContext)
-                .accessibilityHint("A small model writes one sentence of context for your family from what the phone knew. The facts are sent either way.")
+            CKRowDivider()
+            CKToggleRow(title: "Add a short summary", subtitle: "One sentence explaining what happened",
+                        isOn: model.familyAlertsAIContext,
+                        hint: "Adds one sentence of context for your family. The basic facts are sent either way.")
                 .disabled(!self.model.family.canSummarize)
             if let name = self.model.family.summarizerName, self.model.familyAlertsAIContext {
-                Text("Context written by \(name).")
+                Text("Summary written by \(name).")
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             } else if !self.model.family.canSummarize {
-                Text("No model key, so alerts carry facts only.")
+                Text("Summaries aren't set up, so alerts include the basic facts only.")
                     .font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             }
-            CKBigButton(title: "Send test event", systemImage: "antenna.radiowaves.left.and.right",
+            CKBigButton(title: "Send a test alert", systemImage: "paperplane",
                         role: .secondary,
-                        hint: "Posts one sample fall event to the Grok Bot routine and reports what it answered") {
+                        hint: "Sends one sample fall alert to the alert service and shows what it answered") {
                 Task { await self.model.sendFamilyTestEvent() }
             }
             if let status = self.model.family.lastStatus {
@@ -644,10 +689,10 @@ private struct SettingsPage: View {
     /// "This phone" card: which hardware / package features this device actually has, so a
     /// teammate can tell at a glance why depth or mesh cues are missing.
     private var capabilityCard: some View {
-        CKCard(title: "This phone") {
-            capabilityRow("LiDAR depth", model.lidarSupported)
-            capabilityRow("Mesh classification (door / wall / seat)", model.meshClassificationSupported)
-            capabilityRow("Logic package linked", Self.logicPackageOK)
+        CKCard(title: "This phone", systemImage: "checklist") {
+            capabilityRow("Depth sensor (LiDAR)", model.lidarSupported)
+            capabilityRow("Recognizes doors, walls and seats", model.meshClassificationSupported)
+            capabilityRow("App self-check", Self.logicPackageOK)
         }
     }
 
@@ -766,7 +811,8 @@ private struct SceneEngineCard: View {
     var body: some View {
         let f = facts(at: Date())
         let chain = SceneEngineSummary.chain(f)
-        CKCard(title: "Scene engine") {
+        CKCard(title: "Recent activity", systemImage: "sparkles",
+               caption: "What answered your last question and what OpenCane is watching for.") {
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: chain.text, tone: .neutral, systemImage: "brain",
                              spoken: chain.spoken)
@@ -782,17 +828,22 @@ private struct SceneEngineCard: View {
                         .accessibilityAddTraits(.updatesFrequently)
                 }
             }
-            if let gate = SceneEngineSummary.gate(f) { row("Gate", gate) }
+            if let gate = SceneEngineSummary.gate(f) { row("Check", gate) }
             TimelineView(.periodic(from: .now, by: Self.ageRefresh)) { timeline in
                 let live = facts(at: timeline.date)
-                row("Watch", SceneEngineSummary.hazardWatch(live))
-                // Step 49: "Light: lit (640 lux)" / "Light: dark (12 lux) · flashlight on (by
-                // OpenCane)" / "… flashlight off — cameras may miss things" / "Light: unknown".
-                // In the timeline so the lux number refreshes every 10 s; a state change redraws
-                // it at once through `model.lightState`.
-                row("Light", SceneEngineSummary.light(live))
+                // UI audit 2026-09-13: an explicit leading VStack. Two rows straight inside the
+                // TimelineView were laid out by an implicit stack that centred the shorter "LIGHT"
+                // row under the "WATCH" sentence.
+                VStack(alignment: .leading, spacing: CKSpacing.md) {
+                    row("Hazards", SceneEngineSummary.hazardWatch(live))
+                    // Step 49: "Light: lit (640 lux)" / "Light: dark (12 lux) · flashlight on (by
+                    // OpenCane)" / "… flashlight off — cameras may miss things" / "Light: unknown".
+                    // In the timeline so the lux number refreshes every 10 s; a state change redraws
+                    // it at once through `model.lightState`.
+                    row("Light", SceneEngineSummary.light(live))
+                }
             }
-            row("Cues", SceneEngineSummary.cues(f))
+            row("Alerts", SceneEngineSummary.cues(f))
             voiceRow
         }
     }
@@ -805,11 +856,12 @@ private struct SceneEngineCard: View {
         let words = model.speech.lastEngine.map {
             VoiceEngineChoice.describe(engine: $0.engine, reason: $0.reason)
         } ?? "No line spoken yet"
-        return HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
-            Text("VOICE").font(CKFont.pill).foregroundStyle(CKColor.textSecondary)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("VOICE").font(CKFont.pill).kerning(0.6).foregroundStyle(CKColor.textSecondary)
             Text(words).font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Last spoken line: \(words)")
     }
@@ -820,11 +872,14 @@ private struct SceneEngineCard: View {
     ///   - caption: the row's word, drawn uppercased in `CKFont.pill`.
     ///   - line: the visible text and its VoiceOver sentence.
     private func row(_ caption: String, _ line: SceneEngineLine) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: CKSpacing.sm) {
-            Text(caption.uppercased()).font(CKFont.pill).foregroundStyle(CKColor.textSecondary)
+        // UI audit 2026-09-13: caption stacked over the sentence, so long sentences use the full
+        // card width instead of a ragged column beside captions of different widths.
+        VStack(alignment: .leading, spacing: 2) {
+            Text(caption.uppercased()).font(CKFont.pill).kerning(0.6).foregroundStyle(CKColor.textSecondary)
             Text(line.text).font(CKFont.body).foregroundStyle(CKColor.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(line.spoken)
     }

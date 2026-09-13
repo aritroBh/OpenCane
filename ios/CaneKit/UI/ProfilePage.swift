@@ -25,10 +25,13 @@ struct ProfilePage: View {
 
     var body: some View {
         @Bindable var model = model
+        // UI audit 2026-09-13: Medical ID first (what a responder needs), then Activity, then
+        // Privacy. `testAccessibilityLabelsExist` waits for each label, which scrolls nothing but
+        // finds off-screen elements in this non-lazy stack.
         pageScroll {
-            privacyCard(model: $model)
             medicalIDCard
             mobilityFitnessCard
+            privacyCard(model: $model)
         }
         .sheet(isPresented: $showingEditor) {
             EditMedicalIDSheet(store: model.medicalProfile)
@@ -44,21 +47,22 @@ struct ProfilePage: View {
     /// this one is read aloud to a blind walker deciding whether to opt in. When a writer in
     /// `CloudSync` stops being a no-op seam, this sentence changes in the same commit.
     private func privacyCard(model: Bindable<AppModel>) -> some View {
-        CKCard(title: "Privacy") {
-            Toggle("Share data with OpenCane cloud", isOn: model.cloudSharingEnabled)
+        CKCard(title: "Privacy", systemImage: "lock.fill") {
+            CKToggleRow(title: "Share data with OpenCane cloud", subtitle: "Medical ID, family contacts and walk summaries",
+                        isOn: model.cloudSharingEnabled)
                 .accessibilityHint("When on, uploads your Medical ID, family contacts, a summary of each walk with where it started and ended, and any hazard the cane detects, with its photo. The detailed trip log, your settings and anything you say stay on this phone. Off stops future uploads.")
                 .disabled(!self.model.cloud.isConfigured)
             Text(self.model.cloud.isConfigured
                  ? (self.model.cloudSharingEnabled
                     ? "Cloud sharing is on. Turn it off any time to stop future uploads."
                     : "Cloud sharing is off. Medical ID, family contacts and walk summaries stay on this phone.")
-                 : "No cloud project is configured; your data stays on this phone.")
+                 : "Cloud sharing isn't set up, so everything stays on this phone.")
                 .font(CKFont.secondary)
                 .foregroundStyle(CKColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(self.model.cloud.isConfigured
                                     ? (self.model.cloudSharingEnabled ? "Cloud sharing is on" : "Cloud sharing is off")
-                                    : "Cloud sharing is unavailable because no cloud project is configured")
+                                    : "Cloud sharing isn't set up, so everything stays on this phone")
         }
     }
 
@@ -104,9 +108,9 @@ struct ProfilePage: View {
                             .font(.subheadline)
                             .foregroundStyle(CKColor.danger)
                             .accessibilityHidden(true)
-                        Text("EMERGENCY ID")
-                            .font(CKFont.pill)
-                            .foregroundStyle(CKColor.danger)
+                        Text("Emergency ID")
+                            .font(CKFont.secondary.weight(.semibold))
+                            .foregroundStyle(CKColor.textSecondary)
                     }
                 }
 
@@ -115,13 +119,15 @@ struct ProfilePage: View {
                 Button {
                     showingEditor = true
                 } label: {
+                    // 44 pt tall: the old capsule was ~28 pt, under every touch-target rule.
                     Text("Edit")
                         .font(CKFont.secondary.weight(.semibold))
-                        .foregroundStyle(CKColor.accent)
-                        .padding(.horizontal, CKSpacing.md)
-                        .padding(.vertical, CKSpacing.xs)
+                        .foregroundStyle(CKColor.textPrimary)
+                        .padding(.horizontal, CKSpacing.lg)
+                        .frame(minHeight: 44)
                         .background(CKColor.surfaceRaised, in: Capsule())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Edit Medical ID")
             }
 
@@ -133,9 +139,9 @@ struct ProfilePage: View {
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: CKSpacing.xs) {
-                    Text("WHITE CANE USER / BLIND")
-                        .font(CKFont.pill)
-                        .foregroundStyle(CKColor.danger)
+                    Text("Blind · uses a white cane")
+                        .font(CKFont.label)
+                        .foregroundStyle(CKColor.textPrimary)
                     Text(p.emergencyNotes)
                         .font(CKFont.secondary)
                         .foregroundStyle(CKColor.textPrimary)
@@ -147,19 +153,26 @@ struct ProfilePage: View {
 
             // Medical Details Grid
             VStack(spacing: CKSpacing.sm) {
-                infoRow(label: "Date of Birth", value: p.dateOfBirth, icon: "calendar")
-                infoRow(label: "Blood Type", value: p.bloodType, icon: "drop.fill")
-                infoRow(label: "Height & Weight", value: "\(p.height) · \(p.weight)", icon: "ruler.fill")
+                infoRow(label: "Date of birth", value: p.dateOfBirth, icon: "calendar")
+                CKRowDivider()
+                infoRow(label: "Blood type", value: p.bloodType, icon: "drop.fill")
+                CKRowDivider()
+                infoRow(label: "Height & weight", value: "\(p.height) · \(p.weight)", icon: "ruler.fill")
+                CKRowDivider()
                 infoRow(label: "Allergies", value: p.allergies, icon: "exclamationmark.triangle.fill")
+                CKRowDivider()
                 infoRow(label: "Medications", value: p.medications, icon: "pills.fill")
-                infoRow(label: "Residence", value: p.homeAddress, icon: "house.fill")
-                infoRow(label: "Cane Spec", value: p.caneType, icon: "figure.walk")
+                CKRowDivider()
+                infoRow(label: "Home", value: p.homeAddress, icon: "house.fill")
+                CKRowDivider()
+                infoRow(label: "Cane", value: p.caneType, icon: "figure.walk")
             }
 
             // Emergency Contact Row
             VStack(alignment: .leading, spacing: CKSpacing.xs) {
                 Text("EMERGENCY CONTACT")
                     .font(CKFont.pill)
+                    .kerning(0.6)
                     .foregroundStyle(CKColor.textSecondary)
 
                 HStack {
@@ -187,10 +200,11 @@ struct ProfilePage: View {
                                 Text("Call")
                             }
                             .font(CKFont.pill)
-                            .padding(.horizontal, CKSpacing.md)
-                            .padding(.vertical, CKSpacing.sm)
+                            .padding(.horizontal, CKSpacing.lg)
+                            .frame(minHeight: 44)
                             .background(CKColor.accent, in: Capsule())
-                            .foregroundStyle(CKColor.ink)
+                            // Was `ink` on the `accent` fill: ink on ink in light mode (invisible).
+                            .foregroundStyle(CKColor.onAccent)
                         }
                         .accessibilityLabel("Call emergency contact \(contact.name)")
                     }
@@ -222,11 +236,11 @@ struct ProfilePage: View {
         let activeSteps = stats.todaySteps > 0 ? stats.todaySteps : (model.trip.steps ?? 0)
         let activeDistKm = stats.todayDistanceMeters > 0 ? (stats.todayDistanceMeters / 1000.0) : (model.trip.distanceM / 1000.0)
 
-        return CKCard(title: "MOBILITY & FITNESS") {
+        return CKCard(title: "Today's activity", systemImage: "figure.walk") {
             HStack {
-                Text("Today's Cane Mobility")
-                    .font(CKFont.instruction)
-                    .foregroundStyle(CKColor.textPrimary)
+                Text("Walking with your cane today")
+                    .font(CKFont.secondary)
+                    .foregroundStyle(CKColor.textSecondary)
 
                 Spacer()
 
@@ -234,10 +248,13 @@ struct ProfilePage: View {
                     model.medicalProfile.refreshMobilityStats()
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                        .font(.title3)
-                        .foregroundStyle(CKColor.accent)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(CKColor.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(CKColor.surfaceRaised, in: Circle())
                 }
-                .accessibilityLabel("Refresh mobility stats")
+                .buttonStyle(.plain)
+                .accessibilityLabel("Refresh activity")
             }
 
             // Large Glanceable Metrics
@@ -257,14 +274,14 @@ struct ProfilePage: View {
 
             HStack(spacing: CKSpacing.md) {
                 metricTile(
-                    title: "Trips Finished",
+                    title: "Trips",
                     value: "\(stats.completedTrips)",
                     icon: "flag.checkered"
                 )
 
                 let paceMps = stats.averagePaceMps > 0 ? stats.averagePaceMps : 1.2
                 metricTile(
-                    title: "Average Pace",
+                    title: "Pace",
                     value: String(format: "%.1f m/s", paceMps),
                     icon: "speedometer"
                 )
@@ -273,9 +290,9 @@ struct ProfilePage: View {
             // Active Route Live Telemetry
             if model.nav.isNavigating {
                 VStack(alignment: .leading, spacing: CKSpacing.xs) {
-                    Text("ACTIVE ROUTE")
+                    Text("WALKING NOW")
                         .font(CKFont.pill)
-                        .foregroundStyle(CKColor.accent)
+                        .foregroundStyle(CKColor.textSecondary)
 
                     HStack {
                         Text(model.nav.route?.name ?? "Current Walk")
@@ -374,7 +391,7 @@ struct EditMedicalIDSheet: View {
                     TextField("Home Address", text: $homeAddress)
                 }
 
-                Section("Medical Vitals") {
+                Section("Medical") {
                     TextField("Blood Type", text: $bloodType)
                     TextField("Height", text: $height)
                     TextField("Weight", text: $weight)
@@ -388,7 +405,7 @@ struct EditMedicalIDSheet: View {
                     TextField("Phone Number", text: $emergencyContactPhone)
                 }
 
-                Section("Cane Equipment") {
+                Section("Cane") {
                     TextField("Cane Type", text: $caneType)
                 }
             }

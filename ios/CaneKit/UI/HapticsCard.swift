@@ -38,9 +38,11 @@ struct HapticsCard: View {
     /// test", and the audio-session error in red.
     var body: some View {
         @Bindable var model = model
-        CKCard(title: "Haptics") {
+        // UI audit 2026-09-13: titled "Vibration"; "Speak obstacle names" moved to the Alerts card.
+        CKCard(title: "Vibration", systemImage: "iphone.radiowaves.left.and.right",
+               caption: "Feel each pattern and check the voice.") {
             HStack(spacing: CKSpacing.sm) {
-                CKStatusPill(text: model.haptics.isHealthy ? "Engine OK" : "Engine down",
+                CKStatusPill(text: model.haptics.isHealthy ? "Ready" : "Not working",
                              tone: model.haptics.isHealthy ? .trusted : .danger,
                              systemImage: model.haptics.isHealthy ? "waveform" : "exclamationmark.triangle",
                              spoken: model.haptics.isHealthy ? "Haptic engine running" : "Haptic engine not running")
@@ -51,10 +53,10 @@ struct HapticsCard: View {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
             // ⚠ test contract: switches["Silence haptics"].
-            Toggle("Silence haptics", isOn: $model.hapticsSilenced)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("The phone stops vibrating; obstacle cues go to the watch and are spoken instead")
-            Text("Test patterns").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            CKToggleRow(title: "Silence haptics", subtitle: "Warnings go to the watch and voice instead",
+                        isOn: $model.hapticsSilenced,
+                        hint: "The phone stops vibrating; obstacle warnings go to the watch and are spoken instead")
+            Text("Try a pattern").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             // ⚠ test contract: these titles become "Test <title lowercased> haptic".
             HStack(spacing: CKSpacing.sm) {
                 testButton("Left", "arrow.left", .left)
@@ -62,9 +64,7 @@ struct HapticsCard: View {
                 testButton("Right", "arrow.right", .right)
                 testButton("Head", "arrow.up.to.line", .head)
             }
-            Toggle("Speak obstacle names", isOn: $model.obstacleNamesEnabled)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Says door, seat, window or table when one is straight ahead. Off by default. Which names are said depends on Cue detail and Place.")
+            CKRowDivider()
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: model.speech.isSpeaking ? "Speaking" : "Quiet",
                              tone: model.speech.isSpeaking ? .warning : .neutral,
@@ -74,7 +74,10 @@ struct HapticsCard: View {
                 // key would otherwise paint a green pill over lines coming out in Apple's voice.
                 // Step 54: the spoken label names the last line's engine *and* why
                 // (`VoiceEngineChoice.describe`), and says so when the breaker holds the system voice.
-                CKStatusPill(text: model.speech.naturalVoice == nil ? "System" : model.speech.backendName,
+                // UI audit 2026-09-13: "Natural" / "iPhone voice" on screen instead of the vendor
+                // name; the tone still follows `backendName` (what actually spoke).
+                CKStatusPill(text: model.speech.naturalVoice == nil || model.speech.backendName != "ElevenLabs"
+                                 ? "iPhone voice" : "Natural voice",
                              tone: model.speech.backendName == "ElevenLabs" ? .trusted
                                  : (model.speech.naturalVoiceOffline || model.speech.naturalVoiceUnavailable ? .warning : .neutral),
                              systemImage: "waveform.and.mic",
@@ -91,7 +94,7 @@ struct HapticsCard: View {
                     .accessibilityLabel("Voice problem: \(voiceError)")
             }
             // Own row: sharing the pill row squeezed "Speaking" to "SPEAKI…" on a 17 Pro Max.
-            CKBigButton(title: "Speech test", systemImage: "speaker.wave.3", role: .secondary,
+            CKBigButton(title: "Test the voice", systemImage: "speaker.wave.3", role: .secondary,
                         hint: "Speaks a scene line, then an obstacle line that interrupts it") { model.speechTest() }
             if let err = model.speech.audioSessionError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
@@ -103,9 +106,9 @@ struct HapticsCard: View {
     /// that the natural voice is unreachable; otherwise the last line's engine and reason
     /// ("Voice: Natural voice · cached"), or the backend name before the first line.
     private var voicePillSpoken: String {
-        guard model.speech.naturalVoice != nil else { return "System voice; add an ElevenLabs key for the natural voice" }
-        if model.speech.naturalVoiceUnavailable { return "System voice; the ElevenLabs account is out of credit or refused the key" }
-        if model.speech.naturalVoiceOffline { return "Natural voice unreachable; using the system voice until the network is back" }
+        guard model.speech.naturalVoice != nil else { return "iPhone voice; the natural voice isn't set up" }
+        if model.speech.naturalVoiceUnavailable { return "iPhone voice; the natural voice isn't available right now" }
+        if model.speech.naturalVoiceOffline { return "Natural voice can't be reached; using the iPhone voice until the internet is back" }
         if let last = model.speech.lastEngine {
             return "Voice: " + VoiceEngineChoice.describe(engine: last.engine, reason: last.reason)
         }

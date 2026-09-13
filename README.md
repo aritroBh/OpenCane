@@ -4,8 +4,11 @@ OpenCane clamps an iPhone to a white cane and turns the phone into the only comp
 Its LiDAR sees obstacles between waist and head height, which the cane tip misses. Its Taptic
 Engine shakes the cane to warn about them. GPS and a waypoint engine guide the walk. AirPods Pro
 play a spatial beacon that clicks from the direction to walk, and speak instructions. An Apple Watch
-taps turns and crossings onto the wrist and carries Repeat / Next / Describe / Recenter. Nothing
-needs to be bought (the phone mount is 3D-printed), and the kit runs **untethered on the phone**.
+taps turns and crossings onto the wrist and carries Repeat / Next / Describe / Recenter. An optional
+**Grok Bot** hook posts cane events to a family-alert routine — falls, close obstacles, low battery,
+trip start/end, and periodic breadcrumbs — and the bot decides whether to email or text registered
+contacts. Nothing needs to be bought (the phone mount is 3D-printed), and the kit runs **untethered
+on the phone**.
 
 **OpenCane** is the app: native iOS 26 SwiftUI, Swift 6 strict concurrency, Apple frameworks only.
 It lives in [`ios/`](ios/). Inside the repo the code is still called **CaneKit** — the Xcode
@@ -14,8 +17,8 @@ project, targets, scheme, the `CaneKitLogic` module, the `ios/CaneKit/…` paths
 Only what a person sees or hears says OpenCane. See [`AGENTS.md`](AGENTS.md) → "The name split".
 
 Hackathon (54FoundersHack): Champaign-Urbana, Sat Sep 12 – Sun Sep 13 2026.
-Team: **Aritro**, **Aarav**, **Tejas** (software / iOS app); **Sagar**, **Tommy**
-(hardware, 3D printing, CAD).
+Team: **Aritro**, **Aarav**, **Tejas** (software / iOS app); 
+**Sagar**, **Tommy** (hardware, 3D printing, CAD).
 
 > **Teammates: after `git pull`, read [`docs/TEAM_BRIEF.md`](docs/TEAM_BRIEF.md) (2 minutes), then
 > [`docs/TEAM_HANDOFF.md`](docs/TEAM_HANDOFF.md).** It says
@@ -37,6 +40,10 @@ the way:
 - The camera reads safety signs ("Sign: sidewalk closed.") on the phone, the LiDAR can warn about
   curbs and drop-offs (off by default until tuned on the cane), and every hazard lands on a
   shareable GeoJSON map.
+- With **family alerts** on (opt-in, Settings → Family alerts), the app POSTs cane events to the
+  **Grok Bot** routine "OpenCane cane events"; the bot decides who to notify from the event type and
+  severity. Register family emails in Settings; add `OPENCANE_GROKBOT_WEBHOOK_URL` and
+  `OPENCANE_GROKBOT_WEBHOOK_KEY` to `Secrets.plist` (see [`ios/README.md` §4.1](ios/README.md)).
 - On arrival the phone speaks a summary of distance, minutes and steps.
 
 Any other destination works through MapKit walking directions. The route and its evidence are in
@@ -115,9 +122,11 @@ make run                           # gen + build + install + launch
 make audit                         # after a walk: pull the newest trip log off the phone, measure its cue load
 ```
 
-Put API keys (ElevenLabs voice, "Where am I" model, the Grok Bot family-alert webhook) in `ios/CaneKit/Resources/Secrets.plist`
-**before** `make run`, because the file is bundled into the app. Never commit it. Without keys the
-app uses the system voice and describes scenes on the phone. Then follow
+Put API keys in `ios/CaneKit/Resources/Secrets.plist` **before** `make run`, because the file is
+bundled into the app. Never commit it. Keys: ElevenLabs voice, the "Where am I" cloud model, and the
+Grok Bot family-alert webhook (`OPENCANE_GROKBOT_WEBHOOK_URL` / `_KEY` — the routine decides whether
+to text family; an HTTP 200 only means the bot started a run). Without keys the app uses the system
+voice, describes scenes on the phone, and family alerts stay disabled. Then follow
 [`docs/devices_setup.md`](docs/devices_setup.md) for the AirPods, the watch and the untethered demo
 (warm the voice cache on Wi-Fi, turn on Guided Access, battery above 40 %).
 

@@ -68,9 +68,35 @@ struct GuideCard: View {
     /// head pills, Simulate walk) or the rest of the idle picker (Repeat after arrival, Cancel route
     /// start, Navigate to CIF from here, Simulate walk, the route-start status, `DestinationField`);
     /// last, the route / location error line.
+    ///
+    /// UI audit 2026-09-13: one tall card became a stack of focused pieces — a status card
+    /// (instruction, distance, pills), the microphone and the compact row on the page ground, then
+    /// a "Where to" card (idle: destination field first, then Navigate to CIF from here and
+    /// Simulate walk) or a "Route tools" card (navigating / indoors). Labels, actions and the focus
+    /// order are unchanged; only grouping and the order inside the idle picker moved.
     var body: some View {
-        @Bindable var model = model
-        CKCard(title: "Guide") {
+        VStack(alignment: .leading, spacing: CKSpacing.lg) {
+            statusCard
+            voiceAndActions
+            if model.nav.isNavigating || model.indoor.isActive {
+                routeToolsCard
+                errorLine
+            } else {
+                // Idle: the error line sits inside "Where to", right under the field that caused it.
+                whereToCard
+            }
+        }
+        .onChange(of: model.nav.isNavigating) { _, navigating in
+            if !navigating { stopConfirmation.reset() }
+        }
+        .onChange(of: model.indoor.isActive) { _, active in
+            if !active { stopConfirmation.reset() }
+        }
+    }
+
+    /// "Guide" card: the instruction, the indoor step line, the distance row and the status pills.
+    private var statusCard: some View {
+        CKCard(title: "Guide", systemImage: "figure.walk") {
             // ⚠ test contract: plain Text whose accessibility label is the instruction itself.
             Text(model.indoor.isActive ? model.indoor.currentSay : model.nav.instruction)
                 .font(CKFont.instruction)
@@ -123,10 +149,15 @@ struct GuideCard: View {
                                  spoken: "Low light; obstacle detection still works")
                 }
             }
+        }
+    }
 
-            // Step 58: the voice shell's giant microphone (≥ 60 % of the page height). Its label is
-            // "Talk to OpenCane" / "Listening…" / "Starting…" / "Thinking…"; the assistant's last
-            // answer ("Assistant: …") is its status line.
+    /// The microphone, the compact row under it and the describer's result, on the page ground.
+    @ViewBuilder private var voiceAndActions: some View {
+        VStack(alignment: .leading, spacing: CKSpacing.md) {
+            // Step 58: the voice shell's giant microphone. Its label is "Talk to OpenCane" /
+            // "Listening…" / "Starting…" / "Thinking…"; the assistant's last answer
+            // ("Assistant: …") is its status line.
             VoiceTile()
 
             // The compact row directly under the microphone — the only place the Guide puts three
@@ -178,7 +209,13 @@ struct GuideCard: View {
             if let err = model.describer.lastError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
+        }
+    }
 
+    /// "Route tools" card while a route (or the indoor leg) runs: Recenter, the beacon / headphone
+    /// pills and Simulate walk; indoors only the step simulation.
+    private var routeToolsCard: some View {
+        CKCard(title: "Route tools", systemImage: "slider.horizontal.3") {
             if model.nav.isNavigating {
                 // Repeat / Next / Stop route live in the compact row under the microphone (Step 58).
                 // ⚠ test contract: "Recenter" (below the fold now: the tests `scrollTo` it).
@@ -203,7 +240,7 @@ struct GuideCard: View {
                     CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
                                 hint: "Simulates walking along the active route indoors") { model.startSimulatedWalk() }
                 }
-            } else if model.indoor.isActive {
+            } else {
                 // Step 62: indoors there is no beacon, recenter or route picker — only the step simulation.
                 if model.indoor.isSimulating {
                     CKBigButton(title: "Stop simulation", systemImage: "pause.circle.fill", role: .secondary,
@@ -212,7 +249,14 @@ struct GuideCard: View {
                     CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
                                 hint: "Simulates walking the indoor steps without moving") { model.startSimulatedWalk() }
                 }
-            } else {
+            }
+        }
+    }
+
+    /// "Where to" card on the idle Guide. Order (owner request 2026-09-13): the destination field
+    /// first, then Navigate to CIF from here, then Simulate walk.
+    private var whereToCard: some View {
+        CKCard(title: "Where to", systemImage: "mappin.and.ellipse") {
                 if model.nav.arrived {
                     // The arrival line + trip summary are the longest of the walk: keep Repeat.
                     // ⚠ test contract: after a mid-route Stop `arrived` is false, so no Repeat
@@ -230,10 +274,13 @@ struct GuideCard: View {
                         model.cancelRouteStart()
                     }
                 }
-                // Secondary navigation actions:
+                // Search box + live suggestions + "Go" (⚠ test contract: the "Go" button and the
+                // "Destination" field live in DestinationField). First in the card (owner request).
+                DestinationField(scroller: scroller)
+                errorLine
                 // ⚠ test contract: "Navigate to CIF from here" (its label is its text).
                 CKBigButton(title: "Navigate to CIF from here",
-                            subtitle: "Live GPS · Apple Maps walking route",
+                            subtitle: "Walking directions from where you are",
                             systemImage: "location.north.circle.fill",
                             role: .secondary,
                             hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
@@ -241,7 +288,7 @@ struct GuideCard: View {
                     .disabled(model.isBuildingRoute || model.routeStartWaiting)
 
                 CKBigButton(title: "Simulate walk",
-                            subtitle: "Indoor demo · walks the route for you",
+                            subtitle: "Demo: plays the route without moving",
                             systemImage: "play.circle.fill",
                             role: .secondary,
                             hint: "Simulates walking the demo route indoors step by step without moving") {
@@ -257,10 +304,11 @@ struct GuideCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel(status)
                 }
-                // Search box + live suggestions + "Go" (⚠ test contract: the "Go" button and the
-                // "Destination" field live in DestinationField now).
-                DestinationField(scroller: scroller)
-            }
+        }
+    }
+
+    /// The route / location error line, under everything else.
+    @ViewBuilder private var errorLine: some View {
             // ⚠ test contract: the error text itself stays a plain `Text` whose accessibility
             // label is its content ("Type a destination first"); the warning glyph beside it is
             // hidden from VoiceOver. Only shown after something actually failed — every keystroke
@@ -278,14 +326,8 @@ struct GuideCard: View {
                         .foregroundStyle(CKColor.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.horizontal, CKSpacing.xs)
             }
-        }
-        .onChange(of: model.nav.isNavigating) { _, navigating in
-            if !navigating { stopConfirmation.reset() }
-        }
-        .onChange(of: model.indoor.isActive) { _, active in
-            if !active { stopConfirmation.reset() }
-        }
     }
 
     /// Stop route is deliberately a two-tap confirmation (Step 51a). The first tap gives a spoken and

@@ -31,7 +31,7 @@ struct WatchCard: View {
     /// the persisted mirror toggle, and the four send buttons in one row.
     var body: some View {
         @Bindable var model = model
-        CKCard(title: "Watch") {
+        CKCard(title: "Watch", systemImage: "applewatch") {
             HStack(spacing: CKSpacing.sm) {
                 CKStatusPill(text: linkWord, tone: model.watch.isReachable ? .trusted : .neutral,
                              systemImage: model.watch.isReachable ? "applewatch.radiowaves.left.and.right" : "applewatch.slash",
@@ -43,10 +43,10 @@ struct WatchCard: View {
             if let err = model.watch.lastError {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
-            Toggle("Mirror obstacle cues to the watch", isOn: $model.fallbackToWatch)
-                .font(CKFont.body).foregroundStyle(CKColor.textPrimary)
-                .accessibilityHint("Also taps the wrist for every obstacle; automatic when the phone's haptic engine fails")
-            Text("Send wrist cue").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
+            CKToggleRow(title: "Also tap my wrist", subtitle: "Sends obstacle taps to the watch too",
+                        isOn: $model.fallbackToWatch,
+                        hint: "Also taps the wrist for every obstacle; happens by itself if the phone can't vibrate")
+            Text("Try a wrist tap").font(CKFont.secondary).foregroundStyle(CKColor.textSecondary)
             HStack(spacing: CKSpacing.sm) {
                 testButton("Left", "arrow.turn.up.left", .turnLeft)
                 testButton("Right", "arrow.turn.up.right", .turnRight)
@@ -59,10 +59,10 @@ struct WatchCard: View {
     /// Link pill word. First failing check wins: "Unsupported" → "Not paired" →
     /// "App not installed" → "Reachable" / "Asleep" (paired and installed but not reachable).
     private var linkWord: String {
-        if !model.watch.isSupported { return "Unsupported" }
+        if !model.watch.isSupported { return "No watch" }
         if !model.watch.isPaired { return "Not paired" }
         if !model.watch.isWatchAppInstalled { return "App not installed" }
-        return model.watch.isReachable ? "Reachable" : "Asleep"
+        return model.watch.isReachable ? "Connected" : "Asleep"
     }
 
     /// A 60 pt button that sends one `NavCue` to the watch so its wrist haptic can be felt
