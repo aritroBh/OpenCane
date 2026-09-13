@@ -166,7 +166,7 @@ struct ConversationLogicTests {
         #expect(FastPathIntentClassifier.classify(query: "eight") == .emergency)
         #expect(FastPathIntentClassifier.classify(query: "yes") == .confirm(true))
         #expect(FastPathIntentClassifier.classify(query: "No.") == .confirm(false))
-        #expect(FastPathIntentClassifier.classify(query: "cancel") == .confirm(false))
+        #expect(FastPathIntentClassifier.classify(query: "cancel") != .confirm(false))   // not a refusal
         // Place routes are unchanged by rule 0.
         #expect(FastPathIntentClassifier.classify(query: "take me to CIF") == .startRoute(destination: "the CIF east entrance"))
         #expect(FastPathIntentClassifier.classify(query: "route to CIF") == .startRoute(destination: "the CIF east entrance"))

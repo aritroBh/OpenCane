@@ -2,6 +2,68 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Steps 51–60 review round — Muse, OpenCode, Codex, Antigravity on the merged diff (Sun Sep 13)
+
+**How.** One adversarial prompt (safety, voice, microphone, conversation, UI contract, logging,
+concurrency) over the full diff vs `origin/main` on a repo copy. Muse and OpenCode read the files;
+Codex read-only (first pass timed out at 25 min and was rerun on a narrowed scope); Antigravity
+headless with the key diff inlined (it cannot read files here). Every finding checked against the
+current code before it was fixed or rejected.
+
+**Fixed (tests first where the rule is numeric).**
+- *A cane sweep held the head episode open for the whole walk* (Antigravity, confirmed by reading
+  `CueDecider.update`): every untrusted frame restarted the 2 s clear clock, a cane sweeps about once
+  a second, so the episode never ended and the next real overhang's onset — and its "Head height." —
+  never came. Untrusted frames now freeze state without touching the clock.
+  `aSweepDoesNotHoldTheHeadEpisodeOpen` (was `aSweepRestartsTheClearClock`); `cue_audit` replay and
+  selftest mirror it (tonight's log: signature only 14 onsets / 13 lines, with estimated cover 0 / 0).
+- *A quiet head episode silenced the centre loop* (OpenCode): a re-entry with no band to cross
+  `.stop`ped the Geiger and fired nothing. The head cue now owns the hand only while it has something
+  to say (`bandWouldFire`); otherwise the centre / side cue plays, and with nothing else to play the
+  zone is held without a `.stop` (which could cut the head pattern's second transient).
+  `aQuietHeadEpisodeLetsTheCentreCueThrough`.
+- *The emergency "yes" window could close before the microphone opened* (Muse HIGH, OpenCode,
+  Antigravity): the 8 s started when "emergency" was heard; the read-back prompt takes 4–7 s and the
+  walking follow-up was only 3 s. `EmergencyConfirm.restartWindow(now:)` restarts it when the answer's
+  microphone opens, and that listen gets the whole 8 s, walking or not.
+  `answerWindowRestartsWhenTheMicrophoneOpens`.
+- *The launch / follow-up listen opened after the 15 s drain cap even with speech still playing*
+  (OpenCode): `waitForSpeechToDrain` now reports whether it drained and the listen is skipped
+  (`voice_menu` / `voice_followup {reason: still_speaking}`).
+- *Bare "cancel" mid-route answered "Nothing to confirm."* (OpenCode): it is no longer an emergency
+  refusal ("no", "cancel call", "no cancel" still are).
+- *Status came out clause by clause, each clause racing 2.5 s for the natural voice* (Muse MEDIUM):
+  `speakStatus` speaks `StatusSummary.sentence` as one line (a warning still cuts it and it resumes at
+  the clause).
+- *Rows mode fired a false "Head height." in the first second* (Muse): before ARKit has a pose the
+  head band is marked uncovered (`DepthFrameProcessor`), torso cues still run.
+- *The describer ignored the overhang valve* (Muse): `contextLine` takes the decider's live thresholds.
+- *A cache entry that vanished between the stat and the play was logged as ElevenLabs* (Muse):
+  `speech_engine {engine_reason: playback_failed}` now.
+- *The safety watchdog retry lost its "system voice now" after `immediate:` was removed* (merge with
+  Step 51a): `speakNow(watchdogFallback:)` dispatches `system / watchdog_fallback` directly.
+- `VoiceShellPolicy` documents that the app passes "not refused" for permissions (Muse, OpenCode).
+
+**Rejected, with evidence.**
+- "A race timeout / failure never speaks and deadlocks the queue" (Antigravity BLOCKER): both
+  branches of `startRace` call `speakSystem(spokenText, gen:)` — it reviewed a trimmed diff.
+- "The head cue flickers off after one frame" (Antigravity BLOCKER): frame 2 is the same-cue branch,
+  which returns `bandRefire`'s nil, never `.stop`.
+- "The launch mic opens during a race because nothing is speaking yet" (Antigravity HIGH):
+  `isSpeaking` is set in `speakNow` before the race starts.
+- "Intrinsics may be portrait" (OpenCode): `capturedImage` / `imageResolution` is landscape
+  1920×1440 (trip log `video_format`), and `GroundSampler` has used the same scaling since Step 21.
+- "The breaker sticks open once everything is cached" (Muse, Antigravity): the next uncached line
+  speaks once in the system voice and is prefetched, and that probe closes the breaker within 60 s;
+  cached lines play in the natural voice meanwhile. Noted in docs/todo.md.
+- "A superseded turn's "One moment." still plays" (Antigravity, OpenCode LOW): accepted as cosmetic.
+- "Self-hear misses a one-word echo of the menu" (Antigravity): the tap is paused while the app speaks
+  (+0.3 s); the filter is the second layer.
+
+**Verification.** After the fixes: `make test` 763 / 763; `make sim` green; `make uitest` 12 run / 0
+failures; `make build` + `make install` on the iPhone 17 Pro Max green. `make e2e` PASS × 4 (clean,
+missed_fence, gps_jitter, wrong_turn) on the pre-fix build of the same commit (no route-path change since).
+
 ## Step 60 — Consent-gated Supabase MVP (Sun Sep 13)
 
 ⚠ Numbered 60, not 56: "Steps 56–59" below is the voice shell, and this entry was drafted twice, as

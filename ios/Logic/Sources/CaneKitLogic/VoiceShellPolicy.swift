@@ -58,8 +58,10 @@ public enum VoiceShellPolicy {
     /// - Parameters:
     ///   - enabled: the "Listen on launch" setting.
     ///   - muted: `SpeechQueue.muted` (automation).
-    ///   - speechAuthorized: `SFSpeechRecognizer.authorizationStatus() == .authorized`.
-    ///   - micGranted: `AVAudioApplication.shared.recordPermission == .granted`.
+    ///   - speechAuthorized: whether speech recognition may be used. ⚠ `AppModel.speakMenuThenListen`
+    ///     passes "not denied / restricted" (owner decision 2026-09-13): on a first launch the
+    ///     permission prompts appear right after the menu, because the voice shell is the app.
+    ///   - micGranted: likewise "not denied" from the app.
     ///   - micOwnedElsewhere: `SoundWatcher` owns the microphone session.
     ///   - recoveredLaunch: `LaunchRecovery` disabled optional features this launch.
     ///   - cameraDenied: the camera permission is denied (the app is already warning loudly).

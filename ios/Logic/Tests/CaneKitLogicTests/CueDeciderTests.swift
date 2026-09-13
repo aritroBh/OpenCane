@@ -188,15 +188,31 @@ private func report(head: [Float] = [.infinity, .infinity, .infinity],
 
 /// A sweep (untrusted frames) in the middle of the clear restarts the 2 s clock: the smeared
 /// frames are no evidence that the overhang is gone. (Plan name: `untrustedFramesDoNotEndAnEpisode`.)
-@Test func aSweepRestartsTheClearClock() {
+/// A cane sweep freezes the head episode clock; it does not restart it.
+/// History: Step 52 first restarted the clear clock on every untrusted frame. The 2026-09-13 review
+/// (Antigravity, OpenCode) showed a walker sweeping every second never accumulated 2 s of clear, so
+/// the episode lived all walk and the next overhang's onset — and its "Head height." — never came.
+@Test func aSweepDoesNotHoldTheHeadEpisodeOpen() {
     let d = CueDecider()
     #expect(d.update(report(head: [4, 1.0, 4]), now: 0) == .fire(.head(distance: 1.0, onset: true)))
-    #expect(d.update(report(), now: 0.5) == .stop)
-    #expect(d.update(report(trusted: false), now: 1.5) == nil)         // clock restarts
-    #expect(d.update(report(), now: 2.0) == nil)                       // clear run starts again
-    #expect(d.update(report(), now: 2.6) == nil)
-    #expect(d.headEpisodeActive)                                       // 2.6 s since 0.5, but 0.6 s since the sweep
-    #expect(d.update(report(head: [4, 1.0, 4]), now: 3.0) == nil)      // still the same episode
+    #expect(d.update(report(), now: 0.5) == .stop)                     // clear run starts at 0.5
+    #expect(d.update(report(trusted: false), now: 1.5) == nil)         // sweep: frozen, not restarted
+    #expect(d.update(report(), now: 2.0) == nil)
+    #expect(d.update(report(trusted: false), now: 2.3) == nil)
+    #expect(d.update(report(), now: 2.6) == nil)                       // 2.1 s since 0.5: episode over
+    #expect(!d.headEpisodeActive)
+    #expect(d.update(report(head: [4, 1.0, 4]), now: 3.1) == .fire(.head(distance: 1.0, onset: true)))
+}
+
+/// Inside a live head episode with no closer band to cross, the centre approach still plays.
+/// History: the first Step 52 decider `.stop`ped the centre loop under a quiet head zone (review
+/// 2026-09-13, OpenCode): an overhang plus a torso obstacle ahead gave one tap, then nothing.
+@Test func aQuietHeadEpisodeLetsTheCentreCueThrough() {
+    let d = CueDecider()
+    #expect(d.update(report(head: [4, 1.2, 4]), now: 0) == .fire(.head(distance: 1.2, onset: true)))
+    #expect(d.update(report(head: [4, 1.2, 4], torso: [4, 1.8, 4]), now: 0.5) == .fire(.centerApproach(distance: 1.8)))
+    // The 1.0 m band crossing ≥ 1.5 s after the onset takes over again.
+    #expect(d.update(report(head: [4, 0.95, 4], torso: [4, 1.6, 4]), now: 2.0) == .fire(.head(distance: 0.95, onset: false)))
 }
 
 /// With obstacles everywhere the head cue wins, then centre, then left — but a head cell with an

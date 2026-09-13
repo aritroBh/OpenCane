@@ -533,6 +533,13 @@ final class ConversationCoordinator {
         }
     }
 
+    /// The voice shell opened the microphone for the emergency answer: restart the 8 s window and
+    /// its expiry from now (the prompt took several seconds to speak). Caller:
+    /// `AppModel.openFollowUpListenIfWanted`.
+    func emergencyListenOpened() {
+        if emergency.restartWindow(now: Self.clock()) { scheduleEmergencyExpiry() }
+    }
+
     /// After an emergency prompt: once the window has passed with no yes / no, speak "Emergency
     /// canceled." (`.nav`) and log `emergency {action: timeout}`. A new prompt restarts it; an answer
     /// cancels it. The sleep runs 0.1 s past the window so `expire` sees it lapsed.

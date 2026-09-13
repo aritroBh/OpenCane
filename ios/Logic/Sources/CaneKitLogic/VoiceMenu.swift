@@ -219,8 +219,10 @@ public enum VoiceMenu {
         "yes", "yeah", "yep", "yes please", "confirm", "yes call", "call", "do it",
     ]
 
-    /// Refusals for the emergency prompt (also what a stray "cancel" does: nothing is dialled).
+    /// Refusals for the emergency prompt. Bare "cancel" is deliberately not one (review 2026-09-13,
+    /// OpenCode): mid-route it meant "stop" and answered "Nothing to confirm."; it goes on to the
+    /// rest of the classifier ("cancel route" stops).
     private static let noForms: Set<String> = [
-        "no", "nope", "cancel", "no cancel", "dont call", "do not call", "cancel call", "never mind",
+        "no", "nope", "no cancel", "dont call", "do not call", "cancel call", "never mind",
     ]
 }

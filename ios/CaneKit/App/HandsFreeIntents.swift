@@ -116,7 +116,10 @@ extension AppModel {
             metresToNext: nav.distanceToNext,
             batteryPercent: batteryPercent)
         facts.voice = voiceFacts()
-        for line in StatusSummary.lines(facts) { speech.say(line, .scene, ttl: 20) }
+        // One line (Muse review 2026-09-13): per clause, every number-bearing clause paid its own
+        // 2.5 s natural-voice race and the status dribbled out over 5–15 s. A warning that cuts it
+        // resumes at the clause it cut (`SpeechResume`), which is what the split used to protect.
+        speech.say(StatusSummary.sentence(facts), .scene, ttl: 20)
         logger.event("status_spoken", ["text": StatusSummary.sentence(facts)])
     }
 

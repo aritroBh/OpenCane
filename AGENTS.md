@@ -543,7 +543,8 @@ bench has *disproved* must never sit in the file as though it were settled — m
   gap in front of `.safety`.
 - **The 400 ms change gate still applies to a head onset** that replaces another cue; only the 1 s
   repeat floor was removed for head (Step 52, `cueChangeNeeds400ms`, `headOnsetIsNeverHeldByTheRepeatFloor`).
-  A head episode outlives the zone's `.stop` by 2 s of trusted clear (a sweep restarts that clock), a
+  A head episode outlives the zone's `.stop` by 2 s (a sweep freezes that clock, never restarts it —
+  a cane sweeps every second), a quiet episode lets the centre / side cues play under it, a
   return inside it is silent unless it crosses a closer band, and there is no time-based head
   re-fire. Do not re-add one, and do not end the episode on a `.stop` (that split said "Head height."
   8 times in 12 minutes on the first cane walk).

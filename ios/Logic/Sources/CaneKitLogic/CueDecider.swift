@@ -22,9 +22,12 @@
 //      (`headRefireBands` 1.0 m, 0.6 m — each once), ≥ `headRefireMinGap` (1.5 s) apart; a jump
 //      across both bands fires once; there is no time-based re-fire;
 //    · the zone still clears with the 0.15 m hysteresis (→ `.stop`, as before), but the episode
-//      ends only after `headClearSeconds` (2 s) of *trusted* clear frames; a sweep (untrusted
-//      frame) restarts that clock; a re-entry inside the live episode is silent unless a closer
-//      band is crossed;
+//      ends `headClearSeconds` (2 s) after the zone cleared on a trusted frame; a sweep (untrusted
+//      frame) freezes state but neither ends nor restarts that clock (a cane sweeps every second —
+//      restarting it held episodes open all walk, review 2026-09-13); a re-entry inside the live
+//      episode is silent unless a closer band is crossed;
+//    · a quiet head episode (no onset, no band to cross) does not own the hand: the next cue
+//      (centre loop, sides) plays under it, and a band crossing takes over again;
 //    · the payload `HapticCue.head(distance:onset:)` tells `CueSpeechPolicy` whether this fire is
 //      the onset ("Head height.") or a band re-fire (spoken once more only under 0.6 m).
 //
@@ -223,12 +226,11 @@ public final class CueDecider {
     /// Pinned by every test in CueDeciderTests.swift.
     public func update(_ r: LaneReport, now: TimeInterval) -> CueOutput? {
         guard r.depthAvailable else { return nil }
-        guard r.isTrusted else {
-            // Freeze while sweeping — and a sweep restarts the head episode's clear clock: the
-            // frames it smeared are not evidence that the overhang is gone.
-            headEpisode?.clearSince = nil
-            return nil
-        }
+        // Freeze while sweeping. A sweep neither ends nor restarts the head episode's clear clock
+        // (review 2026-09-13, Antigravity + OpenCode): a cane sweeps every second, so restarting the
+        // clock on every smeared frame kept an episode open for the rest of the walk and turned the
+        // next real overhang's onset — its "Head height." — into a silent re-entry.
+        guard r.isTrusted else { return nil }
 
         // The head distance is the gate's answer, not `min(head)`: covered cells only, and with
         // the signature on, only cells whose torso is clear enough to be an overhang. The active
@@ -270,14 +272,28 @@ public final class CueDecider {
 
         let effCenterD = centerD.isFinite ? centerD : (lastNearDistance[.center] ?? thresholds.centerNear)
 
-        // Priority: head > centre > left > right.
+        // Priority: head > centre > left > right — but only while the head cue has something to
+        // say. Inside a live episode with no closer band to cross, the head zone is quiet and the
+        // next cue plays (review 2026-09-13, OpenCode: the old branch `.stop`ped the centre loop and
+        // left the walker with no proximity feedback until a band was crossed).
+        let headSpeaks = zoneActive[.head]! && (headEpisode == nil || bandWouldFire(distance: headD, now: now))
         let desired: HapticCue? =
-            zoneActive[.head]! ? .head(distance: headD, onset: headEpisode == nil) :
+            headSpeaks ? .head(distance: headD, onset: headEpisode == nil) :
             zoneActive[.center]! ? .centerApproach(distance: max(thresholds.centerNear, effCenterD)) :
             zoneActive[.left]! ? .left :
             zoneActive[.right]! ? .right : nil
 
         guard let desired else {
+            // A quiet head episode with nothing else to play holds the head zone (a discrete tap:
+            // no `.stop` that could cut its second transient); a different cue still running under
+            // it — the centre loop whose zone just cleared — is stopped once.
+            if zoneActive[.head]! {
+                guard active != .head else { return nil }
+                let wasPlaying = active != .clear
+                active = .head
+                lastChange = now
+                return wasPlaying ? .stop : nil
+            }
             if active != .clear {
                 active = .clear
                 lastChange = now
@@ -345,6 +361,12 @@ public final class CueDecider {
         case .head(let d, _):
             return bandRefire(distance: d, now: now)
         }
+    }
+
+    /// True when `bandRefire` would fire for `d` now (same three conditions, nothing consumed).
+    private func bandWouldFire(distance d: Float, now: TimeInterval) -> Bool {
+        guard let ep = headEpisode, ep.bandsFired < thresholds.headRefireBands.count else { return false }
+        return d < thresholds.headRefireBands[ep.bandsFired] && now - ep.lastFireAt >= thresholds.headRefireMinGap
     }
 
     /// How many of `headRefireBands` a head distance is already inside (bands are descending).
