@@ -249,14 +249,14 @@ Why: inside ~10 cm the LiDAR returns 0 / NaN (not a low-confidence distance), `L
 | `requireOverhangSignature` | `true` | owner decision 2026-09-13; pushed from `CueRules.requireOverhangSignature` by `AppModel.applyCueRules` |
 | `headRefireBands` | `[1.0, 0.6]` m | inside an episode the head haptic re-fires only on crossing these, each once |
 | `headRefireMinGap` | 1.5 s | minimum time between two head fires |
-| `headClearSeconds` | 2.0 s | trusted clear time that ends a head episode (a sweep restarts it) |
+| `headClearSeconds` | 2.0 s | time after a trusted clear that ends a head episode (a sweep freezes, never restarts, it) |
 
 - **`enum GeigerRate`** — `static func hertz(distance: Float, thresholds: CueThresholds = .init()) -> Double`: `clamp(4/d, 2, 8)`; non-finite or ≤ 0 → 2. So 2 Hz at 2.0 m, 4 Hz at 1.0 m, 8 Hz at 0.5 m. Called by `HapticPlayer`'s Geiger loop (`startApproachLoopIfNeeded`). Pinned by `geigerRateScalesWithInverseDistance`.
 - **`final class CueDecider`** — **not Sendable**; owned by `AppModel` (`@ObservationIgnored private let decider`). State: `thresholds` (var), `active: CueKind` (private(set), starts `.clear`), `lastChange: TimeInterval` (starts `-∞`), private `lastFired: [CueKind: TimeInterval]`, private `zoneActive` per kind.
   - `init(thresholds: CueThresholds = .init())`
   - `reset()` — clears all state.
   - `update(_ r: LaneReport, now: TimeInterval) -> CueOutput?` — `nil` = nothing new. Algorithm, in order:
-    1. `guard r.depthAvailable, r.isTrusted else { return nil }` — untrusted frames **freeze** state (no zone updates, no stop); an untrusted frame also restarts the head episode's clear clock.
+    1. `guard r.depthAvailable, r.isTrusted else { return nil }` — untrusted frames **freeze** state (no zone updates, no stop); an untrusted frame neither ends nor restarts the head episode's clear clock (review 2026-09-13). A quiet head episode (no onset, no band to cross) lets the next-priority cue play (`bandWouldFire`); with nothing else to play it holds the head zone without a `.stop`.
     2. Zone hysteresis via `updateZone` for head (`HeadGate.candidate(in:enter:overhangGap:)` distance — covered cells, overhang signature — vs `head`, the gate seeing up to `head + hysteresis` while active), center (`torso[1]` vs `center`), left (`torso[0]` vs `side`), right (`torso[2]` vs `side`). Then the head episode clock: an inactive head zone for `headClearSeconds` ends the episode.
     3. Priority **head > center > left > right**; centre distance reported as `max(centerNear, torso[1])`.
     4. No desired cue: if `active != .clear` → `active = .clear`, `lastChange = now`, return `.stop`; else `nil`.
@@ -768,7 +768,7 @@ Why: the owner asked how the app copes with low light. LiDAR depth, the gyro gat
 - `sameCueDoesNotRefireWithinOneSecondAcrossAChange` — left→right at 0.4 s; left back at 0.8 s → `.stop` (active cleared); 1.0 s → nil (400 ms gate); 1.25 s → fire.
 - `headFlappingAcrossTheExitLineIsOneEpisode` (was `headReturningAfterClearWaitsOutTheFloor`) — zone clears → `.stop`; a return inside 2 s is silent; after 2 s of clear a new onset.
 - `centerLoopIsExemptFromTheFloor` — centre re-fires 0.4 s after a stop.
-- `headFiresAtOnsetThenOnlyOnCloserBands` (was `headCueKeepsRefiringWhileObstaclePersists`, 1 Hz) — onset at 1.2 m; silent at 1, 2, 3 s; 0.95 m → band fire; 0.55 m held until 1.5 s after it; nothing after both bands. `aJumpAcrossBothBandsFiresOnce`; `headOnsetIsNeverHeldByTheRepeatFloor` (a 10 s `repeatInterval` does not delay an onset); `headEpisodeEndsOnlyAfterTwoSecondsOfTrustedClear`; `aSweepRestartsTheClearClock`.
+- `headFiresAtOnsetThenOnlyOnCloserBands` (was `headCueKeepsRefiringWhileObstaclePersists`, 1 Hz) — onset at 1.2 m; silent at 1, 2, 3 s; 0.95 m → band fire; 0.55 m held until 1.5 s after it; nothing after both bands. `aJumpAcrossBothBandsFiresOnce`; `headOnsetIsNeverHeldByTheRepeatFloor` (a 10 s `repeatInterval` does not delay an onset); `headEpisodeEndsOnlyAfterTwoSecondsOfTrustedClear`; `aSweepDoesNotHoldTheHeadEpisodeOpen` (was `aSweepRestartsTheClearClock`); `aQuietHeadEpisodeLetsTheCentreCueThrough`.
 - `headBeatsCenterBeatsSides` — priority order; head 1.0 over torso 1.0 is now the centre cue (a wall), head over a clear torso is head.
 - HeadGate: `wallNearInBothBandsIsNotHead`, `hangingSignWithClearTorsoIsHead`, `torsoHalfAMetreFartherIsHead` (1.5 inclusive, 1.49 is a wall), `torsoNoDataFailsSafeToHead`, `overhangSignatureCanBeSwitchedOff`, `headIgnoresLanesWithoutCoverage`, `torsoWithoutCoverageFailsSafeToHead`. Also `nearDropoutHoldsUrgentObstacleAcrossBlindZone`.
 - `untrustedFramesFreezeState` — untrusted frame returns nil and leaves `active == .left`; next trusted clear frame → `.stop`.

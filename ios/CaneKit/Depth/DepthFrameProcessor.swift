@@ -458,6 +458,10 @@ nonisolated final class DepthFrameProcessor: NSObject, ARSessionDelegate, @unche
             config: config,
             scratch: &scratch,
             geometry: geometry)
+        // Rows mode (no pose yet) cannot say what is at head height: on a 45° cane its "head" rows
+        // are knee height, so a wall 1 m ahead passed the overhang signature and fired a false
+        // "Head height." in the first second (Muse review 2026-09-13). Torso cues still run.
+        if geometry == nil { grid.headCoverage = [false, false, false] }
         // Blind share from the RAW map when the smoothed one was used for distances: temporal
         // smoothing holds stale finite values and inpaints neighbours for a few frames as the
         // wall arrives, which delays or hides the blind share (Muse F3). Distances stay smoothed.

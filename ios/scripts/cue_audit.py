@@ -235,9 +235,7 @@ def head_gate_replay(records: list[dict], gap: float | None = SIGNATURE_GAP_M,
     for r in frames:
         now = r.get("ar_t", r.get("t", 0))
         if not r.get("trusted", True):
-            if episode:
-                episode["clear_since"] = None     # a sweep restarts the clear clock
-            continue
+            continue                              # a sweep freezes the clock (review 2026-09-13)
         cover = None
         if estimate_cover and r.get("bands") != "metric":
             cover = [frame_head_cover(r, limit) is not False] * 3
@@ -725,7 +723,8 @@ def selftest() -> None:
 # Step 51 / 52 fixtures: the geometry limit, `could_not_be_head` on a 45° and a 5° rows frame, the
 # cover verdict from logged flags, the gate (wall vs sign vs dropout vs uncovered) and episode
 # sequences (onset once; steady, no re-fire; back after 1.5 s of clear = same episode; after 2.5 s
-# = new onset; two band re-fires held to 1.5 s apart; a sweep restarts the clock). Caller: `selftest`.
+# = new onset; two band re-fires held to 1.5 s apart; a sweep freezes, never restarts, the clock).
+# Caller: `selftest`.
 def selftest_head() -> None:
     """Asserts for the head-cover and head-gate sections."""
     assert abs(head_cover_limit_deg() - 19.0) < 0.3, head_cover_limit_deg()
@@ -758,8 +757,8 @@ def selftest_head() -> None:
     g = head_gate_replay(bands)                                    # 0.9 at 1.0 s is < 1.5 s: held to 2.0
     assert g == {"frames": 5, "onsets": 1, "band_refires": 2, "lines_would_speak": 2}, g
     sweep = [frame(0, 1.2), frame(0.5, None), frame(1.5, None, trusted=False), frame(2.0, None),
-             frame(3.0, 1.2)]                                      # 2.5 s since 0.5, but 1.0 s since the sweep
-    assert head_gate_replay(sweep)["onsets"] == 1, head_gate_replay(sweep)
+             frame(3.0, 1.2)]                                      # 2.5 s since 0.5: the sweep did not hold it
+    assert head_gate_replay(sweep)["onsets"] == 2, head_gate_replay(sweep)
 
 
 # CLI entry: `log` path, `--pull`, `--json`, `--selftest` (selftest wins and ignores the rest).

@@ -115,4 +115,18 @@ struct EmergencyConfirmTests {
         #expect(EmergencyConfirm.fixedLines.contains(EmergencyConfirm.nothingPendingLine))
         #expect(EmergencyConfirm.fixedLines.allSatisfy { $0.hasSuffix(".") })
     }
+
+    /// The window restarts when the answer's microphone opens, so a long prompt does not eat it.
+    @Test func answerWindowRestartsWhenTheMicrophoneOpens() {
+        var e = EmergencyConfirm()
+        _ = e.emergency(now: 0, name: "Mom", number: "+1 (925) 791-8082")
+        let restarted = e.restartWindow(now: 6)             // prompt spoken, mic opens at 6 s
+        #expect(restarted)
+        let answer = e.confirm(true, now: 13)               // 7 s after the mic opened
+        #expect(answer == .call(tel: "+19257918082"))
+        var late = EmergencyConfirm()
+        _ = late.emergency(now: 0, name: "Mom", number: "925")
+        let lateRestart = late.restartWindow(now: 9)        // lapsed: nothing to restart
+        #expect(!lateRestart)
+    }
 }

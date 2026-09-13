@@ -135,6 +135,19 @@ public struct EmergencyConfirm: Sendable, Equatable {
     /// Poll from a ticker: true exactly once when a pending prompt's window has lapsed with no
     /// answer (speak `canceledLine`). Pinned by `expiryIsReportedOnce`.
     /// - Parameter now: the caller's clock.
+    /// The microphone opened for the answer: the window restarts now (review 2026-09-13,
+    /// Antigravity + OpenCode). The prompt itself takes ~4–7 s to speak (a race plus the read-back
+    /// number), which left the walker a second or two — or nothing — of the 8 s window. No-op when
+    /// nothing is pending. Pinned by `answerWindowRestartsWhenTheMicrophoneOpens`.
+    /// - Parameter now: the caller's monotonic clock.
+    /// - Returns: true when a pending prompt's window was restarted.
+    @discardableResult
+    public mutating func restartWindow(now: Double) -> Bool {
+        guard isPending(now: now) else { return false }
+        promptedAt = now
+        return true
+    }
+
     public mutating func expire(now: Double) -> Bool {
         guard let promptedAt, now - promptedAt >= Self.confirmWindow else { return false }
         self.promptedAt = nil

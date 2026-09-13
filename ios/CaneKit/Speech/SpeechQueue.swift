@@ -1455,7 +1455,12 @@ final class SpeechQueue {
                 self?.lineEnded(gen: gen)
             }
         case .natural:
-            if let cachedURL { playFile(cachedURL, gen: gen) } else { speakSystem(spokenText, gen: gen) }
+            if let cachedURL {
+                playFile(cachedURL, gen: gen)
+            } else {
+                reportPlaybackFailure()          // dispatch said cached; the system voice spoke (Muse review)
+                speakSystem(spokenText, gen: gen)
+            }
         case .race:
             if let naturalVoice {
                 startRace(text, spokenText: spokenText, gen: gen, voice: naturalVoice)

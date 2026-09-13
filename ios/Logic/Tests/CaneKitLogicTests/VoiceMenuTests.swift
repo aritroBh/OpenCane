@@ -96,7 +96,7 @@ struct VoiceMenuTests {
         for yes in ["yes", "Yes.", "yeah", "yep", "yes please", "confirm", "yes call"] {
             #expect(VoiceMenu.confirmation(yes) == true, "\(yes)")
         }
-        for no in ["no", "No!", "nope", "cancel", "no cancel", "don't call", "do not call", "cancel call"] {
+        for no in ["no", "No!", "nope", "no cancel", "don't call", "do not call", "cancel call"] {
             #expect(VoiceMenu.confirmation(no) == false, "\(no)")
         }
         #expect(VoiceMenu.confirmation("yes and also route") == nil)

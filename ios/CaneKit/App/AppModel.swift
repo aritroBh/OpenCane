@@ -1477,7 +1477,11 @@ final class AppModel {
         logger.event("voice_menu", ["action": "spoken"])
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.waitForSpeechToDrain()
+            // Still talking after the cap (a warning run): skip rather than open the mic over it.
+            guard await self.waitForSpeechToDrain() else {
+                self.logger.event("voice_menu", ["action": "skipped", "reason": "still_speaking"])
+                return
+            }
             let speech = SFSpeechRecognizer.authorizationStatus()
             let mic = AVAudioApplication.shared.recordPermission
             let verdict = VoiceShellPolicy.launchListen(
@@ -1503,16 +1507,26 @@ final class AppModel {
     /// prompt, which needs a yes or no). Logs `voice_followup {action, reason | seconds}`.
     /// Caller: the `onTranscriptionFinalized` wiring in `start()`.
     private func openFollowUpListenIfWanted() async {
-        await waitForSpeechToDrain()
-        guard !voiceInput.isListening, !voiceInput.isStarting, !SpeechQueue.muted else { return }
+        // Read before the drain: the emergency prompt is still speaking, and its window restarts
+        // when the microphone opens (`emergencyListenOpened`).
+        let wasQuestion = conversation.awaitingEmergencyAnswer
+        let drained = await waitForSpeechToDrain()
+        guard drained, !voiceInput.isListening, !voiceInput.isStarting, !SpeechQueue.muted else {
+            if !drained { logger.event("voice_followup", ["action": "skipped", "reason": "still_speaking"]) }
+            return
+        }
         let verdict = VoiceShellPolicy.followUp(enabled: voiceFollowUp, navigating: nav.isNavigating,
                                                 navigatingEnabled: false,
                                                 queuedLines: speech.queuedLineCount,
-                                                answerWasQuestion: conversation.awaitingEmergencyAnswer)
+                                                answerWasQuestion: wasQuestion)
         switch verdict {
         case .open(let seconds):
-            logger.event("voice_followup", ["action": "opened", "seconds": seconds])
-            voiceInput.startListening(windowSeconds: seconds)
+            // The emergency answer gets the whole confirmation window, walking or not (review
+            // 2026-09-13, OpenCode: 3 s while navigating was shorter than the 8 s the prompt promises).
+            let window = wasQuestion ? EmergencyConfirm.confirmWindow : seconds
+            logger.event("voice_followup", ["action": "opened", "seconds": window, "emergency": wasQuestion])
+            if wasQuestion { conversation.emergencyListenOpened() }
+            voiceInput.startListening(windowSeconds: window)
         case .skip(let reason):
             logger.event("voice_followup", ["action": "skipped", "reason": reason])
         }
@@ -1520,12 +1534,16 @@ final class AppModel {
 
     /// Waits until nothing is speaking and nothing is queued, at most `VoiceShellPolicy.menuWaitCap`
     /// seconds, plus `SelfHearFilter.tailSeconds` so the recogniser does not open on the last word.
-    private func waitForSpeechToDrain() async {
+    /// - Returns: false when the cap passed with speech still playing or queued — the caller skips
+    ///   the listen rather than open the microphone over a warning (review 2026-09-13, OpenCode).
+    private func waitForSpeechToDrain() async -> Bool {
         let deadline = Date().addingTimeInterval(VoiceShellPolicy.menuWaitCap)
         while Date() < deadline, speech.isSpeaking || speech.queuedLineCount > 0 {
             try? await Task.sleep(for: .milliseconds(100))
         }
+        guard !speech.isSpeaking, speech.queuedLineCount == 0 else { return false }
         try? await Task.sleep(for: .seconds(SelfHearFilter.tailSeconds))
+        return true
     }
 
     /// Set by `protectedDataWillBecomeUnavailableNotification` (the phone is locking); cleared when
@@ -1999,7 +2017,7 @@ final class AppModel {
            groundPolicy.shouldAnnounce(g, now: report.timestamp) {
             groundHazardFound(g, now: report.timestamp)
         }
-        sceneContext.set(Self.contextLine(report))
+        sceneContext.set(Self.contextLine(report, thresholds: decider.thresholds))
         noteDepthGeometry(report)
         // Step 51: once per route, after 2 s of trusted metric frames with no head lane covered,
         // say so (the mount is too steep to see head height). Logged as `head_cover`, not
@@ -2612,7 +2630,7 @@ final class AppModel {
     /// Thresholds: 3 m for "ahead", 1.5 m for head height (the outdoor head threshold). Head height
     /// goes through `HeadGate` (Step 52: covered cells, overhang signature, any lane), so the
     /// describer never says "Something at head height." for a wall or a band the camera cannot see.
-    static func contextLine(_ r: LaneReport) -> String {
+    static func contextLine(_ r: LaneReport, thresholds t: CueThresholds = CueThresholds()) -> String {
         guard r.depthAvailable else { return "" }
         var parts: [String] = []
         let centre = [r.torso, r.head].compactMap { $0.count == 3 ? $0[1] : nil }
@@ -2620,8 +2638,10 @@ final class AppModel {
         if ahead.isFinite, ahead < 3 {
             parts.append("\(SpokenDistance.leadingCapitalized(SpokenDistance.phrase(ahead))) ahead, obstacle.")
         }
-        let t = CueThresholds()
-        if HeadGate.candidate(in: r.grid, enter: t.head, overhangGap: t.overhangGapM) != nil {
+        // The decider's live thresholds (Muse review 2026-09-13): with the overhang valve off the
+        // describer must agree with the haptic, not with the defaults.
+        if HeadGate.candidate(in: r.grid, enter: t.head,
+                              overhangGap: t.requireOverhangSignature ? t.overhangGapM : nil) != nil {
             parts.append("Something at head height.")
         }
         if let g = r.groundHazard { parts.append(g.spokenLine) }
