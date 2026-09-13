@@ -157,6 +157,13 @@ struct GuideCard: View {
                                  systemImage: "airpodspro",
                                  spoken: headSpoken)
                 }
+                if model.isSimulatingWalk {
+                    CKBigButton(title: "Stop simulation", systemImage: "pause.circle.fill", role: .secondary,
+                                hint: "Pauses the walk simulation") { model.stopSimulatedWalk() }
+                } else {
+                    CKBigButton(title: "Simulate walk", systemImage: "play.circle", role: .secondary,
+                                hint: "Simulates walking along the active route indoors") { model.startSimulatedWalk() }
+                }
                 CKBigButton(title: "Stop route", systemImage: "stop.fill", role: .destructive,
                             hint: "Ends guidance") { model.stopRoute() }
             } else {
@@ -188,6 +195,12 @@ struct GuideCard: View {
                             hint: "Builds a walking route with Apple Maps from where you are to the CIF east entrance",
                             value: model.isBuildingRoute ? "finding a route" : nil) { model.navigateToCIFFromHere() }
                     .disabled(model.isBuildingRoute || model.routeStartWaiting)
+                CKBigButton(title: "Simulate walk to CIF", systemImage: "figure.walk.motion",
+                            role: .secondary,
+                            hint: "Simulates walking the demo route indoors step by step without moving") {
+                    model.startSimulatedWalk()
+                }
+                .disabled(model.routeStartWaiting || model.isBuildingRoute)
                 // Why a route has not started yet (waiting for depth, or timed out); not an error,
                 // so primary text, spoken as written.
                 if let status = model.routeStartStatus {

@@ -73,10 +73,10 @@ struct CKTabBar: View {
         .spring(duration: 0.16, bounce: 0.08)
     }
     /// Width of the selected capsule (chrome only; the 60 pt hit area is wider).
-    private static let pillWidth: CGFloat = 62
+    private static let pillWidth: CGFloat = 72
     /// Height of the selected capsule. Deliberately under `CKMetrics.touchTarget`: this is the
     /// drawn pill, not the tappable area, so the bar stays a standard height.
-    private static let pillHeight: CGFloat = 36
+    private static let pillHeight: CGFloat = 40
 
     /// The currently visible page; written on tap.
     @Binding var selection: RootTab
@@ -128,7 +128,7 @@ struct CKTabBar: View {
             }
         } label: {
             Image(systemName: tab.systemImage)
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(selected ? CKColor.onAccent : CKColor.textSecondary)
                 .scaleEffect(selected && !reduceMotion ? 1.06 : 1)
                 .frame(width: Self.pillWidth, height: Self.pillHeight)
