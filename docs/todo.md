@@ -700,6 +700,7 @@ for 60 s so a weak network can never stall a cue.
 - [x] Mobility & fitness tracking in `MedicalProfileStore.swift`: daily steps, distance (km), trips completed, average pace via `CMPedometer`
 - [x] Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `_KEY` in `Secrets.plist`; verified HTTP 200 curl response
 
+<<<<<<< Updated upstream
 ## Step 45 — Supabase cloud backend integration (Sat Sep 12)
 - [x] Configured Supabase project credentials in Secrets.plist (URL, publishable and secret keys)
 - [x] Created `SupabaseClient.swift`: native URLSession PostgREST client for walkers, medical_profiles, mobility_days, hazards, family_alerts, devices
@@ -716,6 +717,22 @@ for 60 s so a weak network can never stall a cue.
 - [x] Redesigned GuideCard buttons: added subtitle and chevron support to `CKBigButton`; replaced cramped 3-line wrapped HStack with clean full-width vertical hierarchy ("Campus Demo" vs "Live GPS")
 - [x] Verified unit tests (`make test`: 538 / 538 passing), simulator build (`make sim`), XCUITests (`make uitest`: 11 / 11 passing), and physical device install on iPhone 17 Pro Max (PID 6563)
 - [x] Refreshed knowledge graph (`graphify update .`) to 4,020 nodes, 9,423 edges, 205 communities
+=======
+## Step 45 — Supabase cloud mirror (Sat Sep 12)
+- [x] 16 tables + 4 demo views + 3 RPCs + `hazard-photos` bucket, migrations `opencane_01`…`_06`, every table commented
+- [x] PostGIS `geography` generated columns on `hazards` / `posts` / `route_waypoints`, GiST indexed; `hazards_near(lat, lon, radius)`
+- [x] RLS on all 16 tables with explicit anon policies; advisors clean on the OpenCane tables
+- [x] `CloudSchema.swift` + `CloudSchemaTests.swift` (CaneKitLogic): row types + `CloudBatchPolicy`, 17 tests
+- [x] ⚠ Uniform-key encoding for bulk inserts — PostgREST 400s `PGRST102` on mismatched key sets and writes nothing
+- [x] `SupabaseClient.swift` (hand-rolled PostgREST + Storage over URLSession, no SDK) and `CloudSync.swift` (queue + 5 s flush)
+- [x] Wired: `TripLogger.onRecord`, `recordHazard`, `dropPost`, `FamilyAlerts.onDelivered`, `MedicalProfileStore` hooks, `Settings.onChange`
+- [x] Family email list mirrored through `save_family_contacts` only — never in a log payload or an alert row
+- [x] Fixed: trip + route opens deferred until `register_cane` returns (a cold-launch route start lost the whole walk's `trips` row)
+- [x] Verified `make test` (555) / `make sim` / `make e2e SCENARIO=clean`, rows queried back out of Postgres
+- [ ] Device: walk the route on the cane, then check `trip_summary`, `device_settings`, `family_contacts` and a hazard JPEG in the bucket
+- [ ] Open (not done): conversation turns are wired but `ConversationCoordinator` does not call `recordConversationTurn` yet; family contacts are readable with the publishable key (drop the `family_contacts_read` policy to close that)
+- **test on device:** see CHANGELOG Step 45
+>>>>>>> Stashed changes
 
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab

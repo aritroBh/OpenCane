@@ -70,6 +70,15 @@ final class TripLogger {
     /// Logger creation time (`AppModel` init, i.e. app launch); every record's `t` is seconds since this.
     @ObservationIgnored private let t0 = Date()
 
+    /// Called for every record that reaches the file, so the cloud copy holds the same lines as
+    /// the JSONL (`CloudSync.logEvent`). Set once by `AppModel.init`; nil means no mirror.
+    ///
+    /// ⚠ Must stay a cheap, synchronous append — it runs inside `event(_:_:)`, which runs on the
+    /// cue path. `CloudSync` queues and flushes on its own 5 s loop for exactly that reason.
+    /// A record dropped by the `enabled` guard or by invalid JSON is not handed over either: the
+    /// hook sees what the file sees.
+    @ObservationIgnored var onRecord: ((_ kind: String, _ t: Double, _ fields: [String: Any]) -> Void)?
+
     /// Lane reports are logged at most this often (Hz); cues and events are always logged.
     /// The throttle is `1 / laneRate` seconds (0.5 s), so 0 would stop `lanes` records entirely.
     /// No caller changes it.
@@ -152,12 +161,16 @@ final class TripLogger {
     ///     dictionaries of those); never name one `t` or `kind` on purpose.
     func event(_ kind: String, _ fields: [String: Any] = [:]) {
         guard enabled else { return }
-        let obj = TripLogRecord.make(t: Self.num(Date().timeIntervalSince(t0)), kind: kind, fields: fields)
+        let t = Self.num(Date().timeIntervalSince(t0))
+        let obj = TripLogRecord.make(t: t, kind: kind, fields: fields)
         guard JSONSerialization.isValidJSONObject(obj),
               let data = try? JSONSerialization.data(withJSONObject: obj),
               let line = String(data: data, encoding: .utf8) else { return }
         buffer += line + "\n"
         linesWritten += 1
+        // The cloud mirror sees exactly the records the file does — after the `enabled` guard and
+        // after the JSON validity check, never before.
+        onRecord?(kind, t, fields)
         if buffer.count > 16_384 { flush() }
     }
 

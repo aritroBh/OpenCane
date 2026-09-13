@@ -148,6 +148,10 @@ final class AppModel {
     /// Family alerts: cane detections → the Grok Bot routine "OpenCane cane events" (step 39).
     /// Off unless `familyAlertsEnabled`; unconfigured (no webhook key) is a no-op that says so.
     let family = FamilyAlerts()
+    /// The cloud mirror (step 45): every local store — settings, family list, Medical ID, trip
+    /// log, hazard map, posts, alerts — kept in Supabase as well as on the phone. Inert when
+    /// `Secrets.plist` has no `SUPABASE_URL` / `SUPABASE_ANON_KEY`, and never on the cue path.
+    let cloud = CloudSync()
     /// Last LiDAR ground hazard spoken ("Two meters ahead, drop-off."), for the Hazards card's
     /// LIDAR row. Set by `groundHazardFound`; cleared by `startRouteNow` so a new route never shows
     /// the previous route's drop-off.
@@ -757,6 +761,41 @@ final class AppModel {
         AppModel.shared = self
         self.conversation = ConversationCoordinator(appModel: self, client: client)
         self.voiceInput = VoiceInputEngine(speech: speech, beacon: beacon)
+        // Every persisted write mirrors to the cloud, with no per-setting wiring — see
+        // `Settings.onChange`. `CloudSync` coalesces the burst a single toggle can make (the cue
+        // profile writes two keys) and does nothing at all when the project is unconfigured.
+        Settings.onChange = { [weak self] in
+            guard let self else { return }
+            self.cloud.saveSettings(self.cloudSettings)
+        }
+    }
+
+    /// The full settings snapshot for `device_settings`: one property per persisted
+    /// `UserDefaults` key, in the order the Settings screen shows them.
+    ///
+    /// ⚠ Deliberately excludes the keys that do NOT persist (`liveViewEnabled`,
+    /// `bothCamerasEnabled`, `faceHeadTrackingEnabled`, `dangerSoundsEnabled`, `nodToTalkEnabled`,
+    /// `torchEnabled` — see `Settings`): a column for a switch that resets every launch would say
+    /// something false about the phone. Add a key here when you add one to `Settings`.
+    var cloudSettings: DeviceSettingsRow {
+        DeviceSettingsRow(portraitMode: portraitMode,
+                          mirrorLeftRight: mirrorLeftRight,
+                          cueLevel: cueLevel.rawValue,
+                          cuePlace: cuePlace.rawValue,
+                          obstacleNamesEnabled: obstacleNamesEnabled,
+                          hapticsSilenced: hapticsSilenced,
+                          beaconEnabled: beaconEnabled,
+                          fallbackToWatch: fallbackToWatch,
+                          groundHazardsEnabled: groundHazardsEnabled,
+                          signsEnabled: signsEnabled,
+                          hazardWatchEnabled: hazardWatchEnabled,
+                          namePeopleEnabled: namePeopleEnabled,
+                          highFrameRateCamera: highFrameRateCamera,
+                          familyAlertsEnabled: familyAlertsEnabled,
+                          familyAlertsAIContext: familyAlertsAIContext,
+                          fallDetectionEnabled: fallDetectionEnabled,
+                          familyContactsRegistered: familyContactsRegistered,
+                          loggingEnabled: loggingEnabled)
     }
 
     /// One call for every trigger: on-screen button, watch, Action button, Camera Control.
@@ -910,6 +949,7 @@ final class AppModel {
         observeThermalAndBattery()
         observeLaunchHealth()
         logger.start()
+        startCloudMirror()
         liveActivity.endAllOrphanedActivities()
         recordDeviceCapabilities()
         speech.onSuppressed = { [weak self] text, load, reason in
@@ -1276,6 +1316,9 @@ final class AppModel {
             namer.reset()
             activeCue = .clear
             logger.flush()
+            // Same reason as the disk flush: a backgrounded walk must still land. The queue keeps
+            // its rows if the POST does not finish before the app is suspended.
+            cloud.flushNow()
         @unknown default:
             break
         }
@@ -1856,29 +1899,12 @@ final class AppModel {
         if let direction { eventFields["direction"] = direction }
         if let severity { eventFields["severity"] = severity }
         logger.event("hazard", eventFields)
-
-        let lat = fix?.coordinate.latitude
-        let lon = fix?.coordinate.longitude
-        let accuracyM = fix?.accuracy
-
-        Task { [kind, text, whatItSaw, lat, lon, accuracyM, distanceM, heightM, direction, headingDeg, speedMps, routeName, instruction, source, severity] in
-            await SupabaseClient.shared.recordHazard(
-                kind: kind,
-                source: source.rawValue,
-                severity: severity ?? "warn",
-                spokenText: text,
-                whatItSaw: whatItSaw,
-                lat: lat,
-                lon: lon,
-                accuracyM: accuracyM,
-                distanceM: distanceM,
-                heightM: heightM,
-                direction: direction,
-                headingDeg: headingDeg,
-                speedMps: speedMps,
-                routeName: routeName,
-                instruction: instruction
-            )
+        // The same record the GeoJSON just got, plus the frame. `HazardLog` may have refused this
+        // one as jitter (its 3 s debounce), in which case `records.last` is the older hazard and
+        // re-sending it is harmless: the cloud row is an insert of what was announced, and the
+        // debounced duplicate was never announced twice either.
+        if let record = hazardLog.records.last {
+            cloud.recordHazard(record, jpeg: jpeg)
         }
     }
 
@@ -2002,17 +2028,6 @@ final class AppModel {
         }
         audioRoute.start()
         beacon.headphonesConnected = audioRoute.headphonesConnected
-    }
-
-    /// Records current device hardware capabilities, watch presence, and headphone status to Supabase.
-    private func recordDeviceCapabilities() {
-        Task { [watchPaired = watch.isPaired, airPodsPaired = audioRoute.headphonesConnected] in
-            await SupabaseClient.shared.recordDevice(
-                hasLiDAR: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
-                watchPaired: watchPaired,
-                airPodsPaired: airPodsPaired
-            )
-        }
     }
 
     /// Turns the AirPods double nod (`HeadPoseTracker.onDoubleNod`) into `startVoiceInput()` when
@@ -2209,6 +2224,15 @@ final class AppModel {
                 self.nav.appendToLastSpoken(summary)     // Repeat at the door includes the numbers
                 self.speech.say(summary, .nav, ttl: 30)
                 self.logger.event("speech", ["text": summary, "priority": "nav"])
+                // Close the cloud walk with exactly the numbers the walker just heard, and
+                // refresh the day's mobility row now that the trip count has gone up.
+                self.cloud.endTrip(outcome: "arrived", elapsed: self.trip.elapsed,
+                                   distanceM: self.trip.distanceM, steps: self.trip.steps,
+                                   stepSource: self.trip.stepSource,
+                                   waypointsReached: self.nav.route?.waypoints.count ?? 0,
+                                   batteryPct: self.batteryPercent, spokenSummary: summary,
+                                   end: self.location.fix)
+                self.cloud.saveMobility(self.medicalProfile.mobilityStats)
             }
         }
     }
@@ -2300,6 +2324,11 @@ final class AppModel {
     /// the demo route started would otherwise call `beginRoute` again and silently swap the walker
     /// onto the searched route mid-walk. A route already queued behind the depth interlock is
     /// cancelled too, for the same reason (the newest request wins).
+    /// The name inside `Resources/route_isr_cif.json`, so an uploaded route can be labelled
+    /// `bundled` rather than `mapkit`. Read once (the file is in the app bundle and cannot
+    /// change); "" when the file is missing, which simply makes every route read as `mapkit`.
+    static let bundledRouteName: String = (try? RouteSource.bundled().name) ?? ""
+
     func startDemoRoute() {
         cancelRouteBuild()
         cancelPendingRouteStart()
@@ -2487,6 +2516,13 @@ final class AppModel {
         speech.routeLines = []               // and nothing of that route stays on the prefetch list
         speech.say("Route stopped.", .nav)
         logger.event("route", ["action": "stop"])
+        // Closed as `stopped`, not `arrived`: the distinction is the whole point of the column.
+        // `trip.stop()` above is fire-and-forget, so these are the numbers as of this moment —
+        // the same ones the arrival card would show.
+        cloud.endTrip(outcome: "stopped", elapsed: trip.elapsed, distanceM: trip.distanceM,
+                      steps: trip.steps, stepSource: trip.stepSource,
+                      waypointsReached: nav.waypointIndex, batteryPct: batteryPercent,
+                      spokenSummary: nil, end: location.fix)
         pushStatusToWatch()
     }
 
@@ -2878,9 +2914,91 @@ final class AppModel {
         }
         logger.event("route", ["action": "start", "name": route.name, "waypoints": route.waypoints.count,
                                "headphones": audioRoute.outputName, "watch": watch.isReachable])
+        // Open the cloud walk and upload the waypoints. Everything the logger queues from here on
+        // is stamped with this trip, so `trip_summary` reads as one walk rather than loose lines.
+        cloud.beginTrip(destination: route.name, cueLevel: cueLevel.rawValue,
+                        cuePlace: cuePlace.rawValue, batteryPct: batteryPercent,
+                        logFileName: logger.fileName, start: location.fix)
+        // `bundled` = the hand-recorded campus demo route (the only route with a fixed waypoint
+        // `id` sequence and 12 m turn fences); anything else came from MapKit walking directions.
+        cloud.uploadRoute(route, source: Self.bundledRouteName == route.name ? "bundled" : "mapkit")
         pushStatusToWatch()
         announceChannels()
         if Self.describeEveryWaypoint { describeScene() }   // the start (ISR) is a corner too
+    }
+
+    // MARK: Cloud mirror
+
+    /// Register the cane, push everything the phone already holds, and start mirroring the log.
+    ///
+    /// Called once from `start()`, after `logger.start()` so the `session` record is the first
+    /// line the cloud sees too. Every step is a no-op when `Secrets.plist` has no Supabase keys,
+    /// which is what makes the cloud genuinely optional: with no project configured OpenCane
+    /// behaves exactly as it did before step 45.
+    ///
+    /// ⚠ Order matters. The `onRecord` hook goes on *before* the registration RPC is awaited, so
+    /// the lines logged during launch are queued rather than lost; `CloudSync` stamps the walker
+    /// id onto them when registration lands.
+    private func startCloudMirror() {
+        guard cloud.isConfigured else { return }
+        // Every line the trip log writes, mirrored. Cheap and synchronous — it appends to a queue.
+        logger.onRecord = { [weak self] kind, t, fields in
+            self?.cloud.logEvent(kind: kind, tSeconds: t, fields: fields)
+        }
+        // Every family alert and what the webhook answered. ⚠ `accepted` means the bot STARTED a
+        // run, not that anyone was emailed — `delivery_status` is worded that way in the schema
+        // too, and no view may "improve" it into "family notified".
+        family.onDelivered = { [weak self] event, result in
+            switch result {
+            case .accepted:
+                self?.cloud.recordAlert(event, status: "posted", httpStatus: 200, error: nil)
+            case .rejected(let status, let body):
+                self?.cloud.recordAlert(event, status: "failed", httpStatus: status,
+                                        error: body.isEmpty ? "rejected" : body)
+            case .failed(let message):
+                self?.cloud.recordAlert(event, status: "failed", httpStatus: nil, error: message)
+            case .notConfigured:
+                break            // nothing was sent, so there is no alert to record
+            }
+        }
+        // The Medical ID and the day's mobility numbers, on every edit / pedometer refresh.
+        medicalProfile.onProfileSaved = { [weak self] profile in
+            self?.cloud.saveMedicalProfile(profile)
+        }
+        medicalProfile.onMobilityRefreshed = { [weak self] stats in
+            self?.cloud.saveMobility(stats)
+        }
+        cloud.start(CloudSync.RegistrationFacts(
+            displayName: medicalProfile.profile.name,
+            caneID: family.caneID ?? "opencane-01",
+            hasLiDAR: DepthEngine.supportsMesh,
+            watchPaired: watch.isPaired,
+            airPodsPaired: audioRoute.headphonesConnected))
+        // What the phone already holds, pushed once the registration returns ids. The 2 s wait is
+        // the registration round trip; a failure just leaves the next settings write to carry it.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.cloud.isRegistered else { return }
+            self.cloud.saveSettings(self.cloudSettings)
+            self.cloud.saveMedicalProfile(self.medicalProfile.profile)
+            self.cloud.saveMobility(self.medicalProfile.mobilityStats)
+            self.cloud.saveFamilyContacts(self.familyEmails, registered: self.familyContactsRegistered)
+            self.cloud.recordLaunch(mode: Settings.launchMode,
+                                    clearedKeys: LaunchRecovery.optionalFeatureKeys)
+        }
+    }
+
+    /// Refresh the `devices` row's hardware facts. The watch and the AirPods come and go mid-session
+    /// and which cues are possible depends on them, so the row must not freeze at launch values.
+    /// Callers: `start()`, `watch.onStateChange`, the audio-route change. A no-op before the cane
+    /// has registered, and before that the launch values are already on their way.
+    private func recordDeviceCapabilities() {
+        cloud.updateDeviceFacts(CloudSync.RegistrationFacts(
+            displayName: medicalProfile.profile.name,
+            caneID: family.caneID ?? "opencane-01",
+            hasLiDAR: DepthEngine.supportsMesh,
+            watchPaired: watch.isPaired,
+            airPodsPaired: audioRoute.headphonesConnected))
     }
 
     /// When location access is refused: shows and speaks how to fix it, returns true (the caller
@@ -3061,6 +3179,9 @@ final class AppModel {
             line = result.summary
         }
         speech.say(line, .nav, ttl: 10)
+        // ⚠ The ONLY path by which a family address reaches the cloud (`save_family_contacts`).
+        // Never put one in a trip-log payload or an alert row — see `CloudSync`.
+        cloud.saveFamilyContacts(familyEmails, registered: familyContactsRegistered)
         logger.event("family_contacts", ["count": familyEmails.count, "send_test": sendTest,
                                          "result": result.summary])
     }
@@ -3246,14 +3367,24 @@ enum Settings {
         try? FileManager.default.removeItem(at: markerURL)
     }
 
+    /// Called after every persisted write, so the cloud copy of the settings never drifts from
+    /// the phone's. Installed once by `AppModel.init` (`self.cloud.saveSettings(…)`, debounced
+    /// there); nil in a preview, a UI test or any process that never builds an `AppModel`.
+    ///
+    /// ⚠ A hook on `set`, not eighteen calls in eighteen `didSet`s, and deliberately so: a setting
+    /// added later is mirrored with no extra wiring, and there is no way to add a persisted key
+    /// that silently fails to sync. Keep it cheap — `set` runs on the main actor from a `didSet`.
+    static var onChange: (() -> Void)?
+
     /// Stored Bool for `key`, or `d` when the key has never been written (not `false`).
     static func bool(_ key: String, default d: Bool) -> Bool {
         _ = launchMode              // ⚠ forces the recovery above before any setting is read
         return UserDefaults.standard.object(forKey: key) as? Bool ?? d
     }
-    /// Persists `value` under `key` in `UserDefaults.standard`.
+    /// Persists `value` under `key` in `UserDefaults.standard`, then tells `onChange`.
     static func set(_ value: Bool, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
+        onChange?()
     }
 
     /// Stored String for `key` (a persisted enum's raw value), or `d` when never written.
@@ -3261,9 +3392,10 @@ enum Settings {
         _ = launchMode              // ⚠ forces the recovery above before any setting is read
         return UserDefaults.standard.string(forKey: key) ?? d
     }
-    /// Persists `value` under `key` in `UserDefaults.standard`.
+    /// Persists `value` under `key` in `UserDefaults.standard`, then tells `onChange`.
     static func set(_ value: String, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
+        onChange?()
     }
 
     /// String list for `key`, or `d`. Anything that is not a `[String]` (a key written by an
@@ -3272,8 +3404,9 @@ enum Settings {
         _ = launchMode              // ⚠ same ordering rule as `bool`
         return UserDefaults.standard.object(forKey: key) as? [String] ?? d
     }
-    /// Persists a string list under `key`.
+    /// Persists a string list under `key`, then tells `onChange`.
     static func set(_ value: [String], _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
+        onChange?()
     }
 }

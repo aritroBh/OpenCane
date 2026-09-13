@@ -513,6 +513,30 @@ Foundation-only conversational assistant decisions and models:
 - **`FastPathIntentClassifier`**: Sub-millisecond deterministic intent matcher resolving settings, status aspects, campus gazetteer destinations (`CampusPlaces`), marker drops, and trip metrics with zero LLM tokens.
 - **`ConversationPrompt` & `ConversationResponseParser`**: Compact telemetry serialization with strict anti-slop rules (< 25 words, no pleasantries) and `CloudSceneGate` safety filters stripping false "all clear" reassurance. Tests: `ConversationLogicTests.swift`.
 
+### `CloudSchema.swift` — the Supabase wire schema and the batching numbers (Step 45)
+
+Pure row types for the cloud mirror plus `CloudBatchPolicy` (every number: batch 200, flush 5 s,
+queue ceiling 5000 dropping the OLDEST rows, backoff 2 s doubling to 30 s, photo cap 200 to match
+`HazardLog.maxPhotos`). Column names in each `CodingKeys` are the contract with migrations
+`opencane_01`…`_06`; a rename here fails at run time with an HTTP error nobody watches in a demo.
+
+Rows: `TripEventRow` (one JSONL line), `TripOpenRow` / `TripClosePatch`, `HazardRow`, `PostRow`,
+`FamilyAlertRow` / `FamilyAlertDeliveryPatch`, `DeviceSettingsRow`, `MedicalProfileRow`,
+`MobilityDayRow`, `ConversationTurnRow`, `AppLaunchRow`, `RouteRow`, `RouteWaypointRow`.
+
+- ⚠ **Uniform keys.** PostgREST rejects a bulk insert whose objects disagree on their key set
+  (400 `PGRST102`, "All object keys must match") and writes **nothing**. `TripEventRow` and
+  `RouteWaypointRow` hand-write `encode(to:)` so every column is emitted on every row, nil as an
+  explicit JSON null. Codable's synthesised encoder omits nil optionals and would silently cost a
+  whole walk. Pinned by `tripEventRowsAlwaysCarryEveryKey` / `waypointRowsAlwaysCarryEveryKey`.
+- ⚠ `FamilyAlertRow.init` returns **nil** for a `family_contacts` event: a registration is not an
+  alert, and a family's addresses must never reach the alert feed.
+- `ai_context` is promoted out of `extra` into its own column, so it is stored once.
+- `MobilityDayRow.dayKey` is the walker's *local* day, not UTC's.
+- Non-finite numbers are sanitised (JSON has no infinity), the same rule `TripLogger.num` follows.
+
+Tests: `CloudSchemaTests.swift` (17).
+
 ### `CueProfile.swift` — cue verbosity level × place (Step 36, cue design v2)
 
 `enum CueLevel: String` (`quiet`, `standard`, `detailed`; raw values persisted — `rawValuesAreStable`) with `spokenLine` ("Quiet cues." …) and `title`; `enum CuePlace: String` (`outdoors`, `indoors`) with "Outdoor mode." / "Indoor mode." and `title`. `struct CueRules { level, place }`: `static default` = Detailed + Outdoors (today's behaviour, owner decision until a mounted log tunes it); `headEnterM` (outdoors `CueThresholds().head` 1.5 m, indoors 1.2 m [H]); `allowsName(_ cls:, navigating:)` (speakable classes only; indoors or Quiet never; Standard door only while navigating; Detailed all but wall); `namesLimitLine` (nil for Detailed outdoors, else "Quiet cues name nothing." / "Standard cues name only doors, on a route." / "Indoor mode names nothing." — appended by `AppModel.setOption` when names are turned on by voice); `allowedSignPhrases` (Quiet or Indoors → `safetySignPhrases`: closures, danger, caution, wet floor, push button, closed; otherwise nil = all); `static safetySignPhrases`, `static allSpokenLines` (in `AppModel.commonLines`). Owner: `AppModel.cueLevel` / `cuePlace` / `cueRules`. Tests: `CueProfileTests.swift` (11) + `SignPhraseFilterTests` (4).
@@ -618,6 +642,52 @@ Foundation-only conversational assistant decisions and models:
 - `detailLineShowsTheAddressOrTheCampusDistance`, `shortDistanceSwitchesToKilometresAt950Metres`, `announcementCountsTheRows`, `campusCentreIsWithinWalkingRangeOfEveryPlace`.
 
 ---
+
+## Module: cloud — `ios/CaneKit/Cloud/`
+
+The Supabase mirror (Step 45). Everything the phone keeps locally is kept in Postgres too;
+**the phone stays the source of truth** and works unchanged with no project configured.
+
+### `SupabaseClient.swift` — PostgREST + Storage over URLSession (no SDK)
+
+`nonisolated final class`, hand-rolled because hard rule 2 forbids third-party packages and the
+REST surface needed is five verbs wide: `select`, `insert` / `bulkInsert`, `upsert` (with
+`on_conflict`), `patch` (refuses an empty filter, which would update a whole table), `rpc`, and
+`uploadObject` for the `hazard-photos` bucket. 15 s request timeout — a cane that cannot reach the
+network must fail fast and let `CloudSync` re-queue. A non-2xx throws `SupabaseError.http` carrying
+the **body**, because PostgREST puts the real reason there and a status code alone never suffices.
+`fromSecrets()` reads `SUPABASE_URL` / `SUPABASE_ANON_KEY`; either missing returns nil and the whole
+feature is inert. ⚠ Publishable (anon) key only — a service-role key here would hand anyone who
+unzips the .ipa full write access to every walker's data.
+
+### `CloudSync.swift` — the mirror
+
+`@MainActor @Observable`, owned by `AppModel.cloud`. Queues trip-log lines and flushes them on a
+5 s loop; a failed batch goes back on the **front** of the queue so a walk replays in order.
+
+| Local store | Cloud table | Fed from |
+|---|---|---|
+| `UserDefaults` settings | `device_settings` | `Settings.onChange` (0.4 s debounce) |
+| `familyContactEmails` | `family_contacts` | `AppModel.saveFamilyContacts()` |
+| `MedicalProfileStore` | `medical_profiles`, `mobility_days` | `onProfileSaved` / `onMobilityRefreshed` |
+| `canekit-*.jsonl` | `trips`, `trip_events` | `TripLogger.onRecord`, `beginTrip` / `endTrip` |
+| `hazards/*.geojson` + JPEGs | `hazards` + `hazard-photos` | `AppModel.recordHazard` |
+| `posts.json` | `posts` | `ConversationCoordinator.dropPost` |
+| `OpenCaneEvent`s | `family_alerts`, `family_alert_recipients` | `FamilyAlerts.onDelivered` |
+| `LaunchRecovery` outcome | `app_launches` | `AppModel.startCloudMirror()` |
+
+- ⚠ **Nothing here may `await` on the cue path.** The writers are synchronous queue appends.
+- ⚠ **Deferred, not dropped.** A route can start well inside the `register_cane` round trip on a
+  cold launch. `beginTrip` and `uploadRoute` hold their work (with the real start time) and send it
+  the moment ids arrive, retrying on every tick; lines queued in between are stamped with the trip
+  id when it lands. Before this, a measured e2e walk produced 899 `trip_events` and **zero**
+  `trips`. The one-shot writers (hazard, post, alert, conversation turn) drop instead — they fire
+  seconds into a launch at the earliest, and a stale replay is worse than a gap.
+- ⚠ The family email list goes through `save_family_contacts` **only**.
+- `recordConversationTurn` exists and is not called yet — `ConversationCoordinator` does not wire it.
+
+Tests: the decisions are in `CloudSchema` / `CloudBatchPolicy` (CaneKitLogic). This class is the
+effectful shell; verify it by walking and watching `trip_summary` fill in.
 
 ### `ios/scripts/test.sh` — runs the package tests (`make test`)
 - `cd ios/Logic`; if `xcode-select -p` points at `Xcode.app` → `exec swift test "$@"`.
