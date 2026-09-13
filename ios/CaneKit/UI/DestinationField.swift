@@ -156,8 +156,9 @@ struct DestinationField: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(CKColor.textSecondary)
                 .accessibilityHidden(true)
-            // ⚠ test contract: label "Destination", placeholder "Or type a destination".
-            TextField("Or type a destination", text: text)
+            // ⚠ test contract: label "Destination". The placeholder is not queried; it became
+            // "Search for a place" when the field moved to the top of the "Where to" card.
+            TextField("Search for a place", text: text)
                 .textFieldStyle(.plain)
                 .font(CKFont.body)
                 .foregroundStyle(CKColor.textPrimary)

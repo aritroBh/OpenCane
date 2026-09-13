@@ -229,18 +229,18 @@ final class CaneKitUITests: XCTestCase {
     /// buttons on launch, "Head row" after opening Sense, "Write trip log" after opening Settings,
     /// and Profile's Medical ID actions and metric tile (only the selected page is in the tree).
     ///
-    /// ⚠ test contract: tabs "Guide", "Sense", "Settings", "Profile"; button "Start route to CIF",
+    /// ⚠ test contract: tabs "Guide", "Details", "Settings", "Profile"; button "Start route to CIF",
     /// element "Head row" (LaneGridView row label), button "Where am I",
     /// switch "Write trip log" (Settings Mount card), buttons "Edit Medical ID" / "Announce Medical ID",
     /// and the Profile metric label beginning "Steps Today:".
     func testAccessibilityLabelsExist() {
         XCTAssertTrue(app.buttons["Guide"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Sense"].exists)
+        XCTAssertTrue(app.buttons["Details"].exists)
         XCTAssertTrue(app.buttons["Settings"].exists)
         XCTAssertTrue(app.buttons["Profile"].exists)
         XCTAssertTrue(app.buttons["Start route to CIF"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Where am I"].exists)
-        openTab("Sense")
+        openTab("Details")
         // Rows expose a combined spoken value ("left clear, center clear, right clear" or "no depth data").
         XCTAssertTrue(app.otherElements["Head row"].waitForExistence(timeout: 5))
         openTab("Settings")
@@ -269,7 +269,7 @@ final class CaneKitUITests: XCTestCase {
     /// Selects a root tab by its VoiceOver label (icon-only on screen). Fails the test if the tab
     /// is missing after 5 s (the tour's copy just skips instead).
     ///
-    /// ⚠ test contract: `name` is one of "Guide", "Sense", "Settings", "Profile" (`RootTab.title`).
+    /// ⚠ test contract: `name` is one of "Guide", "Details", "Settings", "Profile" (`RootTab.title`).
     private func openTab(_ name: String) {
         let tab = app.buttons[name]
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "tab \(name)")

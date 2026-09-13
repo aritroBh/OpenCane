@@ -41,14 +41,17 @@ struct LaneGridView: View {
     /// "Obstacles" card: the trust pill right-aligned ("Trusted" = the gyro gate accepted the
     /// frame, "Sweeping" = warnings paused while the cane swings), then the Head and Torso rows.
     var body: some View {
-        CKCard(title: "Obstacles") {
+        // UI audit 2026-09-13: pill beside the title's caption instead of alone on its own row;
+        // "Trusted" / "Sweeping" → "Steady" / "Swinging" (what the cane is doing, in plain words).
+        CKCard(title: "Obstacles", systemImage: "square.grid.3x2",
+               caption: "Nearest thing in each direction, at head and body height.") {
             HStack {
-                Spacer()
-                CKStatusPill(text: report.isTrusted ? "Trusted" : "Sweeping",
+                CKStatusPill(text: report.isTrusted ? "Steady" : "Swinging",
                              tone: report.isTrusted ? .trusted : .warning,
                              systemImage: report.isTrusted ? "checkmark" : "arrow.left.arrow.right",
                              spoken: report.isTrusted ? "Depth trusted" : "Sweeping, warnings paused",
                              updatesFrequently: true)
+                Spacer()
             }
             row(title: "Head", values: report.head, coverage: report.grid.headCoverage)
             row(title: "Torso", values: report.torso, coverage: report.grid.torsoCoverage)
@@ -157,7 +160,7 @@ struct LaneTile: View {
         case .far: return "FAR"
         case .clear: return "CLEAR"
         case .noData: return "NO DATA"
-        case .noCover: return "NO COVER"
+        case .noCover: return "NOT SEEN"   // UI audit 2026-09-13: was "NO COVER"
         }
     }
 

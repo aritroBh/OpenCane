@@ -40,7 +40,7 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .guide: "Guide"
-        case .sense: "Sense"
+        case .sense: "Details"      // UI audit 2026-09-13: was "Sense"; now matches the page title
         case .settings: "Settings"
         case .profile: "Profile"
         }
@@ -60,9 +60,9 @@ enum RootTab: Int, CaseIterable, Identifiable, Hashable {
     var hint: String {
         switch self {
         case .guide: "Walk a route and hear the next instruction"
-        case .sense: "Obstacles, depth and hazards ahead"
-        case .settings: "Haptics, watch, mount and this phone"
-        case .profile: "Medical ID card, emergency identification and mobility fitness"
+        case .sense: "What the cane sees: obstacles and hazards ahead"
+        case .settings: "Alerts, voice, the phone on the cane and family alerts"
+        case .profile: "Medical ID and today's activity"
         }
     }
 }
@@ -79,10 +79,10 @@ struct CKTabBar: View {
         .spring(duration: 0.16, bounce: 0.08)
     }
     /// Width of the selected capsule (chrome only; the 60 pt hit area is wider).
-    private static let pillWidth: CGFloat = 64
+    private static let pillWidth: CGFloat = 56
     /// Height of the selected capsule. Deliberately under `CKMetrics.touchTarget`: this is the
-    /// drawn pill, not the tappable area, so the bar stays a standard height.
-    private static let pillHeight: CGFloat = 40
+    /// drawn pill, not the tappable area, so the bar (pill + caption) stays a standard height.
+    private static let pillHeight: CGFloat = 32
 
     /// The currently visible page; written on tap.
     @Binding var selection: RootTab
@@ -96,6 +96,11 @@ struct CKTabBar: View {
     /// One row of equal-width tab buttons on the card surface with a top hairline; one VoiceOver
     /// container "OpenCane tabs"; a `.selection` haptic on every change of `selection` (the only
     /// app-owned haptic besides the big-button press).
+    ///
+    /// UI audit 2026-09-13: the surface now runs down under the home indicator
+    /// (`ignoresSafeArea(edges: .bottom)`), so there is no ivory strip below the bar on Face ID
+    /// phones and the bar still sits clear of the indicator; on a Home-button phone (no bottom
+    /// inset) the `xs` padding keeps it off the edge. Four equal columns fit every iPhone width.
     var body: some View {
         HStack(spacing: 0) {
             ForEach(RootTab.allCases) { tab in
@@ -103,8 +108,9 @@ struct CKTabBar: View {
             }
         }
         .padding(.horizontal, CKSpacing.sm)
-        .padding(.vertical, CKSpacing.xs)
-        .background(CKColor.surface)
+        .padding(.top, CKSpacing.xs)
+        .padding(.bottom, CKSpacing.xs)
+        .background(CKColor.surface.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(CKColor.border)
@@ -133,20 +139,31 @@ struct CKTabBar: View {
                 withAnimation(Self.pillTravel()) { selection = tab }
             }
         } label: {
-            Image(systemName: tab.systemImage)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(selected ? CKColor.onAccent : CKColor.textSecondary)
-                .scaleEffect(selected && !reduceMotion ? 1.06 : 1)
-                .frame(width: Self.pillWidth, height: Self.pillHeight)
-                .background {
-                    if selected {
-                        Capsule()
-                            .fill(CKColor.accent)
-                            .matchedGeometryEffect(id: "tab-pill", in: pillNS)
+            // UI audit 2026-09-13: a short visible word under each symbol (the icon-only bar made
+            // sighted helpers guess which grid icon was which). The word is `tab.title`, the same
+            // string VoiceOver reads, so what is seen and what is heard never differ.
+            VStack(spacing: 2) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(selected ? CKColor.onAccent : CKColor.textSecondary)
+                    .scaleEffect(selected && !reduceMotion ? 1.06 : 1)
+                    .frame(width: Self.pillWidth, height: Self.pillHeight)
+                    .background {
+                        if selected {
+                            Capsule()
+                                .fill(CKColor.accent)
+                                .matchedGeometryEffect(id: "tab-pill", in: pillNS)
+                        }
                     }
-                }
-                .frame(maxWidth: .infinity, minHeight: CKMetrics.touchTarget)
-                .contentShape(Rectangle())
+                Text(tab.title)
+                    .font(.caption.weight(selected ? .bold : .semibold))
+                    .foregroundStyle(selected ? CKColor.textPrimary : CKColor.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, minHeight: CKMetrics.touchTarget)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         // ⚠ test contract: the label is exactly `tab.title`.
