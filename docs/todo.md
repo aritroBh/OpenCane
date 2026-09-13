@@ -685,6 +685,21 @@ for 60 s so a weak network can never stall a cue.
 - [x] Dynamic centered navigation title (`OpenCane`, `Sense`, `Settings` with `.inline` display mode)
 - [x] Added startup cleanup of orphaned `CLBackgroundActivitySession` in `LocationService.init()`
 
+## Step 42 — Graceful GPS fallback, activity cleanup & on-device walk simulator (Sat Sep 12)
+- [x] Extended depth readiness check to 7.0 s with graceful fallback to GPS guidance ("Obstacle detection warming up. Guiding with GPS.")
+- [x] Dynamic Island orphan activity teardown on startup via `liveActivity.endAllOrphanedActivities()`
+- [x] On-device walk simulator in `AppModel.swift`: `startSimulatedWalk` and `stopSimulatedWalk` with 1 Hz synthetic GPS/heading injection
+- [x] Centered navigation bar titles with `ToolbarItem(placement: .principal)` and `.title2.weight(.bold)`
+- [x] Middle tab title updated to "Details"
+
+## Step 43 — Medical ID Profile tab, mobility fitness & streamlined Guide (Sat Sep 12)
+- [x] Fixed Dynamic Island idle location arrow by removing `CLBackgroundActivitySession` instantiation from `LocationService.init()`
+- [x] Streamlined GuideCard idle buttons: Where am I + Talk paired in HStack; Start route to CIF primary hero; Navigate to CIF + Simulate walk paired in HStack
+- [x] Added 4th root tab `.profile` (`ProfilePage.swift`, `RootTab.profile`, `pillWidth = 64`)
+- [x] Emergency Medical ID card: white cane / blind safety alert banner, vitals grid, tap-to-call emergency contact, announce medical ID button, edit sheet modal
+- [x] Mobility & fitness tracking in `MedicalProfileStore.swift`: daily steps, distance (km), trips completed, average pace via `CMPedometer`
+- [x] Configured `OPENCANE_GROKBOT_WEBHOOK_URL` and `_KEY` in `Secrets.plist`; verified HTTP 200 curl response
+
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen
