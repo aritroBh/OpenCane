@@ -86,12 +86,18 @@ public final class MedicalProfileStore {
         let trips = UserDefaults.standard.integer(forKey: Self.tripsKey)
         self.mobilityStats.completedTrips = max(trips, 0)
         refreshMobilityStats()
+        Task { [profile] in
+            await SupabaseClient.shared.syncMedicalProfile(profile)
+        }
     }
 
-    /// Saves the medical profile to UserDefaults.
+    /// Saves the medical profile to UserDefaults and syncs to Supabase.
     public func save() {
         if let data = try? JSONEncoder().encode(profile) {
             UserDefaults.standard.set(data, forKey: Self.profileKey)
+        }
+        Task { [profile] in
+            await SupabaseClient.shared.syncMedicalProfile(profile)
         }
     }
 
@@ -99,32 +105,42 @@ public final class MedicalProfileStore {
     public func recordCompletedTrip() {
         mobilityStats.completedTrips += 1
         UserDefaults.standard.set(mobilityStats.completedTrips, forKey: Self.tripsKey)
+        Task { [stats = mobilityStats] in
+            await SupabaseClient.shared.syncMobilityStats(stats)
+        }
     }
 
     /// Queries CMPedometer for today's steps and walking distance from midnight to now.
+    /// ⚠ The handler must stay `@Sendable`: CMPedometerHandler is called on CoreMotion's background queue,
+    /// so without `@Sendable` the closure is inferred `@MainActor` under default isolation and traps
+    /// (`_dispatch_assert_queue_fail`, signal 5).
     public func refreshMobilityStats() {
         guard CMPedometer.isStepCountingAvailable() else { return }
         let now = Date()
         let startOfDay = Calendar.current.startOfDay(for: now)
 
         isFetchingPedometer = true
-        pedometer.queryPedometerData(from: startOfDay, to: now) { [weak self] data, error in
-            Task { @MainActor in
+        pedometer.queryPedometerData(from: startOfDay, to: now) { @Sendable [weak self] data, error in
+            let steps = data?.numberOfSteps.intValue
+            let dist = data?.distance?.doubleValue
+            let pace = data?.currentPace?.doubleValue
+            let isSuccess = (error == nil && data != nil)
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isFetchingPedometer = false
-                guard let data, error == nil else { return }
-                let steps = data.numberOfSteps.intValue
-                let dist = data.distance?.doubleValue ?? 0.0
-                let pace = data.currentPace?.doubleValue ?? 0.0
-                self.mobilityStats.todaySteps = steps
-                self.mobilityStats.todayDistanceMeters = dist
-                if pace > 0 {
+                guard isSuccess else { return }
+                if let steps { self.mobilityStats.todaySteps = steps }
+                if let dist { self.mobilityStats.todayDistanceMeters = dist }
+                if let pace, pace > 0 {
                     self.mobilityStats.averagePaceMps = 1.0 / pace
-                } else if dist > 0 {
+                } else if let dist, dist > 0 {
                     let seconds = now.timeIntervalSince(startOfDay)
                     self.mobilityStats.averagePaceMps = min(2.0, dist / max(60, seconds))
                 }
                 self.mobilityStats.lastUpdated = now
+                Task { [stats = self.mobilityStats] in
+                    await SupabaseClient.shared.syncMobilityStats(stats)
+                }
             }
         }
     }

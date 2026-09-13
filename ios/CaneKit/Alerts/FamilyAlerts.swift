@@ -246,15 +246,43 @@ final class FamilyAlerts {
         return (out, prompt)
     }
 
-    /// Summarise (best effort, bounded) then POST. A failed or slow summary costs the event its
-    /// `ai_context` and nothing else — it is never a reason not to send.
     private func deliver(_ event: OpenCaneEvent, prompt: String,
                          client: GrokBotClient) async -> GrokBotResult {
         var toSend = event
         if aiContextEnabled, let summarizer, let line = await summarizer.summarize(prompt: prompt) {
             toSend.extra?["ai_context"] = .string(line)
         }
-        return await client.send(toSend)
+        let result = await client.send(toSend)
+        Task { [toSend, result] in
+            let statusStr: String
+            let code: Int?
+            let err: String?
+            switch result {
+            case .accepted:
+                statusStr = "posted"
+                code = 200
+                err = nil
+            case .rejected(let status, let body):
+                statusStr = "rejected"
+                code = status
+                err = body
+            case .failed(let message):
+                statusStr = "failed"
+                code = nil
+                err = message
+            case .notConfigured:
+                statusStr = "not_configured"
+                code = nil
+                err = nil
+            }
+            await SupabaseClient.shared.recordFamilyAlert(
+                event: toSend,
+                deliveryStatus: statusStr,
+                statusCode: code,
+                errorMessage: err
+            )
+        }
+        return result
     }
 }
 
