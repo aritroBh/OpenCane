@@ -2,6 +2,34 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 41 — Enriched sidewalk hazard telemetry for Grok Bot, anti-flapping filters, and dynamic navigation titles (Sat Sep 12)
+
+**Why:** The user reported:
+1. "so what can you make sure that all this is making sense? Like this needs to be a log. I feel like this we can make this a lot better. I feel like this log can be fed into our Grok Bot later that will come... Maybe add the m location, add what it saw, etcetera": The existing `hazards-*.geojson` only recorded flat coordinates and spoken text. At `00:26:29Z` in `hazards-2026-09-13T00-25-04Z.geojson`, rapid sensor classification flapping between `pothole` and `dropOff` at the exact same location wrote 5 duplicate features in a single second.
+2. "also another thing here, like I'm not sure if this settings module actually does anything. And then also for all the different tabs, it says the same thing, open cane. Can we make it a little bit nicer? Maybe it's like open cane centered. And the next one is like information and the next one was like settings": The navigation bar title in `ContentView` was statically pinned to "OpenCane" on all tabs.
+
+**What changed:**
+- `Hazards.swift` (`CaneKitLogic`):
+  - Enriched `HazardRecord` with `distanceM`, `heightM`, `direction`, `headingDeg`, `speedMps`, `routeName`, `instruction`, `source`, `whatItSaw`, `severity`.
+  - Added `asGrokBotEvent(user:caneID:) -> OpenCaneEvent` to bridge hazard detections directly into Tejas's Grok Bot webhook routine.
+  - Added `isDepression`, `isElevation`, and `isSameFamily(as:)` to `GroundHazardKind`.
+  - In `GroundHazardPolicy.shouldAnnounce`, added `l.kind.isSameFamily(as: h.kind)` check to eliminate rapid kind-toggling between `pothole` and `dropOff` at the same world anchor.
+  - Enriched `HazardGeoJSON.encode` with RFC 7946 feature properties (`distance_m`, `height_m`, `direction`, `heading_deg`, `speed_mps`, `route_name`, `instruction`, `source`, `what_it_saw`, `severity`).
+- `HazardLog.swift`:
+  - Enriched `record(...)` parameters to persist full route and detector context.
+  - Added 3-second temporal/spatial debounce filter (`records.last.time < 3.0s` and matching coordinate/kind) to protect the GeoJSON and filesystem from sensor bounce.
+- `AppModel.swift`:
+  - Wired live distance, vertical delta, heading, speed, route name, instruction, source, and severity into `recordHazard` calls from `groundHazardFound` and `wireHazards`.
+- `ContentView.swift`:
+  - Dynamic navigation title: "OpenCane" on Guide, "Sense" on Sense, "Settings" on Settings.
+  - Set `.navigationBarTitleDisplayMode(.inline)` to center titles cleanly across all tabs.
+- `LocationService.swift`:
+  - Added startup invalidation of temporary `CLBackgroundActivitySession` in `init()` to tear down any stale orphaned navigation session assertions from previous crashes.
+- Tests:
+  - Added 3 unit tests in `HazardTests.swift`: `enrichedHazardRecordSerializesAllProperties`, `hazardRecordMapsToGrokBotEvent`, and `groundHazardPolicySuppressesDepressionFlapping`. 513/513 Logic tests passing.
+
+test on device: open Settings (nav title reads "Settings" centered); switch to Sense ("Sense") and Guide ("OpenCane"). Walk toward a curb or depression: observe single clear announcement without pothole/drop-off flapping. Check Files > OpenCane > hazards: open GeoJSON in geojson.io to see distance_m, height_m, direction, heading_deg, and route properties.
+
 ## Step 40 — Dynamic Island: clean idle state (session scoped to active route), real-time obstacle radar pill and ActivityKit coalescing (Sat Sep 12)
 
 **Why:** The user reported:

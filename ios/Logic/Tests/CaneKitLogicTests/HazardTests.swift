@@ -525,3 +525,103 @@ private func denseGround(_ profile: (Float) -> Float) -> [GroundSample] {
     let r = p.line(forReply: "Scooter ahead, 2.5 meters. Also a tree.", now: 0)
     #expect(r == "Caution: Scooter ahead, 2.5 meters.")
 }
+
+/// Enriched telemetry properties (distance, height, direction, heading, route, instruction, source)
+/// serialize into GeoJSON properties for Grok Bot and mapping pipelines.
+@Test func enrichedHazardRecordSerializesAllProperties() throws {
+    let r = HazardRecord(
+        kind: "pothole",
+        text: "One and a half meters ahead, hole.",
+        latitude: 40.1099,
+        longitude: -88.2215,
+        accuracy: 5.2,
+        time: 1_789_000_000,
+        photo: "hazard-1.jpg",
+        distanceM: 1.5,
+        heightM: -0.15,
+        direction: "center",
+        headingDeg: 89.0,
+        speedMps: 1.2,
+        routeName: "CIF",
+        instruction: "Continue straight on Springfield Avenue",
+        source: "ground",
+        whatItSaw: "hole (depression of -0.15 m)",
+        severity: "warn"
+    )
+    let data = try HazardGeoJSON.encode([r])
+    let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let f = (obj?["features"] as? [[String: Any]])?.first
+    let props = f?["properties"] as? [String: Any]
+
+    #expect(props?["kind"] as? String == "pothole")
+    #expect(props?["distance_m"] as? Double == 1.5)
+    let height = props?["height_m"] as? Double ?? 0
+    #expect(abs(height - (-0.15)) < 0.001)
+    #expect(props?["direction"] as? String == "center")
+    #expect(props?["heading_deg"] as? Double == 89.0)
+    #expect(props?["speed_mps"] as? Double == 1.2)
+    #expect(props?["route_name"] as? String == "CIF")
+    #expect(props?["instruction"] as? String == "Continue straight on Springfield Avenue")
+    #expect(props?["source"] as? String == "ground")
+    #expect(props?["what_it_saw"] as? String == "hole (depression of -0.15 m)")
+    #expect(props?["severity"] as? String == "warn")
+}
+
+/// HazardRecord directly converts into OpenCaneEvent for Grok Bot webhook processing.
+@Test func hazardRecordMapsToGrokBotEvent() {
+    let r = HazardRecord(
+        kind: "dropOff",
+        text: "Two meters ahead, drop-off.",
+        latitude: 40.1105,
+        longitude: -88.2240,
+        accuracy: 4.5,
+        time: 1_789_000_000,
+        photo: "hazard-2.jpg",
+        distanceM: 2.0,
+        heightM: -0.20,
+        direction: "center",
+        headingDeg: 180.0,
+        speedMps: 1.1,
+        routeName: "ISR",
+        instruction: "Walk toward Townsend Hall",
+        source: "ground",
+        whatItSaw: "drop-off curb",
+        severity: "critical"
+    )
+    let event = r.asGrokBotEvent(user: "Aritro", caneID: "opencane-01")
+    #expect(event.type == .obstacle)
+    #expect(event.severity == .critical)
+    #expect(event.lat == 40.1105)
+    #expect(event.lng == -88.2240)
+    #expect(event.accuracyM == 4.5)
+    #expect(event.heading == 180.0)
+    #expect(event.speedMps == 1.1)
+    #expect(event.note == "Two meters ahead, drop-off.")
+    #expect(event.user == "Aritro")
+    #expect(event.caneID == "opencane-01")
+    #expect(event.obstacle?.kind == "dropOff")
+    #expect(event.obstacle?.distanceM == 2.0)
+    #expect(event.obstacle?.direction == "center")
+    #expect(event.extra?["what_it_saw"] == .string("drop-off curb"))
+    #expect(event.extra?["photo"] == .string("hazard-2.jpg"))
+    #expect(event.extra?["route_name"] == .string("ISR"))
+    #expect(event.extra?["instruction"] == .string("Walk toward Townsend Hall"))
+    #expect(event.extra?["source"] == .string("ground"))
+}
+
+/// Rapid alternation between depression kinds (pothole and dropOff) at the same anchor is suppressed.
+@Test func groundHazardPolicySuppressesDepressionFlapping() {
+    var p = GroundHazardPolicy()
+    let pothole = GroundHazard(kind: .pothole, distance: 1.5, delta: -0.15, anchor: 5.0)
+    let dropOff = GroundHazard(kind: .dropOff, distance: 1.5, delta: -0.15, anchor: 5.0)
+
+    let h1 = p.shouldAnnounce(pothole, now: 0)
+    #expect(h1)
+    // 0.2s later: detector flickers to dropOff at the same spot. Must be suppressed!
+    let h2 = p.shouldAnnounce(dropOff, now: 0.2)
+    #expect(!h2)
+    // 0.4s later: detector flickers back to pothole. Must be suppressed!
+    let h3 = p.shouldAnnounce(pothole, now: 0.4)
+    #expect(!h3)
+}
+

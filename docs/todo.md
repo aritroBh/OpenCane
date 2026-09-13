@@ -651,6 +651,20 @@ for 60 s so a weak network can never stall a cue.
 - [ ] Muse + Antigravity adversarial review of this diff (AGENTS.md "How we engineer" 3)
 - **test on device:** see CHANGELOG Step 39
 
+## Step 40 — Dynamic Island idle state & obstacle radar pill (Sat Sep 12)
+- [x] Scoped `.otherNavigation` and `CLBackgroundActivitySession` to active navigation (`setNavigating`)
+- [x] `LiveActivityCoalescer.swift` (Logic): non-linear distance bands, 0.2s flap-guard, immediate emergency emissions
+- [x] `NavLiveActivity.swift`: leading turn glyph + distance, trailing obstacle radar pill, expanded radar banner
+- [x] Surfaced Live Activity errors in `GuideCard`
+
+## Step 41 — Enriched hazard telemetry for Grok Bot & anti-flapping (Sat Sep 12)
+- [x] Enriched `HazardRecord` and `HazardGeoJSON` with distance, height delta, direction, heading, speed, route, instruction, source, and severity
+- [x] Added `asGrokBotEvent(user:caneID:)` for direct Grok Bot ingestion
+- [x] Anti-flapping in `GroundHazardPolicy`: `isSameFamily` suppresses rapid depression toggling (pothole vs drop-off)
+- [x] 3-second temporal/spatial debounce in `HazardLog.record`
+- [x] Dynamic centered navigation title (`OpenCane`, `Sense`, `Settings` with `.inline` display mode)
+- [x] Added startup cleanup of orphaned `CLBackgroundActivitySession` in `LocationService.init()`
+
 ## Cross-cutting
 - [x] Three icon-only root tabs (Guide / Sense / Settings) — `CKTabBar`, VoiceOver labels pinned, XCUITests open the matching tab
 - [x] UI design system (docs/design.md, Theme.swift, WatchTheme.swift) applied to grid + root screen

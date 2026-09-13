@@ -66,7 +66,41 @@ final class HazardLog {
     ///   - fix: chosen by `AppModel.recordHazard` — the live fix or the nav engine's last fix, only
     ///     if < 120 s old; nil otherwise.
     ///   - jpeg: the camera frame, or nil; saved as `hazard-<session>-<n>.jpg` (n = record number).
-    func record(kind: String, text: String, fix: GeoFix?, jpeg: Data?) {
+    ///   - distanceM: distance ahead in metres to the hazard.
+    ///   - heightM: elevation change delta in metres.
+    ///   - direction: "center", "left", "right", "head".
+    ///   - headingDeg: walker course/heading in degrees.
+    ///   - speedMps: walker speed in m/s.
+    ///   - routeName: active route/destination name.
+    ///   - instruction: current nav instruction.
+    ///   - source: "ground", "sign", "vision".
+    ///   - whatItSaw: detailed classifier findings.
+    ///   - severity: "info", "warn", "critical".
+    func record(kind: String, text: String, fix: GeoFix?, jpeg: Data?,
+                distanceM: Double? = nil, heightM: Double? = nil,
+                direction: String? = nil, headingDeg: Double? = nil,
+                speedMps: Double? = nil, routeName: String? = nil,
+                instruction: String? = nil, source: String? = nil,
+                whatItSaw: String? = nil, severity: String? = nil) {
+        let now = Date().timeIntervalSince1970
+        // Temporal/spatial debounce: suppress rapid sensor jitter (< 3.0s between records of the
+        // same kind or same feature family at the same physical fix).
+        if let last = records.last, now - last.time < 3.0 {
+            let sameKindOrText = last.kind == kind || (last.text == text)
+            let lastFamily = GroundHazardKind(rawValue: last.kind)
+            let thisFamily = GroundHazardKind(rawValue: kind)
+            let sameFamily = (lastFamily != nil && thisFamily != nil && lastFamily!.isSameFamily(as: thisFamily!))
+
+            let bothHaveFix = last.accuracy >= 0 && (fix?.accuracy ?? -1) >= 0
+            let sameCoord = bothHaveFix &&
+                abs(last.latitude - (fix?.coordinate.latitude ?? 0)) < 0.00005 &&
+                abs(last.longitude - (fix?.coordinate.longitude ?? 0)) < 0.00005
+
+            // Suppress if exact same kind/text within 3s, OR same feature family at the same GPS fix
+            if sameKindOrText || (sameFamily && sameCoord) {
+                return
+            }
+        }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var photo: String?
@@ -79,7 +113,17 @@ final class HazardLog {
                                         latitude: fix?.coordinate.latitude ?? 0,
                                         longitude: fix?.coordinate.longitude ?? 0,
                                         accuracy: fix?.accuracy ?? -1,
-                                        time: Date().timeIntervalSince1970, photo: photo))
+                                        time: now, photo: photo,
+                                        distanceM: distanceM,
+                                        heightM: heightM,
+                                        direction: direction,
+                                        headingDeg: headingDeg,
+                                        speedMps: speedMps,
+                                        routeName: routeName,
+                                        instruction: instruction,
+                                        source: source,
+                                        whatItSaw: whatItSaw,
+                                        severity: severity))
             try HazardGeoJSON.encode(records).write(to: fileURL, options: .atomic)
             fileWritten = true
             lastError = nil

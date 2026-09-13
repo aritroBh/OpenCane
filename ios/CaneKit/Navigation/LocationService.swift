@@ -103,6 +103,9 @@ final class LocationService: NSObject, @MainActor CLLocationManagerDelegate {
         manager.delegate = self
         manager.headingFilter = 2
         manager.headingOrientation = .portrait
+        // Tear down any orphaned background navigation session from previous runs or crashes.
+        let orphan = CLBackgroundActivitySession()
+        orphan.invalidate()
     }
 
     // MARK: Lifecycle
