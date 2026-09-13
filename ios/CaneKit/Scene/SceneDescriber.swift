@@ -149,6 +149,15 @@ final class SceneDescriber {
     @ObservationIgnored var onResult: ((_ text: String?, _ error: String?, _ ms: Int?, _ frame: String,
                                         _ gate: String, _ cloudText: String) -> Void)?
 
+    /// Is it dark with no torch lit? (`AppModel.camerasInTheDark`, from `LowLightPolicy`, Step 49.)
+    /// Read once per accepted run, at the moment the result is spoken: a true answer prefixes the
+    /// description or answer with `darkCaveat`, because a camera model in the dark misses things
+    /// and a blind walker cannot see why. Default false (the simulator, tests). Set by
+    /// `AppModel.wireDescriber`.
+    @ObservationIgnored var isDark: () -> Bool = { false }
+    /// The spoken prefix when `isDark()`; the sentence after it is the model's as usual.
+    static let darkCaveat = "It is dark, so this may miss things. "
+
     /// "Where am I". One description at a time. Speaks the result (or a spoken error); the Action
     /// Button tick and the disabled UI state provide progress without adding another spoken line.
     ///
@@ -280,8 +289,11 @@ final class SceneDescriber {
                     // something was is worse than no answer; the wait itself is unavoidable and
                     // auditable (`ms` + `frame` in `describe_result`). Plain "Where am I" keeps
                     // 20 — that walker asked and stood still.
-                    self.speech.say(text, .scene, ttl: 10)
-                    self.onResult?(text, nil, self.lastLatencyMs, frameName, gate, raw)
+                    // Step 49: an answer given in the dark says so first (the caveat is a fact
+                    // about the camera, not a claim by the model, so it is added after the gate).
+                    let answer = (self.isDark() && !text.contains(CloudSceneGate.tooDark)) ? Self.darkCaveat + text : text
+                    self.speech.say(answer, .scene, ttl: 10)
+                    self.onResult?(answer, nil, self.lastLatencyMs, frameName, gate, raw)
                     return
                 }
                 let answer = try await client.describeScene(jpeg: jpeg)
@@ -307,6 +319,12 @@ final class SceneDescriber {
                     text = await Self.withPeople(text, jpeg: jpeg, depth: depth,
                                                  mirrored: self.context.mirrored())
                 }
+                // Step 49: in the dark with no torch the description is prefixed with the caveat —
+                // spoken and shown (the Guide card's "Scene: …" line), after the gate and after the
+                // people line, because it is about the camera, not something the model said. Not
+                // when the model itself answered `CloudSceneGate.tooDark`: that sentence already is
+                // the caveat, and it is spoken as the answer (with the LiDAR line in front, as usual).
+                if self.isDark(), !text.contains(CloudSceneGate.tooDark) { text = Self.darkCaveat + text }
                 self.lastDescription = text
                 self.speech.say(text, .scene, ttl: 20)
                 self.onResult?(text, nil, self.lastLatencyMs, frameName, gate,

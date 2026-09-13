@@ -98,6 +98,11 @@ final class DepthEngine {
     /// queued; after a route starts it is reset to idle and ordinary depth interruptions continue
     /// to be represented by `status` / `report` as before.
     private(set) var readinessState: DepthReadinessState = .idle
+    /// Why the gate timed out (`DepthReadiness.timeoutReason`, Step 49): `depthMissing`,
+    /// `trackingLimitedDepthLive` (a dark hallway: LiDAR depth live, pose drifting) or
+    /// `depthUnsteady`; nil unless `readinessState == .timedOut`. `AppModel.failQueuedRouteStart`
+    /// reads it **before** `cancelReadiness`, which clears it, to pick the honest spoken line.
+    var readinessTimeoutReason: DepthReadiness.TimeoutReason? { readiness.timeoutReason }
 
     /// Fired on the main actor for every report; the cue router hangs off this.
     /// Set once by `AppModel.start()` to `AppModel.handle(_:)` (haptics, watch mirror, speech).

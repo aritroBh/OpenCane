@@ -92,6 +92,14 @@ struct GuideCard: View {
                 if model.nav.gpsWeak {
                     CKStatusPill(text: "GPS weak", tone: .warning, systemImage: "exclamationmark.triangle")
                 }
+                // Step 49: the light the cameras have, for the sighted spotter — the walker was
+                // told once by voice ("Low light. Obstacle detection still works."). Warning, not
+                // danger: LiDAR, GPS and haptics are unaffected; it is the camera features that
+                // may miss things. Drawn only while `LowLightPolicy` says dark.
+                if model.lightState == .dark {
+                    CKStatusPill(text: "Dark", tone: .warning, systemImage: "moon.fill",
+                                 spoken: "Low light; obstacle detection still works")
+                }
             }
 
             // ⚠ test contract: "Where am I". While describing, the label becomes "Describing…"

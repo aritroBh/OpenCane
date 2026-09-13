@@ -758,6 +758,32 @@ for 60 s so a weak network can never stall a cue.
 - **test on device:** see CHANGELOG Step 45
 >>>>>>> Stashed changes
 
+## Step 49 — Low light: notice the dark for the walker, say what still works (Sat Sep 12, late)
+- [x] Owner's question 22:50 ("we have the flashlight and LiDAR doesn't need light — what else?"). Honest answer: LiDAR, gyro gate, GPS, compass, haptics unaffected; ARKit tracking, signs, scene words, people, "Where am I", hazard watch degrade silently — and a blind walker cannot tell it is dark
+- [x] `LowLightPolicy` (CaneKitLogic, 11 tests): 0.3 s EMA over `ARFrame.lightEstimate.ambientIntensity` (`LaneReport.ambientLux`), dark after 3 s under 40 lux, lit after 5 s over 120, unknown before the first estimate, 60 s minimum on-time for an app-lit torch (the torch raises the reading), 60 s backoff after a thermal cut-out, no auto-torch at ≤ 20 % battery (`FamilyAlertLimits.lowBatteryPct`) — **all [H]**
+- [x] `AppModel`: "Flashlight on in the dark (routes)" (Mount card, **default ON — deliberate, AGENTS.md**), torch only while a route guides via `setTorch(_:byApp:)`, off on lit / Stop / arrival / restart, walker's own torch never touched; "Low light. Obstacle detection still works." (+ " Flashlight on.") once per episode at `.nav` 10 s; the duplicate "Flashlight on." confirmation muted; `light {state, lux, torch, torch_by_app}` records
+- [x] Vision honesty: "It is dark, so this may miss things. " prefix on "Where am I" / a question when dark with no torch; `ScenePrompt` asks for "It is too dark to see." (`CloudSceneGate.tooDark` passes it, spoken as the answer); `HazardPrompt` asks for NONE in the dark; `scan` / `hazard_watch` carry `light: "dark"`; no mesh name (`centerHit = nil`) while tracking is not `.normal`
+- [x] `DepthReadiness.TimeoutReason` (2 tests): a timeout with depth live but tracking never `.normal` speaks "Camera tracking is limited, probably low light. Obstacle detection is running on LiDAR." (`.safety`, 15 s) instead of the false "Guiding with GPS."; `route_readiness {state: timed_out_tracking_limited | timed_out_fallback_gps, reason}`
+- [x] Details → Scene engine "Light" row (3 tests): "Light: lit (640 lux)" / "Light: dark (12 lux) · flashlight on (by OpenCane)" / "Light: dark (12 lux) · flashlight off — cameras may miss things" / "Light: unknown"; Guide card DARK pill (warning) next to GPS
+- [x] `make test` 626 / 626; simulator build clean; docs (design.md §5.1 / §5.4 / §6.5 / Scene engine, CODE_REFERENCE, AGENTS.md two bullets)
+- [ ] **On the phone, dark room, torch off**: start a route → within ~3–4 s the torch comes on and "Low light. Obstacle detection still works. Flashlight on." is spoken **once**; no second "Flashlight on."; the tiles still show obstacles; Stop → "Flashlight off."; Details → Light row reads "dark (N lux) · flashlight on (by OpenCane)"
+- [ ] Dark room, no route: the line is spoken without "Flashlight on.", the torch stays off, the Guide card shows DARK; "Where am I" starts with "It is dark, so this may miss things." (or the model answers "It is too dark to see.")
+- [ ] Dark hallway route start: does readiness time out with `reason: tracking_limited_depth_live` and speak the LiDAR line (not "Guiding with GPS")? Do obstacle cues run during it?
+- [ ] Walker's own Flashlight switch on, then a route in the dark: the app must not switch it off at Stop
+- [ ] Lit room → torch cycle check: while the app's torch is on the exit threshold is `litWithTorchLux` (400 lux [H]); read `light` records in a torch-lit hallway and at a lit crossing and tune 400 so the glow never ends the episode but a lit building does
+- [ ] Tune 40 / 120 lux and 3 / 5 s from the `light` + `lanes` records of a dusk walk (a street-lamp pool must not end an episode; a doorway shadow must not start one)
+- [ ] Battery: at ≤ 20 % the torch must not auto-light (the plain line is spoken); thermal: after "The flashlight turned off." the app must not relight it for 60 s
+- [ ] `cloudSettings` / `DeviceSettingsRow` do not carry `autoTorchInDark` yet (Supabase schema change) — add the column with the next cloud step
+
+## Step 48 — Point-blank: a wall against the phone is STOP, never CLEAR (Sat Sep 12, late)
+- [x] Root cause from the teammate's photo: inside ~10 cm the LiDAR returns 0 / NaN, `LaneMath` discarded them, the cell went `.infinity` = CLEAR; Step 38 only covered low-confidence finite returns
+- [x] `LaneMath` blind share per cell; `NearHold` (7 tests) holds a blind-after-near cell at 0.1 m; `lanes {head_blind, torso_blind, held}` evidence
+- [x] Merged onto the teammate's Step 45 cloud commit; 605 / 605 tests; installed on the phone
+- [ ] On the phone: wall at 15 cm → push to the wall → STOP + urgent buzz stays; step back → clear; night sky / long corridor → no STOP
+- [ ] Tune `NearHoldConfig` (0.5 blind share, 0.6 m arm, cold start 4 cells / 0.8 / 0.8 m) from the `lanes` records of that walk
+- [ ] Known gap (Codex): a glossy / absorptive surface at 0.35 m–a few metres returns finite *low-confidence* samples — neither valid nor blind — so the cell can read CLEAR; needs an "unknown" tile state, not a guess (Step 38 boundary)
+- [ ] Known gap: toggling "Mirror left / right" mid-session swaps lane indices under the hold's per-lane memory; the next sweep disarms it
+
 ## Step 47 — Dynamic Island redesign from its first pictures, Guide tile pair, real emergency phone (Sat Sep 12, evening)
 - [x] Evidence first: the newest phone logs say `live_activity {action: start, active: true}` — the activity exists; nobody had ever seen what it drew
 - [x] `CaneKitIslandTour` + `make island`: compact, expanded, walking, after-Stop pictures of the island from the simulator (before and after)

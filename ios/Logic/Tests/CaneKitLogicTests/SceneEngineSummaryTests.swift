@@ -182,13 +182,40 @@ private func idle(cloud: String? = "Muse") -> SceneEngineFacts {
     #expect(SceneEngineSummary.cues(f).text == "Quiet · Indoors · names on")
 }
 
+@Test func lightRowSaysWhatTheCamerasHave() {
+    var f = idle()
+    f.lightState = .lit; f.ambientLux = 640.4
+    #expect(SceneEngineSummary.light(f).text == "Light: lit (640 lux)")
+    #expect(SceneEngineSummary.light(f).spoken == "Light: lit, 640 lux.")
+    f.lightState = .dark; f.ambientLux = 12.2; f.torchOn = false
+    #expect(SceneEngineSummary.light(f).text == "Light: dark (12 lux) · flashlight off — cameras may miss things")
+    #expect(SceneEngineSummary.light(f).spoken.contains("Obstacle detection still works."))
+}
+
+@Test func lightRowNamesWhoLitTheTorch() {
+    var f = idle()
+    f.lightState = .dark; f.ambientLux = 12; f.torchOn = true; f.torchByApp = true
+    #expect(SceneEngineSummary.light(f).text == "Light: dark (12 lux) · flashlight on (by OpenCane)")
+    #expect(SceneEngineSummary.light(f).spoken == "Light: dark, 12 lux. Flashlight on, switched on by OpenCane.")
+    f.torchByApp = false
+    #expect(SceneEngineSummary.light(f).text == "Light: dark (12 lux) · flashlight on")
+}
+
+@Test func lightRowUnknownBeforeAnEstimate() {
+    // The idle facts carry the defaults: no estimate, torch off.
+    #expect(SceneEngineSummary.light(idle()).text == "Light: unknown")
+    var f = idle()
+    f.lightState = .lit                       // an estimate that was not carried (nil lux): no number
+    #expect(SceneEngineSummary.light(f).text == "Light: lit")
+}
+
 @Test func summaryReadsEveryRowInOrder() {
     var f = idle()
     f.lastSource = "Muse"; f.lastCloudMs = 1_940; f.lastGate = "spoken"; f.secondsSinceLast = 5
     f.lastTrigger = .button
     let s = SceneEngineSummary.spokenSummary(f)
     let order = ["asks Muse first", "Muse answered the last Where am I", "Just now",
-                 "passed the gate", "Hazard watch is off", "Cues: Detailed"]
+                 "passed the gate", "Hazard watch is off", "Light level unknown", "Cues: Detailed"]
     var cursor = s.startIndex
     for needle in order {
         guard let r = s.range(of: needle, range: cursor..<s.endIndex) else {

@@ -385,7 +385,33 @@ bench has *disproved* must never sit in the file as though it were settled — m
   on every launch (trip logs `canekit-2026-09-12T02-40-53Z` / `02-41-13Z`), with the off switch on a
   screen the app never reached. The flashlight (`torchEnabled`) is not persisted either (a pocketed
   torch is a dead battery and a burn risk).
+- **"Flashlight on in the dark (routes)" ships ON** (Step 49, `AppModel.autoTorchInDark`) — the one
+  deliberate exception to "new and untuned ships off by default". A blind walker cannot see that it
+  is dark, so an opt-in nobody knows to flip would never be flipped; the light gives the cameras
+  (ARKit tracking, signs, scene words, "Where am I") something to see and makes the walker visible
+  to drivers. What keeps it safe: `LowLightPolicy` (CaneKitLogic) needs the smoothed ARKit lux under
+  40 for 3 s; the torch is lit **only while a route guides** (never in a pocket), never at ≤ 20 %
+  battery, not for 60 s after a thermal cut-out, only through the KVO-confirmed `setTorch(_:byApp:)`,
+  and it goes off when the light returns, the route ends or the walker touches the switch; a torch
+  the walker lit is never touched. The numbers are [H] until a dark-room walk (`light` records). Do
+  not flip the default off in code; the owner flips the switch.
+- **Vision says it is dark instead of guessing** (Step 49). When `LowLightPolicy` says dark and no
+  torch is lit, "Where am I" prefixes "It is dark, so this may miss things.", the cloud prompt asks
+  for exactly "It is too dark to see." on a black frame (`CloudSceneGate.tooDark` passes it), the
+  `scan` / `hazard_watch` records carry `light: "dark"`, and `DepthFrameProcessor` publishes no mesh
+  *name* (`centerHit = nil`) while ARKit tracking is not `.normal` — a world-anchored mesh under a
+  drifting pose is the one path that could say "door" with confidence about a wall. Distances,
+  cues, GPS and haptics are untouched: LiDAR does not need light. A readiness timeout with depth
+  live but tracking limited now says "Camera tracking is limited, probably low light. Obstacle
+  detection is running on LiDAR." instead of the false "Guiding with GPS."
+  (`DepthReadiness.TimeoutReason`).
 
+- **A blind lane cell right after a near reading is a wall, not a clear path** (Step 48,
+  `NearHold`): inside ~10 cm the LiDAR returns 0 / NaN, not a low-confidence distance, so `LaneMath`
+  reports the blind share per cell and `DepthFrameProcessor` holds such a cell at 0.1 m (STOP)
+  until it measures again. It never arms without a prior reading under 0.6 m — the deliberate
+  trade against painting STOP over a blind sky. Do not "simplify" the blind share into a plain
+  no-data clear, and do not arm it without history without a night-sky test.
 - **Always location is asked at the first route start, and the background session is armed only
   without it** (Step 47, `LocationService.requestAlwaysAuthorization` / `reconcileBackgroundSession`).
   A When-In-Use app keeps GPS through the screen lock only via `CLBackgroundActivitySession`, and

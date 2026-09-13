@@ -138,3 +138,56 @@ import Testing
     #expect(firstAfter)
     #expect(secondAfter)
 }
+
+/// Step 49: in a dark hallway ARKit sits in `.limited(.insufficientFeatures)` while `sceneDepth`
+/// keeps arriving and the lane cues run. A timeout there must be named as limited tracking with
+/// depth live — the app then says obstacle detection is running on LiDAR, not "Guiding with GPS".
+@Test func timeoutInTheDarkNamesLimitedTrackingWithDepthLive() {
+    var gate = DepthReadiness()
+    gate.begin(at: 100)
+    #expect(gate.timeoutReason == nil)
+    var t = 100.0
+    while t < 104.9 {
+        t += 1.0 / 30
+        #expect(gate.frame(at: t, trackingNormal: false, sceneDepthAvailable: true, reportTrusted: true) == .warming)
+    }
+    #expect(gate.timeoutReason == nil)                       // not decided before the deadline
+    #expect(gate.frame(at: 105.1, trackingNormal: false, sceneDepthAvailable: true, reportTrusted: true) == .timedOut)
+    #expect(gate.timeoutReason == .trackingLimitedDepthLive)
+    // The reason survives until `cancel`, which clears it (the app reads it first).
+    gate.cancel()
+    #expect(gate.timeoutReason == nil)
+}
+
+/// The other two reasons: nothing with depth ever arrived (a poll-driven timeout on a dead
+/// session), and depth + normal tracking seen but never three steady frames (a continuous sweep).
+@Test func timeoutReasonsTellDepthMissingFromUnsteady() {
+    var dead = DepthReadiness()
+    dead.begin(at: 0)
+    #expect(dead.frame(at: 1, trackingNormal: true, sceneDepthAvailable: false, reportTrusted: true) == .warming)
+    #expect(dead.poll(at: 5) == .timedOut)
+    #expect(dead.timeoutReason == .depthMissing)
+
+    var sweeping = DepthReadiness()
+    sweeping.begin(at: 0)
+    var t = 0.0
+    while t < 5 {
+        t += 1.0 / 30
+        // Depth and tracking fine; the sweep gate untrusts every frame.
+        _ = sweeping.frame(at: t, trackingNormal: true, sceneDepthAvailable: true, reportTrusted: false)
+    }
+    #expect(sweeping.state == .timedOut)
+    #expect(sweeping.timeoutReason == .depthUnsteady)
+
+    // An interruption mid-wait keeps the evidence: still "tracking limited", not "missing".
+    var dark = DepthReadiness()
+    dark.begin(at: 0)
+    _ = dark.frame(at: 1, trackingNormal: false, sceneDepthAvailable: true, reportTrusted: true)
+    dark.invalidate(at: 2)
+    #expect(dark.poll(at: 5) == .timedOut)
+    #expect(dark.timeoutReason == .trackingLimitedDepthLive)
+    // `begin` starts the count over.
+    dark.begin(at: 10)
+    #expect(dark.poll(at: 15) == .timedOut)
+    #expect(dark.timeoutReason == .depthMissing)
+}

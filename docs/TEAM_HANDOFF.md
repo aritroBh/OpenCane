@@ -400,7 +400,7 @@ first thing** (stress plan D17): it should name what is there.
 - **Install the graph tool once:** `uv tool install graphifyy` (or `pipx install graphifyy`); the
   command is `graphify`. The graph is committed in `graphify-out/`, so queries work right after a
   pull. The committed `graphify-out/GRAPH_REPORT.md` was rebuilt at Step 47 (Sat 2026-09-12
-  evening): 4,332 nodes, 9,962 edges, 219 communities, so it knows every Step 47 file
+  evening): 4,681 nodes, 10,872 edges, 216 communities (Step 49), so it knows every Step 47 file
   (`SceneEngineSummary`, `TorsoHapticPolicy`, `CaneKitIslandTour`). Compare it with
   `git rev-parse HEAD` and run `graphify update .` after any code change.
 - **Ask the knowledge graph first:** from the repo root, `graphify query "how does a curb warning reach

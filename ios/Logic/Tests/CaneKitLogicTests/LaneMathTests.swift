@@ -120,6 +120,24 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(g.torso[1] == 4)
 }
 
+/// Step 48: a cell whose samples are 0 / NaN (the LiDAR inside ~10 cm) reports `.infinity` as
+/// before — but its blind fraction says so, which is what `NearHold` keys on. A cell that read
+/// normally reports 0 blind.
+@Test func blindFractionIsReportedPerCell() {
+    // Left third all zero (saturated), the rest a clean 4 m wall.
+    let d = portraitBuffer { x, _ in x < 64 ? 0 : 4.0 }
+    let g = LaneMath.computeLanes(depth: d, confidence: nil, width: 256, height: 192)
+    #expect(g.head[0] == .infinity && g.torso[0] == .infinity)
+    #expect(g.headBlind[0] > 0.95 && g.torsoBlind[0] > 0.95)
+    #expect(g.headBlind[1] == 0 && g.torsoBlind[2] == 0)
+    #expect(g.torso[1] == 4)
+    // NaN counts as blind too, and a half-blind cell reports about a half.
+    let half = portraitBuffer { x, y in (x >= 64 && x < 128 && y >= 96 && y < 144) ? Float.nan : 4.0 }
+    let h = LaneMath.computeLanes(depth: half, confidence: nil, width: 256, height: 192)
+    #expect(abs(h.torsoBlind[1] - 0.5) < 0.1)
+    #expect(h.torso[1] == 4)                                   // still enough valid samples
+}
+
 /// A thin pole covering 20 % of a cell registers; a 5 % speck of noise does not.
 @Test func tenthPercentileNeedsMoreThanTenPercentOfCell() {
     // 20 % of the centre torso cell at 1 m → reports 1 m; 5 % → reports the 4 m background.

@@ -136,6 +136,12 @@ final class TripLogger {
         event("lanes", [
             "ar_t": Self.num(r.timestamp),          // ARKit's monotonic clock, for cue correlation
             "head": r.head.map(Self.num), "torso": r.torso.map(Self.num),
+            // Step 48 evidence for the point-blank hold: blind share per cell (0…1, 2 dp) and
+            // how many cells the hold substituted this frame (a count, not which — the held cells
+            // are the ones reading 0.1 / 0.8 m beside a high blind share; see NearHold.swift).
+            "head_blind": r.grid.headBlind.map { Self.num(Double(($0 * 100).rounded() / 100)) },
+            "torso_blind": r.grid.torsoBlind.map { Self.num(Double(($0 * 100).rounded() / 100)) },
+            "held": r.grid.headHeld.filter { $0 }.count + r.grid.torsoHeld.filter { $0 }.count,
             "trusted": r.isTrusted, "depth": r.depthAvailable,
             "tracking_normal": r.trackingNormal, "omega": Self.num(r.rotationRate),
             "frame_seq": r.frameSequence,

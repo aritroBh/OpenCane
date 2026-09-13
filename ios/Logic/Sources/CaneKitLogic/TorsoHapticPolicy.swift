@@ -176,6 +176,17 @@ public struct TorsoHapticPolicy: Sendable, Equatable {
                                 crossingSettle: Bool, now: TimeInterval) -> TorsoHapticAction? {
         if report.depthAvailable, report.isTrusted { record(report, now: now) }
         guard let output else { return nil }
+        // A point-blank hold (`NearHold`, a wall against the phone) renders at every level and
+        // place, like the head cue: Quiet or Indoors must not turn a held cell back into silence
+        // (Muse review, Step 48). Pinned by `pointBlankBypassesEveryTorsoHold`.
+        if case .fire(let cue) = output, cue.kind != .head, report.grid.torsoHeld.contains(true) {
+            centerLoopRendered = cue.kind == .center
+            return .render(cue)
+        }
+        if case .updateCenter = output, report.grid.torsoHeld[1] {
+            centerLoopRendered = true
+            if case .updateCenter(let d) = output { return .updateCenter(distance: d) }
+        }
 
         switch output {
         case .stop:

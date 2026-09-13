@@ -83,6 +83,10 @@ public enum CloudSceneGate {
         // Whitespace (newlines included) collapsed to single spaces: every rule below splits on " ".
         let text = sentence.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard text.contains(where: \.isLetter) else { return Verdict(sentence: nil, note: "refused: nothing left to say") }
+        // Step 49: the one sentence the prompt asks for when the frame is black. It has no noun,
+        // number, name or promise, so the rules below would pass it anyway; the explicit check
+        // makes the canonical spelling the one spoken (a model may drop the full stop or quote it).
+        if isTooDark(text) { return Verdict(sentence: tooDark, note: "spoken") }
 
         if let promise = reassurance(in: text) {
             return Verdict(sentence: nil, note: "refused: unsupported reassurance \"\(promise)\"")
@@ -106,6 +110,20 @@ public enum CloudSceneGate {
         guard !dropped.isEmpty else { return Verdict(sentence: short, note: "spoken") }
         let list = dropped.map { "\"\($0)\"" }.joined(separator: ", ")
         return Verdict(sentence: short, note: "edited: dropped count\(dropped.count > 1 ? "s" : "") \(list)")
+    }
+
+    // MARK: The too-dark answer (Step 49)
+
+    /// The sentence `ScenePrompt.text` asks the model for when it cannot see. Spoken as the answer
+    /// by `SceneDescriber` (with the LiDAR line in front, as for any sentence — the distance is
+    /// still measured), and never prefixed with the low-light caveat, which would say the same
+    /// thing twice. ⚠ Byte-identical to the prompt's "answer exactly" text. Pinned by
+    /// `tooDarkPassesTheGateUnchanged`.
+    public static let tooDark = "It is too dark to see."
+
+    /// True when `text` is `tooDark` modulo case, quotes and a missing or doubled full stop.
+    static func isTooDark(_ text: String) -> Bool {
+        SceneVocabulary.tokens(text) == ["it", "is", "too", "dark", "to", "see"]
     }
 
     // MARK: Rule d — reassurance the sensors cannot support

@@ -91,6 +91,11 @@ public struct LaneReport: Sendable, Equatable {
     /// How far the camera looks below the horizon, degrees (positive = down), smoothed over
     /// ~0.5 s at the normal 30 Hz publish rate; nil before the first frame. See `MountTilt`.
     public var cameraTiltDownDeg: Float?
+    /// ARKit's ambient light estimate for this frame, lux (`ARFrame.lightEstimate?.ambientIntensity`;
+    /// ~1000 = a well-lit room per Apple's docs); nil when ARKit gave none (the simulator, light
+    /// estimation off). Raw per frame — `LowLightPolicy` (Step 49) smooths and debounces it in
+    /// `AppModel.handle(_:)`; nobody else should act on a single frame's value.
+    public var ambientLux: Float?
 
     /// Every parameter defaults to the "no depth yet" state (empty grid, trusted, no data).
     public init(grid: LaneGrid = .empty,
@@ -102,7 +107,8 @@ public struct LaneReport: Sendable, Equatable {
                 frameSequence: Int = 0,
                 centerHit: MeshHit? = nil,
                 groundHazard: GroundHazard? = nil,
-                cameraTiltDownDeg: Float? = nil) {
+                cameraTiltDownDeg: Float? = nil,
+                ambientLux: Float? = nil) {
         self.grid = grid
         self.isTrusted = isTrusted
         self.rotationRate = rotationRate
@@ -113,6 +119,7 @@ public struct LaneReport: Sendable, Equatable {
         self.centerHit = centerHit
         self.groundHazard = groundHazard
         self.cameraTiltDownDeg = cameraTiltDownDeg
+        self.ambientLux = ambientLux
     }
 
     /// Shortcut for `grid.head` (metres; 0 left, 1 centre, 2 right).
