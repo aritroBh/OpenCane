@@ -232,6 +232,39 @@ public enum SpokenPhrases {
     /// ⚠ Pinned by `spokenPhrasesStayInsideTheCharacterBudget`.
     public static let warningCharacterBudget = 2_000
 
+    // MARK: The voice shell (Step 56)
+
+    /// Spoken when a listen ends with no words (`VoiceInputEngine`). ⚠ Byte-identical there.
+    public static let notHeardLine = "I did not catch that."
+
+    /// Spoken when "Where am I" is asked while a description is still in flight (`SceneDescriber`,
+    /// `ConversationCoordinator`). ⚠ Byte-identical there.
+    public static let describerBusyLine = "Still describing the previous scene."
+
+    /// Every fixed line the voice shell can speak, deduplicated, in the order it is heard: the menu
+    /// and help first (said at launch), then each item's confirmation, the three cue-level lines,
+    /// the latency filler and timeout, the emergency flow, the number-free status clauses, and the
+    /// shell's odd ones. `AppModel.commonLines` appends it, so every one is prefetched in the
+    /// natural voice. Built from the production constants, never retyped; the per-profile
+    /// emergency prompt is prefetched separately (it has a name and number in it).
+    /// Pinned by `everyLineTheShellCanSpeakIsPrefetched`, `shellLinesStayInsideTheirBudget`.
+    public static let shellLines: [String] = {
+        var lines = [VoiceMenu.menuLine, VoiceMenu.helpLine]
+        lines += VoiceMenu.Item.allCases.map(\.confirmationLine)
+        lines += CueLevel.allCases.map(\.spokenLine)
+        lines += [ConversationBudget.fillerLine, ConversationBudget.timeoutLine]
+        lines += EmergencyConfirm.fixedLines
+        lines += StatusSummary.fixedLines
+        lines += [notHeardLine, describerBusyLine, HeadCoverNotice.line]
+        var seen = Set<String>()
+        return lines.filter { seen.insert($0).inserted }
+    }()
+
+    /// Characters of ElevenLabs quota `shellLines` may cost, one time. The same reasoning as
+    /// `warningCharacterBudget`: a new family of shell lines should fail a test and be a decision.
+    /// ⚠ Pinned by `shellLinesStayInsideTheirBudget`.
+    public static let shellCharacterBudget = 1_500
+
     /// Total characters ElevenLabs would be billed for `lines` (its quota counts request text).
     /// - Parameter lines: the lines that would be synthesized.
     /// - Returns: the sum of their character counts.

@@ -90,11 +90,13 @@ extension AppModel {
     /// Priority `.scene` and a 20 s TTL: the answer is information, never a warning, so anything
     /// the sensors say outranks it, and a clause still waiting after 20 s of warnings is stale
     /// enough to drop. The battery clause is omitted when the level is unknown (simulator).
+    /// Step 54: the voice clause ("Natural voice ready." / "…warming up, 42 percent cached." / why
+    /// the system voice) follows the audio clause (`voiceFacts()`); the demo checklist gates on it.
     /// Logs `status_spoken {text}` with the whole report as one sentence.
     /// Callers: `StatusIntent` (Siri / Shortcuts / the Action button). `ConversationCoordinator`
     /// builds its own `StatusFacts` for voice status questions rather than calling this.
     func speakStatus() {
-        let facts = StatusFacts(
+        var facts = StatusFacts(
             lidarSupported: lidarSupported,
             obstacleDetectionRunning: depth.isRunning,
             depthFps: depth.fps,
@@ -113,6 +115,7 @@ extension AppModel {
             routeInstruction: nav.instruction,
             metresToNext: nav.distanceToNext,
             batteryPercent: batteryPercent)
+        facts.voice = voiceFacts()
         for line in StatusSummary.lines(facts) { speech.say(line, .scene, ttl: 20) }
         logger.event("status_spoken", ["text": StatusSummary.sentence(facts)])
     }

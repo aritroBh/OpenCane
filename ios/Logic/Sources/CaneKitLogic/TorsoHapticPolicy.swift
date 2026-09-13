@@ -194,8 +194,10 @@ public struct TorsoHapticPolicy: Sendable, Equatable {
             if centerClearSince == nil { centerClearSince = now }
             return .stop
 
-        case .fire(.head):
-            return .render(.head)                        // the safety floor: never gated
+        case .fire(.head(let d, let onset)):
+            // The safety floor: never gated, payload (distance, onset) passed through unchanged so
+            // `CueSpeechPolicy` still knows an onset from a band re-fire (Step 52).
+            return .render(.head(distance: d, onset: onset))
 
         // Every `HapticCue` case is named here on purpose (review, Step 47): a cue kind added later
         // must fail to compile, not fall into the centre logic by way of a catch-all.

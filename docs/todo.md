@@ -854,8 +854,35 @@ ground hazards (when on) speak their first confirmation; hush never touches any 
 - [ ] **cue-v2 #40** Speech budget: unsolicited non-safety lines ≥ 8 s apart, none while still or at a crossing; ground hazards pinned to `.safety`; beacon silent when still > 3 s
 - [x] **cue-v2 #41** (shipped as CHANGELOG Step 47) Torso haptics by level: Standard onset taps (1.5 m closing, 0.6 m strong triple), Detailed = today + shoreline suppression, Quiet none; no torso taps during a crossing settle — `TorsoHapticPolicy` (CaneKitLogic, 19 tests + `defaultRulesRenderTodaysHaptics`) over an untouched `CueDecider`; `HapticPlayer.playCenterOnset`; `cue` log gains `suppressed` / `render`, `cue_audit` counts them; Settings caption now true per level
   - [ ] Device: feel the Standard onset tap and the strong triple on the cane (the triple shares the right lane's 3-tap count — Standard has no side taps, but confirm it is not mistaken for "right" on the shaft); walk a hedge in Detailed and confirm the shoreline hush; stand at a crossing and confirm no torso taps
-- [ ] **cue-v2 #42** "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
+- [~] **cue-v2 #42** (mostly shipped as CHANGELOG Steps 51–52, **ON by default** — owner decision 2026-09-13; rig test still owed) "Calm head alerts (test on the cane first)", default off: per-cell sample validity in `LaneMath`, overhang signature (torso ≥ head + 0.5 m or no data), band re-fire (1.0 / 0.6 m), speech closing gate, same-overhang dedup; hanging-sign rig test 10/10 before it can default on
 - [ ] **cue-v2 #43** Hush: Watch double tap + app button + Siri, 60 s, non-safety speech and non-head haptics only, soft buzz on, "Cues back." off
 - [ ] **cue-v2 #44** "What's ahead?": LiDAR lanes + ARKit mesh class + ground hazard, no vision model; ≤ 3 items (≤ 5 Detailed), nearest first, doors / drop-offs before furniture
 - [ ] **cue-v2 #45** Indoor suggestion after 20 s of GPS accuracy > 30 m, once per 10 min, never switches by itself
-- Deferred (not scheduled): gravity-corrected metric head band; speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).
+- Deferred (not scheduled): ~~gravity-corrected metric head band~~ (shipped, Step 51); speed-scaled head distance; route distance updates every 15 m; in-app speech-rate override; AirPods stem-press hush (would take Now Playing from music).
+
+## Voice-first cane — Steps 51–61 (plan `glittery-floating-tiger`, 2026-09-13)
+
+- [x] **Step 56** IVR grammar on the phone: `VoiceMenu` (8 words + digits, whole utterance, help / menu lines, yes / no, next / standard / detailed), classifier rule 0, `ConversationAction` voice-shell cases, rule 12 before rule 8, `SpokenPhrases.shellLines` + completeness test, `StatusSummary.fixedLines`
+- [x] **Step 57** `ConversationBudget` + coordinator latest-wins (filler 1.5 s, timeout 4 s, stale results silent, `conv_turn` budget fields)
+- [x] **Step 58 (part 1)** `VoiceTile` giant microphone + compact row; `VoiceShellPolicy` / `ScenePhaseReason` pure; `UtteranceEndDetector(maxListen:)`; `scrollTo` in the three UI suites
+- [x] **Step 59 (part 1)** `EmergencyConfirm` + coordinator (prompt, 8 s window, yes → flush + `tel:`), `ProfilePage` uses `telDigits`
+- [ ] Part 2 (AppModel): `commonLines` += `SpokenPhrases.shellLines` (drop the first pass's two literal shell lines); delete the "Still working on your last question." branch; speak `VoiceMenu.menuLine` after "OpenCane ready." + `VoiceShellPolicy.launchListen`; follow-up window (`followUp`, `awaitingEmergencyAnswer`); prefetch `EmergencyConfirm.promptLine` at launch and on profile save; Settings toggles; `scene_phase` logging
+- [ ] `VoiceInputEngine` / `SceneDescriber`: speak `SpokenPhrases.notHeardLine` / `describerBusyLine` instead of their literals
+- [ ] Gate: `make test` (once the head-cue conversion compiles), `make uitest` with `scrollTo`, `make tour` pictures of the tile, `make e2e`
+- [ ] Device: "help", "four", "emergency" → "no", an open question under 4 s, the rings respond to the finger anywhere on them
+
+## Steps 53–55 — one voice, no self-hear (Sun Sep 13; plan `glittery-floating-tiger.md`)
+
+- [x] Step 51: metric lane bands — `LaneGeometry` (world-up row, cm: camera 95, floor < 25, head ≥ 140, cover 150), `LaneGrid.headCoverage` / `torsoCoverage` / `bandMode` (no cover = `.infinity` + flag), `DepthFrameProcessor` geometry, `TileLevel.noCover` + NO COVER tile, `MountTilt.status(downDeg:headCover:)` + `headCoverLimitDeg` (≈ 19°), `NearHold` covered cold start, `HeadCoverNotice` route-start line, `lanes {bands, head_cover, torso_cover}` + `depth_geometry`, `cue_audit.py head_cover` / `could_not_be_head`; `LaneGeometryTests` (16)
+- [x] Step 52: `HeadGate` overhang signature (ON; `Settings.bool("overhangSignature")` valve), head episode in `CueDecider` (onset at once, 1.0 / 0.6 m bands ≥ 1.5 s apart, 2 s trusted clear, sweep restarts the clock), `HapticCue.head(distance:onset:)`, `CueSpeechPolicy` onset + once under 0.6 m (no `cleared()`), `cue {distance, onset}`, island + describer through the gate, `cue_audit.py head_gate_replay`
+- [ ] Steps 51–52 on the phone: T3 (floor at 5° and 45°: no Geiger; Mount card + NO COVER at 45°), T4 at ≤ 15° (board at 1.7 m: one onset tap + line, ≤ 2 band taps, silence standing under it, wall → no "Head height."), `make audit --pull`: `bands: metric` on every `lanes`, `share_head_cover` ≈ 1 when re-angled; check `depth_geometry.up` orientation (portrait `upX` ≈ −cos θ)
+- [ ] Not done in 51–52: camera height calibrated from the ground plane (constant 95 cm); side-lane head threshold; onset closing gate / same-overhang dedup / standing-still rule (cue_design_v2 §3.2); ground detector at steep tilt (still 0–15°)
+- [x] Step 53: `VoiceEngineChoice` decided before `onDispatch`; `speech_dispatch {engine, engine_reason}`; `speech_engine` on race resolution; `AppModel.naturalVoiceEnabled` persisted; Settings "Voice" card; `cue_audit.py` engine flips (whole walk / inside route speech)
+- [x] Step 54: `immediate:` removed everywhere; session-sticky `VoiceBreaker` (`voice_breaker`); additive prefetch (`VoicePrefetch.merge`, one worker); `WalkingIntro.routeStarted` shared by `NavigationEngine.start` and the route-start prefetch; safety lines first at launch; `StatusSummary` voice clause; Scene engine "Voice" row
+- [x] Step 55: hold before the mic lease; `SpeechBufferBox` `Mutex<Bool>` pause + 0.3 s tail via `onSpeakingChanged`; `SelfHearFilter` on the final transcript; `voice_self_hear`
+  - [ ] Device: warm-up to "Natural voice ready." on venue Wi-Fi (time it); `make audit` engine flips inside route speech = 0 on a mounted walk
+  - [ ] Device: Wi-Fi off mid-walk → one flip, breaker open; Wi-Fi back → closes within ~60 s
+  - [ ] Device: "Head height." during dictation never becomes the query (`voice_self_hear`); tune `SelfHearFilter.window` / `tailSeconds` from `pause_ms`
+  - [ ] Later: cap `prefetchBacklog` if a long outage with many novel answers ever makes it large (unbounded today, grows only by lines actually spoken)
+  - [ ] Later: character budget — novel answers and status clauses now consume ElevenLabs characters (10,000 / month free tier); watch the account
+

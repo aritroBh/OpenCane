@@ -77,6 +77,7 @@ import AVFoundation
 import CaneKitLogic
 import CoreLocation
 import Observation
+import Speech
 import SwiftUI
 import UIKit
 
@@ -348,6 +349,43 @@ final class AppModel {
     var obstacleNamesEnabled: Bool = Settings.bool("obstacleNamesEnabled", default: false) {
         didSet { Settings.set(obstacleNamesEnabled, "obstacleNamesEnabled") }
     }
+    /// Settings → Voice: Natural (ElevenLabs, the one voice for every line — owner decision
+    /// 2026-09-13) or System (Apple's voice, the founder's valve for a venue with bad Wi-Fi). Default
+    /// Natural; persisted like every other switch (Step 53 moved it out of `SpeechQueue`'s own
+    /// UserDefaults key). Pushed into `speech.useNaturalVoice` in `start()` and on every change, and
+    /// each change logs `voice_backend {natural, by: "settings"}`. Without a key the picker is disabled
+    /// and the value is moot (`VoiceEngineReason.noKey` wins). ⚠ Not in
+    /// `LaunchRecovery.optionalFeatureKeys` (test-pinned): a voice choice cannot keep the app from starting.
+    var naturalVoiceEnabled: Bool = Settings.bool("useNaturalVoice", default: true) {
+        didSet {
+            Settings.set(naturalVoiceEnabled, "useNaturalVoice")
+            speech.useNaturalVoice = naturalVoiceEnabled
+            logger.event("voice_backend", ["natural": naturalVoiceEnabled, "by": "settings",
+                                           "key": speech.naturalVoice != nil])
+        }
+    }
+
+    /// The natural voice's readiness for `StatusSummary.voiceLine` (Step 54): key, picker, breaker and
+    /// the cached share of `voiceReadyLines` (a `stat` per line — called once per spoken status).
+    /// Caller: `speakStatus()`.
+    func voiceFacts() -> VoiceFacts {
+        VoiceFacts(hasKey: speech.naturalVoice != nil, naturalEnabled: naturalVoiceEnabled,
+                   breakerOpen: speech.naturalVoiceOffline,
+                   cachedShare: speech.cachedShare(of: Self.voiceReadyLines))
+    }
+    /// Whether OpenCane speaks the voice menu and starts listening at launch (disabled in automation).
+    var listenOnLaunch: Bool = Settings.bool("listenOnLaunch", default: true) {
+        didSet { Settings.set(listenOnLaunch, "listenOnLaunch") }
+    }
+    /// Whether OpenCane opens a 5-second follow-up listening window after assistant responses.
+    var voiceFollowUp: Bool = Settings.bool("voiceFollowUp", default: true) {
+        didSet { Settings.set(voiceFollowUp, "voiceFollowUp") }
+    }
+    /// True when running under XCUITest or automated muted test runs.
+    static var isAutomation: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["CANEKIT_UITEST"] == "1" || env["CANEKIT_MUTE"] == "1"
+    }
     /// Cue verbosity level (Settings → Cues). Persisted as `CueLevel.rawValue` under `cueLevel`.
     /// ⚠ Default `.detailed` = today's behaviour until a trip log from the MOUNTED cane tunes the
     /// calmer levels (owner decision 2026-09-12; AGENTS.md "How we engineer" 6). A change is
@@ -361,8 +399,20 @@ final class AppModel {
     var cuePlace: CuePlace = CuePlace(rawValue: Settings.string("cuePlace", default: CuePlace.outdoors.rawValue)) ?? .outdoors {
         didSet { cueProfileChanged(levelChanged: false, placeChanged: cuePlace != oldValue) }
     }
-    /// The rules the current level × place imply (CaneKitLogic `CueRules`, `CueProfileTests`).
-    var cueRules: CueRules { CueRules(level: cueLevel, place: cuePlace) }
+    /// The rules the current level × place imply (CaneKitLogic `CueRules`, `CueProfileTests`),
+    /// with the Step 52 overhang signature from `overhangSignatureEnabled`.
+    var cueRules: CueRules {
+        CueRules(level: cueLevel, place: cuePlace, requireOverhangSignature: overhangSignatureEnabled)
+    }
+    /// Step 52 valve for the head gate's overhang signature: ON unless `overhangSignature` is set
+    /// false in the defaults (owner decision 2026-09-13; no UI, so no hard rule 9 label). Read once
+    /// at launch: `cueRules` is read on every depth report.
+    @ObservationIgnored private let overhangSignatureEnabled = Settings.bool("overhangSignature", default: true)
+
+    /// Sets the cue verbosity level programmatically (e.g. from conversational IVR or watch).
+    func setCueLevel(_ level: CueLevel) {
+        self.cueLevel = level
+    }
 
     /// Persist, apply, speak and log a level or place change. Called only from the two `didSet`s;
     /// an unchanged value (a picker re-selecting its current segment) does nothing.
@@ -386,6 +436,7 @@ final class AppModel {
     private func applyCueRules() {
         let rules = cueRules
         decider.thresholds.head = rules.headEnterM
+        decider.thresholds.requireOverhangSignature = rules.requireOverhangSignature   // Step 52
         hazards.signAllowedPhrases = rules.allowedSignPhrases
         torsoPolicy.reset()
         haptics.stopAll()
@@ -1077,8 +1128,7 @@ final class AppModel {
 
     /// Handles a typed or dictated query from Shortcuts / Siri by forwarding it to
     /// `ConversationCoordinator.handleQuery` (fast-path commands first, then the model; answers at
-    /// `.scene`). Returns silently if a previous query is still processing (the coordinator's
-    /// `isProcessing` guard) — the push-to-talk path in `start()` speaks that case instead.
+    /// `.scene`). A query still in flight is superseded (latest wins, `ConversationBudget`, Step 57).
     /// - Parameter text: the query, already trimmed and non-empty.
     /// Callers: `TalkToOpenCaneIntent` (a query carried by the intent).
     func handleSpokenQuery(_ text: String) async {
@@ -1209,10 +1259,33 @@ final class AppModel {
         }
         // Every line handed to a voice backend, from any caller (`SpeechQueue.onDispatch`).
         // `resume_from` > 0: a cut line continuing from that UTF-16 offset (Step 37, `SpeechResume`).
-        speech.onDispatch = { [weak self] text, priority, replays, resumeFrom in
-            self?.logger.event("speech_dispatch", ["text": text, "priority": "\(priority)", "replays": replays,
-                                                   "resume_from": resumeFrom])
+        // Step 53: `engine` / `engine_reason` are `VoiceEngineChoice.decide`'s answer, made before this
+        // record; a `race` is settled by the `speech_engine` record below. Step 55: while listening,
+        // the line goes into the voice engine's self-hear history.
+        speech.onDispatch = { [weak self] text, priority, replays, resumeFrom, decision in
+            self?.logger.event("speech_dispatch", [
+                "text": text, "priority": "\(priority)", "replays": replays,
+                "resume_from": resumeFrom, "engine": decision.engine.rawValue,
+                "engine_reason": decision.reason.rawValue
+            ])
+            self?.voiceInput.noteDispatched(text)
         }
+        // How a race (or an mp3 that would not play) ended: `race_won` / `race_timeout` /
+        // `race_failed` / `playback_failed`, and how long the line waited (`SpeechQueue.onEngineResolved`).
+        speech.onEngineResolved = { [weak self] text, outcome, waitMs in
+            self?.logger.event("speech_engine", [
+                "text": text, "engine": VoiceEngineChoice.resolvedEngine(outcome).rawValue,
+                "engine_reason": outcome.rawValue, "wait_ms": waitMs
+            ])
+        }
+        // The session-sticky natural-voice breaker opening or closing (Step 54, `VoiceBreaker`).
+        speech.onBreakerChanged = { [weak self] open, reason in
+            self?.logger.event("voice_breaker", ["open": open, "reason": reason])
+        }
+        // The persisted Voice picker, before the first line can be dispatched (Step 53).
+        speech.useNaturalVoice = naturalVoiceEnabled
+        logger.event("voice_backend", ["natural": naturalVoiceEnabled, "by": "launch",
+                                       "key": speech.naturalVoice != nil])
         // A line's natural end, so the audit measures end → next start (`SpeechQueue.onLineEnd`).
         speech.onLineEnd = { [weak self] priority in
             self?.logger.event("speech_end", ["priority": "\(priority)"])
@@ -1230,7 +1303,7 @@ final class AppModel {
             // unavailable, the watch status remains the non-auditory proof that guidance may be
             // silent and the user must recover the route before trusting it.
             speech.say("Audio output is not ready. Guidance may be silent. Check OpenCane audio settings.",
-                       .safety, ttl: 30, immediate: true)
+                       .safety, ttl: 30)   // `.safety`: an uncached line is the system voice at once
             watch.send(status: "Audio output not ready", distanceM: -1)
             logger.event("audio_session", ["state": "startup_failed", "error": audioError])
         }
@@ -1298,12 +1371,10 @@ final class AppModel {
         voiceInput.onTranscriptionFinalized = { [weak self] transcript in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if self.conversation.isProcessing {
-                    self.speech.say("Still working on your last question.", .scene, ttl: 6)
-                } else {
-                    await self.conversation.handleQuery(transcript)
-                }
+                // Latest wins (Step 57): the coordinator cancels a cloud turn still in flight.
+                await self.conversation.handleQuery(transcript)
                 self.voiceInput.finishProcessing()
+                await self.openFollowUpListenIfWanted()
             }
         }
         voiceInput.shouldRestorePlaybackSession = { [weak self] in
@@ -1353,13 +1424,16 @@ final class AppModel {
         // utility task inside `prefetch`: it never touches the main actor and never delays launch,
         // and a failure only writes `speech.voiceError` (the system voice still speaks everything).
         speech.backgroundLines = SpokenPhrases.warningLines
-        speech.prefetch(Self.commonLines)
+        // Safety vocabulary first (Step 54): an uncached `.safety` line is the one case that still
+        // speaks in the system voice by design, so it is requested before anything else.
+        speech.prefetch(Self.voiceReadyLines)
         if !cameraDenied {
             // ⚠ "OpenCane ready." is also in `Self.commonLines` above; the two must stay
             // byte-identical or this first line misses the ElevenLabs disk cache and the walker
             // hears Apple's system voice instead. The product is called OpenCane to a human; the
             // code, module and bundle id are still CaneKit (AGENTS.md → "The name split").
             speech.say(lidarSupported ? "OpenCane ready." : "OpenCane. This phone has no LiDAR.", .nav)
+            speakMenuThenListen()
         }
         announceLaunchRecovery()
         // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
@@ -1371,6 +1445,114 @@ final class AppModel {
         // What this phone's cameras could do *together* — a capability read, no session started,
         // off the main thread, one `multicam_depth` record. See `MultiCamDepthProbe`.
         logMultiCamDepthProbe()
+    }
+
+    // MARK: Voice shell (Steps 58, 60)
+
+    /// Launch: speak the voice menu, wait for the queue to drain, then open the microphone once —
+    /// the walker hears what to say and can say it without touching the phone (owner decision
+    /// 2026-09-13: "when you pop open the app it should automatically start speaking … and start
+    /// hearing"). The menu is `.nav` so any warning cuts it. `VoiceShellPolicy.launchListen` decides;
+    /// the permission inputs are "not refused" rather than "granted": on a first launch the owner
+    /// wants the microphone and speech prompts to appear right away, because the voice shell is the
+    /// app. Never under automation (`SpeechQueue.muted`), so UI tests and e2e stay silent and prompt-free.
+    /// Logs `voice_menu {action: spoken | skipped, reason}`. Caller: `start()`, after "OpenCane ready.".
+    private func speakMenuThenListen() {
+        guard !SpeechQueue.muted else {
+            logger.event("voice_menu", ["action": "skipped", "reason": "muted"])
+            return
+        }
+        speech.say(VoiceMenu.menuLine, .nav, ttl: 20)
+        logger.event("voice_menu", ["action": "spoken"])
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.waitForSpeechToDrain()
+            let speech = SFSpeechRecognizer.authorizationStatus()
+            let mic = AVAudioApplication.shared.recordPermission
+            let verdict = VoiceShellPolicy.launchListen(
+                enabled: self.listenOnLaunch, muted: SpeechQueue.muted,
+                speechAuthorized: speech != .denied && speech != .restricted,
+                micGranted: mic != .denied,
+                micOwnedElsewhere: self.sounds.ownsMicrophoneSession,
+                recoveredLaunch: Settings.launchMode == .recovered,
+                cameraDenied: AVCaptureDevice.authorizationStatus(for: .video) == .denied)
+            switch verdict {
+            case .listen:
+                guard !self.voiceInput.isListening, !self.voiceInput.isStarting else { return }
+                self.logger.event("voice_listen", ["mode": "launch"])
+                self.voiceInput.startListening(windowSeconds: UtteranceEndDetector.maxListen)
+            case .skip(let reason):
+                self.logger.event("voice_menu", ["action": "skipped", "reason": reason])
+            }
+        }
+    }
+
+    /// After an answer: once it has finished speaking, open a short listening window if
+    /// `VoiceShellPolicy.followUp` says so (idle only by default; always after the emergency
+    /// prompt, which needs a yes or no). Logs `voice_followup {action, reason | seconds}`.
+    /// Caller: the `onTranscriptionFinalized` wiring in `start()`.
+    private func openFollowUpListenIfWanted() async {
+        await waitForSpeechToDrain()
+        guard !voiceInput.isListening, !voiceInput.isStarting, !SpeechQueue.muted else { return }
+        let verdict = VoiceShellPolicy.followUp(enabled: voiceFollowUp, navigating: nav.isNavigating,
+                                                navigatingEnabled: false,
+                                                queuedLines: speech.queuedLineCount,
+                                                answerWasQuestion: conversation.awaitingEmergencyAnswer)
+        switch verdict {
+        case .open(let seconds):
+            logger.event("voice_followup", ["action": "opened", "seconds": seconds])
+            voiceInput.startListening(windowSeconds: seconds)
+        case .skip(let reason):
+            logger.event("voice_followup", ["action": "skipped", "reason": reason])
+        }
+    }
+
+    /// Waits until nothing is speaking and nothing is queued, at most `VoiceShellPolicy.menuWaitCap`
+    /// seconds, plus `SelfHearFilter.tailSeconds` so the recogniser does not open on the last word.
+    private func waitForSpeechToDrain() async {
+        let deadline = Date().addingTimeInterval(VoiceShellPolicy.menuWaitCap)
+        while Date() < deadline, speech.isSpeaking || speech.queuedLineCount > 0 {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .seconds(SelfHearFilter.tailSeconds))
+    }
+
+    /// Set by `protectedDataWillBecomeUnavailableNotification` (the phone is locking); cleared when
+    /// the app is active again. Read by `logScenePhase`.
+    @ObservationIgnored private var sawProtectedDataLoss = false
+    /// The lock observer's token, registered once by `logScenePhase`'s first call.
+    @ObservationIgnored private var protectedDataObserver: NSObjectProtocol?
+
+    /// One `scene_phase {phase, reason, navigating, idle_timer_disabled, guided_access, low_power,
+    /// protected_data}` record per transition (Step 60): the evidence for "the walk ended because the
+    /// phone locked". Re-asserts `isIdleTimerDisabled` on `.active`. Caller: `scenePhaseChanged`.
+    private func logScenePhase(_ phase: ScenePhase) {
+        if protectedDataObserver == nil {
+            protectedDataObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.sawProtectedDataLoss = true
+                    self?.logger.event("scene_phase", ["phase": "will_lock", "reason": "locked"])
+                }
+            }
+        }
+        let mirrored: ScenePhaseReason.Phase = phase == .active ? .active : (phase == .inactive ? .inactive : .background)
+        let app = UIApplication.shared
+        let idleWasDisabled = app.isIdleTimerDisabled
+        logger.event("scene_phase", [
+            "phase": "\(phase)",
+            "reason": ScenePhaseReason.classify(phase: mirrored, protectedDataAvailable: app.isProtectedDataAvailable,
+                                                sawProtectedDataWillBecomeUnavailable: sawProtectedDataLoss),
+            "navigating": nav.isNavigating, "idle_timer_disabled": idleWasDisabled,
+            "guided_access": UIAccessibility.isGuidedAccessEnabled,
+            "low_power": ProcessInfo.processInfo.isLowPowerModeEnabled,
+            "protected_data": app.isProtectedDataAvailable,
+        ])
+        if phase == .active {
+            sawProtectedDataLoss = false
+            app.isIdleTimerDisabled = true
+        }
     }
 
     // MARK: Launch health (an optional feature may never stop the app from starting)
@@ -1529,6 +1711,7 @@ final class AppModel {
     /// process is suspended. `.inactive` does nothing (a notification pull-down must not pause).
     func scenePhaseChanged(_ phase: ScenePhase) {
         guard started else { return }
+        logScenePhase(phase)
         switch phase {
         case .active:
             haptics.resume()
@@ -1608,7 +1791,8 @@ final class AppModel {
             haptics.stopAll()
             decider.reset()
             torsoPolicy.reset()              // its closing / shoreline history is as stale as the zones
-            cueSpeech.cleared()              // a new foreground is a new episode: speak the first head cue
+            // `decider.reset()` ended the head episode: the first head cue after foreground is an
+            // onset and speaks (Step 52; `CueSpeechPolicy` has no `cleared()` any more).
             namer.reset()
             activeCue = .clear
             logger.flush()
@@ -1733,8 +1917,7 @@ final class AppModel {
                 // change) no centre update would arrive to end a running Geiger loop: stop it
                 // first, then render the head (Codex review, Step 47). `stopAll` never touches the
                 // head pattern that follows.
-                if cue.kind == .head, activeCue == .center,
-                   torsoPolicy.torsoIsHeld(rules: cueRules, crossingSettle: nav.isCrossingSettle) {
+                if activeCue == .center, cue.kind != .center {
                     haptics.stopAll()
                 }
                 activeCue = cue.kind
@@ -1743,6 +1926,9 @@ final class AppModel {
                 // Field "cue", not "kind": "kind" is the record type (TripLogRecord reserves it).
                 var fields: [String: Any] = ["cue": cue.kind.rawValue, "ar_t": report.timestamp]
                 if case .centerApproach(let d) = cue { fields["distance"] = Double(d) }
+                // Step 52: the gated head distance and whether this fire opened the episode
+                // (`cue_audit.py` counts onsets vs band re-fires).
+                if case .head(let d, let onset) = cue { fields["distance"] = Double(d); fields["onset"] = onset }
                 logger.event("cue", fields)
             case .centerOnset(let strong, let d):
                 // Standard: one tap (< 1.5 m, closing) or the strong triple (< 0.6 m, closing),
@@ -1765,7 +1951,8 @@ final class AppModel {
             case .stop:
                 activeCue = .clear
                 haptics.stopAll()
-                cueSpeech.cleared()              // the next head cue is a new episode
+                // A stop no longer ends the head speech episode: the decider's episode does, after
+                // 2 s of trusted clear (Step 52).
                 logger.event("cue", ["cue": "clear"])
             case .suppressed(let cue, let reason):
                 // The level, place or crossing settle renders nothing for this torso cue: no
@@ -1802,12 +1989,26 @@ final class AppModel {
             groundHazardFound(g, now: report.timestamp)
         }
         sceneContext.set(Self.contextLine(report))
+        noteDepthGeometry(report)
+        // Step 51: once per route, after 2 s of trusted metric frames with no head lane covered,
+        // say so (the mount is too steep to see head height). Logged as `head_cover`, not
+        // `speech` (e2e.py asserts on `speech`; `speech_dispatch` still records the utterance).
+        if nav.isNavigating,
+           headCoverNotice.update(metric: report.grid.bandMode == .metric, trusted: report.isTrusted,
+                                  headCovered: report.grid.headCoverage.contains(true), now: report.timestamp) {
+            speech.say(HeadCoverNotice.line, .nav, ttl: 10)
+            logger.event("head_cover", ["state": "none", "text": HeadCoverNotice.line,
+                                        "tilt": report.cameraTiltDownDeg.map { Double($0) } ?? -1])
+        }
         // Island glance while standing still (no GPS fix drives `liveActivity.update` then): a
         // point-blank hold or a head cell change is pushed from the depth path, throttled by the
         // coalescer's hazard rules (Muse review, Step 48).
         if nav.isNavigating {
             let anyHeld = report.grid.headHeld.contains(true) || report.grid.torsoHeld.contains(true)
-            let headNear = report.grid.head.contains { $0 < decider.thresholds.head }
+            // Same gate as the haptic and the describer (Step 52): covered cells, overhang signature.
+            let t = decider.thresholds
+            let headNear = HeadGate.candidate(in: report.grid, enter: t.head,
+                                              overhangGap: t.requireOverhangSignature ? t.overhangGapM : nil) != nil
             let status: LiveActivityObstacleGlance = headNear ? .head : (anyHeld ? .warning : .clear)
             if status != lastIslandGlance {
                 lastIslandGlance = status
@@ -1838,8 +2039,7 @@ final class AppModel {
         faceHead.stop()
         guard nav.isNavigating else { return }
         depthSafetyDegraded = true
-        decider.reset()
-        cueSpeech.cleared()
+        decider.reset()                  // also ends the head episode (Step 52)
         namer.reset()
         haptics.stopAll()
         activeCue = .clear
@@ -1879,16 +2079,51 @@ final class AppModel {
         speakCueIfNeeded(cue, phoneCannotBuzz: phoneCannotBuzz, now: now)
     }
 
+    /// Step 51: the once-per-route "Camera too steep for head-height cover. Torso obstacles only."
+    /// (`HeadCoverNotice`, CaneKitLogic). `routeStarted()` in `startRouteNow`, `update` in `handle`.
+    @ObservationIgnored private var headCoverNotice = HeadCoverNotice()
+
+    /// Intrinsics (fx, fy, cx, cy, rounded to 0.1 px) of the last `depth_geometry` record, so the
+    /// record is written once per distinct set, not per frame (the pose part changes every frame).
+    @ObservationIgnored private var loggedGeometryKey: [Float]?
+
+    /// Step 51: log a `depth_geometry` record when the metric bands' intrinsics first appear or
+    /// change — the evidence for re-bucketing a trip log offline (`cue_audit.py`) and for checking
+    /// the portrait orientation on hardware. Heights in centimetres (owner decision 2026-09-13).
+    /// Fields: `fx`, `fy`, `cx`, `cy` (depth-map px), `up` (the world-up components at that
+    /// frame), `pitch_deg`, `cam_h_cm`, `floor_max_cm`, `head_min_cm`, `cover_range_cm`,
+    /// `half_fov_long_deg`, `head_cover_limit_deg`. Called from `handle(_:)` on every report.
+    private func noteDepthGeometry(_ report: LaneReport) {
+        guard let g = report.geometry else { return }
+        let key = [g.fx, g.fy, g.cx, g.cy].map { ($0 * 10).rounded() / 10 }
+        guard key != loggedGeometryKey else { return }
+        loggedGeometryKey = key
+        let lane = LaneConfig()
+        let halfFov = g.fx > 0 ? Double(atan(g.cx / g.fx)) * 180 / .pi : 0
+        logger.event("depth_geometry", [
+            "fx": Double(g.fx), "fy": Double(g.fy), "cx": Double(g.cx), "cy": Double(g.cy),
+            "up": [Double(g.upX), Double(g.upY), Double(g.upZ)],
+            "pitch_deg": Double(g.pitchDownDeg),
+            "cam_h_cm": Double(lane.cameraHeightCm), "floor_max_cm": Double(lane.floorMaxHeightCm),
+            "head_min_cm": Double(lane.headMinHeightCm), "cover_range_cm": Double(lane.coverageRangeCm),
+            "half_fov_long_deg": halfFov,
+            "head_cover_limit_deg": Double(MountTilt.headCoverLimitDeg(
+                cameraHeightCm: lane.cameraHeightCm, headMinHeightCm: lane.headMinHeightCm,
+                coverageRangeCm: lane.coverageRangeCm, halfFovDeg: Float(halfFov))),
+        ])
+    }
+
     /// Last obstacle glance pushed to the island from the depth path (`handle`), so a standing
     /// walker's island changes on the transition only. Reset at route start.
     @ObservationIgnored private var lastIslandGlance: LiveActivityObstacleGlance = .clear
 
     /// Which obstacle cues are also spoken (CaneKitLogic.CueSpeechPolicy, unit-tested).
-    /// Replaced with a fresh value at every `startRouteNow`; `cleared()` on the decider's `.stop`,
-    /// on `.background` and when both cameras pause ARKit.
+    /// Replaced with a fresh value at every `startRouteNow`. The head episode it speaks for is the
+    /// decider's (Step 52): onset → "Head height.", once more under 0.6 m.
     @ObservationIgnored private var cueSpeech = CueSpeechPolicy()
 
-    /// Voice channel for obstacle cues. "Head height." is spoken once per obstacle episode (plan:
+    /// Voice channel for obstacle cues. "Head height." is spoken at the head onset and once more
+    /// under 0.6 m in the same episode (Step 52; the decider's `HeadEpisode`) (plan:
     /// "the .head cue must never be suppressed" — an overhanging sign has no mesh class and the
     /// clamp may damp the tap), never re-spoken every few seconds under the same branch (that
     /// cut crossing lines to pieces). Left / right / ahead are spoken only when the phone cannot
@@ -1897,7 +2132,8 @@ final class AppModel {
     /// everything else to `.obstacle`. `now` is the AR clock.
     /// ⚠ Do not add a further suppression path for `.head` without a device head-height test and
     /// re-running `NavSupportTests` (`headHeightIsSpokenOncePerEpisode`,
-    /// `headEpisodesAreRateLimitedAcrossEpisodes`, `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`).
+    /// `headEpisodesAreRateLimitedAcrossEpisodes`, `secondHeadLineNeedsUnderSixtyCentimetres`,
+    /// `sideCuesAreSpokenOnlyWhenThePhoneCannotBuzz`).
     private func speakCueIfNeeded(_ cue: HapticCue, phoneCannotBuzz: Bool, now: TimeInterval) {
         guard let (text, tier) = cueSpeech.line(for: cue, phoneCannotBuzz: phoneCannotBuzz, now: now) else { return }
         let priority: SpeechPriority = tier == .safety ? .safety : .obstacle
@@ -2026,8 +2262,7 @@ final class AppModel {
                 self.depth.pause()              // the AR session must let the cameras go
                 self.haptics.stopAll()
                 self.decider.reset()
-                self.torsoPolicy.reset()
-                self.cueSpeech.cleared()
+                self.torsoPolicy.reset()        // `decider.reset()` above ended the head episode
                 self.namer.reset()
                 self.activeCue = .clear
                 self.sceneContext.set("")
@@ -2363,7 +2598,9 @@ final class AppModel {
     /// on-device hazard labels permanently open (review round 5).
     /// Pure (no `self`), so `static`: `handle(_:)` writes it into `sceneContext` on every report,
     /// and a non-empty line is also the on-device hazard watch's "LiDAR sees something" gate.
-    /// Thresholds: 3 m for "ahead", 1.5 m for head height (the outdoor head threshold).
+    /// Thresholds: 3 m for "ahead", 1.5 m for head height (the outdoor head threshold). Head height
+    /// goes through `HeadGate` (Step 52: covered cells, overhang signature, any lane), so the
+    /// describer never says "Something at head height." for a wall or a band the camera cannot see.
     static func contextLine(_ r: LaneReport) -> String {
         guard r.depthAvailable else { return "" }
         var parts: [String] = []
@@ -2372,7 +2609,10 @@ final class AppModel {
         if ahead.isFinite, ahead < 3 {
             parts.append("\(SpokenDistance.leadingCapitalized(SpokenDistance.phrase(ahead))) ahead, obstacle.")
         }
-        if r.head.count == 3, r.head[1].isFinite, r.head[1] < 1.5 { parts.append("Something at head height.") }
+        let t = CueThresholds()
+        if HeadGate.candidate(in: r.grid, enter: t.head, overhangGap: t.overhangGapM) != nil {
+            parts.append("Something at head height.")
+        }
         if let g = r.groundHazard { parts.append(g.spokenLine) }
         if let hit = r.centerHit, let name = hit.classification.spokenName {
             parts.append("The obstacle ahead looks like a \(name).")
@@ -3091,9 +3331,12 @@ final class AppModel {
                 guard isCurrent() else { return }
                 self.logger.event("destination", ["name": planned.placeName, "meters": planned.walkingMeters,
                                                   "waypoints": planned.route.waypoints.count])
-                self.beginRoute(planned.route,
-                                announce: WalkingIntro.line(place: planned.placeName, meters: planned.walkingMeters,
-                                                            accuracyM: fix.accuracy))
+                let announce = WalkingIntro.line(place: planned.placeName, meters: planned.walkingMeters,
+                                                 accuracyM: fix.accuracy)
+                // Step 54: the first things the walker hears on this route, into the natural-voice
+                // backlog the moment MapKit answers (the depth wait in `queueRouteStart` adds the rest).
+                self.speech.prefetch(Self.routeStartLines(planned.route, announce: announce))
+                self.beginRoute(planned.route, announce: announce)
             } catch {
                 guard isCurrent() else { return }
                 self.routeError = error.localizedDescription
@@ -3273,6 +3516,9 @@ final class AppModel {
         "OpenCane ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
         "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
         "No route running.", "No GPS fix yet. Try again outside.",
+        // Step 54: the empty-transcript line (`VoiceInputEngine.stopListeningAndSubmit`) lost
+        // `immediate: true`; cached here so it is the natural voice at once. ⚠ Byte-identical.
+        "I did not catch that.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         "Obstacle detection warming up. Route will start when it is ready.", "Route start canceled.",
         "Obstacle detection warming up. Guiding with GPS.",
@@ -3288,6 +3534,9 @@ final class AppModel {
         "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
         "Finish the sensor self-test before starting a route.",
         "Obstacle detection is back.",
+        // Step 51: the route-start admission that the mount is too steep to see head height
+        // (`HeadCoverNotice.line`, `.nav`). ⚠ Byte-identical to `HeadCoverNotice.line`.
+        "Camera too steep for head-height cover. Torso obstacles only.",
         "Wait for the camera transition to finish.",
         "Sensor settings cannot change while a route is starting. Wait for obstacle detection to be ready.",
         "Sensor settings cannot change while a route is guiding you. Stop the route first.",
@@ -3303,10 +3552,34 @@ final class AppModel {
         // Every flashlight line (`TorchSwitch.allSpokenLines`, pinned to the outcomes by
         // `TorchSwitchTests.allSpokenLinesMatchOutcomes`): toggle feedback never waits on a fetch.
         + TorchSwitch.allSpokenLines
+        // Every fixed line the voice shell can speak (Steps 56–59): menu, help, confirmations,
+        // "One moment.", the timeout, the emergency fixed lines, the number-free status clauses.
+        // Pinned by `SpokenPhrasesTests.everyLineTheShellCanSpeakIsPrefetched`.
+        + SpokenPhrases.shellLines
         // The two low-light lines (`LowLightAdvice.allSpokenLines`, Step 49, pinned by
         // `LowLightTests.adviceSpeaksOncePerEpisode`): spoken at `.nav` the moment the dark is
         // confirmed, so they must not wait on a fetch either.
         + LowLightAdvice.allSpokenLines
+
+    /// Every `.safety` line the app can speak (Step 54): "Head height." and the LiDAR ground-hazard
+    /// lines. First in the launch prefetch, because an uncached `.safety` line is the one case that
+    /// still comes out in the system voice by design (warnings never wait for the network).
+    static let safetyLines = ["Head height."] + SpokenPhrases.groundHazardLines
+
+    /// The launch vocabulary whose cached share is the "voice ready" fact (`voiceFacts()`,
+    /// `StatusSummary.voiceLine`) and the launch prefetch: `safetyLines`, then `commonLines`.
+    static let voiceReadyLines = safetyLines + commonLines
+
+    /// What a route start says first, in speaking order: the MapKit announce ("Walking to …", nil for
+    /// the demo route), the intro (`WalkingIntro.routeStarted`, the exact bytes `NavigationEngine.start`
+    /// speaks) and every waypoint line. Prefetched by `buildRoute`, `queueRouteStart` and
+    /// `startRouteNow` (Step 54; the old copy of the intro string here missed on every cold cache).
+    /// - Parameters:
+    ///   - route: the route about to start.
+    ///   - announce: `beginRoute`'s announce line, if any.
+    static func routeStartLines(_ route: Route, announce: String?) -> [String] {
+        (announce.map { [$0] } ?? []) + [WalkingIntro.routeStarted(route)] + route.waypoints.map(\.say)
+    }
 
     /// Shared entry for both route sources (the bundled demo route and every MapKit build).
     /// Order: tear down a route already guiding (`endRouteQuietly`) → refuse a denied Location
@@ -3379,6 +3652,9 @@ final class AppModel {
         routeStartGeneration &+= 1
         let generation = routeStartGeneration
         pendingRouteStart = PendingRouteStart(route: route, announce: announce)
+        // Step 54: the depth wait is the free window to put the announce, the intro and every
+        // waypoint line on disk, so the route's first line plays in the natural voice.
+        speech.prefetch(Self.routeStartLines(route, announce: announce))
         reserveSensorModeRouteStart()
         routeStartWaiting = true
         routeStartStatus = "Obstacle detection warming up. Route will start when it is ready."
@@ -3576,16 +3852,12 @@ final class AppModel {
         groundPolicy.reset()
         lockWarningGiven = false
         lastGroundHazard = nil               // a new route must not show the last route's drop-off
-        // Every waypoint line and the route intro, synthesized now so they play instantly. The
-        // route's own lines go first because waypoint 1 is needed in seconds; whatever is left of
-        // `speech.backgroundLines` (the warning set) follows on the same two-request budget.
-        // Standing for the whole walk, not just this batch: `prefetch` cancels the batch before it,
-        // and every obstacle warning that misses the cache starts a new one. Without this the first
-        // warning the walker hears would throw away every waypoint line still unsynthesized, and the
-        // next turn instruction would arrive late, in the wrong voice, at a street corner.
+        // Every waypoint line stays in the prefetch's standing tail for the whole walk
+        // (`speech.routeLines`, ahead of the warning set). `queueRouteStart` / `buildRoute` already
+        // queued the intro during the depth wait; this call covers the degraded paths (no LiDAR,
+        // camera denied) and is additive (Step 54) — a repeat of a queued line costs nothing.
         speech.routeLines = route.waypoints.map(\.say)
-        speech.prefetch(route.waypoints.map(\.say) + Self.commonLines
-                        + ["Route started. \(route.name). First: \(route.waypoints.first?.say ?? "")"])
+        speech.prefetch(Self.routeStartLines(route, announce: announce))
         location.start()
         location.setNavigating(true)
         // Step 47: Always lets the route run with the screen locked without the blue location pill
@@ -3610,6 +3882,7 @@ final class AppModel {
         recenterPending = true               // first straight stretch zeroes the head reference
         straightWalk.reset()
         cueSpeech = CueSpeechPolicy()
+        headCoverNotice.routeStarted()       // Step 51: "Camera too steep…" may be said once on this route
         torsoPolicy.reset()                  // a new walk starts with both Standard onsets armed (Codex review)
         lastIslandGlance = .clear
         startTicker()

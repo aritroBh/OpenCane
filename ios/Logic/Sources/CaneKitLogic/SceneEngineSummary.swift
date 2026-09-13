@@ -54,6 +54,8 @@ public enum DescribeTrigger: String, Sendable, CaseIterable, Codable {
     case waypoint
     /// "Ask OpenCane …" — a question about the frame, not a plain description.
     case question
+    /// The voice shell (Step 56): "where am I" / "describe" / two / three, spoken to the app itself.
+    case voice
 
     /// The phrase after "from" on the card and in VoiceOver. Pinned by `triggerWordsAreSpoken`.
     public var spoken: String {
@@ -64,6 +66,7 @@ public enum DescribeTrigger: String, Sendable, CaseIterable, Codable {
         case .cameraControl: return "Camera Control"
         case .waypoint: return "a waypoint"
         case .question: return "a question"
+        case .voice: return "the voice menu"
         }
     }
 }

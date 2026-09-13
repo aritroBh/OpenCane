@@ -19,6 +19,17 @@ trust any of it.
    height at the 1.5 m head-cue distance. The ground-hazard detector *is* gravity-aligned and
    still gets its near-field reference at 5° (section 4). Pitching steeper needs a software
    change first (section 13).
+
+   > **Update 2026-09-13 (software Step 51).** The first cane walk held the phone at **45° down**
+   > (trip log `canekit-2026-09-13T04-36-32Z`, tilt median 45.3°), and the row bands then read
+   > knee-high things as "head" and the floor as "torso". `LaneMath` now gravity-corrects: every
+   > depth sample is bucketed by its height above the ground (camera 95 cm; floor < 25 cm dropped;
+   > head ≥ 140 cm), so pavement is never an obstacle at any pitch. The 3–8° window is no longer a
+   > lane requirement. What remains: **head-height cover ends at ≈ 19° down** (the top ray must
+   > reach 140 cm at 1.5 m; `MountTilt.headCoverLimitDeg`) and the ground detector still wants
+   > 0–15°. At 45° the app covers torso only and says so (Mount card "too steep for head-height
+   > cover", NO COVER head tiles, one spoken line at route start). 5° is still the recommended
+   > hinge setting; anything up to ~15° keeps head cover.
 2. **Hinge angle φ = 90° − cane angle + camera pitch.** For a cane held 45° above horizontal,
    φ = 50°. The hinge is a 72-tooth face rosette, which gives 5° detents. Its usable range is
    35–80°, and an angle scale is engraved on the ear.
@@ -74,7 +85,7 @@ drawing.
 | Software fact (file) | Consequence for the mount |
 |---|---|
 | `LaneMath` portrait remap (`rotateForPortrait = true`); Mount toggle "Phone held upright (portrait)" | Phone upright in portrait, top up, rear camera facing forward. |
-| `LaneMath` skips the bottom 25 % of the image as ground. Head band = rows 0–37.5 %, torso = 37.5–75 %. 10th-percentile depth per cell. No gravity correction. | The camera pitch must be small, 3–8° down (section 4). |
+| `LaneMath` (since Step 51, 2026-09-13): each sample bucketed by height above ground from the ARKit pose — floor < 25 cm dropped, torso 25–140 cm, head ≥ 140 cm; a band not visible at 1.5 m reports NO COVER. Before the first pose only: the old rows (bottom 25 % skipped, head 0–37.5 %, torso 37.5–75 %). 10th-percentile depth per cell. | Pitch ≤ ~15° down for head-height cover (limit ≈ 19°, section 4 note); pavement no longer caps the pitch. |
 | `CueDecider`: head < 1.5 m, centre < 2.0 m (clears at 2.15), side < 1.2 m | Pavement must read above ~2.2 m in the torso band. A 1.8 m overhang must still be in the head band 1.5 m away. |
 | `GroundSampler` + `GroundHazardDetector`: gravity-aligned; needs ≥ 12 samples 0.8–1.5 m ahead as the ground reference; scans 1.5–3.5 m; ignores depth < 0.3 m (the cane shaft) and > 4.5 m | The ground from ~1.2 m out must be in view, which holds at ≥ 3° down. A shaft in view closer than 0.3 m is harmless. |
 | Sweep gate: frames with \|gyro\| ≥ 0.6 rad/s are untrusted (`ios/README.md` §6) | A wobbly mount adds gyro spikes and loses frames, so the mount must be stiff. |
@@ -154,6 +165,12 @@ walking, and the sweep gate drops the worst frames. So the target is **5°** and
 in `CaneKitLogic`, with a test, and accept a lower head band. The better fix is a gravity-aware
 ground cut in `LaneMath` that uses the ARKit camera pitch. Either is a Logic change for Aritro
 (AGENTS.md rule 3). The mount can already reach those angles.
+
+> **Update 2026-09-13 (Step 51): the gravity-aware cut shipped.** The "Torso band reads bare
+> pavement" and "`groundSkipFraction` needed" columns above describe the old row bands and apply
+> only before ARKit has a pose. With metric bands the pitch limit comes from head cover alone: the
+> top ray (half FOV 33.5°) reaches 140 cm at 1.5 m of z-depth up to θ = acos(0.3 · cos 33.5°) −
+> 56.5° ≈ 19°. 10–15° is now fine for the lanes and gives the ground detector more near field.
 
 ---
 
@@ -333,8 +350,8 @@ Run in order. Record pass/fail and numbers in `CHANGELOG.md` under "test on devi
 | T0 | **Fit.** Coupons read (bore ring, corner clearance, rosette mesh). Collar doesn't turn under a firm two-hand twist. Phone slides in and the cap fits; no rattle when shaken by hand. Action, volume and side buttons press through their windows; the full screen is visible. Guided Access: triple-click the side button in OpenCane works through the window. Camera Control can't take the app away: Guided Access blocks it, and also turn off or remap Camera Control's launch in Settings (verify on this iOS 27 build). Check that the Action button still reaches "Where am I" under Guided Access. | All yes |
 | T1 | **Angle.** The walker holds the cane in their normal pose. A second phone's Measure → Level laid along the shaft reads c. Set φ = 90 − c + 5. | φ set, witness mark drawn |
 | T2 | **Wall at 1 m** (from `ios/README.md` go/no-go). Face a flat wall, phone back 1.0 m from it. | All six tiles read 0.8–1.2 m |
-| T3 | **Empty floor** (pitch check). Flat floor, ≥ 4 m clear ahead, stand still, then walk slowly. | Torso tiles CLEAR or > 2.2 m, **no centre Geiger buzz**. If the centre reads 1.5–2.2 m, the pitch is too steep: go down one detent (−5°). |
-| T4 | **Head row.** A helper holds a flat board level, lower edge at 1.7 m (a branch at head height); walk toward it. Repeat with a hand overhead (`ios/README.md` go/no-go). | Head cue plus "Head height." before the board is 1.3 m away. If not, the pitch is too steep. |
+| T3 | **Empty floor** (floor rejection). Flat floor, ≥ 4 m clear ahead, stand still, then walk slowly; repeat with the cane at its natural ~45°. | Torso tiles CLEAR, **no centre Geiger buzz** at both pitches (Step 51: the floor is dropped by height). Mount card "good" at ≤ ~15°, "too steep for head-height cover" and NO COVER head tiles at 45°. If the centre reads the floor, check the `lanes.bands` field says `metric`. |
+| T4 | **Head row.** Set the hinge so the Mount card says "good". A helper holds a flat board level, lower edge at 1.7 m (a branch at head height), nothing under it; walk toward it. Repeat with a hand overhead (`ios/README.md` go/no-go). Then walk at a plain wall. | Board: one head tap plus one "Head height." before the board is 1.3 m away, at most one more tap under 1.0 m and one more tap + line under 0.6 m, nothing on a timer (Step 52). Standing under it 10 s: silence. Wall: centre cue, **no** "Head height." (overhang signature). At 45° the board is not seen (NO COVER), by design. |
 | T5 | **Curb** with "Detect drop-offs" on. Walk slowly toward a down-curb from 4 m, then an up-curb. | "Drop-off ahead, …" spoken before the edge is 2 m ahead (the detector looks 1.5–3.5 m out); "Step up ahead" for the up-curb. If never announced, check pitch ≥ 3° with T3 still clear. |
 | T6 | **Haptics felt at the grip.** Blindfolded walker, normal grip. Haptics card: Test left, centre, right and head haptic, 5 random trials each, standing and while sweeping. Compare with the phone hand-held. | 5/5 identified for each pattern; felt "about as strong as hand-held". If weaker, look for a loose joint (knob, collar, cap). |
 | T7 | **5 min shake/sweep.** Normal sweeping plus two-point tapping on concrete for 5 min, app running a route. | Witness marks unmoved (collar, hinge, screws). Phone unmoved in the cradle. App still in the foreground with no lock. Trip log shows continuous lanes/cues. |
@@ -362,10 +379,11 @@ Run in order. Record pass/fail and numbers in `CHANGELOG.md` under "test on devi
   swap to a plain M5 hex bolt and spanner. A second ear (a fork around the arm) is the proper fix
   after the demo.
 - **Software: none of this is in `hardware/`, so it is for Aritro.**
-  (a) If T3 fails at every usable pitch, raise `LaneConfig.groundSkipFraction` using the table in
-  section 4. (b) A gravity-aware ground cut in `LaneMath` would let the mount pitch further down
-  for more hazard coverage. (c) Log the camera pitch from `frame.camera.transform` in the trip log
-  so the mount angle is recorded with every test.
+  (a) ~~If T3 fails at every usable pitch, raise `LaneConfig.groundSkipFraction`~~ — superseded.
+  (b) Done 2026-09-13 (Step 51): `LaneMath` is gravity-aware (metric bands, coverage flags). (c) Done:
+  `lanes.tilt`, `lanes.bands`, `lanes.head_cover` / `torso_cover` and a `depth_geometry` record
+  (intrinsics, camera height) are in every trip log. Still open: the camera height is a constant
+  95 cm, not calibrated from the ground plane (docs/todo.md).
 - The old `cad/` drafts (12.7 mm cane, ESP32 grip, sensor pod) are the superseded
   pre-phone-only plan. This folder replaces `cad/` for the phone mount.
 

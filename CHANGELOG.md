@@ -2,7 +2,354 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
-## Step 51 — Adversarial safety hardening: stale sensors, lifecycle races, and explicit consent (Sun Sep 13)
+## Step 52 — "Head height." only for things at head height, once per overhang (Sun Sep 13)
+
+**Why.** The first cane walk (`canekit-2026-09-13T04-36-32Z.jsonl`) had 137 head cues and 8 "Head
+height." lines in 12 minutes. Two causes besides the geometry (Step 51): 587 of the 625 head cells
+under 1.5 m were near in the torso band too (walls, doors, people — things the cane finds), and the
+repeat engine re-fired the head haptic at 1 Hz while the speech episode ended on any single clear
+frame, so an overhang flapping at the 1.65 m exit line re-spoke every 4 s.
+
+**What changed.**
+- `HeadGate.swift` (new, pure): `candidate(in:enter:overhangGap:)` — nearest **covered** head cell
+  under `enter` whose torso cell is ≥ 0.5 m farther, non-finite or uncovered (fail-safe). One rule
+  for three readers: `CueDecider`, `AppModel.contextLine` ("Something at head height." — any lane
+  now, through the gate) and the island `headNear`.
+- **Overhang signature ON by default** (owner decision 2026-09-13, "keep it on for now"):
+  `CueRules(level:place:requireOverhangSignature: = true)` → `AppModel.applyCueRules` →
+  `CueThresholds.requireOverhangSignature`; valve `Settings.bool("overhangSignature", default:
+  true)` read once in `AppModel` (no UI, hard rule 9 untouched). Supersedes the AGENTS.md line
+  "Walls still get 'Head height.' (owner: 'Leave as is')". `cue_design_v2.md` had it off by default.
+- `CueDecider`: `HapticCue.head(distance:onset:)` (kind / wire format unchanged); a `HeadEpisode` —
+  the onset fires at once (only the 400 ms change gate; the 1 s repeat floor no longer applies to
+  head), re-fire only on crossing 1.0 m and 0.6 m, each once, ≥ 1.5 s apart (a jump across both fires
+  once), no time-based re-fire; the zone still `.stop`s with the 0.15 m hysteresis, but the episode
+  ends only after 2 s of **trusted** clear, and an untrusted (sweep) frame restarts that clock. New
+  thresholds `overhangGapM`, `requireOverhangSignature`, `headRefireBands`, `headRefireMinGap`,
+  `headClearSeconds`; `headEpisodeActive`. The Gemini first pass (in the tree) held the `.stop` for
+  2 s and kept the 1 s floor for head; both corrected.
+- `CueSpeechPolicy`: `episodeKind` and `cleared()` removed; "Head height." on the onset (4 s limiter
+  kept) and once more per episode under 0.6 m (`headSecondLineBelowM`). Text byte-identical, so
+  `commonLines` and the voice cache are unchanged. `AppModel.handle` drops the three `cleared()`
+  calls (stop, background, depth failure, both cameras — `decider.reset()` ends the episode there);
+  the head `cue` record gains `distance` and `onset`. `TorsoHapticPolicy` passes the payload through.
+- `ios/scripts/cue_audit.py`: `head_gate` (Python `HeadGate`) and `head_gate_replay` (2 Hz mirror of
+  the episode rule and the speech policy; ±0.5 s timing, no change gate) + `selftest_head` fixtures.
+
+**Evidence (replay of `04-36-32Z`, rows-mode log, 393 depth frames).** Logged: 137 head cues, 8 lines.
+Signature + episode rule alone: 12 onsets, 0 band re-fires, 12 lines — the signature alone does not
+fix a 45° mount (the 37 "overhang-like" cells are knee-high things with the floor 0.5 m behind them,
+and gating them on and off splits episodes; without the signature the same rule gives 5 onsets, 2
+re-fires, 6 lines). With Step 51's estimated cover (tilt 45° > 19° limit): **0 onsets, 0 lines.**
+That is why Step 51 is the root fix and 52 is what keeps a correctly aimed mount quiet.
+
+**Tests (written first, Swift Testing).** CueDeciderTests 26 (was 15 + Gemini's 3): rewritten with
+history comments — `headFiresAtOnsetThenOnlyOnCloserBands` (was `headCueKeepsRefiringWhileObstaclePersists`),
+`headFlappingAcrossTheExitLineIsOneEpisode` (was `headReturningAfterClearWaitsOutTheFloor`),
+`headBeatsCenterBeatsSides` (head 1.0 over torso 1.0 is now the centre cue), `wallNearInBothBandsIsNotHead`
+(was Gemini's `overhangSignatureRequiresTorsoFarther`); new `aJumpAcrossBothBandsFiresOnce`,
+`headOnsetIsNeverHeldByTheRepeatFloor`, `headEpisodeEndsOnlyAfterTwoSecondsOfTrustedClear`,
+`aSweepRestartsTheClearClock`, `hangingSignWithClearTorsoIsHead`, `torsoHalfAMetreFartherIsHead`,
+`torsoNoDataFailsSafeToHead`, `overhangSignatureCanBeSwitchedOff`, `headIgnoresLanesWithoutCoverage`,
+`torsoWithoutCoverageFailsSafeToHead`; `cueChangeNeeds400ms` payload. NavSupportTests: rewritten
+`headHeightIsSpokenOncePerEpisode`, `headEpisodesAreRateLimitedAcrossEpisodes`,
+`aBuzzedSideCueDoesNotSplitAHeadEpisode`; new `secondHeadLineNeedsUnderSixtyCentimetres`.
+CueProfileTests: new `defaultRulesRequireTheOverhangSignature`; payload in
+`defaultRulesRenderTodaysHaptics`. TorsoHapticPolicyTests `quietStillRendersHead`,
+`headIsNeverSuppressed`: torso cells 1.0 → 1.6 m (a 1.0/1.0 pair is a wall under the signature) and
+the second fire is the 0.6 m band re-fire. SpokenPhrasesTests `fixedCueLinesAreLeftToCommonLines`
+payload.
+
+**Reviews.** Not run by this agent (Muse / Antigravity / multi-agent review are the orchestrator's
+gate for this wave). Self-checked against `docs/cue_design_v2.md` §3.2 and the plan; deviations: no
+closing gate on the onset line (hard rule 8: the first cue is never delayed), no side-lane threshold,
+no same-overhang dedup.
+
+**Verification.** `cd ios/Logic && swift test --disable-xctest --scratch-path <scratch>/spm` → exit 0,
+**749 tests in 17 suites passed** (shared tree, with the other agents' Steps 53–59 work in it).
+`python3 ios/scripts/cue_audit.py --selftest` → ok; the audit of `04-36-32Z` → exit 0 (numbers above).
+`cd ios && make sim DERIVED=<scratch>/dd` → BUILD SUCCEEDED. Not run here (orchestrator gate):
+`make uitest`, `make e2e`, device.
+
+test on device: hinge at ≤ 15° (Mount card "good"); a board held at 1.7 m with nothing under it →
+one tap + one "Head height." before 1.3 m, at most one more tap under 1.0 m and one tap + line under
+0.6 m, nothing on a timer; stand under it 10 s → silence; step out and back inside 2 s → silence; after
+3 s → a new onset (line only if ≥ 4 s since the last); walk at a plain wall → centre cue, no "Head
+height."; `make audit --pull` → `cue` records carry `onset`, `head_gate_replay.logged_head_onsets` ≈
+the replay's onsets.
+
+## Step 51 — Metric lane bands: the camera knows what height it is looking at (Sun Sep 13)
+
+**Why.** On the first cane-mounted walk (`canekit-2026-09-13T04-36-32Z.jsonl`) the phone sat **45°
+down** (tilt median 45.3°, range 18.9–73.2°; 0 % inside 3–8°). The lane bands were image rows: at 45°
+the "head" rows looked at knee-to-waist things 1 m ahead and the "torso" rows read the floor ~1.45 m
+away. `cue_audit`: 625 head cells under 1.5 m, **625 of 625 could not have been head height** even from
+the top image row (camera 95 cm, half FOV 33.5°); head cues 15.8 / min, centre 2.1 / min.
+
+**What changed.**
+- `LaneMath.swift`: `LaneGeometry` (depth-map intrinsics + the world-up components of the camera
+  axes; `h = camH + d · (upX·(u−cx)/fx − upY·(v−cy)/fy − upZ)`, `GroundSampler`'s projection, so roll
+  is compensated for free); `LaneBandMode` (`rows` / `metric`); `LaneConfig.cameraHeightCm 95`,
+  `floorMaxHeightCm 25`, `headMinHeightCm 140`, `coverageRangeCm 150` — owner decision 2026-09-13:
+  the new geometry works in **centimetres** (`heightCm(u:v:depthM:cameraHeightCm:)` converts once),
+  lane distances stay metres. `computeLanes(..., geometry:)`: metric path over all rows, floor dropped,
+  blind pixels counted toward their nominal band (Step 48 kept), per-lane `headCoverage` /
+  `torsoCoverage`; **no cover = `.infinity` + flag false**, never NaN / −1. Nil geometry = the old rows.
+  Restored the Muse F6 blind-share comment the first pass dropped.
+- `DepthFrameProcessor.computeGrid`: builds the geometry (nil while `trackingState == .notAvailable`),
+  passes it to both lane passes (smoothed + raw blind), publishes it on `LaneReport.geometry`.
+- `LaneReport.swift`: `MountTilt.status(downDeg:headCover:)` ("Camera tilt N° down: too steep for
+  head-height cover"), `MountTilt.headCoverLimitDeg(...)` — **z-depth** formula
+  `acos(k·cos h) − (90° − h)` ≈ 19.0° (the first pass used the range formula `h − atan(k)` = 16.8°,
+  wrong for ARKit's z-depth; the per-lane flag sweep in `headCoverLimitFollowsTheGeometry` agrees
+  with 19°); `TileLevel.noCover`; `HeadCoverNotice` ("Camera too steep for head-height cover. Torso
+  obstacles only." once per route after 2 s of trusted uncovered metric frames, `.nav`, logged
+  `head_cover`; byte-identical in `AppModel.commonLines`).
+- `NearHold`: uncovered cells skipped; cold start needs `min(4, covered cells)` (at 45° three torso
+  cells exist).
+- UI: `LaneTile` NO COVER ("—" on the no-data fill), row VoiceOver "no cover"; `MountAimRow` passes
+  `headCoverage`. "Head row" / "Torso row" labels unchanged (hard rule 9).
+- Trip log: `lanes {bands, head_cover, torso_cover}`; `depth_geometry` once per distinct intrinsics
+  (fx, fy, cx, cy, up, pitch, cam_h_cm, floor_max_cm, head_min_cm, cover_range_cm, half FOV, limit).
+- `cue_audit.py`: `head_cover` (`share_head_cover`, `limit_deg`, `bands`, `could_not_be_head`) and
+  the human line "head-height cover in 0% of frames (limit ≈ 19.0°) — head cues were impossible on
+  this walk".
+- Docs: AGENTS.md (the gravity bullet, hard rule 8, walls bullet, cue_audit bullet, evidence logs),
+  hardware/mount/DESIGN.md (dated notes §0, §2, §4, T3/T4, §13), docs/cue_design_v2.md (§3.2, §4 rows
+  3, 6, 7, 13), docs/design.md (§5.2 head row, §6.2 NO COVER), CODE_REFERENCE, todo.
+
+**Risk said out loud.** At 45° nothing above ~0.6 m is visible at 1.5 m: head cues are physically
+impossible there, and the app now says so (card, tiles, one line, log) instead of lying. The torso
+band at 45° comes from the upper third of the image; anything under 25 cm (curbs, steps) is the
+ground detector's, still tilt-gated to 0–15°. Camera height is a constant 95 cm (DESIGN.md measured
+0.97 m; ±15 cm stays inside the floor margin). Rows mode still runs for the first frames before a pose.
+Orientation of `upX` in portrait is only verifiable on hardware (`depth_geometry.up`).
+
+**Tests (written first).** `LaneGeometryTests` (16, new fixture `syntheticDepth(pitchDeg:rollDeg:
+camH:surfaces:)`): `metricBandsDropTheFloorAtFortyFiveDegrees`, `metricBandsDropTheFloorAtFiveDegrees`,
+`aWallIsTorsoAndHeadAtMountTilt`, `aWallAtFortyFiveDegreesIsTorsoOnly`, `aHangingSignIsHeadOnlyAtMountTilt`,
+`aHangingSignIsInvisibleAtFortyFiveDegrees`, `aPersonIsTorsoAndHead`, `kneeHighBoxAtFortyFiveDegreesIsTorsoNotHead`,
+`headCoverageFallsOffPastTheGeometryLimit`, `headCoverLimitFollowsTheGeometry`,
+`blindSamplesCountTowardTheirNominalBand`, `rollDoesNotBreakTheBands`,
+`pitchOnlyGeometryMatchesTheTransformRow`, `heightIsLinearInDepth`,
+`mountTiltStatusSaysTooSteepForHeadCover`, `tileNoCoverIsNotClear`, plus
+`headCoverNoticeSpeaksOncePerRouteAfterTheHold`, `headCoverNoticeIgnoresRowsModeAndTransients` (the
+Gemini pass's five geometry tests replaced). LaneMathTests renamed with history:
+`headRowIsTopBandWithoutGeometry`, `groundBandIsSkippedWithoutGeometry`, `mountTiltStatus` (was
+`mountTiltWindow`: 12° is good now). NearHoldTests `coldStartCountsOnlyCoveredCells`.
+
+**Reviews / verification.** As Step 52 (same work unit): Logic 749/749 (exit 0), `cue_audit.py
+--selftest` ok, `make sim` BUILD SUCCEEDED; reviews, `make uitest` (NO COVER tile in the tour
+pictures) and `make e2e` are the orchestrator's gate.
+
+test on device: cane at ~45° on a flat floor → torso tiles CLEAR, no Geiger, head tiles NO COVER, Mount
+card "too steep for head-height cover", one "Camera too steep…" line after starting a route; re-angle
+to 5–10° → card "good", head tiles read; wall at 1 m → torso ≈ head ≈ 1 m; `make audit --pull` →
+`bands: metric` on every `lanes` after the first second, `depth_geometry` present, `share_head_cover`
+≈ 0 at 45° / ≈ 1 re-angled.
+
+## Step 55 — OpenCane never answers its own voice (Sun Sep 13)
+
+**Why.** The first cane-mounted walk logged `conv_error query: "Head height"`: the walker was
+dictating, "Head height." (`.safety`) broke through the voice hold as designed, the microphone has no
+echo control (hard rule 7: no `.voiceChat`, no HFP), and the recogniser transcribed the phone's own
+warning as the question. The hold was also set only *after* the engine started, so the line playing at
+the press was heard by the first buffers.
+
+**What changed.**
+- `VoiceInputEngine`: the voice hold is set just before the `.voiceInput` microphone lease (the line
+  playing is cut first; every failure path still releases it in `cleanupAudioPipeline`). The Gemini
+  first pass set it at the top of `startListening` — before the permission prompts, and never released
+  when `VoiceInputGuard.beginPermissionRequest` refused — moved.
+- `SpeechBufferBox` gains `paused: Mutex<Bool>` (Synchronization), read inside the nonisolated tap —
+  no actor hop from the Core Audio thread (Step 24 SIGTRAP rule); replaces an `NSLock` flag.
+- `SpeechQueue.onSpeakingChanged` → `VoiceInputEngine.speakingChanged`: while listening, speaking →
+  pause now; not speaking → resume after `SelfHearFilter.tailSeconds` (0.3 s) if nothing started
+  again; a `.safety` line already playing when the tap starts pauses it at once. Every pause is logged
+  when it ends: `voice_self_hear {action: paused, pause_ms}`.
+- `AppModel`'s `speech.onDispatch` forwards every dispatched text to `VoiceInputEngine.noteDispatched`,
+  which records it in `SelfHearFilter` only while starting / listening (a line dispatched before the
+  press — the launch menu, an answer — never makes the walker's reply to it look like an echo). The
+  final transcript runs through `shouldDrop`; a match is dropped silently with
+  `voice_self_hear {action: dropped, transcript, matched_line}`.
+- `SelfHearFilter` (CaneKitLogic) audited against the design: 3 s window, 0.3 s tail, ≥ 3 characters,
+  normaliser (lowercase, punctuation → space, whitespace collapsed, digits kept), whole line or one
+  clause split on `SpeechResume.clauseEnders`, never "contains". The pre-written clause test expected
+  "2.5 meters ahead" — the normaliser (documented) turns the point into a space on both sides, so
+  the pinned clause is "2 5 meters ahead"; test corrected, rule unchanged. The app called
+  non-existent `recordSpoken` / `isSelfHear` (the app target did not compile) — replaced.
+- No audio-session category, mode or option changed (hard rule 7).
+
+**Tests.** `SelfHearFilterTests` (8): `selfHearNumbersArePinned`, `exactLineWithinThreeSecondsIsDropped`,
+`punctuationAndCaseDoNotMatter`, `aClauseOfARecentLineIsDropped`, `theWalkersOwnWordsAreKept`,
+`oldLinesAgeOut`, `shortFragmentsNeverMatch`, `recordingIsExplicitAndResetEmptiesTheHistory`.
+
+**Reviews.** Muse / adversarial review / Antigravity: to be run by the orchestrator's gate on the
+combined Steps 51–59 diff (this agent did not run them).
+
+**Verification.** See Step 54 (same run).
+
+test on device: hold a hand over the LiDAR at head height and press Talk; say "where am I" while
+"Head height." plays — the answer is to "where am I", never to "head height"; the log shows
+`voice_self_hear {action: paused}` (and `dropped` if the recogniser still caught the warning).
+
+## Step 54 — One voice (Sun Sep 13)
+
+**Why.** Owner decision 2026-09-13: "ElevenLabs is the one voice for everything." On the mounted walk
+the voice flipped every few lines: every conversational answer was `immediate: true` (system voice
+forever, even on a warm cache), the 60 s breaker re-raced a dead network every minute, each warning's
+cache miss *cancelled* the running prefetch batch, and the route intro was prefetched ten lines before
+`NavigationEngine.start` spoke it — a guaranteed miss on a cold cache.
+
+**What changed.**
+- `immediate:` is gone from `SpeechQueue.say` / `Pending` / `speakNow` and from every caller
+  (`ConversationCoordinator`: fast-path answer, no-cloud line, "One moment.", cloud answer, fallback;
+  `VoiceInputEngine`: "I did not catch that.", now also in `commonLines`). Every line: cache → 2.5 s
+  race → system voice only on failure. `.safety` / `.obstacle` cache misses still speak the system
+  voice at once.
+- `VoiceBreaker` (CaneKitLogic) replaces `naturalVoiceFailedAt` / the Gemini `naturalVoiceBreakerOpen`
+  (which a cache hit or any prefetch closed): opens on a race timeout / failure, closes only when a
+  background prefetch chunk that requested ≥ 1 line succeeds, probe every 60 s while open.
+  `voice_breaker {open, reason}`. `SpeechQueue.naturalVoiceOffline` mirrors it for the UI.
+- Prefetch is additive: `prefetch` prepends to one backlog; a single worker merges it with
+  `routeLines + backgroundLines` (`VoicePrefetch.merge`, off main) and fetches `VoicePrefetch.chunk`
+  (2) lines per pass; a failed chunk keeps the backlog (next `prefetch` call or the probe retries).
+- `WalkingIntro.routeStarted(_:)` builds the intro for both `NavigationEngine.start` and
+  `AppModel.routeStartLines` (announce + intro + waypoint lines), prefetched in `buildRoute` (as soon
+  as MapKit answers), `queueRouteStart` (the depth wait) and `startRouteNow` (degraded paths).
+- Launch prefetch puts the safety vocabulary first (`AppModel.safetyLines` = "Head height." + ground
+  hazard lines, then `commonLines` = `voiceReadyLines`).
+- `StatusSummary`: `VoiceFacts` + `voiceReady` / `voiceLine` ("Natural voice ready." / "…warming up,
+  N percent cached." / why the system voice); the clause follows audio when `StatusFacts.voice` is set
+  (`AppModel.speakStatus` fills it from `voiceFacts()` → `SpeechQueue.cachedShare(of:)`).
+- Details tab: the Scene engine card gains a "Voice" row (last line's engine · reason); the Haptics
+  voice pill's VoiceOver label names the reason and says when the natural voice is unreachable.
+- Docs: `SpeechQueue` header rules, AGENTS.md hard rules 7–8 notes + "Things that look wrong" (one
+  voice, self-hear) + the `speech_dispatch` bullet, design.md §5.1 engine table, CODE_REFERENCE
+  (SpeechQueue, ElevenLabsVoice, VoicePrefetch, new VoiceEngineChoice / VoiceBreaker / SelfHearFilter
+  sections, StatusSummary, WalkingIntro, VoiceInputEngine, ConversationCoordinator, cue_audit).
+
+**Tests.** `VoiceEngineChoiceTests` breaker tests (5; two rewritten to bind mutating calls outside
+`#expect`, which cannot call a mutating member), `VoicePrefetchTests` +3 (`aNewBatchGoesAheadOfTheBacklogAndTheTailFollows`,
+`mergeDropsCachedAndRepeatedLinesButNeverAnUncachedOne`, `prefetchChunkIsTheConcurrencyLimit`),
+`StatusSummaryTests` +3 (`voiceClauseSaysReadyOnlyWhenEverySafetyLineIsCached`,
+`voiceClauseNamesTheSystemVoiceAndWhy`, `voiceClauseFollowsAudioAndIsOmittedWhenNotMeasured`),
+`CampusPlacesTests.introLineIsWhatNavigationSpeaks` (its pre-written `Waypoint(id: "wp1", lng:, bearingDeg:)`
+did not match the real initialiser — fixed).
+
+**Reviews.** Pending (orchestrator gate).
+
+**Verification.** `cd ios/Logic && swift test --disable-xctest --scratch-path <agentB>/spm` and
+`make sim DERIVED=<agentB>/dd` — results in the agent report (REPORT.md).
+
+test on device: Wi-Fi on, relaunch, wait 30 s, ask "status" — hear "Natural voice ready." in the
+ElevenLabs voice; start the CIF route — "Route started. …" in the natural voice; ask an open question —
+the answer in the natural voice (up to 2.5 s later); turn Wi-Fi off and ask again — one system-voice
+line, `voice_breaker {open: true}`, every later uncached line system voice at once; Wi-Fi on — within a
+minute `voice_breaker {open: false}`. `make audit`: `engine_flips_inside_route_speech` 0.
+
+## Step 53 — Which voice spoke is logged; the Voice picker (Sun Sep 13)
+
+**Why.** Nothing in the trip log said which engine spoke a line or why, so the flipping could not be
+measured. And the Gemini first pass persisted `useNaturalVoice` inside `SpeechQueue` under its own
+UserDefaults key with the picker squeezed into the Cues card.
+
+**What changed.**
+- `VoiceEngineChoice` (CaneKitLogic): `decide(muted:hasKey:naturalEnabled:cached:isWarning:breakerOpen:)`
+  → `VoiceEngineDecision {engine, reason}`; raw values pinned (log contract). `SpeechQueue.speakNow`
+  calls it before `onDispatch` (the dispatch time `cue_audit.py` measures from does not move).
+- `speech_dispatch` gains `engine` / `engine_reason`; a race resolution writes
+  `speech_engine {text, engine, engine_reason: race_won | race_timeout | race_failed | playback_failed, wait_ms}`.
+  The Gemini strings ("cache_hit", "fetch_timeout", …) are replaced by the pinned raw values.
+- `AppModel.naturalVoiceEnabled` (`Settings.bool("useNaturalVoice", default: true)`, didSet →
+  `speech.useNaturalVoice` + `voice_backend {natural, by: settings, key}`; pushed and logged `by: launch`
+  in `start()`); `SpeechQueue.useNaturalVoice` is a plain var again.
+- Settings: a "Voice" card after Haptics — segmented Natural / System (disabled without a key, caption
+  says why), and below it the voice-shell listening toggles (moved out of the Cues card; Step 58 owns them).
+- `cue_audit.py`: `engine_flips_per_minute` and `engine_flips_inside_route_speech` (separate functions,
+  `rep["voice"]`, selftest fixture).
+
+**Tests.** `VoiceEngineChoiceTests` table tests (11): `mutedNeverMakesASound`, `noKeyAlwaysSystem`,
+`naturalOffAlwaysSystem`, `cacheHitIsNaturalEvenForAWarningWithTheBreakerOpen`, `warningMissIsSystemNow`,
+`breakerOpenIsSystemNow`, `anyOtherMissRaces`, `raceDeadlineIsPinned`, `engineAndReasonRawValuesArePinned`,
+`aResolvedRaceNamesTheEngineThatSpoke`, `everyReasonHasWordsForTheDetailsCard`. `cue_audit.py --selftest` ok.
+
+**Reviews.** Pending (orchestrator gate).
+
+test on device: Settings → Voice → System: every line in Apple's voice, `voice_backend {by: settings}`;
+back to Natural. Details → Scene engine → Voice row reads "Natural voice · cached" after "OpenCane ready."
+
+## Steps 56–59 (part 1: logic + surface) — the voice shell: eight words on the phone, a 4 s budget, emergency by voice, a giant microphone (Sun Sep 13)
+
+**Why.** The first cane-mounted walk (`canekit-2026-09-13T04-36-32Z.jsonl`) showed a sighted app
+strapped to a cane: a 108 pt "Talk to OpenCane" tile among eleven buttons, one utterance at a time,
+cloud turns of 6–17 s with no bound, a second question dropped ("Still working on your last
+question." ×N). Owner decisions 2026-09-13: launch = a giant round microphone dead-centre; words
+primary, digits as aliases; "route" alone = the CIF demo route, "take me to …" = any place.
+
+**What changed (this part: pure Logic, the coordinator and the Guide surface; the AppModel wiring —
+launch menu + listen, follow-up window, `commonLines` — is part 2).**
+- `VoiceMenu` (new, CaneKitLogic): route / where am I / describe / status / repeat / quiet / help /
+  emergency, digits 1–8 as words and numerals, whole-utterance match after normalisation, no
+  homophones; `menuLine`, numbered `helpLine`, per-item `confirmationLine` (quiet reuses
+  `CueLevel.quiet.spokenLine`), yes / no / cancel, `extraVerbs` next / standard / detailed.
+- `FastPathIntentClassifier` rule 0 goes through `VoiceMenu` (replacing the first pass's literal
+  lists). Deliberately *not* aliases: "route to cif" (rule 14's gazetteer route), "what is ahead"
+  (the grounded scene-question path), "help me" (a walker in trouble says it), "call 911" (the app
+  calls the contact, not 911). "stop" stays an exact-phrase rule. Rule 12 (distance walked) now runs
+  before rule 8, so "how far have I walked" is answered correctly; bare "status" is rule 0.
+- `ConversationAction`: the first pass's `whereAmI` / `showHelp` / `triggerEmergency` /
+  `confirmEmergency` are `describeScene` / `help` / `emergency` / `confirm(Bool)`; new
+  `startDefaultRoute`, `speakStatus`; `setCueLevel(CueLevel)`.
+- `ConversationBudget` (new): filler "One moment." at 1.5 s, timeout at 4 s, turn ids,
+  `begin` / `tick` / `finished` / `cancel`. `ConversationCoordinator` uses it instead of the inline
+  reminder task + task group: every new query supersedes a cloud turn in flight (the old
+  `guard !isProcessing` drop is gone — with it in place the first pass's `cloudTask?.cancel()` could
+  never run for a second query), a 0.25 s ticker speaks the filler / timeout, stale completions never
+  speak, `conv_turn` gains `budget_ms` / `filler_spoken` / `superseded` / `timed_out` / `ivr`,
+  `conv_error {timeout: true}`. The first pass's timeout threw `CancellationError` into the generic
+  catch and spoke "I could not process that request right now." with no timeout field.
+- `EmergencyConfirm` (new): prompt "Say yes to call <name> at <number>.", 8 s window, four fixed
+  lines, `telDigits` (moved from `ProfilePage`, which now calls it — only a *leading* plus is kept).
+  Coordinator: prompt at `.nav` ttl 8 + expiry "Emergency canceled."; "yes" inside the window logs
+  `emergency {action: confirmed, contact}` (the name, never the number), flushes the trip log, opens
+  `tel:`; replaces the first pass's `emergencyPendingUntil`.
+- `VoiceShellPolicy` + `ScenePhaseReason` (new, pure, wired in part 2); `UtteranceEndDetector`
+  takes a per-listen `maxListen`.
+- `SpokenPhrases.shellLines` (31 lines, 1,179 characters ≤ `shellCharacterBudget` 1,500) +
+  `notHeardLine` / `describerBusyLine`; `StatusSummary.fixedLines` (13 number-free clauses, now
+  named constants the clause functions return). `DescribeTrigger.voice` ("the voice menu").
+- UI: `VoiceTile` (new) — the microphone inside ~40 seeded contour rings (`Canvas`), ≥ 60 % of the
+  page height, one button → `toggleVoiceInput()`, ripple while listening / breathe while speaking /
+  still when idle or under Reduce Motion, labels "Talk to OpenCane" / "Listening…" / "Starting…" /
+  "Thinking…". `GuideCard`: the two-up Where am I / Talk row became the tile + a compact row (idle
+  Where am I | Start route to CIF; navigating Repeat | Next | Stop route); every hard-rule-9 label
+  byte-identical. `scrollTo(_:)` added to `CaneKitUITests`, `CaneKitVisualTour`, `CaneKitIslandTour`
+  before Recenter / Simulate walk / Go / Destination / Navigate to CIF from here / Stop route.
+- Docs: design.md §6.1 (tile, compact row, the three-per-row exception), handsfree.md §0 / §1b / §5
+  latency, CODE_REFERENCE (four Logic entries, VoiceTile, coordinator, GuideCard, UI tests).
+
+**Tests (written first).** `VoiceMenuTests` (9), `ConversationBudgetTests` (8, incl.
+`cancelRefusesTheLiveTurn`), `EmergencyConfirmTests` (9), `VoiceShellPolicyTests` (7),
+`ScenePhaseReasonTests` (3), `ConversationLogicTests` (`ivrRuleRunsBeforeEverythingElse`,
+`stopPhrasesStillStopBehindRuleZero`, `howFarHaveIWalkedIsTheDistanceWalked` replace the first pass's
+`fastPathIVR`), `UtteranceEndTests.followUpWindowUsesAShorterCap`,
+`SpokenPhrasesTests.shellLinesStayInsideTheirBudget` / `everyLineTheShellCanSpeakIsPrefetched`,
+`StatusSummaryTests.everyNumberFreeClauseIsAFixedLine`.
+
+**Reviews.** Pending — multi-agent, Muse and Antigravity run by the orchestrator on the combined diff.
+
+**Verification.** `swift test` on a scratch copy of `ios/Logic` without the test files another agent
+had mid-change: 715 tests, 3 issues none in this scope (two need the route file outside the copy,
+one is `SelfHearFilterTests`); the filtered run of every suite above: 148 tests, exit 0.
+`make gen` 0; `make sim` green. UI tests and e2e not run here (orchestrator gate).
+
+test on device: say "help" → the numbered list; "four" → status; "emergency" → prompt with the
+contact's name and number → "no" → "Emergency canceled."; an open question → "One moment." by 1.5 s
+and an answer or the timeout line by 4 s, ask again mid-flight → first `conv_turn` `superseded`; the
+rings ripple while listening and the whole ring area starts listening.
+
+## Step 51a — Adversarial safety hardening: stale sensors, lifecycle races, and explicit consent (Sun Sep 13)
 
 **Why.** A review of the live navigation path found ways for stale sensor state, out-of-order
 asynchronous work, or an unannounced capability failure to outlive the component that produced it.

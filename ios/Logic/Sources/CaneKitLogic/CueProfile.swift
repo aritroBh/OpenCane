@@ -114,12 +114,23 @@ public struct CueRules: Sendable, Equatable {
     public static let allSpokenLines: [String] =
         CueLevel.allCases.map(\.spokenLine) + CuePlace.allCases.map(\.spokenLine)
 
+    /// Whether a head cue needs the overhang signature (Step 52, `HeadGate`): the torso cell of
+    /// the same lane ≥ 0.5 m farther, non-finite or uncovered. ON by default — owner decision
+    /// 2026-09-13 ("keep it on for now, we'll keep testing"); it supersedes the Steps 34–37 note
+    /// "Walls still get 'Head height.' (owner: 'Leave as is')". `AppModel.applyCueRules` pushes it
+    /// into `CueThresholds.requireOverhangSignature`; `AppModel.cueRules` reads the valve
+    /// `Settings.bool("overhangSignature", default: true)` (no UI; hard rule 9 labels untouched).
+    /// Pinned by `defaultRulesRequireTheOverhangSignature`.
+    public let requireOverhangSignature: Bool
+
     /// - Parameters:
     ///   - level: verbosity level.
     ///   - place: outdoors or indoors.
-    public init(level: CueLevel, place: CuePlace) {
+    ///   - requireOverhangSignature: the Step 52 head gate (default ON, owner decision 2026-09-13).
+    public init(level: CueLevel, place: CuePlace, requireOverhangSignature: Bool = true) {
         self.level = level
         self.place = place
+        self.requireOverhangSignature = requireOverhangSignature
     }
 
     /// Head-band distance (metres) below which a head cue fires: today's 1.5 m outdoors, 1.2 m

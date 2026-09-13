@@ -12,6 +12,41 @@ working, and set the **Action button** to **Talk to OpenCane** (steps at the bot
 
 ---
 
+## 0. The voice shell — talking to OpenCane itself
+
+Siri needs the app's name in every phrase. Inside the app you do not: OpenCane has its own short
+phone menu (Steps 56–59).
+
+- **Open the app.** It says "OpenCane ready." and then the menu: *"Say route, where am I, describe,
+  status, repeat, quiet, help, or emergency."* The listen-on-launch and the follow-up window after
+  an answer are the voice-shell integration (part 2): until they land, tap to talk.
+- **Tap the middle of the screen to talk.** The Guide page is one giant microphone surrounded by
+  rings (at least 60 % of the page). The rings ripple while it listens and breathe while it speaks.
+  Say one word; it stops listening by itself 1.5 s after you finish.
+- **Words and digits both work.** "status" and "four" are the same. "help" reads the numbered list.
+- **The eight words never go to the network.** They are matched on the phone, as the whole thing you
+  said: "route" starts the route, "the route is long" does not.
+- **Quick answers, or an honest wait.** An open question goes to the cloud model: you hear
+  "One moment." after 1.5 s, and an answer or "That is taking too long. Ask again in a moment." by
+  4 s. Ask something new at any time — the newest question wins, the old answer is thrown away.
+
+## 1b. The eight words
+
+| Say | or | What happens |
+|---|---|---|
+| **route** | one | Starts the recorded Townsend Hall → CIF route. While walking: says where the route is. ("take me to Grainger" still goes anywhere.) |
+| **where am I** | two | Describes what the camera sees ("Looking." first). |
+| **describe** | three | The same description. |
+| **status** | four | The whole status report: obstacle detection, GPS, audio, haptics, route, battery. |
+| **repeat** | five | Says the current instruction again. |
+| **quiet** | six | Quiet cues ("Quiet cues."). "standard" and "detailed" switch back. |
+| **help** | seven | Reads the list: "One, route. Two, where am I. … Eight, emergency. Or say stop to end the route." |
+| **emergency** | eight | Asks first: "Say yes to call <name> at <number>." Only **yes** within 8 seconds calls (the phone leaves OpenCane). "no", "cancel" or silence → "Emergency canceled." It never calls on one word. |
+
+Also: **next** (skip a waypoint), **stop** (end the route — exact phrases only: "stop", "stop route",
+"stop navigating", "end route", "cancel route"). Homophones are deliberately not commands: "won",
+"to", "for" do nothing, because a false hit acts.
+
 ## 1. The ten spoken commands
 
 Say them to Siri. Every phrase has to contain the app's name — that is Apple's rule for app
@@ -179,6 +214,12 @@ The answer is held to the same rules as "Where am I":
   bench."*, which is an inference nobody measured.)
 - If there is no cloud key set up, it says so and describes the scene instead — the on-device model
   cannot read a question.
+
+**Latency (Step 57).** A question to the cloud model has a 4-second budget. Silence past a second
+reads as "it did not hear me", so at 1.5 s you hear "One moment."; at 4 s the app gives up and says
+"That is taking too long. Ask again in a moment." A second question while the first is still
+thinking cancels the first — its answer, if it arrives, is never spoken. The trip log shows each turn
+with `budget_ms`, `filler_spoken`, `superseded` and `timed_out`.
 
 An answer is spoken at the lowest priority of anything the app says. An obstacle warning, a route
 instruction or "Head height." will cut it off mid-sentence. That is correct.

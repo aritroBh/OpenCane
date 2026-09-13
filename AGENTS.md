@@ -104,12 +104,21 @@ target, path, scheme or bundle id, it is CaneKit. Two traps worth knowing:
    `.playback` the moment the **output** route changes at all, refusing the feature instead. No other
    shipping code may call `setCategory` (the only other call is the debug `SensorProbe`, which runs only
    under `CANEKIT_SENSOR_PROBE=1` / `--sensor-probe` and restores `.playback`).
+   Self-hear (Step 55) changes **no** session setting: while the `.voiceInput` lease is held the
+   recogniser's tap drops buffers whenever `SpeechQueue.isSpeaking` (+ 0.3 s), and a transcript equal
+   to a line dispatched while listening (or one clause of it) is dropped (`SelfHearFilter`).
+   `.voiceChat` / echo cancellation stays forbidden: it forces Bluetooth HFP and kills the beacon.
 8. **Cue priorities** (speech, `SpeechPriority`): `.scene` (Where am I, answers, flashlight lines) <
    `.obstacle` (obstacle names, signs, hazard watch) < `.nav` (route lines, refusals) < `.safety`
-   ("Head height.", LiDAR ground hazards). The `.head` haptic is never suppressed; its spoken line is
-   once per episode (`CueSpeechPolicy`). A line cut by a higher band is re-queued and resumes from the
+   ("Head height.", LiDAR ground hazards). The `.head` haptic is never suppressed and its onset never
+   delayed; "Head height." is spoken at the onset of a head episode and once more only under 0.6 m
+   (`CueSpeechPolicy`; the episode is `CueDecider`'s — re-fire only on crossing 1.0 / 0.6 m ≥ 1.5 s
+   apart, ends after 2 s of trusted clear; Step 52). A line cut by a higher band is re-queued and resumes from the
    clause it was cut in (`SpeechResume`, Step 37 — never restarted from the first word after a warning);
-   lines of different bands are separated by a 0.35 s pause that a safety line never waits for. Keep
+   lines of different bands are separated by a 0.35 s pause that a safety line never waits for. The voice
+   hold (dictating) queues everything below `.safety`; `.safety` still breaks through, but the recogniser
+   is deaf while it plays (Step 55). One voice (Step 54): every line takes cache → 2.5 s race → system
+   voice only on failure; only an uncached `.obstacle` / `.safety` line is the system voice at once. Keep
    `docs/design.md §5.1` and `SpeechQueue` in sync.
 9. **Accessibility labels are a test contract.** The strings in `CaneKitUITests` (Start route to CIF,
    Navigate to CIF from here, Stop route, Repeat, Next, Recenter, Where am I, Go, Test
@@ -296,8 +305,22 @@ bench has *disproved* must never sit in the file as though it were settled — m
   course, still head), never within 15 m of a crossing, never on a timer. Until it happens the beacon
   ignores head yaw (the old reference would double-count the body turn).
 - The beacon only plays into headphones (`AudioRouteMonitor`); connect/disconnect is spoken.
-- Silencing haptics routes obstacle cues to the watch and to speech. "Head height." is spoken once per
-  obstacle episode (≥ 4 s apart), never every second. Warnings never wait for the ElevenLabs network.
+- Silencing haptics routes obstacle cues to the watch and to speech. "Head height." is spoken at a head
+  episode's onset (onset lines ≥ 4 s apart) and once more under 0.6 m, never every second. Warnings never wait for the ElevenLabs network.
+- **One voice, and answers wait up to 2.5 s for it** (Steps 53–54, owner decision 2026-09-13). Nothing
+  passes `immediate: true` any more (the parameter is gone): a conversational answer, "One moment." and
+  "I did not catch that." take the same path as a route line — cached → ElevenLabs at once, uncached →
+  a 2.5 s race (`VoiceEngineChoice.raceDeadline`), system voice only if the fetch fails or times out.
+  "Warnings never wait for the network" is unchanged: an uncached `.obstacle` / `.safety` line is the
+  system voice now (the launch prefetch puts the safety lines first). The breaker (`VoiceBreaker`) is
+  **session-sticky**: one failed or late race opens it and it closes only when a background prefetch
+  actually fetches something (60 s probe) — a flip per outage, never per line, and never a 60 s timer.
+  Prefetch is **additive** (`VoicePrefetch.merge`, one worker): a new batch never cancels the running
+  one. Do not bring back a per-call `immediate` or a time-based breaker reset.
+- **A dictated transcript that equals the app's own recent line is dropped silently** (Step 55,
+  `SelfHearFilter`): whole line or one whole clause (split on `SpeechResume.clauseEnders`), within 3 s,
+  ≥ 3 characters — never "the line contains the transcript", because the menu line contains "route".
+  Only lines dispatched *while listening* count, so answering the menu with its own words works.
 - An interrupted speech line resumes at most 3 times (`SpeechResume.maxResumes`), never from an
   earlier point than last time, then is dropped (Repeat recovers it). Its TTL is extended to ≥ 8 s
   on the *first* cut only, so a line cut again and again still goes stale. Lines said during a
@@ -331,10 +354,18 @@ bench has *disproved* must never sit in the file as though it were settled — m
   is dropped and one older than 2 s loses its distance; "NONE" is silent. Every announced hazard is
   written to Documents/hazards/*.geojson with GPS (the nav engine's last fix after arrival; null
   geometry with no fix) + photo.
-- The lane grid has no gravity correction (a fixed bottom `groundSkipFraction` is ground), so the
-  mount must aim the camera 3–8° below the horizon (`MountTilt`; hardware/mount/DESIGN.md). The
-  Mount card shows the live tilt and fps; do not "fix" a buzzing-on-empty-sidewalk report in code
-  before checking that line.
+- The lane grid is metric (Step 51): with an ARKit pose every depth sample is placed by its height
+  above the ground (`LaneGeometry`, the world-up row of the camera transform, the same projection as
+  `GroundSampler`; camera 95 cm, floor < 25 cm dropped, torso 25–140 cm, head ≥ 140 cm — the new
+  geometry works in centimetres, lane distances stay metres). A band the camera cannot see at
+  150 cm is `.infinity` **plus** `headCoverage` / `torsoCoverage` false — never NaN or −1, so every
+  `.infinity == clear` consumer stays correct and only `HeadGate`, `TileLevel.noCover`, `NearHold`,
+  the Mount card and the trip log read the flag. The 3–8° hinge window is a recommendation, not a
+  lane requirement: head cover ends at ≈ 19° down (`MountTilt.headCoverLimitDeg`, z-depth), the
+  ground detector wants 0–15°. At the cane's natural 45° the app covers torso only and says so (Mount
+  card "too steep for head-height cover", NO COVER tiles, one route-start line, `head_cover` in the
+  log). Rows mode (`bands: rows`) runs only before ARKit has a pose. Do not "fix" a silent head band
+  on a steep mount in code: the camera cannot see head height there.
 - The retained camera frame is dropped when ARKit pauses: after a lock/unlock "Where am I" and the
   sign scan wait for a fresh frame rather than describing where the walker used to be.
 - "Where am I" never needs a key: cloud provider → on-device fallback (Vision + Apple's on-device
@@ -451,7 +482,10 @@ bench has *disproved* must never sit in the file as though it were settled — m
   for the route to end. Pinned by `LiveViewTests.faceTracking*`.
 - **`speech_dispatch` is a separate trip-log kind from `speech`.** `speech` records are written by
   *callers* (what the app decided to say) and are what `ios/scripts/e2e.py` asserts on;
-  `speech_dispatch {text, priority, replays, resume_from}` is written from `SpeechQueue.onDispatch`
+  `speech_dispatch {text, priority, replays, resume_from, engine, engine_reason}` (engine since Step 53:
+  `VoiceEngineChoice.decide`, made before the record; a `race` is settled by a separate
+  `speech_engine {text, engine, engine_reason, wait_ms}`; breaker changes are `voice_breaker {open,
+  reason}`) is written from `SpeechQueue.onDispatch`
   for every line handed to a voice backend, whoever called `say`, muted automation included, so a
   resumed line appears twice. Dispatched is not heard. Folding them into one kind would double-count
   e2e's spoken lines; `speech_end {priority}` (natural line ends) is separate for `cue_audit.py`'s
@@ -502,8 +536,17 @@ bench has *disproved* must never sit in the file as though it were settled — m
 - **"Head height." is never delayed behind a direction.** The first Step 37 plan held it behind a
   playing direction (buzz and chirp now, words later); Muse rejected it because a walker reaches a
   1.5 m overhang in about 1.5 s, before the words. The owner chose "Cut in, then resume": the warning
-  pre-empts at once and the direction resumes. Walls still get "Head height." (owner: "Leave as is").
-  Do not reintroduce a hold, a talk-floor wait or a gap in front of `.safety`.
+  pre-empts at once and the direction resumes. Walls no longer get "Head height.": the overhang
+  signature (`HeadGate`, ON by default — owner decision 2026-09-13, "keep it on for now") superseded
+  the earlier "Leave as is"; `Settings.bool("overhangSignature")` is the valve, and a torso dropout or
+  an uncovered torso cell still warns (fail-safe). Do not reintroduce a hold, a talk-floor wait or a
+  gap in front of `.safety`.
+- **The 400 ms change gate still applies to a head onset** that replaces another cue; only the 1 s
+  repeat floor was removed for head (Step 52, `cueChangeNeeds400ms`, `headOnsetIsNeverHeldByTheRepeatFloor`).
+  A head episode outlives the zone's `.stop` by 2 s of trusted clear (a sweep restarts that clock), a
+  return inside it is silent unless it crosses a closer band, and there is no time-based head
+  re-fire. Do not re-add one, and do not end the episode on a `.stop` (that split said "Head height."
+  8 times in 12 minutes on the first cane walk).
 
 ## Where the plan and history live
 
@@ -522,10 +565,13 @@ bench has *disproved* must never sit in the file as though it were settled — m
 - **Measure first — `ios/scripts/cue_audit.py` via `cd ios && make audit`.** Before tuning any cue
   number: it runs `--selftest`, then reads `LOG=path` or `--pull`s the newest `canekit-*.jsonl` off
   the phone named by `DEVICE` in `ios/local.mk`. It says whether the walk was ON THE MOUNT (tilt
-  inside 3–8°), head band wall vs overhang, cues and lines per minute, suppressed lines,
+  inside 3–8°), whether head height was visible at all (`head_cover.share_head_cover`, and
+  `could_not_be_head` for rows-mode logs), head band wall vs overhang, a `head_gate_replay` of the
+  Step 52 rule beside the log's own head cues and lines, cues and lines per minute, suppressed lines,
   `speech_dispatch` replays (mid-line vs from line start), cross-band pauses < 0.3 s, and any
   `field_kind` / `field_t` app bug. A handheld log must not tune a distance. It mirrors app constants
-  by hand (`HEAD_ENTER_M = CueThresholds.head`, `MountTilt.aim`): move them together. Not part of
+  by hand (`HEAD_ENTER_M = CueThresholds.head`, `SIGNATURE_GAP_M`, the head-episode numbers, the
+  `LaneConfig` centimetre geometry, `MountTilt.aim`): move them together. Not part of
   `make test`.
 - **Trip-log evidence:** trip logs are not in git. The app writes `canekit-<ISO time>.jsonl` to its
   Documents folder ("Write trip log", on by default; Files → On My iPhone → OpenCane); `make audit`
@@ -533,8 +579,9 @@ bench has *disproved* must never sit in the file as though it were settled — m
   timestamp name and `t` in code comments and `CHANGELOG.md`. The logs behind Steps 34–37:
   `2026-09-12T20-57-17Z` (torch, both-cameras, face tracking, first *handheld* cue baseline),
   `22-02-03Z` (`back_rotation: 0`), `22-20-53Z` (per-camera rotation confirmed, cue profile taps,
-  5 of 58 lines restarted), `22-27-00Z` (37-minute handheld walk, 45 "Head height."). No log so far
-  was recorded on the mount; `docs/TEAM_HANDOFF.md` §2.3 has the table.
+  5 of 58 lines restarted), `22-27-00Z` (37-minute handheld walk, 45 "Head height."). `2026-09-13T04-36-32Z` is
+  the first cane-mounted walk (tilt median 45°, 137 head cues, 8 "Head height.", 625 of 625 head cells
+  could not have been head height — Steps 51–52); `docs/TEAM_HANDOFF.md` §2.3 has the table.
 - **Review and workflow expectations per step:** plan as a checklist in `docs/todo.md` (Muse on the
   plan when large or risky) → test first in `ios/Logic` → build → adversarial multi-agent review +
   Muse + Antigravity on the diff, every finding verified by hand and recorded in `CHANGELOG.md` as

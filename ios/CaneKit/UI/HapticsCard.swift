@@ -72,10 +72,13 @@ struct HapticsCard: View {
                 // "System" / "ElevenLabs": one word so the pill row fits a 17 Pro Max with the
                 // button. The tone follows what actually spoke, not whether a key exists: a wrong
                 // key would otherwise paint a green pill over lines coming out in Apple's voice.
+                // Step 54: the spoken label names the last line's engine *and* why
+                // (`VoiceEngineChoice.describe`), and says so when the breaker holds the system voice.
                 CKStatusPill(text: model.speech.naturalVoice == nil ? "System" : model.speech.backendName,
-                             tone: model.speech.backendName == "ElevenLabs" ? .trusted : .neutral,
+                             tone: model.speech.backendName == "ElevenLabs" ? .trusted
+                                 : (model.speech.naturalVoiceOffline ? .warning : .neutral),
                              systemImage: "waveform.and.mic",
-                             spoken: model.speech.naturalVoice == nil ? "System voice; add an ElevenLabs key for the natural voice" : "Voice: \(model.speech.backendName)")
+                             spoken: voicePillSpoken)
                 Spacer(minLength: 0)
             }
             // The reason the voice pill still says "System" with a key in Secrets.plist — a wrong
@@ -94,6 +97,18 @@ struct HapticsCard: View {
                 Text(err).font(CKFont.secondary).foregroundStyle(CKColor.laneUrgent)
             }
         }
+    }
+
+    /// VoiceOver sentence for the voice pill: no key → how to get the natural voice; breaker open →
+    /// that the natural voice is unreachable; otherwise the last line's engine and reason
+    /// ("Voice: Natural voice · cached"), or the backend name before the first line.
+    private var voicePillSpoken: String {
+        guard model.speech.naturalVoice != nil else { return "System voice; add an ElevenLabs key for the natural voice" }
+        if model.speech.naturalVoiceOffline { return "Natural voice unreachable; using the system voice until the network is back" }
+        if let last = model.speech.lastEngine {
+            return "Voice: " + VoiceEngineChoice.describe(engine: last.engine, reason: last.reason)
+        }
+        return "Voice: \(model.speech.backendName)"
     }
 
     /// Visible word for the active obstacle cue (`CueKind`): Clear / Center / Left / Right / Head.

@@ -93,6 +93,37 @@ struct NearHoldTests {
         #expect(g.head == [.infinity, .infinity, .infinity] && !g.headHeld.contains(true))
     }
 
+    /// Step 51: at the cane's natural 45° the head band is uncovered (`.infinity`, blind 0, flag
+    /// false), so only the three torso cells can be blind. The cold start needs
+    /// `min(coldStartMinCells, covered cells)` = 3 of them; counting all six would ask for 4 of 3
+    /// and a phone switched on against a wall on the cane would never show caution. An uncovered
+    /// cell never counts, even if it reports blind.
+    @Test("cold start counts only covered cells (45° mount: three torso cells are enough)")
+    func coldStartCountsOnlyCoveredCells() {
+        var hold = NearHold()
+        let steep = LaneGrid(head: [.infinity, .infinity, .infinity], torso: [.infinity, .infinity, .infinity],
+                             centerDepth: .infinity, headBlind: [0, 0, 0], torsoBlind: [1, 1, 0.9],
+                             headCoverage: [false, false, false], bandMode: .metric)
+        let g = hold.apply(steep)
+        #expect(g.torso == [0.8, 0.8, 0.8] && g.torsoHeld == [true, true, true])
+        #expect(g.head == [.infinity, .infinity, .infinity] && !g.headHeld.contains(true))
+        #expect(g.headCoverage == [false, false, false])            // flags pass through
+
+        // The same three blind torso cells with the head band covered (and clear) are 3 of 6:
+        // today's rule, no cold start.
+        var covered = NearHold()
+        let flat = covered.apply(LaneGrid(head: [.infinity, .infinity, .infinity], torso: [.infinity, .infinity, .infinity],
+                                          centerDepth: .infinity, headBlind: [0, 0, 0], torsoBlind: [1, 1, 0.9]))
+        #expect(!flat.torsoHeld.contains(true))
+
+        // Uncovered cells reporting blind do not count toward the cold start.
+        var ghost = NearHold()
+        let g2 = ghost.apply(LaneGrid(head: [.infinity, .infinity, .infinity], torso: [.infinity, 3, 3],
+                                      centerDepth: 3, headBlind: [1, 1, 1], torsoBlind: [1, 0, 0],
+                                      headCoverage: [false, false, false], bandMode: .metric))
+        #expect(!g2.torsoHeld.contains(true) && !g2.headHeld.contains(true))
+    }
+
     @Test("a sweep (untrusted frame) disarms every cell")
     func aSweepDisarmsEveryCell() {
         var hold = NearHold()

@@ -91,7 +91,7 @@ import Testing
 /// twice — and so a reworded literal is noticed here.
 @Test func fixedCueLinesAreLeftToCommonLines() {
     var policy = CueSpeechPolicy()
-    #expect(policy.line(for: .head, phoneCannotBuzz: false, now: 0)?.text == "Head height.")
+    #expect(policy.line(for: .head(distance: 1.0, onset: true), phoneCannotBuzz: false, now: 0)?.text == "Head height.")
     #expect(policy.line(for: .left, phoneCannotBuzz: true, now: 100)?.text == "Left.")
     #expect(policy.line(for: .right, phoneCannotBuzz: true, now: 200)?.text == "Right.")
     #expect(!SpokenPhrases.warningLines.contains("Head height."))
@@ -194,4 +194,37 @@ import Testing
     #expect(queued.first == missed, "the line just spoken must be synthesized first")
     #expect(queued.count == all.count - 20)   // nothing already on disk is paid for twice
     #expect(queued.dropFirst() == all.dropFirst(20).filter { $0 != missed }[...])
+}
+
+// MARK: - The voice shell's lines (Step 56)
+
+/// The shell's whole fixed vocabulary costs at most `shellCharacterBudget` characters of
+/// ElevenLabs quota, once. A reworded menu or a new confirmation changes the count on purpose.
+@Test func shellLinesStayInsideTheirBudget() {
+    #expect(SpokenPhrases.shellCharacterBudget == 1_500)
+    let cost = SpokenPhrases.characterCount(SpokenPhrases.shellLines)
+    #expect(cost <= SpokenPhrases.shellCharacterBudget, "shell lines cost \(cost) characters")
+    #expect(SpokenPhrases.shellLines.count == Set(SpokenPhrases.shellLines).count, "no line twice")
+}
+
+/// Completeness: every fixed line the voice shell can speak — the menu, the numbered help, every
+/// item's confirmation, the latency filler and timeout, the emergency flow's fixed lines, the
+/// number-free status clauses and the shell's three odd ones — is byte-identical to a member of
+/// `shellLines`, which `AppModel.commonLines` prefetches. Swept from the production constants,
+/// never retyped (a one-byte drift is a silent flip to the system voice).
+@Test func everyLineTheShellCanSpeakIsPrefetched() {
+    let prefetched = Set(SpokenPhrases.shellLines)
+    var spoken: [String] = [VoiceMenu.menuLine, VoiceMenu.helpLine,
+                            ConversationBudget.fillerLine, ConversationBudget.timeoutLine,
+                            SpokenPhrases.notHeardLine, SpokenPhrases.describerBusyLine,
+                            HeadCoverNotice.line]
+    spoken += VoiceMenu.Item.allCases.map(\.confirmationLine)
+    spoken += EmergencyConfirm.fixedLines
+    spoken += StatusSummary.fixedLines
+    spoken += CueLevel.allCases.map(\.spokenLine)
+    for line in spoken {
+        #expect(prefetched.contains(line), "not prefetched: \(line)")
+    }
+    #expect(SpokenPhrases.notHeardLine == "I did not catch that.")
+    #expect(SpokenPhrases.describerBusyLine == "Still describing the previous scene.")
 }

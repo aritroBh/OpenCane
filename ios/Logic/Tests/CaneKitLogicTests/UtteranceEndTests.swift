@@ -98,3 +98,24 @@ import Testing
     #expect(d.update(transcript: "hello", now: 2.5) == .endOfUtterance)
     #expect(d.update(transcript: "hello", now: 3) == .endOfUtterance)
 }
+
+/// Step 58: a follow-up window after an answer is a shorter listen. The detector takes its cap as
+/// a parameter (default the push-to-talk 10 s), so a 5 s follow-up with nothing said times out at
+/// 5 s — silently, the app decides that — and words on the clock at the cap are still a submit.
+@Test func followUpWindowUsesAShorterCap() {
+    var silent = UtteranceEndDetector(startedAt: 0, maxListen: VoiceShellPolicy.followUpSeconds)
+    let s1 = silent.update(transcript: "", now: 4.9)
+    #expect(s1 == .listening)
+    let s2 = silent.update(transcript: "", now: 5.0)
+    #expect(s2 == .timeout)
+    var spoke = UtteranceEndDetector(startedAt: 0, maxListen: 5)
+    let w1 = spoke.update(transcript: "repeat", now: 4.5)
+    #expect(w1 == .listening)
+    let w2 = spoke.update(transcript: "repeat that", now: 5.0)
+    #expect(w2 == .endOfUtterance)
+    var press = UtteranceEndDetector(startedAt: 0)
+    let p1 = press.update(transcript: "", now: 9.9)
+    #expect(p1 == .listening)
+    let p2 = press.update(transcript: "", now: 10)
+    #expect(p2 == .timeout)
+}

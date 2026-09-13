@@ -151,6 +151,12 @@ final class TripLogger {
             // from the log now that there is no on-screen debug footer.
             "tilt": r.cameraTiltDownDeg.map { Self.num(Double($0)) } ?? NSNull(),
             "fps": Self.num(fps),
+            // Step 51: how the bands were cut ("rows" before ARKit has a pose, else "metric") and
+            // whether the camera can see each band per lane (L/C/R) at the 150 cm cover range —
+            // `cue_audit.py`'s `share_head_cover`. A NO COVER cell logs `head` −1 like a clear one.
+            "bands": r.grid.bandMode.rawValue,
+            "head_cover": r.grid.headCoverage,
+            "torso_cover": r.grid.torsoCoverage,
         ])
     }
 

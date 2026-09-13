@@ -139,6 +139,57 @@ struct ConversationLogicTests {
         #expect(FastPathIntentClassifier.classify(query: "take me to Granger Library") == .startRoute(destination: "Grainger Engineering Library"))
     }
 
+    /// Rule 0 (Step 56): the eight menu words, their digits, the three extra verbs and yes / no are
+    /// matched as whole utterances through `VoiceMenu` before any other rule, and map to the voice
+    /// shell's actions. "route" alone is the CIF demo route; "take me to …" still reaches any place.
+    @Test func ivrRuleRunsBeforeEverythingElse() {
+        #expect(FastPathIntentClassifier.classify(query: "route") == .startDefaultRoute)
+        #expect(FastPathIntentClassifier.classify(query: "1") == .startDefaultRoute)
+        #expect(FastPathIntentClassifier.classify(query: "one") == .startDefaultRoute)
+        #expect(FastPathIntentClassifier.classify(query: "where am i") == .describeScene)
+        #expect(FastPathIntentClassifier.classify(query: "Where am I?") == .describeScene)
+        #expect(FastPathIntentClassifier.classify(query: "2") == .describeScene)
+        #expect(FastPathIntentClassifier.classify(query: "describe") == .describeScene)
+        #expect(FastPathIntentClassifier.classify(query: "status") == .speakStatus)
+        #expect(FastPathIntentClassifier.classify(query: "4") == .speakStatus)
+        #expect(FastPathIntentClassifier.classify(query: "check status") == .speakStatus)
+        #expect(FastPathIntentClassifier.classify(query: "repeat") == .repeatInstruction)
+        #expect(FastPathIntentClassifier.classify(query: "say again") == .repeatInstruction)
+        #expect(FastPathIntentClassifier.classify(query: "quiet") == .setCueLevel(.quiet))
+        #expect(FastPathIntentClassifier.classify(query: "6") == .setCueLevel(.quiet))
+        #expect(FastPathIntentClassifier.classify(query: "standard") == .setCueLevel(.standard))
+        #expect(FastPathIntentClassifier.classify(query: "detailed cues") == .setCueLevel(.detailed))
+        #expect(FastPathIntentClassifier.classify(query: "next") == .nextWaypoint)
+        #expect(FastPathIntentClassifier.classify(query: "help") == .help)
+        #expect(FastPathIntentClassifier.classify(query: "7") == .help)
+        #expect(FastPathIntentClassifier.classify(query: "emergency") == .emergency)
+        #expect(FastPathIntentClassifier.classify(query: "eight") == .emergency)
+        #expect(FastPathIntentClassifier.classify(query: "yes") == .confirm(true))
+        #expect(FastPathIntentClassifier.classify(query: "No.") == .confirm(false))
+        #expect(FastPathIntentClassifier.classify(query: "cancel") == .confirm(false))
+        // Place routes are unchanged by rule 0.
+        #expect(FastPathIntentClassifier.classify(query: "take me to CIF") == .startRoute(destination: "the CIF east entrance"))
+        #expect(FastPathIntentClassifier.classify(query: "route to CIF") == .startRoute(destination: "the CIF east entrance"))
+        // Homophones and sentences that merely contain a menu word are not rule 0.
+        #expect(FastPathIntentClassifier.classify(query: "won") == nil)
+        #expect(FastPathIntentClassifier.classify(query: "what is the weather") == nil)
+    }
+
+    /// Rule 0 sits in front of the stop rule, so every stop phrase must still stop — none of them is
+    /// a menu word, verb or confirmation (`VoiceMenuTests.stopIsNotAMenuWord`).
+    @Test func stopPhrasesStillStopBehindRuleZero() {
+        for phrase in ["stop", "Stop.", "stop route", "stop navigating", "stop navigation", "cancel route", "end route"] {
+            #expect(FastPathIntentClassifier.classify(query: phrase) == .stopRoute, "\(phrase)")
+        }
+    }
+
+    /// Rule 12 is checked before rule 8 (Step 56): "how far have I walked" is the distance walked,
+    /// not the distance to the next point; "how far to next point" is still the route clause.
+    @Test func howFarHaveIWalkedIsTheDistanceWalked() {
+        #expect(FastPathIntentClassifier.classify(query: "how far have I walked") == .answerHistory(metric: .distanceWalked, windowSeconds: nil))
+        #expect(FastPathIntentClassifier.classify(query: "how far to next point") == .answerStatus(aspect: .route))
+    }
+
     @Test("FastPath leaves open-ended and visual queries for LLM")
     func fastPathDelegatesOpenEnded() {
         #expect(FastPathIntentClassifier.classify(query: "what is in front of me") == nil)

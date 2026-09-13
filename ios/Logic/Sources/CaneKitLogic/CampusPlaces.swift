@@ -14,6 +14,8 @@
 //    · `WalkingIntro` — the line spoken before the route starts ("Walking to Grainger
 //      Engineering Library, 750 meters.") so a blind walker hears what was chosen and can say
 //      Stop if it is wrong.
+//      Also `routeStarted` (Step 54): the "Route started. <name>. First: …" intro, built once
+//      for both `NavigationEngine.start` (speaks it) and `AppModel` (prefetches it).
 //
 //  Owner / callers (all in the app, all main actor; every type here is a stateless value):
 //    · `RouteSource.mapKit(to:from:)` — `CampusPlaces.match` first, then `DestinationPicker.pick`
@@ -240,6 +242,28 @@ public enum WalkingIntro {
             return "Walking to \(place), \(d)."
         }
         return "Walking to \(place), \(d). GPS is weak. If you are inside, head for the exit first."
+    }
+
+    /// The route intro, "Route started. <name>. First: <first waypoint's line>" (Step 54).
+    ///
+    /// Why one function: `NavigationEngine.start` speaks it and `AppModel` prefetches it into the
+    /// natural-voice cache (`queueRouteStart` during the depth wait, `buildRoute` as soon as MapKit
+    /// answers, `startRouteNow` for the degraded paths). The cache is keyed by exact bytes; the
+    /// old copy of this string in `startRouteNow` was prefetched a moment before the engine spoke
+    /// it, so on a cold cache the first line of every route came out in the system voice.
+    /// Pinned by `introLineIsWhatNavigationSpeaks`.
+    /// - Parameter route: the route about to start; an empty route ends in "First: " (the engine
+    ///   still speaks it before the first fix).
+    public static func routeStarted(_ route: Route) -> String {
+        routeStarted(name: route.name, firstLine: route.waypoints.first?.say ?? "")
+    }
+
+    /// The intro from its two parts; `routeStarted(_:)` is the production entry.
+    /// - Parameters:
+    ///   - name: `Route.name`.
+    ///   - firstLine: the first waypoint's `say`, or "".
+    public static func routeStarted(name: String, firstLine: String) -> String {
+        "Route started. \(name). First: \(firstLine)"
     }
 
     /// Nearest 10 m below a kilometre (at least "10 meters", never "0"), tenths of a kilometre

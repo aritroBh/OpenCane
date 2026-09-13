@@ -26,9 +26,12 @@
 //  and cost no tokens; only open questions go to the network (and scene questions to the camera).
 //  Owner / callers: `ConversationCoordinator.handleQuery` (app, main actor) — `classify` first, then
 //  `isSceneQuestion`, then the cloud model; `executeAction` performs the result.
+//  Rule 0 (Step 56) is the voice shell's grammar (`VoiceMenu`): whole utterances only, before
+//  everything else, never sent to the cloud.
 //  Tests: `ConversationLogicTests` (`fastPathSettings`, `fastPathStatusAndStop`,
 //  `fastPathMarkersAndTrends`, `fastPathCampusNavigation`, `fastPathDelegatesOpenEnded`,
-//  `sceneQuestionDetection`) and `NodToTalkFastPathTests` (rule 5b).
+//  `sceneQuestionDetection`, `ivrRuleRunsBeforeEverythingElse`, `stopPhrasesStillStopBehindRuleZero`,
+//  `howFarHaveIWalkedIsTheDistanceWalked`), `VoiceMenuTests` and `NodToTalkFastPathTests` (rule 5b).
 //
 
 import Foundation
@@ -46,6 +49,25 @@ public enum FastPathIntentClassifier {
 
         let lower = trimmed.lowercased()
         let cleaned = lower.trimmingCharacters(in: CharacterSet(charactersIn: ".?!,\"';:"))
+
+        // 0. Voice shell (Step 56): the eight menu words or their digits, the three extra verbs
+        //    (next / standard / detailed) and yes / no — whole utterance only, through `VoiceMenu`,
+        //    so "the route is long" is not a command and "won" is not "one". It runs before the
+        //    stop rule, which is safe because no stop phrase is a menu word, verb or confirmation
+        //    (`stopIsNotAMenuWord`, `stopPhrasesStillStopBehindRuleZero`).
+        if let item = VoiceMenu.match(cleaned) {
+            return action(for: item)
+        }
+        if let verb = VoiceMenu.verb(cleaned) {
+            switch verb {
+            case .next: return .nextWaypoint
+            case .standard: return .setCueLevel(.standard)
+            case .detailed: return .setCueLevel(.detailed)
+            }
+        }
+        if let yes = VoiceMenu.confirmation(cleaned) {
+            return .confirm(yes)
+        }
 
         // 1. Navigation Escape / Stop — exact phrases only, so "stop the beacon" or "don't stop"
         //    never end a route.
@@ -120,18 +142,25 @@ public enum FastPathIntentClassifier {
             return .answerStatus(aspect: .headphones)
         }
 
-        // 8. Status: Route Progress / Distance to Next Point. ⚠ "how far" also swallows
-        //    "how far have I walked", so rule 12's copy of that phrase is unreachable today (the
-        //    walker hears the distance to the next point, not the distance walked).
+        // 12. History & Trends: Distance Walked — checked before rule 8 (Step 56), whose "how far"
+        //     substring used to swallow "how far have I walked" (`howFarHaveIWalkedIsTheDistanceWalked`).
+        if cleaned.contains("how far have i walked") || cleaned.contains("distance walked")
+            || cleaned.contains("how long have we been walking") {
+            return .answerHistory(metric: .distanceWalked, windowSeconds: nil)
+        }
+
+        // 8. Status: Route Progress / Distance to Next Point. "how far have I walked" never reaches
+        //    here: rule 12 runs first.
         if cleaned.contains("how far") || cleaned.contains("distance to next") || cleaned.contains("where am i going")
             || cleaned.contains("next instruction") || cleaned.contains("current route") {
             return .answerStatus(aspect: .route)
         }
 
         // 9. Status: Overall System Health ("how is OpenCane doing", "status")
-        if cleaned == "status" || cleaned == "status check" || cleaned.contains("how are you doing")
+        //    The bare "status" / "status check" / "check status" are rule 0 (`.speakStatus`) now.
+        if cleaned.contains("how are you doing")
             || cleaned.contains("how is opencane doing") || cleaned.contains("how is canekit doing")
-            || cleaned == "is everything working" || cleaned == "check status" {
+            || cleaned == "is everything working" {
             return .answerStatus(aspect: .all)
         }
 
@@ -160,12 +189,6 @@ public enum FastPathIntentClassifier {
         if cleaned.contains("how many steps") || cleaned.contains("step count") || cleaned.contains("steps walked")
             || cleaned.contains("steps so far") {
             return .answerHistory(metric: .steps, windowSeconds: nil)
-        }
-
-        // 12. History & Trends: Distance Walked
-        if cleaned.contains("how far have i walked") || cleaned.contains("distance walked")
-            || cleaned.contains("how long have we been walking") {
-            return .answerHistory(metric: .distanceWalked, windowSeconds: nil)
         }
 
         // 13. History & Trends: Hazards Encountered
@@ -201,6 +224,22 @@ public enum FastPathIntentClassifier {
         }
 
         return nil
+    }
+
+    /// Rule 0's mapping from a menu item to the action the coordinator performs. "where am I" and
+    /// "describe" are the same camera path; "quiet" is the cue level.
+    /// - Parameter item: the matched `VoiceMenu.Item`.
+    /// - Returns: the voice shell action.
+    public static func action(for item: VoiceMenu.Item) -> ConversationAction {
+        switch item {
+        case .route: return .startDefaultRoute
+        case .whereAmI, .describe: return .describeScene
+        case .status: return .speakStatus
+        case .repeatLast: return .repeatInstruction
+        case .quiet: return .setCueLevel(.quiet)
+        case .help: return .help
+        case .emergency: return .emergency
+        }
     }
 
     /// Whether a query the fast path left over is about what the camera can see, so that with no

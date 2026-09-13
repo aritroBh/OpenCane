@@ -72,18 +72,23 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(g.head[0] == 4 && g.torso[0] == 4)
 }
 
-/// An overhanging sign in the top of the view registers in the head row, not the torso.
-@Test func headRowIsTopBand() {
+/// Rows-mode fallback (no ARKit pose yet, `geometry == nil`): an overhanging sign in the top of
+/// the view registers in the head row, not the torso. Renamed from `headRowIsTopBand` in Step 51,
+/// same body: with a pose the bands are metric (LaneGeometryTests).
+@Test func headRowIsTopBandWithoutGeometry() {
     // Obstacle only in the top 96 scene rows, centre lane.
     let d = portraitBuffer { x, y in (x >= 64 && x < 128 && y < 96) ? 1.0 : 4.0 }
     let g = LaneMath.computeLanes(depth: d, confidence: nil, width: 256, height: 192)
+    #expect(g.bandMode == .rows && g.headCoverage == [true, true, true])
     #expect(g.head[1] == 1)
     #expect(g.torso[1] == 4)
     #expect(g.head[0] == 4 && g.head[2] == 4)
 }
 
-/// Pavement in the bottom quarter of the view is never reported as an obstacle.
-@Test func groundBandIsSkipped() {
+/// Rows-mode fallback (no ARKit pose yet): pavement in the bottom quarter of the view is never
+/// reported as an obstacle. Renamed from `groundBandIsSkipped` in Step 51, same body; metric mode
+/// drops the floor by height instead (`metricBandsDropTheFloorAtFortyFiveDegrees`).
+@Test func groundBandIsSkippedWithoutGeometry() {
     // Bottom 25 % (scene y ≥ 192) is pavement at 0.3 m.
     let d = portraitBuffer { _, y in y >= 192 ? 0.3 : 4.0 }
     let g = LaneMath.computeLanes(depth: d, confidence: nil, width: 256, height: 192)
@@ -208,17 +213,22 @@ private func portraitBuffer(bufW: Int = 256, bufH: Int = 192,
     #expect(TileLevel.level(for: 1.0, hasData: false) == .noData)
 }
 
-/// The mount aim window (hardware/mount/DESIGN.md): 3–8° below the horizon is good; steeper
-/// makes the torso lanes read pavement, shallower loses the ground reference.
-@Test func mountTiltWindow() {
+/// The Mount card's line. Renamed from `mountTiltWindow` in Step 51: the lanes are metric now, so
+/// the 3–8° window is no longer a lane requirement and 12° (which used to say "tilt the phone up",
+/// because the row bands read pavement there) is good; what makes a pitch bad is losing head-height
+/// cover (≈ 19°, `MountTilt.headCoverLimitDeg`), or looking level / up (the ground detector needs
+/// the ground). The one-argument form estimates cover from the shown angle.
+@Test func mountTiltStatus() {
     #expect(MountTilt.status(downDeg: 5).ok)
     #expect(MountTilt.status(downDeg: 5).text == "Camera tilt 5° down, good")
-    #expect(!MountTilt.status(downDeg: 12).ok)
-    #expect(MountTilt.status(downDeg: 12).text == "Camera tilt 12° down: tilt the phone up")
+    #expect(MountTilt.status(downDeg: 12).ok)
+    #expect(MountTilt.status(downDeg: 12).text == "Camera tilt 12° down, good")
+    #expect(!MountTilt.status(downDeg: 25).ok)
+    #expect(MountTilt.status(downDeg: 25).text == "Camera tilt 25° down: too steep for head-height cover")
     #expect(MountTilt.status(downDeg: -2).text == "Camera tilt 2° up: tilt the phone down")
     #expect(MountTilt.status(downDeg: 0.3).text == "Camera level: tilt the phone down")
-    #expect(MountTilt.status(downDeg: 2.6).ok)          // shows "3°", so it must say good
-    #expect(!MountTilt.status(downDeg: 8.6).ok)         // shows "9°"
+    #expect(MountTilt.status(downDeg: 2.6).ok)          // shows "3°"
+    #expect(MountTilt.status(downDeg: 45, headCover: false).text == "Camera tilt 45° down: too steep for head-height cover")
 }
 
 /// Camera pitched down 5°: look = (0, −sin 5°, −cos 5°), so the transform's Z column (= −look) has

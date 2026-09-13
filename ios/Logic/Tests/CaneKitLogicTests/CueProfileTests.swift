@@ -35,6 +35,21 @@ struct CueProfileTests {
         #expect(rules.headEnterM == CueThresholds().head)
     }
 
+    /// Step 52 (owner decision 2026-09-13): the overhang signature is ON for every level and
+    /// place unless the `overhangSignature` valve turns it off, and a fresh `CueThresholds` agrees
+    /// with the default rules, so a decider nobody configured behaves like the app.
+    @Test("every default rule set requires the overhang signature; the valve can switch it off")
+    func defaultRulesRequireTheOverhangSignature() {
+        #expect(CueRules.default.requireOverhangSignature)
+        #expect(CueThresholds().requireOverhangSignature)
+        for level in CueLevel.allCases {
+            for place in CuePlace.allCases {
+                #expect(CueRules(level: level, place: place).requireOverhangSignature)
+            }
+        }
+        #expect(!CueRules(level: .detailed, place: .outdoors, requireOverhangSignature: false).requireOverhangSignature)
+    }
+
     @Test("Quiet names nothing, on or off a route")
     func quietProfileHasNoObstacleNames() {
         let rules = CueRules(level: .quiet, place: .outdoors)
@@ -135,7 +150,7 @@ struct CueProfileTests {
             (.updateCenter(distance: 1.2), .updateCenter(distance: 1.2)),
             (.fire(.left), .render(.left)),
             (.fire(.right), .render(.right)),
-            (.fire(.head), .render(.head)),
+            (.fire(.head(distance: 1.0, onset: true)), .render(.head(distance: 1.0, onset: true))),
             (.stop, .stop),
         ]
         for (i, (output, expected)) in fires.enumerated() {

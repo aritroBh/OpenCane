@@ -79,11 +79,16 @@ struct TorsoHapticPolicyTests {
         #expect(r.step(report(torso: [4, 4, 1.0]), at: 0) == .suppressed(.right, reason: .quiet))
     }
 
+    /// Step 52: the torso cells moved from 1.0 m to 1.6 m. With the overhang signature (ON by
+    /// default) a head cell whose torso cell is as near is a wall, not head height; 1.6 m keeps the
+    /// centre zone busy (< 2.0 m) while the head cell stays an overhang (≥ 0.5 m nearer). The 1.6 s
+    /// fire is the decider's 0.6 m band re-fire (1.0 m onset → 0.5 m, ≥ 1.5 s later), no longer a
+    /// 1 Hz repeat.
     @Test("Quiet still renders the head cue, every time the decider fires it")
     func quietStillRendersHead() {
         var rig = Rig(quiet)
-        #expect(rig.step(report(head: [4, 1.0, 4], torso: [1.0, 1.0, 1.0]), at: 0) == .render(.head))
-        #expect(rig.step(report(head: [4, 1.0, 4], torso: [1.0, 1.0, 1.0]), at: 1.0) == .render(.head))
+        #expect(rig.step(report(head: [4, 1.0, 4], torso: [1.6, 1.6, 1.6]), at: 0) == .render(.head(distance: 1.0, onset: true)))
+        #expect(rig.step(report(head: [4, 0.5, 4], torso: [1.6, 1.6, 1.6]), at: 1.6) == .render(.head(distance: 0.5, onset: false)))
     }
 
     // MARK: Standard — centre onsets
@@ -297,7 +302,7 @@ struct TorsoHapticPolicyTests {
             var r = Rig(rules)
             #expect(r.step(report(torso: [4, 4, 1.0]), at: 0) == .suppressed(.right, reason: reason))
             var h = Rig(rules)
-            #expect(h.step(report(head: [4, 1.0, 4]), at: 0) == .render(.head))
+            #expect(h.step(report(head: [4, 1.0, 4]), at: 0) == .render(.head(distance: 1.0, onset: true)))
         }
     }
 
@@ -319,7 +324,7 @@ struct TorsoHapticPolicyTests {
         #expect(held.dropFirst().allSatisfy { $0 == nil })
         var sh = Rig(standard)
         sh.crossing = true
-        #expect(sh.step(report(head: [4, 1.0, 4]), at: 0) == .render(.head))
+        #expect(sh.step(report(head: [4, 1.0, 4]), at: 0) == .render(.head(distance: 1.0, onset: true)))
     }
 
     @Test("a Geiger loop the walker is feeling stops the moment torso cues become held")
@@ -338,6 +343,8 @@ struct TorsoHapticPolicyTests {
 
     // MARK: The safety floor
 
+    /// Step 52: torso 1.0 → 1.6 m (see `quietStillRendersHead`), and the second fire is the 0.6 m
+    /// band re-fire with its payload.
     @Test("the head cue is rendered at every level, place and hold")
     func headIsNeverSuppressed() {
         for level in CueLevel.allCases {
@@ -345,8 +352,8 @@ struct TorsoHapticPolicyTests {
                 for crossing in [false, true] {
                     var rig = Rig(CueRules(level: level, place: place))
                     rig.crossing = crossing
-                    #expect(rig.step(report(head: [1.0, 4, 4], torso: [1.0, 1.0, 1.0]), at: 0) == .render(.head))
-                    #expect(rig.step(report(head: [1.0, 4, 4], torso: [1.0, 1.0, 1.0]), at: 1.0) == .render(.head))
+                    #expect(rig.step(report(head: [1.0, 4, 4], torso: [1.6, 1.6, 1.6]), at: 0) == .render(.head(distance: 1.0, onset: true)))
+                    #expect(rig.step(report(head: [0.5, 4, 4], torso: [1.6, 1.6, 1.6]), at: 1.6) == .render(.head(distance: 0.5, onset: false)))
                 }
             }
         }

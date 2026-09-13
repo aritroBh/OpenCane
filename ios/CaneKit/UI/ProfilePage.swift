@@ -11,6 +11,7 @@
 //  Module `ui-views` in docs/CODE_REFERENCE.md.
 //
 
+import CaneKitLogic
 import SwiftUI
 
 /// Profile page: Emergency Medical ID card, mobility fitness stats, and profile editor.
@@ -164,7 +165,8 @@ struct ProfilePage: View {
 
                     Spacer()
 
-                    if let phoneURL = URL(string: "tel:\(p.emergencyContactPhone.filter { $0.isNumber || $0 == "+" })") {
+                    // Same digits the voice call dials (`EmergencyConfirm.telDigits`, Step 59).
+                    if let phoneURL = URL(string: "tel:\(EmergencyConfirm.telDigits(p.emergencyContactPhone))") {
                         Link(destination: phoneURL) {
                             HStack(spacing: CKSpacing.xs) {
                                 Image(systemName: "phone.fill")

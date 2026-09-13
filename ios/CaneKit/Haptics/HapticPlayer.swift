@@ -450,7 +450,7 @@ final class HapticPlayer {
         switch kind {
         case .left: play(.left)
         case .right: play(.right)
-        case .head: play(.head)
+        case .head: play(.head(distance: 1.0, onset: true))   // payload unused by the pattern
         case .center:
             play(.centerApproach(distance: 1.0))
             Task { [weak self] in

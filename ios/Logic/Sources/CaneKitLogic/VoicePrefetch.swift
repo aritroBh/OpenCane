@@ -9,11 +9,14 @@
 //  is the one cue prefetch existed to make instant.
 //
 //  Callers: `ElevenLabsVoice.prefetch` (queue + `maxConcurrent` workers) and its error type's
-//  fatal check (`isFatal`). The batches come from `SpeechQueue.prefetch` (the caller's lines, then
-//  the route's lines, then `backgroundLines` = `SpokenPhrases.warningLines`), so dropping cached
-//  lines here is also what lets a cancelled batch resume instead of paying twice.
+//  fatal check (`isFatal`); `SpeechQueue.prefetch` (app) builds its backlog with `merge` — the
+//  caller's new lines first, then what an earlier batch had not reached, then the standing tail
+//  (the route's lines, then `backgroundLines` = `SpokenPhrases.warningLines`) — and one worker
+//  drains it `chunk` lines at a time (Step 54: prefetch is additive; a warning's cache miss appends
+//  to the backlog and never cancels the route batch that is running). Dropping cached lines here is
+//  what keeps a re-merged line from being paid for twice.
 //  Isolation: stateless and nonisolated; `isCached` is called synchronously on the caller's task.
-//  Tests: VoicePrefetchTests.swift (5; `SpokenPhrasesTests.aCancelledWarmUpResumesInsteadOfStartingOver`
+//  Tests: VoicePrefetchTests.swift (8; `SpokenPhrasesTests.aCancelledWarmUpResumesInsteadOfStartingOver`
 //  covers the resume).
 //
 
@@ -71,5 +74,33 @@ public enum VoicePrefetch {
                 && seen.insert(line).inserted
                 && !isCached(line)
         }
+    }
+
+    /// How many backlog lines one worker pass hands to `ElevenLabsVoice.prefetch` (Step 54). Equal
+    /// to `maxConcurrent` so a line merged in while a long batch runs (a route start during the
+    /// warning warm-up, a warning that just missed) is requested within one pass rather than after
+    /// the whole backlog. Pinned by `prefetchChunkIsTheConcurrencyLimit`.
+    public static let chunk = maxConcurrent
+
+    /// The additive backlog (Step 54): what a prefetch worker should still request, in order.
+    ///
+    /// `new` first — it was asked for *now*: a route's lines at route start (waypoint 1 is needed
+    /// in seconds) or a warning that just came out in the system voice and may repeat within
+    /// seconds ("Head height." every 4 s). Then `backlog`, what an earlier batch had not reached,
+    /// in its own order. Then `tail`, the standing set (route lines, then warning lines). The
+    /// union goes through `queue`, so repeats and cached lines are dropped and nothing uncached is
+    /// ever lost. Before Step 54 a new batch *cancelled* the running one; the standing tail existed
+    /// to survive that, and now simply keeps the warm-up complete.
+    /// - Parameters:
+    ///   - new: the caller's lines, in speaking order.
+    ///   - backlog: lines not yet requested from earlier calls.
+    ///   - tail: `routeLines + backgroundLines`.
+    ///   - isCached: whether this exact line is already on disk.
+    /// - Returns: the lines still worth requesting, in the order above, without repeats.
+    /// Pinned by `aNewBatchGoesAheadOfTheBacklogAndTheTailFollows`,
+    /// `mergeDropsCachedAndRepeatedLinesButNeverAnUncachedOne`.
+    public static func merge(new: [String], backlog: [String], tail: [String],
+                             isCached: (String) -> Bool) -> [String] {
+        queue(new + backlog + tail, isCached: isCached)
     }
 }

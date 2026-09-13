@@ -5,8 +5,13 @@ cue load a walker actually got, so cue design v2 (docs/cue_design_v2.md) is tune
 from a feeling. Step 35, the "measure first" item of the research's ranked change list.
 
 It answers, from the log alone:
-  1. Was the phone on the mount? Camera tilt from `lanes.tilt` vs the 3–8° window (`MountTilt.aim`).
-     A handheld walk (the first field log: median 26°) must not be used to tune distances.
+  1. Was the phone on the mount, and could the camera see head height? Camera tilt from `lanes.tilt`
+     vs the 3–8° window (`MountTilt.aim`, a hinge recommendation since Step 51); a handheld walk (the
+     first field log: median 26°) must not be used to tune distances. Step 51 `head_cover`: the share
+     of `lanes` frames with any head lane covered (`lanes.head_cover`, or for a log from before Step
+     51 the tilt against the geometry limit, ≈ 19° at camera 95 cm / head 140 cm / 150 cm). At the
+     cane's natural 45° it is 0: head cues were impossible on that walk. `could_not_be_head` counts
+     rows-mode head cells whose most optimistic (top-row) height is still under 140 cm.
   2. Is "head height" an overhang or a wall? For every `lanes` cell with head < 1.5 m, is the torso
      cell of the same lane also near (within 0.5 m → wall / furniture / person, which the cane finds)
      or clearly farther / empty (the overhang signature)?
@@ -16,6 +21,14 @@ It answers, from the log alone:
      line start), lines dispatched < 1 s apart, and different-band lines starting < 0.3 s after the
      previous line's `speech_end`.
   5. App bugs: any `field_kind` / `field_t` column (TripLogRecord collision; e2e.py fails on it too).
+  6. What would Steps 51–52 have done? (`head_gate_replay`) a Python mirror of `HeadGate` plus the
+     head episode (onset; re-fire on 1.0 / 0.6 m ≥ 1.5 s apart; end after 2 s of trusted clear;
+     "Head height." on the onset under a 4 s limiter and once more under 0.6 m) over the 2 Hz
+     `lanes` records, beside the log's own head cues and lines.
+  6. One voice? (Step 53) Which engine actually spoke each line — `speech_dispatch.engine`, a `race`
+     settled by its `speech_engine` record — and how often the voice flipped: per minute over the
+     whole walk, and separately inside route speech (consecutive `nav` lines while a route runs),
+     which should be 0 once the cache is warm.
 
 Run from ios/:
     scripts/cue_audit.py path/to/canekit-2026-09-12T20-57-17Z.jsonl
@@ -37,7 +50,9 @@ Read-only: never writes into the log or the repo.
 # `lanes` (`head`, `torso`, `depth`, `tilt` from TripLogger.lanes), `cue` (field `cue`; Step 41 adds
 # `suppressed` = a torso cue the level did not render, `render` = a Standard onset tap), `speech`
 # (`text`, `priority`), `speech_suppressed` (`reason`, `load`), `speech_dispatch` (`text`,
-# `priority`, `replays`, `resume_from`), `speech_end` (`priority`), and for the hazard sections
+# `priority`, `replays`, `resume_from`, and since Step 53 `engine` / `engine_reason`), `speech_engine`
+# (`text`, `engine`, `engine_reason`), `route` (`action` start / stop / restart), `speech_end`
+# (`priority`), and for the hazard sections
 # `hazard` (`type`, `source`), `hazard_watch` (`reply`, `error`, `dropped`, `ms`) and `describe_result`
 # (`ms`, −1 when unknown), all written by AppModel / TripLogger / HazardScanner; `t` is seconds since
 # the TripLogger was created (wall clock) on every record. ⚠ The describe_result section also counts
@@ -48,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import statistics
 import subprocess
@@ -59,11 +75,23 @@ from pathlib import Path
 # ⚠ Mirrors of app constants — keep in step with the Swift (nothing checks this automatically):
 # metres; the head band's enter distance, `CueThresholds.head` (ios/Logic/.../CueDecider.swift).
 HEAD_ENTER_M = 1.5            # CueThresholds.head
-# metres; torso at least this much farther than head = overhang. A research hypothesis ([H]), not
-# an app constant: no Swift code uses it yet.
-SIGNATURE_GAP_M = 0.5         # cue design v2 §3.2 overhang signature [H]
+# metres; torso at least this much farther than head = overhang. An app constant since Step 52.
+SIGNATURE_GAP_M = 0.5         # CueThresholds.overhangGapM (HeadGate)
 # degrees below the horizon (inclusive); `MountTilt.aim` = 3...8 (LaneReport.swift).
-MOUNT_AIM_DEG = (3.0, 8.0)    # MountTilt.aim
+MOUNT_AIM_DEG = (3.0, 8.0)    # MountTilt.aim (a hinge recommendation since Step 51)
+# Step 51 geometry (LaneConfig, centimetres) and the depth map's long-axis half FOV; a
+# `depth_geometry` record in the log overrides them (`geometry_from`).
+CAMERA_HEIGHT_CM = 95.0       # LaneConfig.cameraHeightCm
+HEAD_MIN_CM = 140.0           # LaneConfig.headMinHeightCm
+COVER_RANGE_CM = 150.0        # LaneConfig.coverageRangeCm
+HALF_FOV_LONG_DEG = 33.5      # 256-px axis of ARKit's depth map
+# Step 52 head episode (CueThresholds / CueSpeechPolicy).
+HYSTERESIS_M = 0.15           # CueThresholds.hysteresis
+HEAD_REFIRE_BANDS_M = (1.0, 0.6)  # CueThresholds.headRefireBands
+HEAD_REFIRE_MIN_GAP_S = 1.5   # CueThresholds.headRefireMinGap
+HEAD_CLEAR_S = 2.0            # CueThresholds.headClearSeconds
+HEAD_LINE_INTERVAL_S = 4.0    # CueSpeechPolicy.headInterval
+HEAD_SECOND_LINE_M = 0.6      # CueSpeechPolicy.headSecondLineBelowM
 # seconds, dispatch start to dispatch start; a heuristic for "choppy", not an app constant.
 CHOPPY_GAP_S = 1.0            # two dispatches closer than this read as a stutter
 # Case-sensitive `str.startswith` prefixes of lines the walker asked for. ⚠ Heuristic, and weaker
@@ -110,10 +138,216 @@ def cross_band_short_pauses(records: list[dict]) -> int | str:
     return count
 
 
+# ---- Step 51 / 52: head cover and the head-gate replay (pure; pinned by `selftest_head`) ----------
+
+# `MountTilt.headCoverLimitDeg` (LaneReport.swift): the steepest pitch at which the top ray reaches
+# `head_min_cm` at `range_cm` of z-depth. cos θ · tan h − sin θ = k  →  θ = acos(k · cos h) − (90° − h).
+def head_cover_limit_deg(cam_h_cm: float = CAMERA_HEIGHT_CM, head_min_cm: float = HEAD_MIN_CM,
+                         range_cm: float = COVER_RANGE_CM, half_fov_deg: float = HALF_FOV_LONG_DEG) -> float:
+    """Degrees below the horizon; ≈ 19.0 with the app defaults."""
+    k = (head_min_cm - cam_h_cm) / range_cm
+    h = math.radians(half_fov_deg)
+    return math.degrees(math.acos(max(-1.0, min(1.0, k * math.cos(h)))) - (math.pi / 2 - h))
+
+
+# The geometry constants of this log: the first `depth_geometry` record (Step 51 builds) or the
+# defaults above. Returns (cam_h_cm, head_min_cm, range_cm, half_fov_deg).
+def geometry_from(records: list[dict]) -> tuple[float, float, float, float]:
+    """Camera height, head minimum, cover range (cm) and long-axis half FOV (deg)."""
+    for r in records:
+        if r.get("kind") == "depth_geometry":
+            return (float(r.get("cam_h_cm", CAMERA_HEIGHT_CM)), float(r.get("head_min_cm", HEAD_MIN_CM)),
+                    float(r.get("cover_range_cm", COVER_RANGE_CM)),
+                    float(r.get("half_fov_long_deg", HALF_FOV_LONG_DEG)))
+    return CAMERA_HEIGHT_CM, HEAD_MIN_CM, COVER_RANGE_CM, HALF_FOV_LONG_DEG
+
+
+# Is any head lane covered in this `lanes` record? The logged flags when present (Step 51), else
+# the tilt against the geometry limit (None when the record has neither).
+def frame_head_cover(r: dict, limit_deg: float) -> bool | None:
+    """True / False / None (unknown)."""
+    cover = r.get("head_cover")
+    if isinstance(cover, list) and cover:
+        return any(bool(c) for c in cover)
+    t = r.get("tilt")
+    return (t <= limit_deg) if isinstance(t, (int, float)) else None
+
+
+# Rows-mode head cells (a log from before Step 51, or `bands: rows`) that could not have been head
+# height even from the top image row: optimistic height = camH + d · (cos θ · tan h − sin θ).
+def could_not_be_head(frames: list[dict], geom: tuple[float, float, float, float]) -> dict:
+    """{"cells": head cells under the enter distance with a tilt, "could_not_be_head": how many sit
+    under `head_min_cm` even at the top ray}. Metric frames are skipped (their head band already
+    means ≥ 140 cm)."""
+    cam_h, head_min, _, half_fov = geom
+    tan_h = math.tan(math.radians(half_fov))
+    cells = impossible = 0
+    for r in frames:
+        if r.get("bands") == "metric" or not isinstance(r.get("tilt"), (int, float)):
+            continue
+        th = math.radians(r["tilt"])
+        gain = math.cos(th) * tan_h - math.sin(th)
+        for h in (r.get("head") or [])[:3]:
+            if isinstance(h, (int, float)) and 0 <= h < HEAD_ENTER_M:
+                cells += 1
+                if cam_h + h * 100 * gain < head_min:
+                    impossible += 1
+    return {"cells": cells, "could_not_be_head": impossible}
+
+
+# Python mirror of `HeadGate.candidate` over one `lanes` record. Log values: −1 = no data (∞).
+# `head_cover` / `torso_cover` default to all True (a log before Step 51); `head_cover` may be
+# overridden (the replay's cover estimate for rows-mode frames).
+def head_gate(r: dict, enter: float, gap: float | None, head_cover: list | None = None) -> float | None:
+    """Nearest covered head distance < enter carrying the overhang signature, or None."""
+    head, torso = r.get("head") or [], r.get("torso") or []
+    hc = head_cover if head_cover is not None else (r.get("head_cover") or [True, True, True])
+    tc = r.get("torso_cover") or [True, True, True]
+    best = None
+    for i in range(min(3, len(head))):
+        h = head[i]
+        if not (i < len(hc) and hc[i]) or not isinstance(h, (int, float)) or h < 0 or h >= enter:
+            continue
+        if gap is not None:
+            t = torso[i] if i < len(torso) and isinstance(torso[i], (int, float)) else -1
+            covered = tc[i] if i < len(tc) else True
+            if covered and t >= 0 and t < h + gap:
+                continue                  # near in both bands: a wall, the torso logic's
+        best = h if best is None else min(best, h)
+    return best
+
+
+# Python mirror of the Step 52 head episode (`CueDecider`) and `CueSpeechPolicy` over the 2 Hz
+# `lanes` records with depth. ⚠ ±0.5 s timing (2 Hz), no 400 ms change gate, no dropout hold.
+# `estimate_cover`: for rows-mode frames, treat the head band as uncovered when the tilt is past the
+# geometry limit (what Step 51 would have reported); metric frames use their logged flags.
+def head_gate_replay(records: list[dict], gap: float | None = SIGNATURE_GAP_M,
+                     estimate_cover: bool = False) -> dict:
+    """{"frames", "onsets", "band_refires", "lines_would_speak"} for the replayed rule."""
+    limit = head_cover_limit_deg(*geometry_from(records))
+    frames = sorted((r for r in records if r.get("kind") == "lanes" and r.get("depth")),
+                    key=lambda r: r.get("ar_t", r.get("t", 0)))
+    zone = False
+    episode = None                    # {"last_fire", "bands", "clear_since"}
+    last_line = -math.inf
+    second_spoken = False
+    onsets = refires = lines = 0
+    for r in frames:
+        now = r.get("ar_t", r.get("t", 0))
+        if not r.get("trusted", True):
+            if episode:
+                episode["clear_since"] = None     # a sweep restarts the clear clock
+            continue
+        cover = None
+        if estimate_cover and r.get("bands") != "metric":
+            cover = [frame_head_cover(r, limit) is not False] * 3
+        d = head_gate(r, HEAD_ENTER_M + (HYSTERESIS_M if zone else 0), gap, cover)
+        zone = d is not None and (d <= HEAD_ENTER_M + HYSTERESIS_M if zone else d < HEAD_ENTER_M)
+        if episode:
+            if zone:
+                if episode["clear_since"] is not None and now - episode["clear_since"] >= HEAD_CLEAR_S:
+                    episode = None
+                else:
+                    episode["clear_since"] = None
+            else:
+                since = episode["clear_since"] if episode["clear_since"] is not None else now
+                episode = None if now - since >= HEAD_CLEAR_S else {**episode, "clear_since": since}
+        if not zone:
+            continue
+        inside = sum(1 for b in HEAD_REFIRE_BANDS_M if d <= b)
+        if episode is None:
+            onsets += 1
+            episode = {"last_fire": now, "bands": inside, "clear_since": None}
+            second_spoken = False
+            if now - last_line >= HEAD_LINE_INTERVAL_S:
+                lines += 1
+                last_line = now
+        elif (episode["bands"] < len(HEAD_REFIRE_BANDS_M) and d < HEAD_REFIRE_BANDS_M[episode["bands"]]
+              and now - episode["last_fire"] >= HEAD_REFIRE_MIN_GAP_S):
+            refires += 1
+            episode["bands"] = max(episode["bands"] + 1, inside)
+            episode["last_fire"] = now
+            if not second_spoken and d < HEAD_SECOND_LINE_M:
+                second_spoken = True
+                lines += 1
+                last_line = now
+    return {"frames": len(frames), "onsets": onsets, "band_refires": refires, "lines_would_speak": lines}
+
+
 # The measurement itself: pure over the parsed records (no I/O), so `selftest` can drive it.
 # Rates divide by `minutes` = span of every numeric `t` in the log, floored at 1e-9 so a log with a
 # single timestamp does not divide by zero (its per-minute numbers are then meaningless).
 # Returns a JSON-serialisable dict; `human` renders it, `--json` prints it raw.
+# Step 53: the engine that actually spoke each dispatched line, in time order, as [t, priority, engine]
+# with engine "elevenlabs" or "system". A dispatch's `engine` is final unless it is "race" — then the
+# next `speech_engine` record for the same text settles it — and a `playback_failed` resolution turns
+# the latest dispatch of that text into "system". Muted lines are skipped; a race never settled (the
+# line was cut first) is left "race" and ignored by the flip counters. Pre-Step 53 logs have no
+# `engine` field: every dispatch is skipped and the counters report that. Callers: the two below.
+def resolved_engines(records: list[dict]) -> list[list]:
+    """[t, priority, engine] per non-muted dispatched line, races resolved."""
+    timed = sorted((r for r in records if r.get("kind") in ("speech_dispatch", "speech_engine")
+                    and isinstance(r.get("t"), (int, float))), key=lambda r: r["t"])
+    out: list[list] = []
+    last_by_text: dict = {}
+    for r in timed:
+        if r["kind"] == "speech_dispatch":
+            engine = r.get("engine")
+            if engine in (None, "muted"):
+                continue
+            out.append([r["t"], r.get("priority"), engine])
+            last_by_text[r.get("text")] = len(out) - 1
+        else:
+            i = last_by_text.get(r.get("text"))
+            if i is not None and r.get("engine") in ("elevenlabs", "system"):
+                out[i][2] = r["engine"]
+    return out
+
+
+# Engine flips over the whole walk: adjacent settled lines whose engines differ. Returns a dict with the
+# count, the rate per minute and the lines per engine, or a string when the log predates Step 53.
+def engine_flips_per_minute(records: list[dict], minutes: float) -> dict | str:
+    """How often the walker heard the voice change, anywhere in the walk."""
+    lines = resolved_engines(records)
+    if not lines:
+        return "no speech_dispatch.engine fields (build before Step 53): one-voice unmeasured"
+    settled = [e for _, _, e in lines if e in ("elevenlabs", "system")]
+    flips = sum(1 for a, b in zip(settled, settled[1:]) if a != b)
+    return {"flips": flips, "per_min": round(flips / minutes, 1),
+            "by_engine": dict(Counter(settled)), "unsettled_races": len(lines) - len(settled)}
+
+
+# Engine flips inside route speech: consecutive `nav` lines within one route (a `route {action: start}`
+# up to the next stop / restart / start). The number the plan's device check wants at 0: a route's
+# own lines are prefetched before they are spoken (Step 54), so a flip here is a real regression.
+# Returns the count, or a string when there is no engine field or no route record.
+def engine_flips_inside_route_speech(records: list[dict]) -> int | str:
+    """Voice changes between consecutive route lines of the same route."""
+    lines = resolved_engines(records)
+    if not lines:
+        return "no speech_dispatch.engine fields"
+    routes = sorted((r for r in records if r.get("kind") == "route" and isinstance(r.get("t"), (int, float))),
+                    key=lambda r: r["t"])
+    if not routes:
+        return "no route records"
+    # [start, end) windows; an unterminated route runs to the end of the log.
+    windows, open_at = [], None
+    for r in routes:
+        action = r.get("action")
+        if open_at is not None and action in ("stop", "restart", "start"):
+            windows.append((open_at, r["t"]))
+            open_at = None
+        if action == "start":
+            open_at = r["t"]
+    if open_at is not None:
+        windows.append((open_at, float("inf")))
+    flips = 0
+    for start, end in windows:
+        nav = [e for t, p, e in lines if start <= t < end and p == "nav" and e in ("elevenlabs", "system")]
+        flips += sum(1 for a, b in zip(nav, nav[1:]) if a != b)
+    return flips
+
+
 def audit(records: list[dict]) -> dict:
     """The whole report as a dict (see the module docstring for what each part means)."""
     times = [r["t"] for r in records if isinstance(r.get("t"), (int, float))]
@@ -138,6 +372,17 @@ def audit(records: list[dict]) -> dict:
         }
     else:
         rep["tilt"] = None
+    # Step 51: could the camera see head height at all? (logged flags, else tilt vs the geometry).
+    geom = geometry_from(records)
+    limit = head_cover_limit_deg(*geom)
+    covers = [c for c in (frame_head_cover(r, limit) for r in all_lanes) if c is not None]
+    rep["head_cover"] = {
+        "limit_deg": round(limit, 1),
+        "frames": len(covers),
+        "share_head_cover": round(sum(covers) / len(covers), 2) if covers else None,
+        "bands": dict(Counter(r.get("bands", "rows (pre-Step 51)") for r in all_lanes)),
+        **could_not_be_head(lanes, geom),
+    }
 
     # True when this record's `tilt` is a number inside the mount window (a JSON null tilt — no
     # gravity yet — is outside).
@@ -264,6 +509,23 @@ def audit(records: list[dict]) -> dict:
     else:
         rep["describe_result"] = None
 
+    # Step 53: one voice. Both counters are separate on purpose — a flip on a warning during warm-up is
+    # expected, a flip between two route lines is not.
+    rep["voice"] = {"engine_flips": engine_flips_per_minute(records, minutes),
+                    "engine_flips_inside_route_speech": engine_flips_inside_route_speech(records)}
+
+    # Step 52: what the head gate + episode rule would have done with these frames, beside what the
+    # log's build actually did (`cue` records with cue == head, spoken "Head height." lines).
+    rep["head_gate_replay"] = {
+        "signature_only": head_gate_replay(records),
+        "signature_and_estimated_cover": head_gate_replay(records, estimate_cover=True),
+        "no_signature": head_gate_replay(records, gap=None),
+        "logged_head_cues": sum(1 for r in cue_recs if r.get("cue") == "head" and not r.get("suppressed")),
+        "logged_head_onsets": sum(1 for r in cue_recs if r.get("cue") == "head" and r.get("onset") is True),
+        "logged_head_lines": sum(1 for r in spoken if r.get("text") == "Head height."),
+        "caveat": "2 Hz replay: ±0.5 s timing, no 400 ms change gate; rows-mode logs cannot be re-bucketed",
+    }
+
     rep["field_collisions"] = sum(1 for r in records if "field_kind" in r or "field_t" in r)
     return rep
 
@@ -280,6 +542,13 @@ def human(rep: dict) -> str:
         verdict = "ON THE MOUNT" if t["mounted"] else "NOT MOUNTED — do not tune distances from this log"
         lines.append(f"tilt median {t['median_deg']}° (range {t['min_deg']}…{t['max_deg']}°), "
                      f"{int(t['share_in_mount_window'] * 100)}% inside 3–8° → {verdict}")
+    hc = rep.get("head_cover") or {}
+    if hc.get("share_head_cover") is not None:
+        impossible = " — head cues were impossible on this walk" if hc["share_head_cover"] == 0 else ""
+        lines.append(f"head-height cover in {int(hc['share_head_cover'] * 100)}% of frames "
+                     f"(limit ≈ {hc['limit_deg']}°){impossible}; bands {hc['bands']}; "
+                     f"rows-mode head cells that could not be head height: "
+                     f"{hc['could_not_be_head']} of {hc['cells']}")
     for key, label in (("head_band", "all frames"), ("head_band_mounted_frames", "frames inside 3–8°")):
         hb = rep[key]
         lines.append(f"head band < {HEAD_ENTER_M} m ({label}): {hb['cells_under_enter']} cells {hb['by_lane']}; "
@@ -306,6 +575,14 @@ def human(rep: dict) -> str:
         dr = rep["describe_result"]
         lines.append(f"describe results: {dr['calls']} calls, by source {dr['by_source']}, "
                      f"outcomes {dr['by_outcome']} (avg {dr['avg_ms']} ms)")
+    lines.append(f"voice: flips {rep['voice']['engine_flips']}; "
+                 f"flips inside route speech {rep['voice']['engine_flips_inside_route_speech']} (want 0)")
+    if rep.get("head_gate_replay"):
+        g = rep["head_gate_replay"]
+        lines.append(f"head gate replay (Step 52 rule): signature only {g['signature_only']}; "
+                     f"+ estimated cover {g['signature_and_estimated_cover']}; without signature "
+                     f"{g['no_signature']}; logged: {g['logged_head_cues']} head cues, "
+                     f"{g['logged_head_lines']} \"Head height.\" lines ({g['caveat']})")
     if rep["field_collisions"]:
         lines.append(f"⚠ APP BUG: {rep['field_collisions']} records carry field_kind / field_t")
     return "\n".join(lines)
@@ -418,7 +695,71 @@ def selftest() -> None:
     assert rep["torso_suppressed_per_min"] == {"quiet": 1.0}, rep
     assert rep["center_onsets"] == {"center_onset": 1}, rep
     assert audit([{"t": 0, "kind": "session"}])["tilt"] is None
+    # Step 53 one voice: e(route) → race→system(route) → e(route) → e→playback_failed safety → [stop]
+    # → e nav. Whole walk e,s,e,s,e = 4 flips; inside the route the nav lines e,s,e = 2; a muted line
+    # and a never-settled race are ignored.
+    voice = [
+        {"t": 0.5, "kind": "route", "action": "start"},
+        {"t": 1.0, "kind": "speech_dispatch", "priority": "nav", "text": "Route started.", "engine": "elevenlabs", "engine_reason": "cached"},
+        {"t": 2.0, "kind": "speech_dispatch", "priority": "nav", "text": "Turn left.", "engine": "race", "engine_reason": "race"},
+        {"t": 4.5, "kind": "speech_engine", "text": "Turn left.", "engine": "system", "engine_reason": "race_timeout", "wait_ms": 2500},
+        {"t": 5.0, "kind": "speech_dispatch", "priority": "nav", "text": "Cross.", "engine": "elevenlabs", "engine_reason": "cached"},
+        {"t": 5.5, "kind": "speech_dispatch", "priority": "safety", "text": "Head height.", "engine": "elevenlabs", "engine_reason": "cached"},
+        {"t": 5.6, "kind": "speech_engine", "text": "Head height.", "engine": "system", "engine_reason": "playback_failed", "wait_ms": 0},
+        {"t": 5.8, "kind": "speech_dispatch", "priority": "nav", "text": "muted", "engine": "muted", "engine_reason": "muted"},
+        {"t": 5.9, "kind": "speech_dispatch", "priority": "scene", "text": "cut race", "engine": "race", "engine_reason": "race"},
+        {"t": 6.0, "kind": "route", "action": "stop"},
+        {"t": 7.0, "kind": "speech_dispatch", "priority": "nav", "text": "Route stopped.", "engine": "elevenlabs", "engine_reason": "cached"},
+    ]
+    flips = engine_flips_per_minute(voice, 1.0)
+    assert flips["flips"] == 4 and flips["unsettled_races"] == 1, flips
+    assert flips["by_engine"] == {"elevenlabs": 3, "system": 2}, flips
+    assert engine_flips_inside_route_speech(voice) == 2, engine_flips_inside_route_speech(voice)
+    assert engine_flips_per_minute(recs, 1.0).startswith("no speech_dispatch.engine"), rep
+    no_routes = [r for r in voice if r["kind"] != "route"]
+    assert engine_flips_inside_route_speech(no_routes) == "no route records", no_routes
+    selftest_head()                                   # Step 51 / 52 (agent A)
     print("cue_audit selftest: ok")
+
+
+# Step 51 / 52 fixtures: the geometry limit, `could_not_be_head` on a 45° and a 5° rows frame, the
+# cover verdict from logged flags, the gate (wall vs sign vs dropout vs uncovered) and episode
+# sequences (onset once; steady, no re-fire; back after 1.5 s of clear = same episode; after 2.5 s
+# = new onset; two band re-fires held to 1.5 s apart; a sweep restarts the clock). Caller: `selftest`.
+def selftest_head() -> None:
+    """Asserts for the head-cover and head-gate sections."""
+    assert abs(head_cover_limit_deg() - 19.0) < 0.3, head_cover_limit_deg()
+    rows = [{"t": 0, "kind": "lanes", "depth": True, "tilt": 45.0, "head": [1.0, 4.0, -1], "torso": [1.4, 1.4, 1.4]},
+            {"t": 1, "kind": "lanes", "depth": True, "tilt": 5.0, "head": [1.0, 4.0, 4.0], "torso": [3, 3, 3]}]
+    geom = geometry_from(rows)
+    assert could_not_be_head(rows, geom) == {"cells": 2, "could_not_be_head": 1}, could_not_be_head(rows, geom)
+    steep = [{"t": 0, "kind": "lanes", "depth": True, "tilt": 45.0, "bands": "metric",
+              "head": [-1, -1, -1], "torso": [-1, -1, -1], "head_cover": [False] * 3, "torso_cover": [True] * 3}]
+    rep = audit(steep)
+    assert rep["head_cover"]["share_head_cover"] == 0 and rep["head_cover"]["bands"] == {"metric": 1}, rep
+    wall = {"head": [4, 1.0, 4], "torso": [4, 1.0, 4]}
+    sign = {"head": [4, 1.0, 4], "torso": [4, 2.5, 4]}
+    assert head_gate(wall, 1.5, 0.5) is None and head_gate(wall, 1.5, None) == 1.0
+    assert head_gate(sign, 1.5, 0.5) == 1.0
+    assert head_gate({**sign, "torso": [4, -1, 4]}, 1.5, 0.5) == 1.0            # dropout fails safe
+    assert head_gate({**sign, "head_cover": [True, False, True]}, 1.5, 0.5) is None
+    assert head_gate({**wall, "torso_cover": [True, False, True]}, 1.5, 0.5) == 1.0
+
+    # One `lanes` record: head centre `head` m (None = clear), torso empty.
+    def frame(t: float, head: float | None, trusted: bool = True) -> dict:
+        return {"t": t, "kind": "lanes", "depth": True, "trusted": trusted, "bands": "metric",
+                "head": [4, head if head is not None else -1, 4], "torso": [-1, -1, -1]}
+    seq = [frame(0, 1.2), frame(0.5, 1.2), frame(1.0, 1.2),        # onset, then steady
+           frame(1.5, None), frame(2.5, None), frame(3.0, 1.2),    # 1.5 s clear: same episode
+           frame(3.5, None), frame(6.0, None), frame(6.5, 1.2)]    # 2.5 s clear: new onset
+    g = head_gate_replay(seq)
+    assert g == {"frames": 9, "onsets": 2, "band_refires": 0, "lines_would_speak": 2}, g
+    bands = [frame(0, 1.2), frame(1.0, 0.9), frame(2.0, 0.9), frame(4.0, 0.5), frame(6.0, 0.3)]
+    g = head_gate_replay(bands)                                    # 0.9 at 1.0 s is < 1.5 s: held to 2.0
+    assert g == {"frames": 5, "onsets": 1, "band_refires": 2, "lines_would_speak": 2}, g
+    sweep = [frame(0, 1.2), frame(0.5, None), frame(1.5, None, trusted=False), frame(2.0, None),
+             frame(3.0, 1.2)]                                      # 2.5 s since 0.5, but 1.0 s since the sweep
+    assert head_gate_replay(sweep)["onsets"] == 1, head_gate_replay(sweep)
 
 
 # CLI entry: `log` path, `--pull`, `--json`, `--selftest` (selftest wins and ignores the rest).

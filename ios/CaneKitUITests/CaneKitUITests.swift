@@ -77,8 +77,8 @@ final class CaneKitUITests: XCTestCase {
         repeatButton.tap()
         XCTAssertTrue(illinois.exists, "Repeat must not change the instruction")
 
-        app.buttons["Recenter"].tap()
-        stop.tap()
+        scrollTo(app.buttons["Recenter"]).tap()
+        scrollTo(stop).tap()
         stop.tap()
         XCTAssertTrue(start.waitForExistence(timeout: 5), "Stop returns to the idle guide")
         XCTAssertFalse(app.buttons["Repeat"].exists, "No Repeat without a route")
@@ -254,6 +254,18 @@ final class CaneKitUITests: XCTestCase {
         XCTAssertTrue(steps.waitForExistence(timeout: 5), "Profile metric tile should be accessible")
     }
 
+    /// Swipes until `element` is hittable: up to four swipes up, then up to eight down. Step 58's
+    /// voice tile fills the top of the Guide, so route controls start below the fold (and one
+    /// swipe too many can push the compact row above it). Returns the element for chaining.
+    @discardableResult
+    private func scrollTo(_ element: XCUIElement) -> XCUIElement {
+        var ups = 0
+        while ups < 4, !(element.exists && element.isHittable) { app.swipeUp(); ups += 1 }
+        var downs = 0
+        while downs < 8, !(element.exists && element.isHittable) { app.swipeDown(); downs += 1 }
+        return element
+    }
+
     /// Selects a root tab by its VoiceOver label (icon-only on screen). Fails the test if the tab
     /// is missing after 5 s (the tour's copy just skips instead).
     ///
@@ -273,11 +285,11 @@ final class CaneKitUITests: XCTestCase {
     func testNavigateToCIFButtonIsOnTheIdleGuide() {
         let cif = app.buttons["Navigate to CIF from here"]
         XCTAssertTrue(cif.waitForExistence(timeout: 10), "CIF-from-here button should be on the idle guide")
-        XCTAssertTrue(cif.isEnabled)
-        app.buttons["Start route to CIF"].tap()
+        XCTAssertTrue(scrollTo(cif).isEnabled)
+        scrollTo(app.buttons["Start route to CIF"]).tap()
         XCTAssertTrue(app.buttons["Stop route"].waitForExistence(timeout: 10))
         XCTAssertFalse(cif.exists, "route controls replace the picker while navigating")
-        app.buttons["Stop route"].tap()
+        scrollTo(app.buttons["Stop route"]).tap()
         app.buttons["Stop route"].tap()
         XCTAssertTrue(cif.waitForExistence(timeout: 10))
     }
@@ -290,7 +302,7 @@ final class CaneKitUITests: XCTestCase {
     func testDestinationFieldRejectsEmptyQuery() {
         let go = app.buttons["Go"]
         XCTAssertTrue(go.waitForExistence(timeout: 10))
-        go.tap()
+        scrollTo(go).tap()
         XCTAssertTrue(app.staticTexts["Type a destination first"].waitForExistence(timeout: 5))
     }
 
@@ -309,13 +321,13 @@ final class CaneKitUITests: XCTestCase {
     func testTypingOffersCampusSuggestionsAndClearsTheError() {
         let go = app.buttons["Go"]
         XCTAssertTrue(go.waitForExistence(timeout: 10))
-        go.tap()                                     // empty → error line
+        scrollTo(go).tap()                           // empty → error line
         let error = app.staticTexts["Type a destination first"]
         XCTAssertTrue(error.waitForExistence(timeout: 5))
 
         let field = app.textFields["Destination"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
+        scrollTo(field).tap()
         field.typeText("Grainger")
 
         // Match on the name and the kind, not on the whole sentence: the row legitimately gains a
