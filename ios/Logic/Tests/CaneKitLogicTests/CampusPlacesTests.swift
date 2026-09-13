@@ -69,6 +69,10 @@ private func east(_ m: Double) -> Coordinate {
         ("Main Library", "mainLibrary"), ("the main library", "mainLibrary"), ("Main Stacks", "mainLibrary"),
         ("ARC", "arc"), ("the A.R.C.", "arc"), ("Activities and Recreation Center", "arc"),
         ("Activities & Recreation Center", "arc"),
+        // Step 67: what the recogniser writes for these names on the phone.
+        ("Granger Engineering Library", "grainger"), ("Grainger Engineering", "grainger"),
+        ("CIF building", "cif"), ("the C I F", "cif"), ("see eye eff", "cif"),
+        ("Illini union", "illiniUnion"), ("Siebel center", "siebel"), ("ARC gym", "arc"),
     ]
     for (q, id) in cases {
         #expect(CampusPlaces.match(q)?.id == id, "\(q) → \(id)")
@@ -206,8 +210,37 @@ private func east(_ m: Double) -> Coordinate {
     let wp1 = Waypoint(id: 1, lat: 40.11, lon: -88.22, radiusM: 10, say: "Leave Townsend Hall and walk west.",
                        crossing: false, bearingNextDeg: 270, name: "Townsend Hall")
     let route = Route(name: "ISR to CIF", waypoints: [wp1])
-    #expect(WalkingIntro.routeStarted(route) == "Route started. ISR to CIF. First: Leave Townsend Hall and walk west.")
-    #expect(WalkingIntro.routeStarted(name: "X", firstLine: "Go.") == "Route started. X. First: Go.")
+    #expect(WalkingIntro.routeStarted(route) == "Route to CIF. Leave Townsend Hall and walk west.")
+    #expect(WalkingIntro.routeStarted(destination: "X", firstLine: "Go.") == "Route to X. Go.")
     // An empty route still has an intro (the engine speaks it before the first fix).
-    #expect(WalkingIntro.routeStarted(Route(name: "Empty", waypoints: [])) == "Route started. Empty. First: ")
+    #expect(WalkingIntro.routeStarted(Route(name: "Empty", waypoints: [])) == "Route to Empty.")
+}
+
+/// Step 68: the intro names the destination, not the route ("Route to CIF.", not "Route started.
+/// ISR Townsend Hall to CIF. First:"), and is under 160 characters on the shipped demo route.
+@Test func introNamesTheDestinationNotTheRoute() throws {
+    let wp = Waypoint(id: 1, lat: 40.11, lon: -88.22, radiusM: 10, say: "Arrived at Grainger Engineering Library.",
+                      crossing: false, bearingNextDeg: 0, name: "Grainger Engineering Library")
+    #expect(WalkingIntro.destinationName(Route(name: "To Grainger Engineering Library", waypoints: [wp]))
+            == "Grainger Engineering Library")
+    #expect(WalkingIntro.destinationName(Route(name: "ISR Townsend Hall to CIF", waypoints: [wp])) == "CIF")
+    #expect(WalkingIntro.destinationName(Route(name: "Loop", waypoints: [wp])) == "Grainger Engineering Library")
+    #expect(WalkingIntro.destinationName(Route(name: "To Main St.", waypoints: [])) == "Main St")
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../../CaneKit/Resources/route_isr_cif.json").standardized
+    let shipped = try Route.load(from: Data(contentsOf: url))
+    let intro = WalkingIntro.routeStarted(shipped)
+    #expect(intro.hasPrefix("Route to CIF. Leaving Townsend Hall through the ISR front doors."))
+    #expect(intro.count < 160, "\(intro.count) characters")
+}
+
+/// Review round Steps 67–68 (Muse #9): compound mishearings of Grainger match the campus place
+/// instead of falling to a MapKit nearest-pick ("the" is a filler word, so "the Granger building"
+/// is "granger building").
+@Test func compoundGraingerMishearingsMatch() {
+    for alias in ["Granger building", "the Granger building", "Grainger building", "Granger Engineering"] {
+        #expect(CampusPlaces.match(alias)?.id == "grainger", "\(alias)")
+    }
+    #expect(FastPathIntentClassifier.classify(query: "take me to the Granger building")
+            == .startRoute(destination: "Grainger Engineering Library"))
 }

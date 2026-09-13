@@ -17,9 +17,30 @@ working, and set the **Action button** to **Talk to OpenCane** (steps at the bot
 Siri needs the app's name in every phrase. Inside the app you do not: OpenCane has its own short
 phone menu (Steps 56–59).
 
-- **Open the app.** It says "OpenCane ready." and then the short menu: *"Say route, where am I, or
-  help."* (the whole eight-word menu is read only on the very first launch after install; "help"
-  reads it any time). Then a soft rising two-note: the microphone is open, say one word.
+- **Open the app.** It says "OpenCane ready." and then a soft rising two-note: the microphone is
+  open. That is all (Step 67 — no menu at launch, not even on the first launch). Say a word from the
+  list below, a question, or where you want to go. "help", "menu" or "options" reads the list.
+- **Say where you want to go, in your own words** (Step 67). "I want to go to Grainger", "how do I
+  get to CIF", "directions to the Union", "can you take me to Siebel please", "I just wanna get from
+  here to Granger library" — a travel verb followed by "to" and a place. It is matched on the phone,
+  never sent to the network: you hear "Finding a route to …" and then the route intro. "from ISR to
+  CIF" with a real starting place walks the indoor script first (§1c). "Grainger please" alone is not
+  enough — say a travel verb.
+  Everyday verbs — "go to", "get to", "walk to", "going to", "how do I get to" — only work for the
+  campus places OpenCane knows (CIF, ISR / Townsend, Grainger, the Union, Siebel, the Main Library,
+  the ARC…), so "I need to get to class" or "I have to go to work" never starts a route. Anywhere else
+  needs a navigation verb: "take me to Green Street", "navigate to Target", "directions to …", "walk
+  me to …", "bring me to …", "get me to …" (review round Steps 67–68).
+- **Emergency in any sentence.** "emergency", "there's an emergency", "take me to emergency", "call
+  911" all ask "Say yes to call <your contact> at <number>." — it calls your emergency contact after a
+  yes, never 911 itself. "Not an emergency", "cancel emergency" and "the emergency exit" do not.
+- **Stop politely.** "please stop", "stop please", "stop navigation please" end the route like "stop".
+- **Camera Control and the volume buttons** ask "Where am I", but not in the first 5 seconds after
+  launch, not while the microphone is open, and not within 2 seconds of the last description they
+  started; three presses within 1.5 seconds are a grip and do nothing — a hand gripping the phone used
+  to set off descriptions nobody asked for (Step 67). One press during the launch is not lost: the
+  description starts once "OpenCane ready." and the listen are over, unless you said something
+  meanwhile (review round Steps 67–68).
 - **Tap the middle of the screen to talk.** The Guide page is one giant microphone surrounded by
   rings (at least 60 % of the page). The rings ripple while it listens and breathe while it speaks.
   Say one word; it stops listening by itself 1.5 s after you finish.
@@ -27,8 +48,9 @@ phone menu (Steps 56–59).
 - **The eight words never go to the network.** They are matched on the phone, as the whole thing you
   said: "route" starts the route, "the route is long" does not.
 - **Quick answers, or an honest wait.** An open question goes to the cloud model: a faint tick at
-  1.5 s (and once more at 3 s) while it thinks, and an answer or a low double tap + "No answer." by
-  4 s. Ask something new at any time — the newest question wins, the old answer is thrown away.
+  1.5 s (and once more at 4 s) while it thinks, and an answer or a low double tap + "No answer." by
+  8 s (Step 67; it was 4 s, and the cloud took 6–17 s on every logged question). Ask something new
+  at any time — the newest question wins, the old answer is thrown away.
 - **What you hear instead of words (Step 65, calm feedback).** Every sound is under 0.18 s, quiet,
   and comes with a soft tap on the cane; none plays over "Head height.".
 
@@ -123,8 +145,14 @@ shortcuts, not ours. Several wordings work for each command; the first one liste
 | **"Silence the cane in OpenCane"** — or "Silence haptics in OpenCane" | Stops the cane buzzing, and tells you where obstacle cues go instead (the watch, or spoken). Stand still for a few seconds after: the confirmation speaks first and spoken obstacle cues queue behind it. |
 | **"Turn cane haptics on in OpenCane"** | Buzzing back on. |
 
-Before the route starts the app already says out loud which channels are live, and it speaks when
-the AirPods connect or disconnect. You do not have to ask for those.
+Since Step 68 a route start is short: "Starting.", then "Route to <place>." and the first instruction.
+It says a status line only when it changes what you do (the cane cannot buzz, so obstacle cues move to
+the watch or to speech). No headphones or an unreachable watch are on the Guide card and in the "status"
+answer, not spoken. If the AirPods disconnect during a route you hear "AirPods disconnected." once.
+"GPS weak." is said about 10 seconds after GPS goes bad outdoors (never during indoor steps), and again
+no sooner than a minute later; "GPS back." after 10 good seconds, at most once every two minutes.
+Standing still with good GPS says nothing. When something is right in front of you (the
+centre tile turns red) you hear "Close." once.
 
 ### Three more commands, in the Shortcuts app
 
@@ -271,9 +299,11 @@ The answer is held to the same rules as "Where am I":
 - If there is no cloud key set up, it says so and describes the scene instead — the on-device model
   cannot read a question.
 
-**Latency (Step 57, calm feedback Step 65).** A question to the cloud model has a 4-second budget.
-Silence past a second reads as "it did not hear me", so a short tap confirms the microphone heard you,
-and a faint tick plays at 1.5 s and once more at 3 s; at 4 s the app gives up with a low double tap
+**Latency (Step 57, calm feedback Step 65, Step 67).** A question to the cloud model has an 8-second
+budget (4 s until Step 67: every cloud answer on the logged walks took 6–17 s, so 4 s turned almost
+every question into "No answer."). Navigation never waits on it: a spoken destination is routed on
+the phone (§0). Silence past a second reads as "it did not hear me", so a short tap confirms the
+microphone heard you, and a faint tick plays at 1.5 s and once more at 4 s; at 8 s the app gives up with a low double tap
 and "No answer." A second question while the first is still thinking cancels the first — its answer,
 if it arrives, is never spoken, and makes no sound. The trip log shows each turn with `budget_ms`,
 `filler_spoken` (a tick played), `superseded` and `timed_out`, and every tone as `earcon`.

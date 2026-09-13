@@ -1256,13 +1256,18 @@ final class AppModel {
     /// route start) + location prompt → depth callbacks → danger-sound wiring → `depth.start()`
     /// (or the debug sensor probe first) → hazards and describer wiring → voice-input wiring →
     /// the `start` log record → microphone watch if on → camera-denied check → warning-line and
-    /// common-line prefetch → "OpenCane ready." → launch-recovery line → `--demo-route` hook →
+    /// common-line prefetch → "OpenCane ready." (`VoiceShellPolicy.launchLine`; no menu since Step 67)
+    /// + the launch listen → launch-recovery line → `--demo-route` hook →
     /// the detached multi-cam capability probe.
     /// ⚠ Do not reorder audio session → haptics → ARKit without a device test (AirPods route and
     /// Taptic engine ownership depend on it; AGENTS.md hard rule 7: one `.playback` session).
     func start() {
         guard !started else { return }
         started = true
+        // Step 67: the Camera Control launch grace runs from here, not from when AppModel was built.
+        cameraControlGate = CameraControlGate(launchedAt: ProcessInfo.processInfo.systemUptime)
+        cameraControlPendingTask?.cancel()
+        cameraControlPendingTask = nil
         // Before a single engine runs: from here on, a launch that dies is a launch the next one
         // has to recover from. `Settings.launchMode` has already read (and cleared) the previous
         // launch's marker at the first settings read in `init`.
@@ -1470,12 +1475,13 @@ final class AppModel {
         // speaks in the system voice by design, so it is requested before anything else.
         speech.prefetch(Self.voiceReadyLines)
         if !cameraDenied {
-            // ⚠ "OpenCane ready." is also in `Self.commonLines` above; the two must stay
-            // byte-identical or this first line misses the ElevenLabs disk cache and the walker
-            // hears Apple's system voice instead. The product is called OpenCane to a human; the
-            // code, module and bundle id are still CaneKit (AGENTS.md → "The name split").
-            speech.say(lidarSupported ? "OpenCane ready." : "OpenCane. This phone has no LiDAR.", .nav)
-            speakMenuThenListen()
+            // Step 67: "OpenCane ready." and then the listening tone — nothing else (owner: "It should
+            // just be 'OpenCane ready' and then boom"). `Self.commonLines` prefetches the same
+            // constant (`VoiceShellPolicy.readyLine`), so the natural-voice cache hits by bytes. The
+            // product is called OpenCane to a human; the code, module and bundle id are still
+            // CaneKit (AGENTS.md → "The name split").
+            speech.say(VoiceShellPolicy.launchLine(lidarSupported: lidarSupported), .nav)
+            listenAfterLaunchLine()
         }
         announceLaunchRecovery()
         // Automation hook (simulator GPS replay, UI tests): `--demo-route` argument or the
@@ -1489,34 +1495,33 @@ final class AppModel {
         logMultiCamDepthProbe()
     }
 
-    // MARK: Voice shell (Steps 58, 60)
+    // MARK: Voice shell (Steps 58, 60, 67)
 
-    /// Launch: speak the voice menu, wait for the queue to drain, then open the microphone once —
-    /// the walker hears what to say and can say it without touching the phone (owner decision
-    /// 2026-09-13: "when you pop open the app it should automatically start speaking … and start
-    /// hearing"). The menu is `.nav` so any warning cuts it. `VoiceShellPolicy.launchListen` decides;
-    /// the permission inputs are "not refused" rather than "granted": on a first launch the owner
-    /// wants the microphone and speech prompts to appear right away, because the voice shell is the
-    /// app. Never under automation (`SpeechQueue.muted`), so UI tests and e2e stay silent and prompt-free.
-    /// Logs `voice_menu {action: spoken | skipped, reason}`. Caller: `start()`, after "OpenCane ready.".
-    private func speakMenuThenListen() {
+    /// Launch: once the launch line ("OpenCane ready.") has drained, open the microphone once — the
+    /// listening tone is the whole instruction. Step 67 removed the launch menu (owner, on
+    /// `canekit-2026-09-13T15-48-34Z.jsonl`: "when it immediately pops up there's a lot of jargon. It
+    /// should just be 'OpenCane ready' and then boom"); "help" / "menu" / "options" read the list.
+    /// `VoiceShellPolicy.launchListen` decides; the permission inputs are "not refused" rather than
+    /// "granted": on a first launch the owner wants the microphone and speech prompts to appear right
+    /// away, because the voice shell is the app. Never under automation (`SpeechQueue.muted`), so UI
+    /// tests and e2e stay silent and prompt-free.
+    /// `launchLinePending` is true from here until the listen opens or is skipped, so a Camera Control
+    /// press meanwhile is refused (`CameraControlGate`, reason `launch_line`).
+    /// Logs `voice_launch {action: skipped, reason}` (named `voice_menu` before Step 67; no script
+    /// reads either) and `voice_listen {mode: launch}`. Caller: `start()`, right after the launch line.
+    private func listenAfterLaunchLine() {
         guard !SpeechQueue.muted else {
-            logger.event("voice_menu", ["action": "skipped", "reason": "muted"])
+            logger.event("voice_launch", ["action": "skipped", "reason": "muted"])
             return
         }
-        // Step 65 (calm feedback): the whole eight-word menu once after install, then the three-word
-        // one ("help" still reads the list). The flag is set when the menu is queued, not heard: a
-        // launch cut short still counts, which errs toward fewer words.
-        let firstLaunch = !Settings.bool("heardFullVoiceMenu", default: false)
-        speech.say(VoiceMenu.launchMenuLine(firstLaunch: firstLaunch), .nav, ttl: 20)
-        if firstLaunch { Settings.set(true, "heardFullVoiceMenu") }
-        logger.event("voice_menu", ["action": "spoken", "menu": firstLaunch ? "full" : "short"])
+        launchLinePending = true
         let generation = voiceShellGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.launchLinePending = false }
             // Still talking after the cap (a warning run): skip rather than open the mic over it.
             guard await self.waitForSpeechToDrain() else {
-                self.logger.event("voice_menu", ["action": "skipped", "reason": "still_speaking"])
+                self.logger.event("voice_launch", ["action": "skipped", "reason": "still_speaking"])
                 return
             }
             let speech = SFSpeechRecognizer.authorizationStatus()
@@ -1531,14 +1536,18 @@ final class AppModel {
             switch verdict {
             case .listen:
                 guard self.voiceShellMayListen(generation) else {
-                    self.logger.event("voice_menu", ["action": "skipped", "reason": "backgrounded"])
+                    self.logger.event("voice_launch", ["action": "skipped", "reason": "backgrounded"])
                     return
                 }
-                guard !self.voiceInput.isListening, !self.voiceInput.isStarting else { return }
+                guard !self.voiceInput.isListening, !self.voiceInput.isStarting else {
+                    // The walker (or the Action button) already opened the mic: say so in the log.
+                    self.logger.event("voice_launch", ["action": "skipped", "reason": "already_listening"])
+                    return
+                }
                 self.logger.event("voice_listen", ["mode": "launch"])
                 self.voiceInput.startListening(windowSeconds: UtteranceEndDetector.maxListen, kind: .launch)
             case .skip(let reason):
-                self.logger.event("voice_menu", ["action": "skipped", "reason": reason])
+                self.logger.event("voice_launch", ["action": "skipped", "reason": reason])
             }
         }
     }
@@ -1575,12 +1584,12 @@ final class AppModel {
         }
     }
 
-    /// Waits until nothing is speaking and nothing is queued, at most `VoiceShellPolicy.menuWaitCap`
+    /// Waits until nothing is speaking and nothing is queued, at most `VoiceShellPolicy.speechDrainCap`
     /// seconds, plus `SelfHearFilter.tailSeconds` so the recogniser does not open on the last word.
     /// - Returns: false when the cap passed with speech still playing or queued — the caller skips
     ///   the listen rather than open the microphone over a warning (review 2026-09-13, OpenCode).
     private func waitForSpeechToDrain() async -> Bool {
-        let deadline = Date().addingTimeInterval(VoiceShellPolicy.menuWaitCap)
+        let deadline = Date().addingTimeInterval(VoiceShellPolicy.speechDrainCap)
         while Date() < deadline, speech.isSpeaking || speech.queuedLineCount > 0 {
             try? await Task.sleep(for: .milliseconds(100))
             if Task.isCancelled { return false }
@@ -1593,6 +1602,21 @@ final class AppModel {
     /// Bumped when the app goes to the background; a launch / follow-up listen that started waiting
     /// under an older value never opens the microphone. Read by `voiceShellMayListen`.
     @ObservationIgnored private var voiceShellGeneration = 0
+
+    /// Step 67: launch grace + debounce for Camera Control / volume presses — a hand gripping the
+    /// phone fired three scene descriptions in the first four seconds of
+    /// `canekit-2026-09-13T15-48-34Z.jsonl`. Review round Steps 67–68: grip burst, debounce from the
+    /// last accepted press, one deferred press. Re-created in `start()` so the grace runs from the
+    /// real launch. Advanced by `cameraControlPressed` and `watchPendingCameraControl`.
+    @ObservationIgnored private var cameraControlGate = CameraControlGate(launchedAt: ProcessInfo.processInfo.systemUptime)
+
+    /// The poll that settles a deferred Camera Control press (`watchPendingCameraControl`); nil when
+    /// none runs. Cancelled by `start()`.
+    @ObservationIgnored private var cameraControlPendingTask: Task<Void, Never>?
+
+    /// Step 67: true from the launch line until the launch listen opens or is skipped
+    /// (`listenAfterLaunchLine`); a Camera Control press meanwhile is refused (`launch_line`).
+    @ObservationIgnored private var launchLinePending = false
 
     /// True when a voice-shell listen that began at `generation` may still open the microphone: no
     /// background transition since, and the app is frontmost.
@@ -1853,7 +1877,7 @@ final class AppModel {
             if nav.isNavigating, !lockWarningGiven {
                 lockWarningGiven = true
                 depthSafetyDegraded = true
-                speech.say("Screen locked. Obstacle warnings are paused until you unlock.", .nav, ttl: 10)
+                speech.say(RouteStatusLines.screenLockedLine, .nav, ttl: 10)   // Step 68: short line
             }
             hazards.stop()                   // no scanning a frozen last frame in the background
             // GPS runs for the life of the FOREGROUND session. Backgrounded with no route running
@@ -2084,6 +2108,22 @@ final class AppModel {
                                      "suppressed": reason.rawValue])
             }
         }
+        // Step 68: "Close." once per red episode of the centre torso tile (< 0.7 m), while a route
+        // or an indoor script guides (`CueSpeechPolicy.close`; a NearHold substitution never starts
+        // one). Review round Steps 67–68: at EVERY cue level (`closeAllowed` — Quiet renders no torso
+        // haptic, so this is its only near-obstacle signal; Muse #2) and at `closeTier` = `.safety`
+        // (at `.obstacle` it queued behind the route intro and the 3 s TTL dropped it; Antigravity #3).
+        // 3 s TTL: a late "Close." is wrong. It never cuts "Head height." (equal band, FIFO).
+        if CueSpeechPolicy.closeAllowed(navigating: nav.isNavigating, indoorActive: indoor.isActive,
+                                        level: cueRules.level),
+           let close = cueSpeech.close(torsoCentreM: report.grid.torso[1], covered: report.grid.torsoCoverage[1],
+                                       held: report.grid.torsoHeld[1], trusted: report.isTrusted,
+                                       now: report.timestamp) {
+            let priority: SpeechPriority = CueSpeechPolicy.closeTier == .safety ? .safety : .obstacle
+            if speech.say(close, priority, ttl: 3) {
+                logger.event("speech", ["text": close, "priority": "\(priority)"])
+            }
+        }
         let rules = cueRules
         let navigating = nav.isNavigating
         if obstacleNamesEnabled,
@@ -2111,13 +2151,13 @@ final class AppModel {
         sceneContext.set(Self.contextLine(report, thresholds: decider.thresholds))
         noteDepthGeometry(report)
         // Step 51: once per route, after 2 s of trusted metric frames with no head lane covered,
-        // say so (the mount is too steep to see head height). Logged as `head_cover`, not
-        // `speech` (e2e.py asserts on `speech`; `speech_dispatch` still records the utterance).
+        // log it (the mount is too steep to see head height) as `head_cover`. Step 68: no longer
+        // spoken ("Camera too steep for head-height cover. Torso obstacles only." at every route
+        // start was noise the walker cannot act on mid-walk); the Mount card and "status" keep it.
         if nav.isNavigating,
            headCoverNotice.update(metric: report.grid.bandMode == .metric, trusted: report.isTrusted,
                                   headCovered: report.grid.headCoverage.contains(true), now: report.timestamp) {
-            speech.say(HeadCoverNotice.line, .nav, ttl: 10)
-            logger.event("head_cover", ["state": "none", "text": HeadCoverNotice.line,
+            logger.event("head_cover", ["state": "none", "text": HeadCoverNotice.line, "spoken": false,
                                         "tilt": report.cameraTiltDownDeg.map { Double($0) } ?? -1])
         }
         // Island glance while standing still (no GPS fix drives `liveActivity.update` then): a
@@ -2964,7 +3004,10 @@ final class AppModel {
                 self.speech.say("\(name) connected.", .nav, ttl: 5)
                 if self.nav.isNavigating { self.head.start(); self.recenterPending = true }
             } else {
-                self.speech.say("Headphones disconnected. Beacon paused.", .nav, ttl: 5)
+                // Step 68: mid-route "AirPods disconnected." once per route; idle, the old line.
+                if let line = self.headphoneNotice.disconnected(navigating: self.nav.isNavigating) {
+                    self.speech.say(line, .nav, ttl: 5)
+                }
                 self.head.stop()                 // no AirPods, no motion: stop the manager
             }
         }
@@ -2994,27 +3037,27 @@ final class AppModel {
         }
     }
 
-    /// Spoken once at route start so the walker knows which channels are live before moving.
-    /// Near-last step of `startRouteNow` (only the `describeEveryWaypoint` hook follows); each line
-    /// is `.nav` with a 20 s TTL, queued after the intro. Lines: no headphones; a paired watch that
-    /// is not reachable; unhealthy haptics (routed to the watch when reachable, else to speech).
-    /// These lines are not written to the trip log as `speech` (only `speech_dispatch` sees them).
+    /// At most one status line at route start (Step 68, `RouteStatusLines.routeStartLine`): only
+    /// unhealthy haptics, which changes where obstacle cues arrive (Muse: with the watch reachable
+    /// this was once silent, so cane silence read as "path clear"). No headphones and an
+    /// unreachable watch are no longer spoken — the Guide card and "status" say them.
+    /// Near-last step of `startRouteNow` (only the `describeEveryWaypoint` hook follows); `.nav`,
+    /// 20 s TTL, queued after the intro. Not written as `speech` (only `speech_dispatch` sees it).
     private func announceChannels() {
-        var lines: [String] = []
-        if !audioRoute.headphonesConnected {
-            lines.append("No headphones. Beacon paused until AirPods connect.")
+        if let line = RouteStatusLines.routeStartLine(headphonesConnected: audioRoute.headphonesConnected,
+                                                      watchPaired: watch.isPaired,
+                                                      watchReachable: watch.isReachable,
+                                                      // Silence is an intentional unavailable channel: obstacle
+                                                      // cues are routed to the watch / speech just like an
+                                                      // unhealthy Taptic Engine.
+                                                      hapticsHealthy: haptics.isHealthy && !haptics.silenced) {
+            speech.say(line, .nav, ttl: 20)
         }
-        if watch.isPaired, !watch.isReachable {
-            lines.append("Watch not reachable. Open OpenCane on the watch.")
-        }
-        // Always say where obstacle cues went when the cane cannot buzz (Muse: with the watch
-        // reachable this was silent, so cane silence read as "path clear").
-        if !haptics.isHealthy {
-            lines.append(watch.isReachable ? "Haptics unavailable. Obstacle cues on the watch."
-                                           : "Haptics unavailable. Obstacle cues will be spoken.")
-        }
-        for line in lines { speech.say(line, .nav, ttl: 20) }
     }
+
+    /// Mid-route headphone disconnects are said once per route (Step 68, CaneKitLogic
+    /// `HeadphoneNotice`). `routeStarted()` in `startRouteNow`; `disconnected` in `wireAudioRoute`.
+    @ObservationIgnored private var headphoneNotice = HeadphoneNotice()
 
     // MARK: Navigation (step 6)
 
@@ -3154,6 +3197,8 @@ final class AppModel {
             self.nav.update(heading: h, now: Date().timeIntervalSinceReferenceDate)
             self.beacon.setHeading(h)
         }
+        // Step 68: no "GPS weak." while an indoor step script guides (GPSAnnouncer).
+        nav.isIndoorActive = { [weak self] in self?.indoor.isActive ?? false }
         nav.onSpeak = { [weak self] text, priority in
             self?.speech.say(text, priority, ttl: 12)
             self?.logger.event("speech", ["text": text, "priority": "nav"])
@@ -3640,16 +3685,18 @@ final class AppModel {
     /// at the `speech.say` call in `start()` in the same edit — they are matched by bytes, not by
     /// a constant, so a half-rename is silent and only shows up as a line in the wrong voice.
     /// Contents: 25 fixed lines below, then every `CueRules.allSpokenLines` and every
-    /// `TorchSwitch.allSpokenLines` entry appended. ("Route started." and "Next." are not spoken
-    /// on their own today; the intro "Route started. <name>. First: …" is prefetched separately.)
+    /// `TorchSwitch.allSpokenLines` entry appended, and since Step 68 `RouteStatusLines.allSpokenLines`
+    /// (the GPS, screen-lock, headphone, haptics and "Close." lines). ("Route started." and "Next." are
+    /// not spoken on their own today; the intro "Route to <destination>. <first line>" is prefetched
+    /// separately by `routeStartLines`.)
     /// Spoken after the first Stop-route tap. It is a common line so the natural voice can be
     /// prefetched before a route, and `GuideCard` uses this same byte-identical value.
     static let stopRouteConfirmationLine =
         "Stop route is armed. Tap Stop route again within 3 seconds to end guidance."
 
     static let commonLines = [
-        "OpenCane ready.", "Route started.", "Route stopped.", "Next.", "Recentered.",
-        "Veer left.", "Veer right.", "GPS weak. Waypoint cues paused until it recovers.", "GPS back.",
+        VoiceShellPolicy.readyLine, VoiceShellPolicy.noLidarLine, "Route stopped.", "Next.", "Recentered.",
+        "Veer left.", "Veer right.",
         "No route running.", "No GPS fix yet. Try again outside.",
         "Head height.", "Left.", "Right.", "Passed one waypoint.",
         // Step 65: the warm-up sentence is gone (quiet ticks, then "Starting.", which is in
@@ -3668,9 +3715,6 @@ final class AppModel {
         "Head tracking without AirPods cannot change while a route is starting. Wait for obstacle detection to be ready.",
         "Finish the sensor self-test before starting a route.",
         "Obstacle detection is back.",
-        // Step 51: the route-start admission that the mount is too steep to see head height
-        // (`HeadCoverNotice.line`, `.nav`). ⚠ Byte-identical to `HeadCoverNotice.line`.
-        "Camera too steep for head-height cover. Torso obstacles only.",
         "Wait for the camera transition to finish.",
         "Sensor settings cannot change while a route is starting. Wait for obstacle detection to be ready.",
         "Sensor settings cannot change while a route is guiding you. Stop the route first.",
@@ -3694,6 +3738,10 @@ final class AppModel {
         // `LowLightTests.adviceSpeaksOncePerEpisode`): spoken at `.nav` the moment the dark is
         // confirmed, so they must not wait on a fetch either.
         + LowLightAdvice.allSpokenLines
+        // Step 68: "GPS weak." / "GPS back.", the short screen-lock line, the haptics and headphone
+        // lines, and "Close." (`RouteStatusLines.allSpokenLines`, pinned by
+        // `QuietRouteSpeechTests.step68LinesAreShortAndPrefetched`).
+        + RouteStatusLines.allSpokenLines
 
     /// Every `.safety` line the app can speak (Step 54): "Head height." and the LiDAR ground-hazard
     /// lines. First in the launch prefetch, because an uncached `.safety` line is the one case that
@@ -4041,7 +4089,8 @@ final class AppModel {
         recenterPending = true               // first straight stretch zeroes the head reference
         straightWalk.reset()
         cueSpeech = CueSpeechPolicy()
-        headCoverNotice.routeStarted()       // Step 51: "Camera too steep…" may be said once on this route
+        headCoverNotice.routeStarted()       // Step 51: `head_cover` may be logged once on this route
+        headphoneNotice.routeStarted()       // Step 68: "AirPods disconnected." may be said once
         torsoPolicy.reset()                  // a new walk starts with both Standard onsets armed (Codex review)
         lastIslandGlance = .clear
         startTicker()
@@ -4207,13 +4256,70 @@ final class AppModel {
 
 
     /// Camera Control / volume press reached the app while ARKit owns the camera.
-    /// Logged (`describe {source: cameraControl}` in the trip log is the step-2 spike readout),
-    /// then treated like "Where am I" (so one press writes two `describe` records).
+    /// Step 67: judged first by `CameraControlGate` — refused in the first 5 s after launch, while
+    /// the voice shell is listening or the launch line is pending (a gripping hand fired three
+    /// descriptions and two busy earcons in the first four seconds of
+    /// `canekit-2026-09-13T15-48-34Z.jsonl`). Review round Steps 67–68: also refused as a grip burst
+    /// (≥ 3 presses in 1.5 s) and within 2 s of the last ACCEPTED press (a refused press no longer
+    /// extends the lockout); a single press refused only by the launch states is kept pending and
+    /// answered when they end (`watchPendingCameraControl`). A refused press makes no sound and
+    /// writes `describe_skipped {reason, trigger: cameraControl, pending}`; an accepted one is
+    /// "Where am I", whose `describeScene` writes the one `describe {trigger: cameraControl}` record.
     /// Caller: `ContentView`'s `CameraControlInteraction` background.
     func cameraControlPressed() {
-        // One `describe` record per press: `describeScene` logs `trigger: cameraControl` itself
-        // (the separate `source` record it used to write here double-counted a press — review).
-        describeScene(trigger: .cameraControl)
+        let verdict = cameraControlGate.press(now: ProcessInfo.processInfo.systemUptime,
+                                              listening: voiceInput.isListening || voiceInput.isStarting,
+                                              launchLinePending: launchLinePending,
+                                              commandGeneration: conversation?.queryGeneration ?? 0)
+        switch verdict {
+        case .describe:
+            describeScene(trigger: .cameraControl)
+        case .skip(let reason):
+            let pending = cameraControlGate.hasPendingDescribe
+            logger.event("describe_skipped", ["reason": reason,
+                                              "trigger": DescribeTrigger.cameraControl.rawValue,
+                                              "pending": pending])
+            if pending { watchPendingCameraControl() }
+        }
+    }
+
+    /// Settles a deferred Camera Control press (review round Steps 67–68, Muse #6): polls
+    /// `CameraControlGate.resolvePending` every 0.25 s with the same listening / launch-line state
+    /// and the coordinator's query generation. `.fire` → `describeScene(trigger: .cameraControl)` and
+    /// `describe_deferred {action: fired}`; `.drop` → `describe_deferred {action: dropped, reason}`
+    /// (another command ran, or 30 s passed); `.none` (a later press superseded it) ends silently.
+    /// One poll at a time. Caller: `cameraControlPressed`.
+    private func watchPendingCameraControl() {
+        guard cameraControlPendingTask == nil else { return }
+        cameraControlPendingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                let outcome = self.cameraControlGate.resolvePending(
+                    now: ProcessInfo.processInfo.systemUptime,
+                    listening: self.voiceInput.isListening || self.voiceInput.isStarting,
+                    launchLinePending: self.launchLinePending,
+                    commandGeneration: self.conversation?.queryGeneration ?? 0)
+                switch outcome {
+                case .wait:
+                    continue
+                case .none:
+                    self.cameraControlPendingTask = nil
+                    return
+                case .fire:
+                    self.cameraControlPendingTask = nil
+                    self.logger.event("describe_deferred", ["action": "fired",
+                                                            "trigger": DescribeTrigger.cameraControl.rawValue])
+                    self.describeScene(trigger: .cameraControl)
+                    return
+                case .drop(let reason):
+                    self.cameraControlPendingTask = nil
+                    self.logger.event("describe_deferred", ["action": "dropped", "reason": reason,
+                                                            "trigger": DescribeTrigger.cameraControl.rawValue])
+                    return
+                }
+            }
+        }
     }
 
     // MARK: Private

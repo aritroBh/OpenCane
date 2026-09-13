@@ -102,4 +102,8 @@ import Testing
     #expect(line.contains("off"))
     #expect(line.lowercased().contains("guidance"))
     #expect(line.hasSuffix("."))
+    // Step 67 (owner: "a lot of jargon" at launch): one short sentence, no settings-card names.
+    #expect(line.filter { $0 == "." }.count == 1, "one sentence: \(line)")
+    #expect(line.split(separator: " ").count <= 12, "short: \(line)")
+    #expect(!line.contains("Hazards"))
 }

@@ -13,15 +13,15 @@
 //       `tailSeconds` after (`SpeechBufferBox`, a `Mutex<Bool>` read on the audio thread);
 //    2. this filter, on the final transcript: dropped silently when it equals a line the app
 //       dispatched inside `window`, or one whole clause of it.
-//  The match is *whole line or whole clause*, never "line contains transcript": the voice menu
-//  ("Say route, where am I, …") contains "route", and "route" is the one word the shell must hear.
+//  The match is *whole line or whole clause*, never "line contains transcript": the help list
+//  ("One, route. Two, where am I. …") contains "route", and "route" is the one word the shell must hear.
 //  A transcript shorter than `minTranscriptCharacters` is never dropped: the IVR digits "1"…"8"
 //  and "no" must always get through, and a one- or two-letter echo is not worth guessing about.
 //
 //  Owner: `VoiceInputEngine` (app) holds one value per press: `AppModel`'s `speech.onDispatch`
 //  hook calls `record(line:at:)` only while the engine is listening or starting (a line dispatched
-//  before the microphone opened — the launch menu, an answer — can never be in the history, so
-//  answering the menu with one of its own words is never dropped); `stopListeningAndSubmit` calls
+//  before the microphone opened — "OpenCane ready.", the help list, an answer — can never be in the
+//  history, so answering the help list with one of its own words is never dropped); `stopListeningAndSubmit` calls
 //  `shouldDrop(transcript:now:)` and logs `voice_self_hear {action: dropped, transcript,
 //  matched_line}`; `startListening` calls `reset()`.
 //  Isolation: a plain `Sendable` value; single owner, `mutating` updates; no clock of its own.

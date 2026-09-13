@@ -2,6 +2,492 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Steps 67–68 review round (Codex, Muse, Antigravity) (Sun Sep 13)
+
+Reviews: Antigravity (6 findings), Codex (4), Muse (11) on the Steps 67–68 diff. Every finding was checked
+against the code before acting. Logic tests were written first: the new-API tests failed to compile until
+the source existed (that was the red run), and the rest are pinned below. Verification (Logic only):
+`cd ios/Logic && swift test --disable-xctest` → exit 0, **"Test run with 919 tests in 23 suites passed …
+with 1 known issue"** (the Step 66 known issue). `StressTests.fastPathFuzz` passed with its expectations
+unchanged. App files were **not built** here, because the simulator belonged to a UI-test + e2e run: the
+orchestrator must run `make sim uitest e2e`.
+
+### Fixed
+
+**1. Emergency misrouted** (Antigravity #1 — confirmed; Muse #10 — confirmed).
+- Before: "take me to emergency" matched rule 14's "take me to " prefix, and also 14b's "take me", then
+  `destinationAction("emergency")` → `.startRoute("Emergency")`, a MapKit route. "there's an emergency"
+  went to the cloud.
+- New rule 1c `isEmergencyRequest` runs before rules 13b / 14 / 14b. It fires on:
+  - the whole word "emergency" / "emergencies" anywhere;
+  - "911", "9-1-1" or "nine one one" anywhere.
+
+  The result is `.emergency`, the confirmation prompt that calls the emergency contact.
+- It does not fire on:
+  - a negation: not / isn't / cancel / canceled / never / false, or "no emergency" — so the app's own
+    "Emergency canceled." is not a request;
+  - "emergency exit / door / stairs" (decision: a landmark or a place, not SOS).
+- "emergency", "emergencies" and "911" are also `nonPlaceWords`, so they are never a MapKit destination.
+- Tests: `emergencyWordsReachTheConfirmationNeverARoute`.
+
+**2. Wrong routes from ordinary speech** (Antigravity #4, Codex #1, Muse #4 — confirmed: "I need to get to
+class" → `.startRoute("Class")`).
+- The rule now: "go", "get", "walk" and "travel" moved to `gazetteerOnlyVerbPhrases`, next to
+  going / heading. Rule 14's "go to " / "walk to " prefixes (`gazetteerOnlyPrefixes`), and rule 13b after
+  them, route **only to a CampusPlaces hit**.
+- A free-text MapKit search needs an explicit navigation verb: take / bring / get / walk / navigate /
+  guide / lead / route me, navigate (to), directions, show me the way, route to, set destination to.
+- "you" is a non-place word.
+- Negatives (all tested): "I need to get to class", "how do I get to class", "how do I get to see you",
+  "I'm going to call my mom", "I have to go to work", "listen to music", "talk to you later", "how do I get
+  to sleep", "I want to go to bed", "go to class", "go to class from here", "walk to the store".
+- Positives kept: every Step 67 gazetteer phrase, including the log's "I just wanna get from here to
+  Granger library".
+- **Intentional change:** "I want to go to Green Street please" and "how do I get to Target" no longer start
+  a MapKit route; they go to the cloud. Say "take me to Green Street". The Step 67 test now uses "take me
+  to Green Street please".
+- Not added: Muse's extra nonPlaceWords (class, school, lunch, restroom). The gazetteer-only rule already
+  covers the ambiguous verbs, and "take me to the School of Music" is a real request.
+- Tests: `ambiguousTravelPhrasesRouteOnlyToCampusPlaces`, updated `spokenDestinationsRouteOnThePhone`.
+
+**3. "Close." dropped behind the route intro** (Antigravity #3 — confirmed).
+- The cause: `AppModel` spoke it at `.obstacle` with a 3 s TTL. Hard rule 8 lets only a strictly higher
+  band interrupt, so it queued behind the 156-character `.nav` intro and expired.
+- It is now `CueSpeechPolicy.closeTier` = `.safety`, which cuts `.nav` / `.obstacle` / `.scene`.
+- The once-per-red-episode rule, the 3 s out of the red and the 4 s limiter are unchanged, and their five
+  tests still pass.
+- "Head height." and "Close." share `.safety`, so neither cuts the other: they queue in order of arrival
+  (both are one or two words). No pause comes before a `.safety` line. Under the voice hold a `.safety`
+  line breaks through (hard rule 8), and so does "Close." now.
+- Muse #2 (confirmed, `AppModel.handle` gated `cueRules.level != .quiet`): Quiet renders no torso haptic, so
+  a Quiet walker got nothing near a wall. `CueSpeechPolicy.closeAllowed` allows it at every level while a
+  route or an indoor script guides.
+- AGENTS.md hard rule 8 and design.md §5.1 are updated.
+- Tests: `closeIsASafetyLineAtEveryCueLevel`.
+
+**4. GPS silence too long** (Antigravity #2 — confirmed; Muse #1, #8).
+- `GPSAnnouncer` now takes `badOnset`, when GPS turned bad (`GPSAnnouncer.badOnset`):
+  - a fix worse than 20 m;
+  - a fix older than **12 s** — its stretch is dated from the 5 s moment the engine paused guidance;
+  - no fix 10 s after the route started.
+- Timing:
+  - "GPS weak." comes after **10 s** (was 20), and again no sooner than **60 s** after the previous one;
+  - "GPS back." comes after 10 s good, at most once per **120 s**. Inside that limit it stays pending,
+    and no second "weak" is said, because the walker's last word was "weak".
+  - A real outage (fixes stop) is now spoken at +15 s after the last fix (was +25), 10 s after guidance
+    paused.
+- The engine's own pause is untouched: `NavigationHealth.maxFixAge`, `gpsWeak`, the fences, Step 51a.
+- Muse #8: the bad clock keeps running indoors; nothing is spoken there. In the app the indoor handover
+  already waits for a good fix (`IndoorHandover`, `.waiting`), so this matters only when GPS dies right
+  after it.
+- **Replay of tonight's log** (`canekit-2026-09-13T15-48-34Z.jsonl`, Python mirror of the new rule over the
+  92 `gps` records, route 249.573–393.517 s): **0 GPS lines**. The longest gap between fixes was 11.41 s,
+  and accuracy was 6.4–19.1 m over the whole session.
+- Tests (11):
+  - `theFlappingLogSaysNoGPSLines`, `gpsAnnouncerNumbersArePinned`, `badOnsetFollowsAccuracyAgeAndNoFix`;
+  - `aStationaryWalkerWithGoodAccuracyIsSilent` (6 s cadence with 11.4 s gaps for 10 min);
+  - `trueOutdoorLossByAccuracyIsSpokenWithinTenSeconds` (weak at +10 s), and
+    `aRealOutageIsOnePairTenSecondsAfterGuidancePaused`;
+  - `repeatedDropoutsSayWeakAgainAfterSixtySeconds` (10 / 25 / 70 / 145 s), and
+    `aPendingBackIsNotFollowedByASecondWeak`;
+  - `backIsNeverSaidWithoutWeak`, `neverWhileIndoorsButTheBadClockKeepsRunning`,
+    `noFixAtAllIsAnnouncedOnceAtTwentySeconds`.
+
+**5. Emergency seed persisted and uploaded** (Codex #2, Antigravity #5, Muse #3 — confirmed).
+- The cause: `MedicalProfileStore.init` wrote the Secrets contact into `profile`. Any edit's `didSet` saved
+  it to UserDefaults, and `startCloudMirror` pushed `medicalProfile.profile` 2 s after registration.
+- Now `init` never touches the contact. `effectiveEmergencyContact` (`EmergencyContactSeed.effective`)
+  gives the stored contact when its phone is not blank, else the seed marked `fromSetup`. It is computed
+  on read.
+- The Profile card (name, number, "From this phone's setup" caption, Call link, Announce) and
+  `ConversationCoordinator` (prompt, confirm, timeout) read it.
+- `save()`, `didSet`, `onProfileSaved` / `CloudSync.saveMedicalProfile` and the editor sheet see only the
+  stored profile.
+- Tests: `theEffectiveContactPrefersTheTypedOneAndMarksTheSeed`, `theSeedIsNeverPartOfTheStoredValues`.
+
+**6. Camera Control lockout** (Antigravity #6 — confirmed: `lastPressAt` moved on every press, so presses
+every 1–1.8 s refused forever).
+- The debounce now runs from the last **accepted** press. A grip is its own rule: ≥ 3 presses within 1.5 s
+  → `grip_burst`.
+- Launch grace, listening and launch_line are unchanged.
+- Presses every 1.8 s → every other one describes.
+- Muse #6 (the app felt dead): one press refused only by a launch state is kept pending. It fires 0.5 s
+  after those states end: grace over, launch line done, listen closed with nothing.
+- It is dropped when:
+  - a second press comes within 2 s (a grip — the log's 1.71 / 2.89 / 3.56 s presses leave nothing
+    pending);
+  - the coordinator's query generation moves (another command ran);
+  - 30 s pass.
+- `AppModel.watchPendingCameraControl` polls every 0.25 s and logs `describe_deferred {action, reason}`.
+  `describe_skipped` gains `pending`.
+- Tests: `CameraControlGateTests` (14; `aBurstCollapsesToOnePress` / `aRefusedPressStillStartsTheDebounce`
+  were replaced, intentionally, by `theDebounceRunsFromTheLastAcceptedPress`,
+  `pressesEveryOnePointEightSecondsAreNeverLockedOut`, `aGripBurstIsRefused`,
+  `aRefusedPressDoesNotStartTheDebounce` and the four pending tests).
+
+**Muse #5 — polite stop.**
+- The cause: rule 1 was an exact match, so "please stop" / "stop please" went to the cloud, with up to 8 s
+  more guidance.
+- `stopKey` drops leading please / okay / ok / um / uh and the trailing fillers.
+- "stop the beacon" and "don't stop" still do not stop.
+- Tests: `politeStopPhrasesStillStop`.
+
+**Muse #7 — number in trip logs.**
+- Confirmed: the prompt line reached `speech_dispatch` / `speech_engine` / `conv_turn` records and the
+  `onRecord` cloud mirror.
+- `TripLogger.event` passes `text` / `response` / `matched_line` / `transcript` through
+  `EmergencyConfirm.logSafe`: runs of ≥ 7 digits → "[number]".
+- The spoken read-back is kept: the number is read back before dialing.
+- Tests: `logRecordsMaskThePhoneNumber`.
+
+**Muse #9 — aliases.** "Granger Engineering", "Granger Building" and "Grainger Building" were added ("the
+Granger building" normalizes to one of them). Tests: `compoundGraingerMishearingsMatch`.
+
+**Muse #11 — `HeadCoverNotice.line` prefetch.** Already absent from `SpokenPhrases.shellLines` in this tree
+(grep). A regression check was added to `replacedWaitingLinesAreNotPrefetched`, and the stale
+CODE_REFERENCE mention was removed.
+
+### Rejected / changed (evidence)
+- **Codex #3** (the number is spoken aloud) — deliberate. `EmergencyConfirm` reads the number back
+  before dialing (Step 59). Only the log copy is masked.
+- **Codex #4** (AppModel / NavigationEngine concurrency unverified) — not a code defect, and still true
+  of this round. The app edits add one `Task { @MainActor [weak self] }` poll, a `private(set)` read
+  (`ConversationCoordinator.queryGeneration`), a computed property and a static mask. They were
+  checked by reading only; the orchestrator's `make sim` is the evidence.
+- **Muse #1** (8 s moving / 20 s stationary split) — replaced by the orchestrator's single rule. The
+  12 s fix age is what keeps a stationary walker silent (`aStationaryWalkerWithGoodAccuracyIsSilent`),
+  and the 10 s is measured from the guidance pause.
+- **Antigravity #2 "bypass the pair cooldown while guidance is suppressed"** — done differently. The
+  cooldown now applies to "GPS back." only, and "GPS weak." may repeat after 60 s.
+
+**Test on device:**
+- Say "take me to emergency" → "Say yes to call …" → "no".
+- Say "I need to get to class" → no route.
+- Say "please stop" mid-route → the route stops.
+- In Quiet cues, walk at a wall during a route → "Close." (also while the route intro is still speaking).
+- Walk outdoors, cover the phone until GPS drops → "GPS weak." about 15 s after the last fix.
+- Profile shows Aritro with "From this phone's setup". Edit the name and save → the contact phone stays
+  blank in the editor.
+- Open the app and press Camera Control once at 2 s → one description after the launch listen closes.
+- Squeeze repeatedly → nothing.
+
+## Step 68 — half the words (Sun Sep 13)
+
+Owner, verbatim: "when I set the location, I don't have the AirPods and it goes insane … it keeps
+yapping, yapping, yapping. I want it clean, concise. Please make it talk about fifty percent less. But if
+something comes close, feel free to please tell us — like when it turns into the red." Also: "my
+emergency contact is not set."
+
+**Evidence** (phone log `canekit-2026-09-13T15-48-34Z.jsonl`, no AirPods, no watch). The whole session
+dispatched 36 lines / 1,333 characters. Its route (248.98–393.52 s, 2.41 min, from the first
+route-start record) dispatched **31 lines, 1,086 characters = 450.8 characters/min**. 25 of those lines
+were "GPS weak. Waypoint cues paused until it recovers." ×12 / "GPS back." ×13, alternating every 3–9 s.
+GPS accuracy was 6.6–8.7 m the whole time: the phone stood still indoors, CoreLocation delivered a fix
+every ~6 s, and the retained fix went stale after 5 s (`NavigationHealth.maxFixAge`). So
+`markLocationUnavailable` said "GPS weak…" and the next fix said "GPS back.". Also at start: the
+190-character intro, "No headphones. Beacon paused until AirPods connect.", "Watch not reachable.
+Open OpenCane on the watch.", and later "Screen locked. Obstacle warnings are paused until you unlock.".
+
+**Before → after** (`cd ios && scripts/cue_audit.py --speech-load <log>`). The same route is replayed
+through the new rules. The GPS lines come from a Python mirror of `GPSAnnouncer` fed by the log's `gps`
+records, and "Close." is estimated from the 2 Hz `lanes`.
+
+| | lines | characters | lines/min | characters/min |
+|---|---|---|---|---|
+| before (as dispatched) | 31 | 1,086 | 12.9 | 450.8 |
+| after (replayed) | 5 | 230 | 2.1 | 95.5 |
+| change | | | −83.7 % | **−78.8 %** |
+
+After: "Starting." · "Route to CIF. Leaving Townsend Hall through the ISR front doors. Follow the covered
+walk south, then the path west and down to the Illinois Street sidewalk." (156 ch) · "Close." (estimated,
+one red episode) · "It is too dark to see." (a Camera Control describe, Step 67's area) · "Screen locked.
+Obstacle warnings off.". Zero GPS lines. Target was ≥ 50 % fewer characters per route minute: met.
+
+**1. GPS weak / back hysteresis** — `GPSAnnouncer` (new `QuietRouteSpeech.swift`, CaneKitLogic).
+- "GPS weak." (was 49 characters) is said only after **20 s of continuously bad GPS**: no fix, a stale
+  fix, or accuracy outside the 20 m fence gate. It is said only while a route guides **outdoors**:
+  never while an indoor step script is active, and never after the "Location access is off" line.
+- "GPS back." is said only after **10 s continuously good**, and only after "GPS weak.".
+- At most **one pair per 2 minutes**.
+- `NavigationEngine` feeds it from `update(fix:)`, the 10 Hz `tick` and `markLocationUnavailable`.
+  `gpsWeak`, the paused fences, the withdrawn target and the GuideCard pill flip exactly as before;
+  only the speech moved.
+- Tests: `theFlappingLogSaysAtMostTwoGPSLines` (the log's 41 route fix times at the 10 Hz ticker → 0
+  lines; the longest stale stretch was 6.4 s), `weakNeedsTwentySecondsAndBackNeedsTen`,
+  `backIsNeverSaidWithoutWeak`, `atMostOnePairEveryTwoMinutes`, `neverWhileIndoors`,
+  `noFixAtAllIsAnnouncedOnceAtTwentySeconds` (the cc04946 indoor start still hears it at 20 s),
+  `aRealOutageIsOnePair` (fixes stop for 60 s → weak at +25 s, back 10 s after they return).
+- Trade-off, stated: standing still outdoors for > 25 s (CoreLocation pauses fixes) now says
+  "GPS weak." once and "GPS back." once walking resumes. Before, it said them within 5 s, every time.
+
+**2. Route-start chatter** — at most one status line, only when it changes what the walker does.
+- `RouteStatusLines.routeStartLine` returns only the haptics line (cues moved to the watch or to
+  speech). "No headphones…" and "Watch not reachable…" are no longer spoken at start; the Guide card
+  pills and the "status" answer still say them.
+- A headphone disconnect **during** a route is said once per route as "AirPods disconnected."
+  (`HeadphoneNotice`). With no route running it is still "Headphones disconnected. Beacon paused.".
+- "Camera too steep for head-height cover. Torso obstacles only." is no longer spoken. `HeadCoverNotice`
+  still decides it and it is still logged as `head_cover` with `spoken: false`; the Mount card and
+  status keep it.
+- The intro is now `WalkingIntro.routeStarted` → "Route to <destination>. <first say>".
+  `destinationName` takes MapKit's "To X" → X, "A to B" → B, else the last waypoint's place name.
+  The demo intro went from 190 to 156 characters. The route file's `say` text is untouched.
+- Tests: `routeStartSaysOnlyTheHapticsLine`, `aMidRouteDisconnectIsSaidOnce`,
+  `introLineIsWhatNavigationSpeaks` (updated), `introNamesTheDestinationNotTheRoute` (reads the shipped
+  route file: < 160 characters).
+
+**3. "Close." when the tile turns red** — `CueSpeechPolicy.close(torsoCentreM:covered:held:trusted:now:)`.
+- It fires when the centre torso cell enters `TileLevel.urgent` (< 0.7 m, the red tile the walker sees).
+- It speaks once per red episode, at `.obstacle`, with a 3 s TTL.
+- A new episode needs ≥ 3 s of trusted frames out of the red, and there are never two lines within 4 s
+  (a red entry inside the limiter waits and speaks when it expires, if still red).
+- A `NearHold` substitution (point-blank after a near reading, or the 0.8 m cold start) can continue an
+  episode but never start one. Sweep frames and uncovered cells neither start nor end an episode.
+- `AppModel.handle` calls it while a route or an indoor script guides and the cue level is not Quiet.
+  The head band keeps "Head height." at `.safety`.
+- The line is prefetched through `RouteStatusLines.allSpokenLines`.
+- Tests: `closeIsSpokenOncePerRedEpisode`, `closeNeedsThreeSecondsOutOfTheRed`,
+  `closeIsRateLimitedToOneEveryFourSeconds`, `aPointBlankHoldNeverStartsClose`,
+  `sweepAndUncoveredFramesNeitherStartNorEndClose`.
+- Choice, stated: only the centre torso cell. The side cells go red walking through every doorway, and
+  the head band already has its own spoken line.
+
+**4. Screen locked** → "Screen locked. Obstacle warnings off." (61 → 37 characters), still once per
+route, and prefetched (`step68LinesAreShortAndPrefetched`). `AppModel.commonLines` no longer carries the
+two old GPS literals or the head-cover literal; it appends `RouteStatusLines.allSpokenLines`.
+`HeadCoverNotice.line` is still in `SpokenPhrases.shellLines` (a file Step 67 is editing): drop it
+there in a follow-up so nobody pays for an unspoken line.
+
+**5. Emergency contact.**
+- New optional git-ignored Secrets.plist keys `EMERGENCY_CONTACT_NAME` / `EMERGENCY_CONTACT_PHONE`,
+  documented with empty values in `ios/Secrets.example.plist`.
+- `MedicalProfileStore.init` seeds them in memory, and not saved, only when the stored contact phone is
+  blank (`EmergencyContactSeed`, ≥ 7 digits; a typed number always wins).
+- `ProfilePage` and `ConversationCoordinator` → `EmergencyConfirm` read `medicalProfile.profile`, so
+  both see the seed.
+- The local Secrets.plist is set with `plutil -replace` (name "Aritro", the owner's number). No new
+  copy of the number was added to git.
+- Tests: `anEmptyStoredPhoneIsSeededFromSecrets`, `aStoredPhoneIsNeverOverwritten`,
+  `nothingUsableSeedsNothing`.
+
+**6. Measure** — `cue_audit.py --speech-load`: `route_window`, `speech_load` (lines and characters per
+minute, by text, from first dispatches), `step68_replay` (+ `gps_announcer_replay`, `close_replay`,
+`step68_intro`). The new fixture is `selftest_speech_load`. `--selftest`: ok.
+
+**Harness.** `e2e.py` asserts nothing on the GPS, intro, channel or lock lines (its `gps_weak` stress
+metric counts "GPS" in any line and still works), so it is unchanged.
+
+**Verification here.** `cd ios/Logic && swift test --disable-xctest` (exit 0) → "Test run with 900 tests in 23 suites passed … with 1 known issue" (the Step 66 known issue); `scripts/cue_audit.py --selftest` → ok.
+App files were only syntax-checked (`swiftc -parse`), **not built**: the simulator belonged to another
+agent. The orchestrator must run `make sim uitest e2e`.
+
+**Test on device:**
+- Start ISR → CIF indoors without AirPods, standing still for 2 minutes → "Starting.", "Route to CIF. …",
+  then no GPS lines.
+- Walk up to a wall → one "Close." as the centre tile turns red, nothing more while standing there;
+  step back 3 s and approach again → "Close." again.
+- Lock the screen → "Screen locked. Obstacle warnings off." once.
+- Unplug AirPods mid-route twice → "AirPods disconnected." once.
+- Profile → the contact is Aritro with the number; "emergency" → the prompt names Aritro → say "no".
+- `make audit` + `scripts/cue_audit.py --speech-load` on the walk log.
+
+## Step 67 — launch says only "OpenCane ready."; spoken destinations route on the phone (Sun Sep 13)
+
+Owner, verbatim: "when it immediately pops up there's a lot of jargon. It should just be 'OpenCane
+ready' and then boom. When I say the location it doesn't even do it."
+
+**Evidence.** Phone log `canekit-2026-09-13T15-48-34Z.jsonl`:
+
+| t (s) | Record | What the walker got |
+|---|---|---|
+| 0.31 | `speech_dispatch` "OpenCane ready." + `voice_menu {menu: full}` | |
+| 1.71, 2.89, 3.56 | `describe {trigger: cameraControl}` ×3 | the hand gripping the phone hit Camera Control / volume |
+| 2.33 | `speech_dispatch` "Say route, where am I, describe, status, repeat, quiet, help, or emergency." | the eight-word menu (90 characters of speech before the mic opened) |
+| 2.91, 3.58 | `earcon busy` ×2 | two stacked busy taps |
+| 8.70 | `voice_listen {mode: launch}` | the launch listen, 8.4 s after "ready" |
+| 11.94 / 14.88 | `describe_result {cloud_ms: 10113}` → spoken | "Cable and wrapper on the left, sandal in the center, feet on the right." — nobody asked |
+| 14.88 | `voice_end` | heard "I just wanna get from here to Granger library" |
+| 16.55, 18.12 | `earcon thinking` ×2 | no fast-path rule matched ("get … from here to" has no rule-14 prefix) → cloud |
+| 19.18 | `conv_error {timeout: true, budget_ms: 4000}` + "No answer." | no route |
+
+**What changed**
+1. **Launch = "OpenCane ready." then the listening tone.** `VoiceMenu.menuLine`, `shortMenuLine` and
+   `launchMenuLine(firstLaunch:)` are deleted (the first-install full menu too). `VoiceShellPolicy`
+   gains `readyLine`, `noLidarLine`, `launchLine(lidarSupported:)`; `menuWaitCap` → `speechDrainCap`.
+   `AppModel.speakMenuThenListen` → `listenAfterLaunchLine` (no `say`; the drain and the
+   `launchListen` verdict unchanged); its log kind `voice_menu` → `voice_launch` (no script reads
+   either: grep of `ios/scripts`). `commonLines` references `readyLine`, so the natural-voice cache
+   byte trap (AGENTS.md trap 1) is gone. The menu is spoken only on "help" / "menu" / "options" /
+   "seven" (`helpLine`). `SpokenPhrases.shellLines` no longer prefetches the two menus.
+   `LaunchRecovery.spokenLine` (recovered launches only) is now one sentence: "Extra camera features
+   are off after a crash, but guidance still works." (was 3 sentences, 21 words, naming the Hazards card).
+2. **No accidental descriptions.** `CameraControlGate` (Logic, new): a press is refused for 5 s after
+   launch (`launch_grace`), while the voice input listens or starts (`listening`), while the launch line
+   is pending (`launch_line`), and within 2 s of the previous press, accepted or not (`debounce` — a
+   grip's burst is one press, and a grip that began in the grace does not fire when it ends).
+   `AppModel.cameraControlPressed` logs `describe_skipped {reason, trigger: cameraControl}` and makes no
+   sound. Replayed by hand on the log: all three presses are `launch_grace` → no description, no busy taps.
+3. **Spoken destinations route without the cloud.** `FastPathIntentClassifier` rule 14b
+   `travelIntent`: a travel verb anywhere (go, get, take / bring / get / navigate / walk / guide / lead /
+   route me, directions, navigate, walk, travel, show me the way; not "went", "going", "head"; not after
+   "used to") + `to B` or `from A to B`; trailing fillers (please, now, right now, thanks, thank you, for
+   me) trimmed — also in `destinationAction`, so rules 13b / 14 match "take me to the Union please". "from
+   here" / "my location" is no origin; a real origin stays `.routeFromTo`. `CampusPlaces` aliases (exact):
+   "Granger Engineering Library", "Grainger Engineering", "CIF building", "C I F", "see eye eff" ("Granger",
+   "Granger Library", "Illini Union", "Siebel Center", "ARC gym" already existed; "library" alone stays
+   unmatched — Main Library). The log utterance now classifies to
+   `.startRoute(destination: "Grainger Engineering Library")`.
+4. **Cloud budget 4 → 8 s**, thinking ticks at 1.5 s and 4 s (was 3 s), still max 2, latest wins
+   unchanged. Every cloud answer logged so far took 6–17 s (first walk) and this log's cloud description
+   took 10.1 s; with navigation off the cloud path, only real questions wait.
+5. **Route start speaks nothing new**: `.startRoute` still goes through `AppModel.navigate(to:)` →
+   "Finding a route to X." then the walking intro / route intro (`ConversationCoordinator.executeAction`,
+   `alreadySpoken: true`); no line was added.
+
+**Before / after**
+
+| | Before | After |
+|---|---|---|
+| Speech before the launch listen | 90 characters (ready + 75-character menu); first launch after install the same | 15 characters ("OpenCane ready.") |
+| Camera Control presses in the first 5 s | 3 descriptions queued, 2 busy taps, 1 unasked description spoken | 0 (3 × `describe_skipped {launch_grace}`) |
+| "I just wanna get from here to Granger library" | cloud → 2 ticks → error tone + "No answer." at 4.2 s | fast path, 0 network: "Finding a route to Grainger Engineering Library." |
+| Open cloud question | "No answer." at 4 s | answer or "No answer." by 8 s |
+| Recovered launch line | 21 words, 3 sentences | 12 words, 1 sentence |
+
+**Tests (written first).** Red on a scratch copy with the HEAD behaviour files
+(`FastPathIntentClassifier`, `CampusPlaces`, `ConversationBudget`, `LaunchRecovery`) and the new tests:
+45 failing expectations in `spokenDestinationsRouteOnThePhone`, `aTravelVerbAnywhereKeepsARealOrigin`,
+`noTravelIntentIsNotARoute` ("go to please" was a route to "Please"), `everyCampusPlaceAnswersToItsAliases`,
+`numbersArePinned`, `thinkingTicksAtOneAndAHalfAndFourSeconds`, `timeoutAtEightSeconds`,
+`theRecoveryLineSaysWhatIsOffAndThatGuidanceRemains`; the new-API tests (`CameraControlGateTests` (8),
+`launchSaysOnlyOpenCaneReady`) did not compile against HEAD. Green: `cd ios/Logic && swift test
+--disable-xctest` → **900 tests in 23 suites passed, 1 known issue** (Step 66's early-arrival
+`withKnownIssue`), exit 0 (869 before; 880 before the review round below). Replaced: `menuLineIsTheEightWords` and
+`shortMenuLineIsThreeWordsAndTheFullMenuOnlyOnFirstLaunch` → `theOnlyMenuIsTheOneTheWalkerAsksFor`;
+`thinkingTicksAtOneAndAHalfAndThreeSeconds` / `timeoutAtFourSeconds` → the 4 s / 8 s versions.
+`StressTests.fastPathFuzz` (5,000 decorated utterances) passes unchanged — no StressTests edit.
+
+**Review round — Muse** (`muse exec --provider meta --reasoning-effort high`, on the diff; 11 findings,
+each checked by hand):
+- Fixed 1 — rule 14b searched MapKit for anything after "to": "Where do I go to pay my bill" →
+  "Pay My Bill". A rule-14b gazetteer miss now searches MapKit only for ≤ 4 words with none of
+  `nonPlaceWords` (my, it, sleep, pay, work, next, question …).
+- Fixed 2 — first verb won: "Get directions to go to Grainger" searched "Go To Grainger". Every verb is
+  tried; a gazetteer hit from any verb beats an earlier verb's MapKit search.
+- Fixed 3 — a cut-off sentence acted: "take me to Grainger from" → "Grainger From", "go to from ISR" →
+  "From Isr" (rules 14 and 14b). `destinationAction` returns nil for a target starting or ending in a
+  bare "from" / "to"; 14b skips such a verb.
+- Fixed 4 — "I'm going to Grainger", "heading to Granger library" went to the cloud. `going` / `heading`
+  / `headed` / `head` count, gazetteer hits only ("I'm going to sit down", "turn my head to the left"
+  stay nil). Pinned by `travelIntentReviewCases` (red: 4 issues before these fixes, then green).
+- Fixed 10 — `noLidarLine` was not prefetched: added to `commonLines`.
+- Fixed 11 — the launch listen's "already listening" exit logged nothing: `voice_launch {reason: already_listening}`.
+- Rejected 5 (speak a first-launch hint): the owner's directive is "It should just be 'OpenCane ready'
+  and then boom"; "help" / "menu" / "options" remain, and handsfree §0 says so.
+- Rejected 6 (a sound for a refused press): the brief is to stop the stacked busy earcons; a sound per
+  refused grip press is the same noise under another name. The log records every refusal.
+- Rejected 7 (refused presses restarting the debounce): deliberate — the log's grip pressed every
+  0.7–1.2 s; if the grace did not start the debounce, a grip still going at 5 s would fire at once
+  (`aRefusedPressStillStartsTheDebounce`). Cost: one deliberate press within 2 s of a grip press is refused.
+- Rejected 8 (a third thinking tick): the brief pins ticks at 1.5 s and 4 s, max 2.
+- Rejected 9 (`launchLinePending` stuck): the flag is cleared by a `defer` on every exit of the task,
+  and `waitForSpeechToDrain` returns within `speechDrainCap` (15 s) plus 0.3 s; `self` is the
+  app-lifetime model, so the task always runs.
+- Known and unchanged (older rules, not 14b): "take me to the next question" is still a rule-14 MapKit
+  search (like "go to settings"); "… across the street from the library" still splits at "from" (13b's
+  documented ⚠). Multi-agent and Antigravity reviews not run in this pass.
+
+**Not verified here** (the simulator belonged to the Step 66 stress campaign): `make sim` / `uitest` /
+`e2e`. The AppModel, ContentView, CameraControlInteraction and ConversationCoordinator edits were
+type-checked by reading only. No `speech` record e2e asserts on was added or removed: under
+automation (`SpeechQueue.muted`) the old launch sequence returned before speaking the menu, so e2e
+never saw it, and route / waypoint / arrival lines are untouched.
+
+test on device: open the app → only "OpenCane ready." + the rising tone; squeeze the phone / press
+Camera Control in the first 5 s → nothing; say "I just wanna get from here to Granger library" →
+"Finding a route to Grainger Engineering Library."; ask a slow question → answer before 8 s.
+
+## Step 66 — stress campaign: seeded properties, OpenStreetMap walks, repeat runs (Sun Sep 13)
+
+Owner, verbatim: "can we make sure this really really works — spin up a few simulations and other
+things like Google Maps and really stress the idea and logic; I don't know why but whenever you do it
+for some reason it's always different; can we really really test it." How to run all of it:
+`ios/scripts/stress/README.md`.
+
+**A. Logic, seeded (`StressTests.swift`, in-file SplitMix64, every seed run twice).** 1,000 hostile GPS
+walks through `GeofenceTracker`, 400 lane streams (≈ 360,000 frames) through `CueDecider` +
+`CueSpeechPolicy`, 2,000 indoor walks through `IndoorProgress` + `IndoorHandover`, 20,000 island
+inputs, 200 alert-throttle routes, 5,000 fast-path utterances. `swift test` → **869 tests passed, 1
+known issue** (exit 0). Determinism: same seed twice → identical in every suite; the six
+`STRESS-DIGEST` hashes are byte-identical across three separate processes (two default, one
+`SWIFT_DETERMINISTIC_HASHING=1`), and no Logic decision iterates a `Set` / `Dictionary` in hash order
+(the only unordered loops sort first or only reset values). **The "always different" is not in
+Logic.**
+
+**Bugs found and fixed (test first; both red, then green):**
+1. **A returning head overhang could be silent** (`CueDecider`, 82 hits in 400 streams). After a head
+   onset, the head reading vanished within 400 ms while a centre obstacle was in range. The change
+   gate held the hand-off, so `active` stayed `.head`. A sweep longer than the 2 s episode clock then
+   ended the episode, and the returning overhang went down the "same cue still active" branch as a
+   band re-fire with no episode. Result: no haptic and no "Head height." until the zone cleared.
+   Fix: an onset while `active == .head` takes the change branch. Pinned by
+   `headOnsetFiresAfterAGatedHandoffAndALongSweep`.
+2. **"Head height." for a cell the overhang gate rejected** (`CueDecider`, 116 hits). The point-blank
+   dropout latch kept the head zone alive on `HeadGate`'s non-finite answer (a wall, or no coverage),
+   and when the gate opened it fired `.head(distance: ∞, onset: true)`. Fix: an onset needs a finite
+   gated distance on the frame itself. The latch still holds a live episode, and a real saturation is
+   finite because `NearHold` substitutes 0.1 m. Pinned by `noHeadOnsetOnANonFiniteDistance`. All 26
+   `CueDeciderTests` stay green.
+
+**Found, not changed (a tuning decision for the owner, measured):**
+3. **Arrival can fire well before the door under correlated GPS error.** With accuracy reported
+   honestly (≈ 1.5 σ), `distance + accuracy/2 ≤ 20 m` on 2 consecutive fixes arrived more than 25 m
+   early in 12 of 1,000 walks at ρ 0.7 (worst 38 m) and 16 at ρ 0.95 (worst 58 m). Requiring 3 hits
+   gives 3 / 8 early; 4 hits at ρ 0.7 gives 1. At σ ≤ 8 m, arrival stays 229 / 229 in every variant;
+   total arrivals drop 564 → 523 → 455, and the losses are almost all walks with σ > 16 m. Kept as a
+   visible `withKnownIssue` in `geofenceSurvivesHostileGps`; not retuned without a device walk
+   ("measure before tuning").
+4. Indoor, island, throttle and fast path held every invariant (0 violations).
+
+**B. Walks from OpenStreetMap (`ios/scripts/stress/build_routes.py`).** OSRM foot routing
+(routing.openstreetmap.de, ODbL) between the `CampusPlaces` entrances produced 6 walks: ISR → CIF
+(bundled), CIF → ISR, ISR → Grainger, ISR → Illini Union, CIF → Siebel, and the Union walk with a
+50 m wrong turn and recovery. Routes are built the way `RouteBuilder` builds MapKit routes, and the
+traces are JSON + GPX. `--offline` rebuilds byte-identically. Side finding: OSM's own ISR → CIF foot
+route strays up to 218 m from the recorded demo route. New app hook `CANEKIT_ROUTE_FILE`
+(`RouteSource.bundled()`) lets the demo-route hook walk those files. `e2e.py` gains `stress_<walk>` /
+`stress_all` / `--trace` (seeded AR(1) jitter, GPS dropouts as paused replay segments, `check_stress`)
+and `indoor_isr` (`check_indoor`). `ios/scripts/stress/campaign.py` repeats everything.
+
+**C. Repeat runs — PARTIAL.** `make sim` was green. The full campaign (23 configs × 3 rounds) was
+stopped by the orchestrator during its first run (`clean-r1`, no report) so the simulator could be
+used for urgent fixes. Only two smoke runs finished, one round each, so **no run-to-run comparison
+exists yet**:
+
+| config | result | s | waypoints | wrist cues | veers | lines/min | arrival m | GPS fixes / median dt / max gap | notes |
+|---|---|---|---|---|---|---|---|---|---|
+| indoor_isr | PASS | 32 | – | – | – | – | – | – | advanced [1, 2, 3, 4]; exit 18.2 s; handover (gps) 21.2 s; route start 21.4 s |
+| stress_cif_siebel-s11 | FAIL → PASS on re-check | 298 | 8 of 8 | 7 | 1 | 2.33 | 15.6 | 292 / 1.0 / 6.74 | jitter 3 m, cuts at vertices 54 / 64 (20 s each) → "GPS weak." / "GPS back."; the fail was a harness false positive (below) |
+
+- **Harness bug fixed:** `check_stress` flagged "identical consecutive lines" when two *different*
+  waypoints both read "Turn left onto the path." (unnamed OSM footpaths). It now counts a repeat only
+  with no waypoint advance between them. Re-checked on the saved log: failures [], duplicates 0.
+- **Determinism so far:** Logic is deterministic across processes (A). The simulator side is
+  unmeasured: no config has two runs yet. Candidate causes, from reading the harness and app (not
+  measured): `simctl location start` interpolates on wall time and pauses at every vertex; the app's
+  10 Hz ticker (arrival hint), `TurnSettle`'s 25 s moving-time cap and the veer hold all read wall
+  time; and e2e polls every 5 s and stops 6 s after `arrived`, so post-arrival lines vary. Run
+  `python3 ios/scripts/stress/campaign.py --out <dir>` alone to measure it (it resumes from saved
+  reports).
+- **App observations (not changed):** at route start the intro says WP1's line, and WP1's fence
+  (walker standing on it) says it again right after ("Route started … First: Leaving Townsend Hall…"
+  then "Leaving Townsend Hall…"). `IndoorGuide.swift:477` logs `advanced` with the mirrored final
+  `stepIndex`, so two advances in one update would log the same index twice.
+
+test on device: walk under an overhang (a low branch or a sign) while sweeping the cane continuously
+for 3 s right after the first "Head height.", then step back under it → "Head height." again; walk
+toward a doorframe (near in both bands) → no "Head height.".
+
 ## Step 65 — calm feedback: tones instead of waiting words (Sun Sep 13)
 
 Owner, verbatim: "make sure it's not over stimulating again like with the amount of questions with

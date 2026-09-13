@@ -1,5 +1,48 @@
 # LIVE TRACKER — Sun Sep 13 (updated as work lands; newest first)
 
+- [ ] Steps 67–68 review round (Codex, Muse, Antigravity) — CHANGELOG "Steps 67–68 review round"
+  - [x] Logic tests first (new-API tests red on compile): emergency intent, ambiguous travel → gazetteer only, polite stop, Grainger compounds, "Close." `.safety` at every level, GPSAnnouncer ×11 (10 s / 12 s age / 60 s weak / 120 s back / indoor clock), EmergencyContactSeed.effective + log masking, CameraControlGate ×14 (accepted-press debounce, grip burst, one deferred press)
+  - [x] Logic source: `FastPathIntentClassifier` (rule 1 `stopKey`, rule 1c `isEmergencyRequest`, `gazetteerOnlyVerbPhrases` / `gazetteerOnlyPrefixes`, nonPlaceWords), `CueSpeechPolicy.closeTier` / `closeAllowed`, `GPSAnnouncer.badOnset`, `EmergencyContactSeed.effective`, `EmergencyConfirm.logSafe`, `CameraControlGate.resolvePending`, CampusPlaces aliases
+  - [x] App (read-checked only): NavigationEngine.announceGPS, AppModel ("Close." block, cameraControlPressed + watchPendingCameraControl, start()), MedicalProfileStore.effectiveEmergencyContact (no seed in `profile`), ProfilePage card, ConversationCoordinator (effective contact, `queryGeneration` private(set)), TripLogger number masking
+  - [x] Replay 15-48-34Z through the new GPS rule → 0 lines (max fix gap 11.41 s)
+  - [x] `swift test --disable-xctest` exit 0: 919 tests in 23 suites, 1 known issue (Step 66)
+  - [x] Docs: CHANGELOG, AGENTS rule 8, design §5.1, handsfree §0, test_checklist, CODE_REFERENCE
+  - [x] Muse #11: `HeadCoverNotice.line` not in `shellLines` (regression check added) — closes the Step 68 follow-up below
+  - [ ] Orchestrator: `make sim uitest e2e` (app files not built here)
+  - [ ] Device: emergency sentence → prompt; "I need to get to class" → nothing; "please stop"; Quiet + wall → "Close."; outdoor GPS loss → weak ~15 s; Profile caption; one Camera Control press at launch → one description
+
+- [ ] Step 68 — half the words (owner: "make it talk about fifty percent less. But if something comes close … tell us"; log 15-48-34Z: route 31 lines / 1,086 ch → replayed 5 / 230, −78.8 % characters/min)
+  - [x] Logic tests first: `QuietRouteSpeechTests` (GPSAnnouncer ×7 incl. the log's flap pattern, RouteStatusLines, HeadphoneNotice), `NavSupportTests` "Close." ×5, `introNamesTheDestinationNotTheRoute`, `EmergencyContactSeedTests` ×3
+  - [x] `GPSAnnouncer` (20 s bad outdoors / 10 s good / one pair per 2 min) wired in `NavigationEngine` (`announceGPS`, `isIndoorActive`); `gpsWeak` / fences unchanged
+  - [x] Route start: only the haptics status line; no head-cover line (still logged); "AirPods disconnected." once mid-route; intro "Route to <destination>. <first say>"
+  - [x] `CueSpeechPolicy.close` → "Close." at `.obstacle` in `AppModel.handle` (route or indoor, not Quiet)
+  - [x] "Screen locked. Obstacle warnings off."; `commonLines` += `RouteStatusLines.allSpokenLines`
+  - [x] `EMERGENCY_CONTACT_NAME` / `_PHONE` in Secrets.example.plist + `MedicalProfileStore` seed; local Secrets.plist set (plutil)
+  - [x] `cue_audit.py --speech-load` (+ `selftest_speech_load`); CHANGELOG, design §5.1, handsfree, test_checklist §1/§6, CODE_REFERENCE, AGENTS, route_isr_cif.md
+  - [x] `swift test --disable-xctest` exit 0: 900 tests in 23 suites passed, 1 known issue (Step 66); `cue_audit.py --selftest` ok
+  - [x] Follow-up: drop `HeadCoverNotice.line` from `SpokenPhrases.shellLines` (already absent; pinned in the Steps 67–68 review round)
+  - [ ] Orchestrator: `make sim` (NavigationEngine / AppModel / MedicalProfileStore only parse-checked), `make uitest`, `make e2e` (intro wording changed; no e2e assertion depends on it)
+  - [ ] Reviews: Muse on the diff, multi-agent, Antigravity
+  - [ ] Device: indoor route start without AirPods 2 min still → no GPS lines; wall approach → one "Close."; lock → short line; AirPods out ×2 → one line; Profile shows Aritro; "emergency" → "no"
+- [ ] Step 67 — launch says only "OpenCane ready."; spoken destinations route on the phone (owner: "a lot of jargon … It should just be 'OpenCane ready' and then boom. When I say the location it doesn't even do it."; log 15-48-34Z)
+  - [x] Logic tests first (red on HEAD behaviour: 45 failing checks; new-API tests did not compile): `CameraControlGateTests` (8), `spokenDestinationsRouteOnThePhone`, `aTravelVerbAnywhereKeepsARealOrigin`, `noTravelIntentIsNotARoute`, `launchSaysOnlyOpenCaneReady`, `theOnlyMenuIsTheOneTheWalkerAsksFor`, budget 8 s, recovery line one sentence, aliases → `swift test` 900 green after the Muse round (1 known issue, Step 66)
+  - [x] Launch: no menu (short or full); `VoiceShellPolicy.launchLine`; `listenAfterLaunchLine`; `speechDrainCap`; `voice_launch` log; LaunchRecovery line shortened
+  - [x] `CameraControlGate` (5 s grace, 2 s debounce, blocked while listening / launch line) + `AppModel.cameraControlPressed` → `describe_skipped {reason}`
+  - [x] `FastPathIntentClassifier` rule 14b travel intent + trailing fillers; CampusPlaces mishearing aliases
+  - [x] `ConversationBudget` 8 s, ticks 1.5 / 4 s
+  - [x] Docs: handsfree §0 / §5, design §5.1, test_checklist §1, AGENTS trap 1, CODE_REFERENCE, CHANGELOG Step 67
+  - [ ] Orchestrator: `make gen` (new Logic file only — SwiftPM, no project change expected) + `make sim` (AppModel edits type-checked by reading only), `make uitest`, `make e2e`
+  - [x] Review: Muse on the diff — 6 fixed (14b over-matching, first-verb-wins, dangling "from", going/heading, `noLidarLine` prefetch, `already_listening` log), 5 rejected with reasons (CHANGELOG)
+  - [ ] Reviews: multi-agent, Antigravity
+  - [ ] Device (test_checklist §1): launch = ready + tone only; squeeze in first 5 s → no description; "I just wanna get from here to Granger library" → route; a slow question answers before 8 s
+
+- [ ] Step 66 — stress campaign (owner: "really really test it"; README `ios/scripts/stress/README.md`)
+  - [x] Logic `StressTests` (seeded, run twice, cross-process digests identical) → 869 green, 1 known issue (early arrival, owner tuning)
+  - [x] Fixed 2 `CueDecider` bugs (silent returning overhang; onset on a non-finite distance), pinned
+  - [x] OSM walks (6) + `CANEKIT_ROUTE_FILE` hook + `e2e.py` stress_* / indoor_isr + `campaign.py`
+  - [~] Campaign: stopped by the orchestrator during run 1 (simulator needed for urgent fixes); smoke only: indoor_isr PASS, stress_cif_siebel PASS after a harness fix. Rerun `campaign.py` alone (resumes) for the × 3 determinism table
+  - [ ] Reviews (Muse / multi-agent / Antigravity), device walk under an overhang, commit
+
 - [ ] Step 65 — calm feedback (owner: "don't over-stimulate the blind person too much or else they won't listen")
   - [x] Evidence: phone log 08-51-14Z, first 34 s = 301 characters of speech (menu 76, "Still describing…" ×2, "One moment.", timeout 47)
   - [x] Logic tests first: `EarconTests` (14), short menu, thinking ticks + "No answer.", prefetch set, draft caveat → `swift test` 861 green
