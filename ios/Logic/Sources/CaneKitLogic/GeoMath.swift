@@ -19,7 +19,9 @@
 //    · `OffCourseDetector` and `GeofenceTracker` are deliberately NOT Sendable: one actor
 //      (MainActor in the app) owns and drives each instance.
 //    · Arrival is irreversible (it stops the beacon and the Live Activity), so the last
-//      waypoint needs `distance + accuracy/2 ≤ radius` on `arrivalHits` consecutive fixes.
+//      waypoint needs `distance + accuracy ≤ radius` on `arrivalHits` consecutive fixes. The
+//      whole reported uncertainty must fit inside the fence; a half-radius margin allowed
+//      correlated GPS error to finish a walk tens of metres before the door (StressTests).
 //    · An `OffCourseDetector` episode is evidence, not samples: moments with nothing to judge
 //      are reported as `gated(at:)` and only a hole longer than `maxEvidenceGap` (2 s) drops the
 //      episode — jitter must not silence a veer warning, a GPS gap must not fire one. A moment
@@ -320,7 +322,7 @@ public enum NavEvent: Sendable, Equatable {
 ///     and the distance has then grown by a full radius over `passedByFixes` consecutive fixes,
 ///     the waypoint counts as reached (`passedBy: true`). Never applied to the last waypoint.
 ///   · **Arrival** (last waypoint) is exempt from the speed gate (people stop at the door) but
-///     must be *plausibly* inside the fence — `distance + accuracy / 2 ≤ radius` — on
+///     must be *plausibly* inside the fence — `distance + accuracy ≤ radius` — on
 ///     `arrivalHits` consecutive fixes, so one 30 m blob 45 m short of the door cannot end the
 ///     route (arrival stops the beacon and the Live Activity; there is no way back).
 ///
@@ -424,8 +426,10 @@ public final class GeofenceTracker {
             if isLast { arrivalEvaluated = true }
             let d = GeoMath.distanceMeters(fix.coordinate, wp.coordinate)
             if isLast {
-                // Plausibly inside, on consecutive fixes (see the type comment).
-                guard d + fix.accuracy / 2 <= wp.radiusM else { continue }
+                // Arrival is irreversible. Require the entire reported horizontal-accuracy
+                // radius to fit inside the fence, not just half of it: correlated GPS error can
+                // keep two optimistic fixes on the same wrong side of the door.
+                guard d + fix.accuracy <= wp.radiusM else { continue }
                 arrivalCandidate = true
                 arrivalStreak += 1
                 guard arrivalStreak >= arrivalHits else { continue }

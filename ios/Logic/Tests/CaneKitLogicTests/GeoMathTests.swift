@@ -117,11 +117,11 @@ private let wps = [
     #expect(t.index == 1)
     let near2 = Coordinate(latitude: 40.1126, longitude: -88.2283)    // ~11 m from CIF
     // Arrival: speed-exempt (people stop at the door), but a 40 m blob is not a plausible fix,
-    // 11 m + 30/2 > 20 m is not plausibly inside, and it takes two plausible fixes in a row.
+    // 11 m + 30 > 20 m is not plausibly inside, and it takes two plausible fixes in a row.
     #expect(t.update(fix(near2, accuracy: 40, speed: 0)) == nil)
     #expect(t.update(fix(near2, accuracy: 30, speed: 0)) == nil)
-    #expect(t.update(fix(near2, accuracy: 12, speed: 0)) == nil)
-    #expect(t.update(fix(near2, accuracy: 12, speed: 0)) == .reached(index: 1, waypoint: wps[1], isLast: true))
+    #expect(t.update(fix(near2, accuracy: 5, speed: 0)) == nil)
+    #expect(t.update(fix(near2, accuracy: 5, speed: 0)) == .reached(index: 1, waypoint: wps[1], isLast: true))
     #expect(t.isFinished)
     #expect(t.update(fix(near2)) == nil)
 }
@@ -148,8 +148,8 @@ private let wps = [
     // Arrival stays exempt from the speed gate but needs a valid accuracy.
     let near2 = Coordinate(latitude: 40.1126, longitude: -88.2283)
     #expect(t.update(fix(near2, accuracy: -1, speed: -1)) == nil)
-    #expect(t.update(fix(near2, accuracy: 12, speed: -1)) == nil)
-    #expect(t.update(fix(near2, accuracy: 12, speed: -1)) == .reached(index: 1, waypoint: wps[1], isLast: true))
+    #expect(t.update(fix(near2, accuracy: 5, speed: -1)) == nil)
+    #expect(t.update(fix(near2, accuracy: 5, speed: -1)) == .reached(index: 1, waypoint: wps[1], isLast: true))
 }
 
 /// Four waypoints ~100 m apart on a due-north line (9e-4° lat ≈ 100 m): three 15 m turn fences with

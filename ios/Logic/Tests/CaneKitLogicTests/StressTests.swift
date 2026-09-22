@@ -242,13 +242,9 @@ private func simulateWalk(route: Route, seed: UInt64, arrivalHits: Int = 2, rho:
     let early = violations.filter { $0.contains("from the door") }
     let hard = violations.filter { !$0.contains("from the door") }
     #expect(hard.isEmpty, "\(hard.count) violations, first: \(hard.prefix(8))")
-    // ⚠ Step 66 finding, not retuned without a device walk: with honest accuracy (≈ 1.5 σ) and
-    // correlated noise, `distance + accuracy / 2 ≤ radius` on 2 consecutive fixes arrives > 25 m early
-    // in 12 of 1,000 walks at ρ 0.7 (worst 38 m) and 16 at ρ 0.95 (worst 58 m); 3 hits: 3 / 8, 4 hits:
-    // 1 at ρ 0.7, σ ≤ 8 m still 229 / 229 (the STRESS-STAT lines). Remove the wrapper when the rule changes.
-    withKnownIssue("GeofenceTracker arrival can fire > 25 m before the door under correlated GPS error (Step 66)") {
-        #expect(early.isEmpty, "\(early.count) early arrivals: \(early.prefix(4))")
-    }
+    // Arrival is safety-critical and must stay a hard invariant: the tracker may fail to finish a
+    // very noisy walk, but it must never stop the beacon and claim the door tens of metres early.
+    #expect(early.isEmpty, "\(early.count) early arrivals: \(early.prefix(4))")
 }
 
 // MARK: - A. CueDecider + CueSpeechPolicy over random lane streams

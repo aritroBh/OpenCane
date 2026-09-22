@@ -105,7 +105,8 @@ nonisolated final class SupabaseClient: Sendable {
     static func fromSecrets() -> SupabaseClient? {
         guard let raw = Secrets.string("SUPABASE_URL"),
               let url = URL(string: raw),
-              url.scheme?.hasPrefix("http") == true,
+              url.scheme?.lowercased() == "https",
+              url.host != nil,
               // Both names are accepted: Supabase renamed "anon key" to "publishable key", and a
               // teammate's local plist may carry either.
               let key = Secrets.string("SUPABASE_ANON_KEY")
@@ -205,6 +206,14 @@ nonisolated final class SupabaseClient: Sendable {
         _ = try await send(method: "POST", path: "/storage/v1/object/\(bucket)/\(encoded)",
                            body: data, contentType: contentType)
         return path
+    }
+
+    /// Remove an object that was uploaded before the caller's consent generation changed.
+    /// Used only to clean up a photo with no corresponding hazard row.
+    func deleteObject(bucket: String, path: String) async throws {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        _ = try await send(method: "DELETE", path: "/storage/v1/object/\(bucket)/\(encoded)",
+                           body: nil)
     }
 
     /// The public URL of an uploaded object, for a row a human will click in the dashboard.

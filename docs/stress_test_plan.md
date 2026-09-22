@@ -63,7 +63,7 @@ D = device matrix (§2) · F = failure injection (§3) · G = go/no-go (§4).
    line. The debug footer is gone: thermal, battery, camera tilt (`tilt`) and depth rate (`fps`) are
    in every `lanes` log record, and the Mount card shows "Camera tilt N° down · N fps" live; on the
    walk, listen for the hot line.
-9. **Arrival gate.** The fix must satisfy `distance + accuracy/2 ≤ 20 m` (WP9 radius) on 2
+9. **Arrival gate.** The fix must satisfy `distance + accuracy ≤ 20 m` (WP9 radius) on 2
    consecutive fixes with accuracy ≤ 30 m, and there's no speed gate. So at ±10 m accuracy, arrival
    fires within 15 m of the node. Intermediate fences need accuracy ≤ 20 m and speed > 0.5 m/s. Speed
    is −1 when standing, which fails the gate.
@@ -569,7 +569,7 @@ Every wrist cue in the table is also felt on the cane as the matching buzz patte
     the fence of the corner just reached. Walking (> 0.7 m/s), veer is judged on the 15 m smoothed
     course, whose history resets at each waypoint and after each veer cue, so a corrected veer
     doesn't fire again when the 10 s cooldown ends.
-- **Arrival hint.** Stand still inside WP9's zone (fence + accuracy/2, at most 40 m) without arrival
+- **Arrival hint.** Stand still inside WP9's zone (fence + full reported accuracy, at most 40 m) without arrival
   firing, e.g. under the entrance overhang. After 20 s: "You are close to the CIF east entrance. Keep
   going toward it, or press Next to finish." once. It needs no new GPS fixes (the 10 Hz clock
   checks it), and a normal walking approach never hears it.

@@ -111,6 +111,9 @@ final class CloudSync {
     @ObservationIgnored private var registering = false
     /// Kept so a late `start()` can register with the right facts.
     @ObservationIgnored private var pendingRegistration: RegistrationFacts?
+    /// Changes whenever consent changes. Every asynchronous writer captures this value and
+    /// re-checks it after an await, so opting out cannot let a queued continuation write later.
+    @ObservationIgnored private var sharingGeneration: UInt64 = 0
 
     init(client: SupabaseClient? = SupabaseClient.fromSecrets()) {
         self.client = client
@@ -120,6 +123,7 @@ final class CloudSync {
     /// Enables or disables the MVP cloud mirror. Disabling cancels future writes and clears
     /// deferred registration/trip work so withdrawn consent cannot cause a delayed upload.
     func setSharingEnabled(_ enabled: Bool) {
+        sharingGeneration &+= 1
         sharingEnabled = enabled
         guard !enabled else {
             updateStatus()
@@ -251,12 +255,14 @@ final class CloudSync {
                               batteryStartPct: pending.batteryStartPct,
                               logFileName: pending.logFileName,
                               startLat: pending.startLat, startLon: pending.startLon)
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 let data = try await client.insert(into: "trips", row: row, returning: true)
                 let id = Self.firstID(in: data)
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.isCurrent(generation) else { return }
                     self.tripID = id
                     self.pendingTrip = nil
                     self.openingTrip = false
@@ -306,7 +312,9 @@ final class CloudSync {
     private func applyClose(_ patch: TripClosePatch) {
         guard let client, sharingEnabled, let id = tripID else { return }
         tripID = nil
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 try await client.patch("trips",
                                        filter: [URLQueryItem(name: "id", value: "eq.\(id)")],
@@ -328,18 +336,31 @@ final class CloudSync {
         if wantsPhoto { photosUploaded += 1 }
         let photoName = wantsPhoto ? "\(walkerID)/\(UUID().uuidString.lowercased()).jpg" : nil
         let trip = tripID
+        let generation = sharingGeneration
 
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             var uploaded: String?
             if let photoName, let jpeg {
                 uploaded = try? await client.uploadObject(bucket: "hazard-photos",
                                                           path: photoName, data: jpeg)
+                // This object has no row if consent was withdrawn while the upload was in flight.
+                // Remove the orphan rather than leaving a camera frame behind with no local owner.
+                let stillCurrent = await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false })
+                if !stillCurrent {
+                    if uploaded != nil { try? await client.deleteObject(bucket: "hazard-photos", path: photoName) }
+                    return
+                }
             }
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             let row = HazardRow(record: record, walkerID: walkerID, tripID: trip,
                                 photoPath: uploaded)
             do {
                 try await client.insert(into: "hazards", row: row)
-                await MainActor.run { self?.count(1) }
+                await MainActor.run {
+                    guard let self, self.isCurrent(generation) else { return }
+                    self.count(1)
+                }
             } catch {
                 await MainActor.run { self?.note(error) }
             }
@@ -367,10 +388,15 @@ final class CloudSync {
                                        now: Date(), deliveryStatus: status,
                                        webhookStatusCode: httpStatus, errorMessage: error)
         else { return }
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 try await client.insert(into: "family_alerts", row: row)
-                await MainActor.run { self?.count(1) }
+                await MainActor.run {
+                    guard let self, self.isCurrent(generation) else { return }
+                    self.count(1)
+                }
             } catch {
                 await MainActor.run { self?.note(error) }
             }
@@ -408,10 +434,15 @@ final class CloudSync {
             let p_registered: Bool
         }
         let args = Args(p_walker_id: walkerID, p_emails: emails, p_registered: registered)
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 try await client.rpc("save_family_contacts", body: args)
-                await MainActor.run { self?.count(emails.count) }
+                await MainActor.run {
+                    guard let self, self.isCurrent(generation) else { return }
+                    self.count(emails.count)
+                }
             } catch {
                 await MainActor.run { self?.note(error) }
             }
@@ -437,10 +468,15 @@ final class CloudSync {
                                     emergencyContactRelation: profile.emergencyContactRelation,
                                     caneType: profile.caneType,
                                     organDonor: profile.organDonor)
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 try await client.upsert(into: "medical_profiles", row: row, onConflict: "walker_id")
-                await MainActor.run { self?.count(1) }
+                await MainActor.run {
+                    guard let self, self.isCurrent(generation) else { return }
+                    self.count(1)
+                }
             } catch {
                 await MainActor.run { self?.note(error) }
             }
@@ -520,12 +556,14 @@ final class CloudSync {
                         p_has_lidar: facts.hasLiDAR,
                         p_watch_paired: facts.watchPaired,
                         p_airpods_paired: facts.airPodsPaired)
+        let generation = sharingGeneration
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 let data = try await client.rpc("register_cane", body: args)
                 let ids = try? JSONDecoder().decode(RegisterResult.self, from: data)
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.isCurrent(generation) else { return }
                     // ⚠ Only assign on a real answer. A refresh (`updateDeviceFacts`) whose body
                     // failed to decode must not wipe the ids the cane is already using — that
                     // would silently stop every later write.
@@ -535,7 +573,10 @@ final class CloudSync {
                         self.deviceID = ids.device_id
                         self.lastError = nil
                         // Only on the first registration, not on a device-facts refresh.
-                        if isFirst { self.closeAbandonedTrips(walkerID: ids.walker_id, client: client) }
+                        if isFirst {
+                            self.closeAbandonedTrips(walkerID: ids.walker_id, client: client,
+                                                     generation: generation)
+                        }
                     }
                     self.registering = false
                     self.updateStatus()
@@ -562,13 +603,15 @@ final class CloudSync {
     /// launch is about to open (or has just opened) — a route can start inside the registration
     /// round trip, which is the same race `beginTrip` already has to defer around.
     /// Called once, right after `register_cane` returns.
-    private func closeAbandonedTrips(walkerID: String, client: SupabaseClient) {
+    private func closeAbandonedTrips(walkerID: String, client: SupabaseClient,
+                                     generation: UInt64) {
         struct Abandon: Encodable {
             let ended_at: String
             let outcome = "abandoned"
         }
         let cutoff = OpenCaneEvent.iso8601(Self.processStart)
         Task { [weak self] in
+            guard await MainActor.run(body: { [weak self] in self?.isCurrent(generation) ?? false }) else { return }
             do {
                 try await client.patch("trips", filter: [
                     URLQueryItem(name: "walker_id", value: "eq.\(walkerID)"),
@@ -591,6 +634,12 @@ final class CloudSync {
     }
 
     // MARK: Small helpers
+
+    /// True only while the async writer that captured `generation` still has consent. This is
+    /// checked before a request and after every await that could outlive an opt-out.
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        client != nil && sharingEnabled && generation == sharingGeneration
+    }
 
     /// A successful write: count it and clear the error line.
     private func count(_ rows: Int) {

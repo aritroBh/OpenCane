@@ -1,5 +1,19 @@
 # LIVE TRACKER — Sun Sep 13 (updated as work lands; newest first)
 
+- [x] Step 69 — adversarial audit hardening (Tue Sep 22)
+  - [x] Seeded geofence finding fixed: full reported accuracy must fit inside the arrival fence; the
+    `withKnownIssue` is removed and the 1,000-walk campaign is a hard assertion.
+  - [x] Hazard-history answer now counts route-scoped `HazardLog` records instead of returning a
+    fixed sentence.
+  - [x] Cloud consent-generation fences added to every async writer; orphaned post-opt-out hazard
+    photos are cleaned up; Supabase requires HTTPS.
+  - [x] iOS 26 reverse geocoding migrated to `MKReverseGeocodingRequest`; compiler-only `var` fixed.
+  - [x] `make test`: 919 tests / 23 suites green; `make sim`: BUILD SUCCEEDED.
+  - [!] UI / tour / island / e2e: host has only iOS 17.2; iPhone 17 Pro Max / iOS 27 runtime is not
+    installed, and cannot be substituted with an older runtime for an iOS 26 app.
+  - [!] Muse / Antigravity review: `muse` and `agy` are not installed on this host.
+  - [ ] Physical device walk and install.
+
 - [ ] Steps 67–68 review round (Codex, Muse, Antigravity) — CHANGELOG "Steps 67–68 review round"
   - [x] Logic tests first (new-API tests red on compile): emergency intent, ambiguous travel → gazetteer only, polite stop, Grainger compounds, "Close." `.safety` at every level, GPSAnnouncer ×11 (10 s / 12 s age / 60 s weak / 120 s back / indoor clock), EmergencyContactSeed.effective + log masking, CameraControlGate ×14 (accepted-press debounce, grip burst, one deferred press)
   - [x] Logic source: `FastPathIntentClassifier` (rule 1 `stopKey`, rule 1c `isEmergencyRequest`, `gazetteerOnlyVerbPhrases` / `gazetteerOnlyPrefixes`, nonPlaceWords), `CueSpeechPolicy.closeTier` / `closeAllowed`, `GPSAnnouncer.badOnset`, `EmergencyContactSeed.effective`, `EmergencyConfirm.logSafe`, `CameraControlGate.resolvePending`, CampusPlaces aliases

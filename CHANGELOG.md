@@ -2,6 +2,41 @@
 
 Build log for the hackathon. One entry per step; each ends with what to test on the phone.
 
+## Step 69 — adversarial audit hardening (Tue Sep 22)
+
+Audit scope: Logic stress tests, route-history data flow, cloud consent boundaries, iOS 26 SDK
+warnings, and the generated simulator build. The audit found three actionable correctness/privacy
+issues and one stale API; all are fixed below.
+
+### Fixed
+
+- **Arrival could fire early under correlated GPS error.** Step 66's seeded campaign had a visible
+  `withKnownIssue`: `distance + accuracy / 2 ≤ radius` could finish the ISR→CIF walk 38 m early in
+  the σ ≤ 25 m campaign and as much as 58 m in the high-correlation measurement. The last-fence
+  gate now requires the **full** reported horizontal-accuracy radius (`distance + accuracy ≤ radius`)
+  to fit inside the fence. The known-issue wrapper is gone; the 1,000-walk campaign is a hard
+  assertion. σ ≤ 8 m still arrived in all 229 walks, and early arrivals were 0.
+- **Hazard history was a fiction.** `ConversationCoordinator` returned “No severe hazards…” without
+  reading the route log. It now counts `HazardLog.records` created after the retained route start,
+  excluding idle records without a route, and speaks the truthful singular/plural result.
+- **Cloud opt-out had an async race.** Every cloud writer now captures a consent generation and
+  re-checks it before and after suspension. Delayed registration, trip, hazard, alert, medical and
+  family-contact continuations are fenced; a hazard photo that completes after opt-out without a
+  row is deleted. Supabase configuration now accepts only HTTPS URLs with a host.
+- **iOS 26 cleanup.** Destination locality lookup now uses `MKReverseGeocodingRequest`; the unused
+  mutable indoor event local is `let`.
+
+### Verification
+
+- `cd ios && make test` → exit 0, **919 tests in 23 suites passed**; seeded geofence campaign:
+  σ ≤ 8 m `229/229` arrived, `early>25m=0`.
+- `cd ios && make sim` → **BUILD SUCCEEDED**, with only the pre-existing App Intents metadata note.
+- `make uitest`, `make tour`, `make island` and `make e2e` are blocked on this host: CoreSimulator
+  has only iOS 17.2 and no iPhone 17 Pro Max / iOS 27 runtime, while this app deploys to iOS 26.
+  `muse` and `agy` are not installed on this host, so those external review passes could not run.
+
+test on device: not run — required iPhone 17 Pro Max / iOS 27 runtime and physical device unavailable.
+
 ## Steps 67–68 review round (Codex, Muse, Antigravity) (Sun Sep 13)
 
 Reviews: Antigravity (6 findings), Codex (4), Muse (11) on the Steps 67–68 diff. Every finding was checked

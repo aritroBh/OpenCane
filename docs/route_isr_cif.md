@@ -99,7 +99,7 @@ waypoint (you stopped at the curb) release it at once, and auto-recenter of the 
 
 **Arrival is 20 m with a two-hit rule (WP9).** Arrival is irreversible (it stops the beacon, head tracking
 and the Live Activity), so it is gated differently from the other fences: there is no speed gate (people
-stop at the door), a fix counts only if its accuracy is ≤ 30 m **and** `distance + accuracy / 2 ≤ 20 m`, and
+stop at the door), a fix counts only if its accuracy is ≤ 30 m **and** `distance + accuracy ≤ 20 m`, and
 it needs **two consecutive** such fixes. A fix too poor to judge (> 30 m) neither counts nor resets the
 streak; a judged fix outside the fence resets it. In practice: at ±10 m accuracy you must be within 15 m
 of the door, at ±20 m within 10 m, at ±30 m within 5 m. One 30 m blob 45 m short of CIF cannot end the

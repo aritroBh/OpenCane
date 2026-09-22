@@ -320,7 +320,7 @@ public struct IndoorProgress: Sendable, Equatable {
     ///   `numberOfSteps`); a lower value than before is ignored.
     /// - Returns: the events to perform, in order.
     public mutating func update(stepsWalked: Int) -> [IndoorEvent] {
-        var events = start()
+        let events = start()
         guard !atExit else { return events }
         latestSteps = Swift.max(latestSteps, stepsWalked)
         var body: [(event: IndoorEvent, landmark: Bool)] = []

@@ -82,8 +82,8 @@ final class DestinationSearch {
     @ObservationIgnored private var locality: Locality = .campus
     /// The coordinate the current `locality` was geocoded for; nil until the first geocode.
     @ObservationIgnored private var localityOrigin: Coordinate?
-    /// One geocoder, one request at a time (`CLGeocoder` refuses overlapping requests).
-    @ObservationIgnored private let geocoder = CLGeocoder()
+    /// One MapKit reverse-geocoding request at a time; a second request waits for the first.
+    @ObservationIgnored private var reverseRequest: MKReverseGeocodingRequest?
     /// The pending debounce; cancelled by the next keystroke and by `clear()`.
     @ObservationIgnored private var debounce: Task<Void, Never>?
 
@@ -162,15 +162,26 @@ final class DestinationSearch {
     /// Reverse-geocode the fix into a `Locality` (state code + country) when it moved ≥ 500 m
     /// from the last geocoded point. Fire-and-forget; a failure keeps the previous locality.
     private func refreshLocality() {
-        guard let o = origin, !geocoder.isGeocoding else { return }
+        guard let o = origin, reverseRequest?.isLoading != true else { return }
         if let last = localityOrigin, GeoMath.distanceMeters(last, o) < 500 { return }
         localityOrigin = o
         let location = CLLocation(latitude: o.latitude, longitude: o.longitude)
         let stamp = o
+        guard let request = MKReverseGeocodingRequest(location: location) else {
+            localityOrigin = nil
+            return
+        }
+        reverseRequest = request
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let mark = try? await self.geocoder.reverseGeocodeLocation(location).first,
-                  let code = mark.isoCountryCode else { self.localityOrigin = nil; return }   // retry on the next fix
+            defer {
+                if self.reverseRequest === request { self.reverseRequest = nil }
+            }
+            let items = try? await request.mapItems
+            guard let code = items?.first?.addressRepresentations?.__regionCode else {
+                self.localityOrigin = nil
+                return
+            }   // retry on the next fix
             // Apply only if this is still the request for the current geocode origin (a late
             // reply for an older fix must not describe where the walker used to be — review).
             guard self.localityOrigin == stamp else { return }

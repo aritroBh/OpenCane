@@ -463,10 +463,18 @@ final class ConversationCoordinator {
                 let m = Int(model.trip.distanceM.rounded())
                 return ("You have walked \(m) meters on this route.", false)
             case .hazardsEncountered:
-                // ⚠ Fixed sentence: it does NOT consult `AppModel.hazardLog.records`, so it is said
-                // even after hazards were announced and mapped on this route. Known gap; a real
-                // answer should count this route's hazard records.
-                return ("No severe hazards reported on this route.", false)
+                // HazardLog is session-wide, while TripTracker keeps the last route's start time
+                // after stop so the arrival card and this answer can agree. Only records tied to a
+                // route and created after that start belong to this walk; pre-route camera tests
+                // and idle detections must not become a false history answer.
+                let routeStart = model.trip.startedAt?.timeIntervalSince1970 ?? .infinity
+                let count = model.hazardLog.records.reduce(into: 0) { total, record in
+                    if record.routeName != nil && record.time >= routeStart { total += 1 }
+                }
+                let noun = count == 1 ? "hazard" : "hazards"
+                return (count == 0
+                    ? "No hazards reported on this route."
+                    : "\(count) \(noun) reported on this route.", false)
             default:
                 // `.pastWaypoints` / `.recentEvents`: not implemented on the fast path.
                 return ("No trip records available.", false)

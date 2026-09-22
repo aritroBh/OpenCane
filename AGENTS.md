@@ -299,7 +299,8 @@ bench has *disproved* must never sit in the file as though it were settled — m
   stationary fixes (the curb) release it. A fixed timer here caused spurious "Veer" cues.
 - `GeofenceTracker` looks ahead two waypoints and detects passed-by (1 m jitter tolerance). Near the
   current waypoint (2 × radius) the target bearing is the recorded leg bearing and veer cues are muted.
-  Arrival needs `distance + accuracy/2 ≤ radius` on two consecutive fixes (no speed gate) — arrival is
+  Arrival needs `distance + accuracy ≤ radius` on two consecutive fixes (no speed gate) — the full
+  reported horizontal-accuracy radius must fit inside the fence; arrival is
   irreversible. Intermediate fences need ≤ 20 m and > 0.5 m/s; "GPS weak" uses the same 20 m (spoken 10 s after GPS turns bad outdoors — worse than 20 m or a fix older than 12 s — `GPSAnnouncer`, Step 68, retuned in the Steps 67–68 review round).
 - Passed-by never speaks the passed waypoint's own line (its "turn right…" would be wrong by then):
   it says "Passed <place>. <next place> in N meters." Skip-ahead says "Passed one waypoint." + the real line.

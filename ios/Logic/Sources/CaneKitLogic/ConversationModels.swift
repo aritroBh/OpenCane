@@ -347,13 +347,11 @@ public enum StatusAspect: String, Sendable, Codable {
 }
 
 /// Metric requested in a history query. Answered by `ConversationCoordinator.executeAction`
-/// from `TripTracker` (`steps`, `distanceWalked`); `hazardsEncountered` currently gets a fixed
-/// "No severe hazards reported on this route." (not backed by the hazard log), and
-/// `pastWaypoints` / `recentEvents` get "No trip records available.".
+/// from `TripTracker` (`steps`, `distanceWalked`) and the session hazard log
+/// (`hazardsEncountered`); `pastWaypoints` / `recentEvents` get "No trip records available.".
 public enum HistoryMetric: String, Sendable, Codable {
     // `steps` HealthKit steps this route; `distanceWalked` metres this route; `hazardsEncountered`
-    // hazards announced (not implemented in the app, see above); `pastWaypoints` / `recentEvents`
-    // have no answer yet.
+    // hazards announced during the last route; `pastWaypoints` / `recentEvents` have no answer yet.
     case steps, distanceWalked, hazardsEncountered, pastWaypoints, recentEvents
 }
 
