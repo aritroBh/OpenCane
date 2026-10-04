@@ -1,5 +1,13 @@
 # OpenCane: a smart-cane kit that clips an iPhone onto the cane you already own
 
+## Hardware brief
+
+The phone is the computer. The kit adds a mount and a haptic handle to a cane the user already owns. The build verdict for each capability is in the hardware brief.
+
+![OpenCane hardware brief](docs/screenshots/opencane-brief.png)
+
+![Capability verdicts for the 24-hour build and a real product](docs/screenshots/opencane-capabilities.png)
+
 OpenCane clamps an iPhone to a white cane and turns the phone into the only computer in the kit.
 Its LiDAR sees obstacles between waist and head height, which the cane tip misses. Its Taptic
 Engine shakes the cane to warn about them. GPS and a waypoint engine guide the walk. AirPods Pro
